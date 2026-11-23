@@ -647,7 +647,12 @@ fn command_result(s: &mut Session, value: Value, before: &[(String, Vec<u32>)], 
 }
 
 /// Publishes counted projection losses without sending the completed envelope through a second redactor.
-fn finish_result(s: &mut Session, mut value: Value, tokens: usize, withheld: Withheld) -> String {
+fn finish_result(s: &mut Session, value: Value, tokens: usize, withheld: Withheld) -> String {
+    bounded_json(&with_withheld(s, value, withheld), tokens)
+}
+
+/// `value` with the notices of what cleaning it withheld, also given to the app.
+fn with_withheld(s: &mut Session, mut value: Value, withheld: Withheld) -> Value {
     if withheld.depth > 0 || withheld.keys > 0 {
         let mark = s.notice_mark();
         if withheld.depth > 0 {
@@ -662,7 +667,7 @@ fn finish_result(s: &mut Session, mut value: Value, tokens: usize, withheld: Wit
             value = with_notices(value, s, mark);
         }
     }
-    bounded_json(&value, tokens)
+    value
 }
 
 /// Counts output withheld for depth limits or field names that collide after redaction.
@@ -925,9 +930,11 @@ fn losses_since(s: &Session, said: &Said) -> Vec<Value> {
 /// leave room for one entry per code, keeping its `success`, and the list shrinks again if it
 /// must. `lossesTrimmed` says when the list was shortened or, with the tightest budgets, left out.
 fn finish_with_losses(s: &mut Session, r: Value, losses: Vec<Value>, tokens: usize, withheld: Withheld, always: bool) -> String {
-    let Value::Object(o) = r else { return finish_result(s, r, tokens, withheld) };
+    // What cleaning withheld is said first, so the sizes below are the final ones.
+    let r = with_withheld(s, r, withheld);
+    let Value::Object(o) = r else { return bounded_json(&r, tokens) };
     if o.contains_key("losses") || (losses.is_empty() && !always) {
-        return finish_result(s, Value::Object(o), tokens, withheld);
+        return bounded_json(&Value::Object(o), tokens);
     }
     let max = output_bytes(tokens);
     let forms = loss_forms(&losses);
@@ -939,17 +946,18 @@ fn finish_with_losses(s: &mut Session, r: Value, losses: Vec<Value>, tokens: usi
         Value::Object(o)
     };
     if let Some(v) = forms.iter().map(|form| with(o.clone(), form)).find(|v| v.to_string().len() <= max) {
-        return finish_result(s, v, tokens, withheld);
+        return v.to_string();
     }
     // The result cut to leave room for one entry per code.
     let summary = forms.get(2).or(forms.last()).map_or(0, |(list, _)| list.to_string().len());
-    let text = finish_result(s, Value::Object(o.clone()), max.saturating_sub(summary + 64).div_ceil(4).max(1), withheld);
+    let text = bounded_json(&Value::Object(o.clone()), max.saturating_sub(summary + 64).div_ceil(4).max(1));
     let mut cut = match serde_json::from_str::<Value>(&text) {
         Ok(Value::Object(cut)) => cut,
         // A failure's error alone (`error: …`), kept as JSON with as much of it as fits below.
         _ => serde_json::Map::from_iter([("error".to_string(), json!(text))]),
     };
-    if let Some(success) = o.get("success") {
+    let success = o.get("success").cloned();
+    if let Some(success) = &success {
         cut.insert("success".into(), success.clone());
     }
     for form in forms.iter().skip(2) {
@@ -967,8 +975,19 @@ fn finish_with_losses(s: &mut Session, r: Value, losses: Vec<Value>, tokens: usi
             }
         }
     }
-    cut.insert("lossesTrimmed".into(), json!(true));
-    Value::Object(cut).to_string()
+    // The codes before what is left of the result: then only that the list was left out.
+    let bare = serde_json::Map::from_iter(success.map(|v| ("success".to_string(), v)));
+    for form in forms.iter().skip(2) {
+        let v = with(bare.clone(), form);
+        if v.to_string().len() <= max {
+            return v.to_string();
+        }
+    }
+    let mut v = bare;
+    v.insert("lossesTrimmed".into(), json!(true));
+    let v = Value::Object(v).to_string();
+    // The tightest budgets: the marker alone.
+    if v.len() <= max { v } else { json!({"lossesTrimmed": true}).to_string() }
 }
 
 /// `losses` in the forms [`finish_with_losses`] tries, longest first, each with whether it is
@@ -1028,7 +1047,8 @@ fn error_with_notices(e: String, s: &Session, said: &Said, tokens: usize) -> Str
             let mid = low + (high - low).div_ceil(2);
             if fits(&cut(mid)) { low = mid } else { high = mid - 1 }
         }
-        return cut(low);
+        // With no room for even a character of the error, the line alone.
+        return if fits(&cut(low)) { cut(low) } else { line.trim_start().to_string() };
     }
     clip(&text, 8000)
 }
@@ -1663,12 +1683,15 @@ mod tests {
         let out: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(out["losses"], json!([{"code": "dropped.value", "kind": "dropped", "count": 2, "action": "Correct the value."}]));
         assert_eq!((&out["lossesTrimmed"], &out["truncated"], &out["success"]), (&json!(true), &json!(true), &json!(true)));
-        for tokens in [32, 8] {
+        for tokens in [32, 16] {
             let text = finish_with_losses(&mut s, big.clone(), vec![loss.clone()], tokens, Withheld::default(), false);
             let out: Value = serde_json::from_str(&text).unwrap();
-            assert!(text.len() <= output_bytes(tokens) || out.get("losses").is_none(), "{tokens}: {text}");
+            assert!(text.len() <= output_bytes(tokens), "{tokens}: {text}");
             assert_eq!((&out["lossesTrimmed"], &out["success"]), (&json!(true), &json!(true)), "{tokens}: {text}");
+            assert!(out["losses"].to_string().contains("dropped.value"), "{tokens}: {text}");
         }
+        let text = finish_with_losses(&mut s, big.clone(), vec![loss.clone()], 8, Withheld::default(), false);
+        assert!(text.len() <= output_bytes(8), "{text}");
         // A failure's error alone gives way to its losses, as JSON.
         let failed = json!({"success": false, "error": "e".repeat(5000)});
         let text = finish_with_losses(&mut s, failed, vec![loss.clone()], 200, Withheld::default(), true);
