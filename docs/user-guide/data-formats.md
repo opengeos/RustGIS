@@ -395,8 +395,10 @@ system RustGIS reads is asked for in it: the area's box there, within the covera
 and no conversion by the server, so it is resampled once, by the map. Its own system is WCS 2.0's
 envelope's, whose axis labels are needed (`E N` or `N E` say the order; otherwise EPSG's order of
 the system's axes does, as `X` and `Y` mean either), or WCS 1.0's native CRS with an envelope of
-the spatial domain in it. Its longitude/latitude bounds then come from that envelope, so
-`"bbox": "full"` works for it too. Otherwise (a geographic system, or one RustGIS doesn't read)
+the spatial domain in it, when the server lists it among the systems it takes in requests and
+answers (or lists none). Its longitude/latitude bounds then come from that envelope, so
+`"bbox": "full"` works for it too; a coverage across the antimeridian has none, and the view is
+asked for unclipped. Otherwise (a geographic system, or one RustGIS doesn't read)
 the server reprojects it to EPSG:4326 (WCS 2.0 through its CRS extension); one that can't answers
 with an error, which is shown. The request names the system it asks in (WCS 2.0's `OUTPUTCRS`,
 WCS 1.0's `CRS`). A GeoTIFF answer that doesn't name its system is read in that one, with a

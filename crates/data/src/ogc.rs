@@ -2191,6 +2191,22 @@ pub fn parse_describe(c: &Coverage, body: &[u8]) -> Result<CoverageInfo, String>
             .and_then(|t| t.split_whitespace().next().map(str::to_string));
         // The native system's envelope (MapServer writes one in EPSG:4326 first); without a
         // native system named, the first envelope in a projected one.
+        // A system the server takes in requests and answers: listed among `requestResponseCRSs`,
+        // or both `requestCRSs` and `responseCRSs`, when it lists any.
+        // (Each list's codes as written, looked through until one names the system.)
+        let listed = |kind: &str| -> Option<Vec<String>> {
+            let lists: Vec<String> =
+                root.descendants().filter(|n| n.is_element() && local(n) == kind).take(4096).map(|n| text_of(&n)).collect();
+            (!lists.is_empty()).then(|| lists.iter().flat_map(|t| t.split_whitespace().take(4096)).map(str::to_string).collect())
+        };
+        let (both, request, response) = (listed("requestResponseCRSs"), listed("requestCRSs"), listed("responseCRSs"));
+        let names = |list: &Option<Vec<String>>, crs: crate::raster::Crs| {
+            list.as_ref().is_some_and(|l| l.iter().any(|c| projected_system(c).is_some_and(|(_, found)| found == crs)))
+        };
+        let takes = |crs: crate::raster::Crs| match (&both, &request, &response) {
+            (None, None, None) => true,
+            _ => names(&both, crs) || (names(&request, crs) && names(&response, crs)),
+        };
         let (env, (n, crs)) = match native {
             Some(name) => {
                 let (n, crs) = projected_system(&name)?;
@@ -2198,6 +2214,9 @@ pub fn parse_describe(c: &Coverage, body: &[u8]) -> Result<CoverageInfo, String>
             }
             None => envelopes.into_iter().find_map(|e| projected_system(&srs_of(&e)).map(|found| (e, found)))?,
         };
+        if !takes(crs) {
+            return None;
+        }
         let name = format!("EPSG:{n}");
         let pos: Vec<f64> = children(&env, "pos")
             .flat_map(|p| text_of(&p).split_whitespace().filter_map(|t| t.parse().ok()).collect::<Vec<f64>>())
@@ -2211,9 +2230,9 @@ pub fn parse_describe(c: &Coverage, body: &[u8]) -> Result<CoverageInfo, String>
 
 /// A WCS 2.0 coverage's grid axis labels (its `RectifiedGrid`'s), the east-west one first, for
 /// the system axes the envelope labels `env` name in its order (`north_first` when its first is
-/// the north one). A grid axis goes with the system axis of the same name (rasdaman repeats
-/// them), else the one its offset vector runs along, else the grid's first axis is the east one
-/// (its columns, as GeoServer's `i`). Scaling must name grid axes, so the grid's labels are used
+/// the north one). A grid axis goes with the system axis its offset vector runs along, else the
+/// one of the same name (rasdaman repeats them), else the grid's first axis is the east one (its
+/// columns, as GeoServer's `i`). Scaling must name grid axes, so the grid's labels are used
 /// whenever it has two; `None` when it doesn't.
 fn grid_labels(root: &Node, env: [&str; 2], north_first: bool) -> Option<(String, String)> {
     let grid = root.descendants().find(|n| n.is_element() && local(n) == "RectifiedGrid")?;
@@ -2230,17 +2249,15 @@ fn grid_labels(root: &Node, env: [&str; 2], north_first: bool) -> Option<(String
         let (x, y) = (c.first()?.abs(), c.get(1)?.abs());
         (x != y).then_some(usize::from(y > x))
     };
-    // The grid's labels in the envelope's axis order.
-    let in_order = if [l0, l1] == env || [l1, l0] == env {
-        if [l0, l1] == env { [l0, l1] } else { [l1, l0] }
-    } else {
-        let offsets: Option<Vec<usize>> = children(&grid, "offsetVector").take(3).map(|v| along(&v)).collect();
-        match offsets.as_deref() {
-            Some([0, 1]) => [l0, l1],
-            Some([1, 0]) => [l1, l0],
-            // Unknown: the grid's first axis runs east-west.
-            _ => return Some((l0.to_string(), l1.to_string())),
-        }
+    // The grid's labels in the envelope's axis order: by the direction each offset vector runs
+    // (what places the grid), else by name, else the grid's first axis runs east-west.
+    let offsets: Option<Vec<usize>> = children(&grid, "offsetVector").take(3).map(|v| along(&v)).collect();
+    let in_order = match offsets.as_deref() {
+        Some([0, 1]) => [l0, l1],
+        Some([1, 0]) => [l1, l0],
+        _ if [l0, l1] == env => [l0, l1],
+        _ if [l1, l0] == env => [l1, l0],
+        _ => return Some((l0.to_string(), l1.to_string())),
     };
     let [first, second] = in_order;
     Some(if north_first { (second.to_string(), first.to_string()) } else { (first.to_string(), second.to_string()) })
@@ -2293,22 +2310,36 @@ fn lonlat_of(b: [f64; 4], crs: crate::raster::Crs) -> Option<[f64; 4]> {
     let [x0, y0, x1, y1] = b;
     let mut out = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
     const STEPS: usize = 16;
-    for i in 0..=STEPS {
-        let f = i as f64 / STEPS as f64;
-        let (x, y) = (x0 + (x1 - x0) * f, y0 + (y1 - y0) * f);
-        for (px, py) in [(x, y0), (x, y1), (x0, y), (x1, y)] {
+    // Along each edge in turn, so a jump of more than half the globe between neighbouring places
+    // says the edge crosses the antimeridian (a world-wide one changes by a sixteenth of it).
+    let mut crosses = false;
+    for edge in 0..4 {
+        let mut last: Option<f64> = None;
+        for i in 0..=STEPS {
+            let f = i as f64 / STEPS as f64;
+            let (x, y) = (x0 + (x1 - x0) * f, y0 + (y1 - y0) * f);
+            let (px, py) = [(x, y0), (x, y1), (x0, y), (x1, y)][edge];
             let c = t.to_lonlat(rustgis_geom::Coord::new(px, py)).filter(|c| c.x.is_finite() && c.y.is_finite())?;
+            crosses |= last.is_some_and(|l| (c.x - l).abs() > 180.0);
+            last = Some(c.x);
             out = [out[0].min(c.x), out[1].min(c.y), out[2].max(c.x), out[3].max(c.y)];
         }
     }
     // A pole within it (a polar coverage): its edges miss it, so the box reaches it, at every
     // longitude.
+    let mut polar = false;
     for lat in [90.0, -90.0] {
         if t.from_lonlat(rustgis_geom::Coord::new(0.0, lat))
             .is_some_and(|p| p.x.is_finite() && p.y.is_finite() && p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1)
         {
             out = [-180.0, out[1].min(lat), 180.0, out[3].max(lat)];
+            polar = true;
         }
+    }
+    // An edge across the antimeridian, without a pole within: a west-east box can't hold it, so
+    // its bounds aren't known (the view is asked for as it is, unclipped).
+    if !polar && crosses {
+        return None;
     }
     lonlat_box(out[0], out[1], out[2], out[3])
 }
@@ -8842,10 +8873,39 @@ mod tests {
         assert!(get_coverage_url(&c2, &unmatched, unmatched.bbox.unwrap()).contains("SCALESIZE=i(2048),j(2048)"));
         let no_offsets = parse_describe(&c2, gridded("i j", "").as_bytes()).unwrap();
         assert_eq!(no_offsets.native.unwrap().grid_axes, Some(("i".into(), "j".into())));
-        // Grid labels repeating the envelope's pair by name.
-        let named =
-            parse_describe(&c2, gridded("N E", "<offsetVector>10 0</offsetVector><offsetVector>0 -10</offsetVector>").as_bytes()).unwrap();
-        assert_eq!(named.native.unwrap().grid_axes, Some(("E".into(), "N".into())));
+        // The offsets say where a grid axis runs, whatever its name: a grid whose axis `N` runs
+        // east-west (offsets 10 0, then 0 -10) scales it by the width, on a coverage twice as wide
+        // as it is high.
+        let wide = |labels: &str, offsets: &str| {
+            desc(srs, "E N", "2590000 1190000", "2610000 1200000").replace(
+                "<nativeFormat>",
+                &format!(
+                    r#"<domainSet><RectifiedGrid><axisLabels>{labels}</axisLabels>{offsets}</RectifiedGrid></domainSet><nativeFormat>"#
+                ),
+            )
+        };
+        let crossed =
+            parse_describe(&c2, wide("N E", "<offsetVector>10 0</offsetVector><offsetVector>0 -10</offsetVector>").as_bytes()).unwrap();
+        let get = get_coverage_url(&c2, &crossed, crossed.bbox.unwrap());
+        assert!(get.contains("&SCALESIZE=N(2048),E(1024)"), "{get}");
+        // Without offsets, grid labels repeating the envelope's pair by name.
+        let named = parse_describe(&c2, wide("N E", "").as_bytes()).unwrap();
+        let get = get_coverage_url(&c2, &named, named.bbox.unwrap());
+        assert!(get.contains("&SCALESIZE=E(2048),N(1024)"), "{get}");
+        // A coverage across the antimeridian (UTM zone 60, about 174° to 182° east): a west-east box
+        // can't hold its bounds, so they aren't known, and the view is asked for unclipped.
+        let utm60 =
+            parse_describe(&c2, desc("http://www.opengis.net/def/crs/EPSG/0/32660", "E N", "300000 5000000", "900000 5100000").as_bytes())
+                .unwrap();
+        assert!(utm60.native.is_some());
+        assert_eq!(utm60.bbox, None);
+        // A world-wide one keeps its bounds: Web Mercator as WCS 2.0 names it, and an equal-area one.
+        for (code, lo, hi) in [("3857", "-20037508 -20037508", "20037508 20037508"), ("6933", "-17367530 -7314540", "17367530 7314540")] {
+            let world =
+                parse_describe(&c2, desc(&format!("http://www.opengis.net/def/crs/EPSG/0/{code}"), "x y", lo, hi).as_bytes()).unwrap();
+            let [w, _, e, _] = world.bbox.unwrap_or_else(|| panic!("{code}: no bounds"));
+            assert!(w <= -179.9 && e >= 179.9, "{code}: {:?}", world.bbox);
+        }
         // North first (Gauss-Krüger zone 3, `N E`): the grid's axes follow the file's order, then
         // turn with the system's.
         let gk = desc("http://www.opengis.net/def/crs/EPSG/0/31467", "N E", "5420000 3480000", "5440000 3500000").replace(
@@ -8909,6 +8969,18 @@ mod tests {
         // Its envelope in another system than its native one: EPSG:4326 as before.
         let other = parse_describe(&c1, v1.replace(r#"srsName="EPSG:2056""#, r#"srsName="EPSG:21781""#).as_bytes()).unwrap();
         assert!(other.native.is_none());
+        // Its native system asked for only when the server takes it in requests and answers: listed
+        // in requestResponseCRSs, or in both requestCRSs and responseCRSs, or with no list at all.
+        let lists = "<requestResponseCRSs>EPSG:2056 EPSG:4326</requestResponseCRSs>";
+        for (with, native) in [
+            ("<requestResponseCRSs>EPSG:4326</requestResponseCRSs>", false),
+            ("<requestCRSs>EPSG:2056</requestCRSs><responseCRSs>EPSG:2056</responseCRSs>", true),
+            ("<requestCRSs>EPSG:2056</requestCRSs><responseCRSs>EPSG:4326</responseCRSs>", false),
+            ("", true),
+        ] {
+            let info = parse_describe(&c1, v1.replace(lists, with).as_bytes()).unwrap();
+            assert_eq!(info.native.is_some(), native, "{with}");
+        }
     }
 
     #[test]
