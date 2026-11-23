@@ -527,9 +527,10 @@ Points can optionally be weighted by a numeric population field (invalid or non-
 are excluded and reported in the tool messages; for multipoint features, each constituent point part
 receives the feature's weight, a part with a coordinate missing or infinite is left out and
 counted, and a feature with no finite part is skipped). Calculations are performed in the linear units
-of a projected coordinate system (defaults to the projected system the layer is held in, or else was read in; if the input layer lacks a
-coordinate system or is in degrees, or to project into a specific system, supply a projected system via `crs`,
-e.g. `EPSG:32618`). Geocentric systems such as `EPSG:4978` (X, Y and Z from the Earth's centre)
+of a projected coordinate system. By default this is the projected system the layer is held in,
+or else was read in. If the layer has no coordinate system or is in degrees, it uses the project's
+projected system and says so. When the project has none either, or to work in a specific system,
+supply a projected system via `crs`, e.g. `EPSG:32618`. Geocentric systems such as `EPSG:4978` (X, Y and Z from the Earth's centre)
 are refused, whether supplied via `crs` or inherited from the layer: their three axes do not
 define the two-dimensional projected plane Kernel Density needs.
 Because bandwidth and cell size are measured in coordinate-space linear units, global cylindrical
@@ -740,8 +741,10 @@ IDW Interpolation and Ordinary Kriging make their raster in the projected coordi
 as `crs` (such as `EPSG:32616` for UTM zone 16N, or a State Plane code), and then take the
 extent, pixel size and Kriging's `range` in its units, usually metres or feet. Without `crs`
 they use the projected system the layer is held in (or else was read in), as Kernel Density
-does without a note, and say so, naming it; a layer read in longitude and latitude gives a
-raster in degrees, with all three in degrees.
+does without a note, and say so, naming it; a layer read in longitude and latitude, or with no
+system, gives a raster in the project's coordinate system when it has a projected one (said, as
+the Geostatistical Wizard does when Environments sets none), else in degrees, with all three in
+degrees.
 `crs: "EPSG:4326"` makes it in degrees whatever the layer was read in, as these tools always did
 before `crs` was there; so does a layer read in a system that can't hold a raster's cells (a
 geocentric one) or that this version can't project to, with a notice saying which. A script
@@ -1224,7 +1227,8 @@ instead.
 
 - **Generate Tessellation** makes the cells at a resolution over the map's extent, an input
   layer's polygons (or the extent of its points and lines), or the whole world. **Cells:
-  Overlapping** covers the area without gaps; **Center** keeps the cells whose centre is inside.
+  Overlapping** covers the area without gaps (H3, by its own rule, also keeps a cell that only
+  touches the area's outline); **Center** keeps the cells whose centre is inside.
 - **Aggregate Points to Grid** counts a point layer's points (its selection, when there is one) by
   the cell holding them, and keeps only the cells that hold any. It adds `count` and
   `density_per_km2` (by that cell's area, since H3, S2 and hexagon cells differ in size), and a
@@ -1607,7 +1611,7 @@ click them on the map:
 | Geostatistical Wizard | An IDW surface from feature values, using 12 nearest neighbours by default |
 | Network Analysis | The shortest (or cheapest, by a cost field) route over a line layer |
 | Neighborhood Explorer | What lies within a distance of a point, with sums of numeric fields |
-| Simulation | Random points in polygons (a fixed number, or from a field × rate), spread in the layer's own coordinates when it is held in a projected system, else in longitude/latitude |
+| Simulation | Random points in polygons (a fixed number, or from a field × rate), spread in the layer's own coordinates when it is held in a projected system, else in longitude/latitude (then held in the project's coordinate system when it has one, other than a geocentric one) |
 | Data Engineering | Counts, nulls, distinct values, min, max and mean of every field |
 | Exploratory Analysis | Histograms and correlations of numeric fields |
 | Embeddings | The features most like the selected one, by their numeric attributes |
