@@ -265,7 +265,10 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
     }
     if let Some(layers) = add {
         let path = c.path.clone();
-        let linked = c.link.as_ref().filter(|l| l.answered || l.linked != l.rule).map(|l| l.linked);
+        // A GeoJSON file's answer is always sent: it starts from its size, and `layer.addData` unasked
+        // would decide by its count once it is read in place.
+        let geojson = path.trim().to_ascii_lowercase().ends_with(".geojson");
+        let linked = c.link.as_ref().filter(|l| geojson || l.answered || l.linked != l.rule).map(|l| l.linked);
         app.ui.choosing.remove(0);
         add_chosen(app, &path, &layers, linked);
     } else if cancel || !open {
@@ -467,7 +470,22 @@ mod tests {
         };
         let newest_linked =
             |h: &egui_kittest::Harness<'static, RustGisApp>| h.state().session.map().layers.first().map(|l| l.is_streamed());
+        let geojson = dir.path().join("big.geojson");
+        rustgis_engine::data::io::write_path(&ds, &geojson).unwrap();
+        let geojson = geojson.display().to_string();
         let mut h = harness(app);
+        // A GeoJSON file starts at Link by its size, and `layer.addData` unasked would decide by
+        // its count once read in place: the answer shown is sent, untouched, so Add does it.
+        let opened = h.state().session.opened;
+        h.state_mut().ui.choosing.push(listed(
+            opened,
+            &geojson,
+            Ok(json!({"count": 1, "layers": ["big"], "link": {"linked": true, "copy": true}})),
+        ));
+        h.run_steps(2);
+        h.get_by_label("Add").click();
+        h.run_steps(2);
+        assert_eq!(newest_linked(&h), Some(true), "Link shown: linked");
         // Small: Copy is chosen, so Add (or Enter) adds it as today.
         listing(&mut h, &fgb);
         h.get_by_label("Link to the file");

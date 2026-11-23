@@ -110,3 +110,15 @@ fn a_geopackage_of_several_tables_has_one_choice_for_them_all() {
     let plain = s.run("info.fileLayers", &json!({"path": path})).unwrap();
     assert!(plain.get("link").is_none(), "{plain}");
 }
+
+#[test]
+fn a_geojson_file_read_whole_is_copied_whatever_its_count() {
+    // Up to its size it is read whole, so many features still give a copy, as the question says.
+    let f = Fixture::new("link-geojson-count");
+    let path = f.file("many.geojson");
+    rustgis_engine::data::io::write_path(&points(rustgis_engine::map::source::STREAM_ABOVE as usize + 1), &path).unwrap();
+    assert!(std::fs::metadata(&path).unwrap().len() <= rustgis_engine::data::source::geojson::IN_PLACE_ABOVE);
+    let mut s = session();
+    assert_eq!(listed(&mut s, &path)["link"]["linked"], false);
+    assert!(!added_linked(&path), "read whole: copied");
+}
