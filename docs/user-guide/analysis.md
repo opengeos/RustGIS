@@ -2001,8 +2001,9 @@ The Imagery tab's groups open their tools in the Workflows pane. The tab belongs
   refused. An `extent` of four
   numbers is in degrees, or in `crs` when given (`{"extent": [2599000, 1199000, 2601000, 1201000],
   "crs": "EPSG:2056"}`), and the raster is placed in that system; an entry that isn't a number is
-  refused, not passed over. An extent goes without `transform` and `pointsCrs`: either beside it is
-  refused, as neither would be used. The `extent` it answers is in longitude/latitude, whatever system the raster is placed in. An extent goes without control points too.
+  refused, not passed over. An extent goes without control points, `transform` and `pointsCrs`:
+  any of them beside it is refused, as none would be used. The `extent` it answers is in
+  longitude/latitude, whatever system the raster is placed in.
   With `transform` (`raster.georeference`) the points are fitted by any
   of the Control Point Fit transforms and the raster is warped onto a new north-up grid covering the
   warped image: `{"layer": "scan", "transform": "spline", "points": [[column, row, x, y], …],

@@ -436,6 +436,11 @@ impl System {
         [("m", 1.0), ("ft", 0.3048), ("ftUS", 1200.0 / 3937.0)].into_iter().find(|(_, k)| (to_meter - k).abs() < 1e-9).map(|(u, _)| u)
     }
 
+    /// Whether it counts in degrees (a geographic system): a map's own never does.
+    fn is_geographic(&self) -> bool {
+        matches!(self, System::Data(t) if t.is_geographic())
+    }
+
     /// The longitude and latitude of `at`, a place in this system; `None` where it names none:
     /// where the inverse gives no place, or one that doesn't map back to `at` (to a centimetre, or
     /// a billionth of the coordinate's size) because the system's formulas don't reach so far.
@@ -542,6 +547,13 @@ pub(crate) fn read_system_position(map: &Map, text: &str) -> Option<Result<Coord
     };
     if !map.body().is_earth() {
         return Some(Err(format!("{system} is a system of the Earth and names no place on this map")));
+    }
+    // Degrees are written latitude first, as a position without a system reads them, while this
+    // form takes an easting first: the order would be a guess, so a system in degrees is refused.
+    if found.is_geographic() {
+        return Some(Err(format!(
+            "{system} counts in degrees: give the position without a system, latitude then longitude (or with N, S, E and W)"
+        )));
     }
     // A unit written must be the system's: feet aren't read as metres.
     if let Some(unit) = units.iter().find(|u| Some(**u) != found.unit()) {
