@@ -97,8 +97,9 @@ pub fn offer(script: &str, at: usize, ids: &[String]) -> Option<Offer> {
 /// so working an offer out costs no more for a long script.
 pub fn word_at(script: &str, at: usize, asked: bool) -> Option<(usize, String)> {
     let (before, after) = script.split_at(byte_at(script, at)?);
-    // The cursor ends the word: no word character right after it.
-    if after.chars().next().is_some_and(|c| !c.is_whitespace()) {
+    // The cursor ends the word: no word character right after it (a space, or the `=` of
+    // `id={json}`, ends an id).
+    if after.chars().next().is_some_and(|c| !c.is_whitespace() && c != '=') {
         return None;
     }
     let line = before.rsplit('\n').next().unwrap_or_default();
@@ -1763,6 +1764,9 @@ mod tests {
         assert_eq!((o.start, o.end), (15, 22), "the word, after the indent");
         assert_eq!(items(offer("LABELS.ST", 9, &ids())), ["labels.style"], "case aside");
         assert_eq!(items(offer("plu", 3, &ids())), ["plugin:demo/hello"], "plugins' too");
+        // Before the `=` of `id={json}`, as before the space of `id {json}` (#2794).
+        assert_eq!(items(offer("labels.st={}", 9, &ids())), ["labels.style"]);
+        assert_eq!(items(offer("labels.st {}", 9, &ids())), ["labels.style"]);
     }
 
     #[test]
