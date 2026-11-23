@@ -7,20 +7,26 @@
 //! A literal counts as an id when it is dotted words (`layer.add`) in a namespace some registered
 //! command has, or `ui`. It must then be a command the engine registers (`cmd::all()`), or, for
 //! `ui.*`, one the app handles: a match arm `"ui.pane.catalog" => …`. The other dotted literals in
-//! those namespaces (file names, host names) are told apart by their last word and
-//! [`EXEMPT`]. This lives in the UI crate because only it can see both the engine's registry and
-//! the app's own table; the scan looks at the files, so it needs no private access.
+//! those namespaces (file names, host names) are told apart by their last word ([`NOT_IDS`]) and
+//! [`EXEMPT`]. A literal in a namespace no registered command has is not looked at, so removing
+//! the last command of a namespace leaves its literals unchecked. This lives in the UI crate
+//! because only it can see both the engine's registry and the app's own table; the scan reads the
+//! files, so it needs no private access.
 
 use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
 /// Last words of dotted literals that are file names or host names, not ids (`layer.json`,
 /// `data.seattle.gov`). The test checks that no registered id ends in one, so this can't hide a
-/// dangling id.
-const NOT_IDS: &[&str] = &["json", "csv", "tif", "parquet", "shp", "wasm", "com", "gov", "org", "net", "us"];
+/// dangling id. A literal that ends in one of these needs no entry in [`EXEMPT`].
+const NOT_IDS: &[&str] = &[
+    "json", "geojson", "csv", "tif", "tiff", "parquet", "shp", "gpkg", "kml", "gpx", "svg", "png", "jpg", "pdf", "qml", "html", "txt",
+    "md", "xml", "zarr", "pmtiles", "wasm", "com", "gov", "org", "net", "us",
+];
 
-/// Dotted literals in an id's namespace that are not commands, each with why. A literal listed
-/// here that the scan no longer finds fails the test, so the list stays true.
+/// Dotted literals in an id's namespace that are not commands and don't end in a [`NOT_IDS`] word,
+/// each with why. A literal listed here that the scan no longer finds fails the test, so the list
+/// stays true.
 const EXEMPT: &[(&str, &str)] = &[
     ("ui.layoutNudge", "an arrow key on a selected layout element, handled where the key is read (chrome.rs), not a command"),
     ("ui.undoHistory", "the toolbar's Undo History button: a menu, not a command"),
@@ -38,10 +44,12 @@ fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
-/// The `.rs` files of every crate's and app's `src`, leaving out test files and directories.
+/// The `.rs` files of every crate's and app's `src`, leaving out test files and directories. A
+/// directory or entry that can't be read fails the test: a file left out unseen would pass it.
 fn sources(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
-    for entry in entries.flatten() {
+    let entries = std::fs::read_dir(dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display()));
+    for entry in entries {
+        let entry = entry.unwrap_or_else(|e| panic!("{}: {e}", dir.display()));
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().into_owned();
         if path.is_dir() {
@@ -54,53 +62,251 @@ fn sources(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// A file's code up to its test module (`#[cfg(test)]` before a `mod`, whatever the line ends).
-fn non_test(text: &str) -> &str {
-    let at = text.match_indices("#[cfg(test)]").find(|(i, m)| text[i + m.len()..].trim_start().starts_with("mod "));
-    at.map_or(text, |(i, _)| &text[..i])
+/// A piece of Rust source that matters here: a string literal's text (undecoded), a word, or one
+/// punctuation character. Comments, char literals, lifetimes and whitespace make none, and only
+/// the words and punctuation [`non_test`] and [`is_arm`] look at are kept.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Tok<'a> {
+    Str(&'a str),
+    Word(&'a str),
+    Punct(char),
 }
 
-/// The id-shaped string literals of `text`, with their line: dotted words, the first a lower-case
-/// word, none empty. A literal ending in a dot is a prefix (`"ui.pane."`), not an id.
-fn literals(text: &str) -> Vec<(usize, &str, usize)> {
-    let mut out = Vec::new();
-    let mut line_start = 0;
-    for (n, line) in text.split('\n').enumerate() {
-        let start = line_start;
-        line_start += line.len() + 1;
-        if line.trim_start().starts_with("//") {
-            continue;
-        }
-        let b = line.as_bytes();
-        for (i, _) in line.match_indices('"') {
-            let rest = &line[i + 1..];
-            let Some(end) = rest.find('"') else { continue };
-            let word = &rest[..end];
-            let words_ok = word.split('.').all(|w| !w.is_empty() && w.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_'));
-            let first_ok = word.bytes().next().is_some_and(|c| c.is_ascii_lowercase());
-            // A closing quote is no opening one: the byte before it isn't part of a word.
-            let opening = i == 0 || !(b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'_' || b[i - 1] == b'.');
-            if opening && first_ok && words_ok && word.contains('.') {
-                out.push((n + 1, word, start + i + 1 + end + 1));
+/// A source token and the byte offset it starts at.
+type Lexed<'a> = (usize, Tok<'a>);
+
+/// The words [`non_test`] and [`is_arm`] look at.
+const KEPT_WORDS: &[&str] = &[
+    "cfg", "test", "if", "pub", "mod", "fn", "use", "impl", "const", "static", "struct", "enum", "trait", "type", "async", "unsafe",
+    "extern",
+];
+
+/// The tokens of `text`. Reads strings the way Rust does (escapes, raw strings with or without `#`,
+/// byte and C strings) and skips comments (nested block comments too), so a quote inside a
+/// comment, a char (`'"'`) or a raw string doesn't start or end one. It runs over every source
+/// file on every test run, so it jumps over comments and strings with `str::find` (optimised
+/// even in a debug build) and keeps no token it won't look at.
+fn lex(text: &str) -> Vec<Lexed<'_>> {
+    let b = text.as_bytes();
+    let word_byte = |c: u8| c.is_ascii_alphanumeric() || c == b'_' || c >= 0x80;
+    let (mut i, mut out) = (0, Vec::new());
+    while let Some(&c) = b.get(i) {
+        if c.is_ascii_whitespace() {
+            i += 1;
+        } else if c == b'/' && b.get(i + 1) == Some(&b'/') {
+            i += text[i..].find('\n').unwrap_or(b.len() - i);
+        } else if c == b'/' && b.get(i + 1) == Some(&b'*') {
+            let mut depth = 1;
+            i += 2;
+            while depth > 0 {
+                let rest = &text[i..];
+                let Some(end) = rest.find("*/") else {
+                    i = b.len();
+                    break;
+                };
+                if let Some(open) = rest[..end].find("/*") {
+                    depth += 1;
+                    i += open + 2;
+                } else {
+                    depth -= 1;
+                    i += end + 2;
+                }
             }
+        } else if c == b'\'' {
+            // A char literal (`'a'`, `'\n'`, `'"'`) or a lifetime (`'a`, whose word is lexed next).
+            if b.get(i + 1) == Some(&b'\\') {
+                i += 3;
+                while i < b.len() && b[i] != b'\'' {
+                    i += 1;
+                }
+                i += 1;
+            } else {
+                let len = text.get(i + 1..).and_then(|t| t.chars().next()).map_or(1, char::len_utf8);
+                i += if b.get(i + 1 + len) == Some(&b'\'') { 2 + len } else { 1 };
+            }
+        } else if c.is_ascii_alphabetic() || c == b'_' || c == b'"' || c >= 0x80 {
+            // A string starts at its quote or, with a prefix (`b`, `c`, `r`, `br`, `cr`, hashes), at
+            // its first letter; anything else that starts like a word is one.
+            let quote = c == b'"';
+            let mut j = i;
+            if matches!(c, b'b' | b'c') {
+                j += 1;
+            }
+            let raw = !quote && b.get(j) == Some(&b'r');
+            let mut hashes = 0;
+            if raw {
+                j += 1;
+                while b.get(j) == Some(&b'#') {
+                    hashes += 1;
+                    j += 1;
+                }
+            }
+            if b.get(j) == Some(&b'"') && (quote || j > i) {
+                let start = j + 1;
+                let mut k = start;
+                // The closing quote: not one a backslash escapes (an odd run of them before it), or
+                // for a raw string the first one followed by its hashes.
+                let end = loop {
+                    let Some(at) = text[k..].find('"').map(|n| k + n) else { break b.len() };
+                    let escaped = !raw && b[start..at].iter().rev().take_while(|&&c| c == b'\\').count() % 2 == 1;
+                    if !escaped && (1..=hashes).all(|n| b.get(at + n) == Some(&b'#')) {
+                        break at;
+                    }
+                    k = at + 1;
+                };
+                out.push((start, Tok::Str(text.get(start..end).unwrap_or(""))));
+                i = end + 1 + hashes;
+            } else {
+                let start = i;
+                while i < b.len() && word_byte(b[i]) {
+                    i += 1;
+                }
+                let word = text.get(start..i).unwrap_or("");
+                if KEPT_WORDS.contains(&word) {
+                    out.push((start, Tok::Word(word)));
+                }
+            }
+        } else if word_byte(c) {
+            while i < b.len() && word_byte(b[i]) {
+                i += 1;
+            }
+        } else {
+            if matches!(c, b'#' | b'[' | b']' | b'(' | b')' | b'{' | b'}' | b';' | b'|' | b'=' | b'>') {
+                out.push((i, Tok::Punct(char::from(c))));
+            }
+            i += 1;
         }
     }
     out
 }
 
-/// Whether the literal whose closing quote ends before `after` in `text` is (one of the
-/// alternatives of) a match arm: followed, through any more `| "…"` alternatives, by `=>` or an
-/// `if` guard. A list in `matches!(…)` ends in a bracket and isn't one.
-fn is_arm(text: &str, after: usize) -> bool {
-    let mut rest = text[after..].trim_start();
-    loop {
-        if rest.starts_with("=>") || rest.starts_with("if ") {
-            return true;
+/// The line (from 1) of the byte offset `at` in `text`.
+fn line_of(text: &str, at: usize) -> usize {
+    1 + text.as_bytes().iter().take(at).filter(|&&c| c == b'\n').count()
+}
+
+/// `tokens` without the test code in them: items under `#[cfg(test)]` or `#[test]` (a module, fn,
+/// use, impl or the like, up to its closing brace or semicolon). Code after a test module stays.
+fn non_test(tokens: Vec<Lexed<'_>>) -> Vec<Lexed<'_>> {
+    let word = |t: &[Lexed<'_>], i: usize, w: &str| matches!(t.get(i), Some((_, Tok::Word(x))) if *x == w);
+    let punct = |t: &[Lexed<'_>], i: usize, p: char| matches!(t.get(i), Some((_, Tok::Punct(x))) if *x == p);
+    let items = ["mod", "fn", "use", "impl", "const", "static", "struct", "enum", "trait", "type", "async", "unsafe", "extern"];
+    let (mut kept, mut i) = (Vec::new(), 0);
+    while i < tokens.len() {
+        let t = &tokens[..];
+        let attr = if punct(t, i, '#')
+            && punct(t, i + 1, '[')
+            && word(t, i + 2, "cfg")
+            && punct(t, i + 3, '(')
+            && word(t, i + 4, "test")
+            && punct(t, i + 5, ')')
+            && punct(t, i + 6, ']')
+        {
+            7
+        } else if punct(t, i, '#') && punct(t, i + 1, '[') && word(t, i + 2, "test") && punct(t, i + 3, ']') {
+            4
+        } else {
+            0
+        };
+        // The item after the attribute, past a visibility such as `pub(crate)`.
+        let mut j = i + attr;
+        if attr > 0 && word(t, j, "pub") {
+            j += 1;
+            if punct(t, j, '(') {
+                while j < t.len() && !punct(t, j, ')') {
+                    j += 1;
+                }
+                j += 1;
+            }
         }
-        let Some(next) = rest.strip_prefix('|').map(str::trim_start).and_then(|r| r.strip_prefix('"')) else { return false };
-        let Some(end) = next.find('"') else { return false };
-        rest = next[end + 1..].trim_start();
+        if attr > 0 && items.iter().any(|k| word(t, j, k)) {
+            let mut depth = 0;
+            while j < t.len() {
+                match t[j].1 {
+                    Tok::Punct('{') => depth += 1,
+                    Tok::Punct('}') => {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    }
+                    Tok::Punct(';') if depth == 0 => break,
+                    _ => {}
+                }
+                j += 1;
+            }
+            i = j + 1;
+        } else {
+            kept.push(tokens[i]);
+            i += 1;
+        }
     }
+    kept
+}
+
+/// Whether the string at `tokens[at - 1]` is (one of the alternatives of) a match arm: followed,
+/// through any more `| "…"` alternatives, by `=>` or an `if` guard. A list in `matches!(…)` ends
+/// in a bracket and isn't one.
+fn is_arm(tokens: &[Lexed<'_>], mut at: usize) -> bool {
+    loop {
+        match (tokens.get(at), tokens.get(at + 1)) {
+            (Some((_, Tok::Punct('='))), Some((_, Tok::Punct('>')))) => return true,
+            (Some((_, Tok::Word(w))), _) if *w == "if" => return true,
+            (Some((_, Tok::Punct('|'))), Some((_, Tok::Str(_)))) => at += 2,
+            _ => return false,
+        }
+    }
+}
+
+/// The id-shaped string literals in the non-test code of `text`: (offset, literal, whether it is a
+/// match arm). Id-shaped is dotted words, the first a lower-case word, none empty; one ending in a
+/// dot is a prefix (`"ui.pane."`), not an id.
+fn literals(text: &str) -> Vec<(usize, &str, bool)> {
+    let tokens = non_test(lex(text));
+    let mut out = Vec::new();
+    for (n, (at, tok)) in tokens.iter().enumerate() {
+        let Tok::Str(s) = *tok else { continue };
+        let words_ok = s.split('.').all(|w| !w.is_empty() && w.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_'));
+        if words_ok && s.contains('.') && s.bytes().next().is_some_and(|c| c.is_ascii_lowercase()) {
+            out.push((*at, s, is_arm(&tokens, n + 1)));
+        }
+    }
+    out
+}
+
+/// The scan reads Rust as the compiler does: a literal in a comment or after a test module, in a
+/// raw string, next to a `'"'` char or a brace in a string.
+#[test]
+fn the_scan_reads_rust_source_not_text() {
+    let text = r####"
+// "a.comment" is not code, nor is /* "a.block" */ this
+fn code() {
+    let (a, b) = ("a.first", r"a.raw");
+    let c = ('"', "a.after_char"); /* "a.in_block" */
+}
+#[cfg(test)]
+mod tests {
+    fn t() { let s = "{ a.in_tests }"; let c = '{'; }
+    const X: &str = "a.test_only";
+}
+const LATER: &str = r#"a.after_tests"#;
+#[test]
+fn alone() { let _ = "a.single_test"; }
+fn arm(id: &str) {
+    match id { "ui.one" | "ui.two" => {} "ui.three" if true => {} _ => {} }
+    let _ = matches!(id, "ui.four" | "ui.five");
+}
+"####;
+    let found = literals(text);
+    let ids: Vec<&str> = found.iter().map(|(_, id, _)| *id).collect();
+    assert_eq!(
+        ids,
+        ["a.first", "a.raw", "a.after_char", "a.after_tests", "ui.one", "ui.two", "ui.three", "ui.four", "ui.five"],
+        "{found:?}"
+    );
+    let arms: Vec<&str> = found.iter().filter(|(_, _, arm)| *arm).map(|(_, id, _)| *id).collect();
+    assert_eq!(arms, ["ui.one", "ui.two", "ui.three"]);
+    assert_eq!(line_of(text, found[3].0), 12, "the line of a literal after a test module");
 }
 
 #[test]
@@ -116,44 +322,46 @@ fn command_ids_in_hand_kept_lists_are_registered() {
     let root = root();
     let mut files = Vec::new();
     for group in ["crates", "apps"] {
-        for package in std::fs::read_dir(root.join(group)).into_iter().flatten().flatten() {
-            sources(&package.path().join("src"), &mut files);
+        let packages = std::fs::read_dir(root.join(group)).unwrap_or_else(|e| panic!("{group}: {e}"));
+        for package in packages {
+            let src = package.unwrap_or_else(|e| panic!("{group}: {e}")).path().join("src");
+            // A package without a `src` directory has no source; one that can't be read is an error.
+            if src.is_dir() {
+                sources(&src, &mut files);
+            }
         }
     }
     files.sort();
     assert!(files.len() > 200, "the scan found {} source files", files.len());
+    // Each file is read once and lexed once, whatever lists of ids it holds.
     let texts: Vec<(String, String)> = files
         .iter()
-        .filter_map(|f| {
-            let text = std::fs::read_to_string(f).ok()?;
-            Some((f.strip_prefix(&root).unwrap_or(f).display().to_string().replace('\\', "/"), non_test(&text).to_string()))
+        .map(|f| {
+            let text = std::fs::read_to_string(f).unwrap_or_else(|e| panic!("{}: {e}", f.display()));
+            (f.strip_prefix(&root).unwrap_or(f).display().to_string().replace('\\', "/"), text)
         })
         .collect();
+    let found: Vec<(&str, &str, Vec<(usize, &str, bool)>)> =
+        texts.iter().map(|(name, text)| (name.as_str(), text.as_str(), literals(text))).collect();
 
     // The `ui.*` commands the app handles: those with a match arm.
-    let mut ui_arms = HashSet::new();
-    for (_, text) in &texts {
-        for (_, word, after) in literals(text) {
-            if word.starts_with("ui.") && is_arm(text, after) {
-                ui_arms.insert(word.to_string());
-            }
-        }
-    }
+    let ui_arms: HashSet<&str> =
+        found.iter().flat_map(|(_, _, l)| l).filter(|(_, id, arm)| *arm && id.starts_with("ui.")).map(|(_, id, _)| *id).collect();
     assert!(ui_arms.len() > 100, "the scan found {} ui commands with an arm", ui_arms.len());
 
     let (mut seen, mut exempt_seen, mut dangling) = (0, HashSet::new(), Vec::new());
-    for (file, text) in &texts {
-        for (line, word, _) in literals(text) {
+    for (file, text, literals) in &found {
+        for (at, word, _) in literals {
             let namespace = word.split('.').next().unwrap_or("");
             let last = word.rsplit('.').next().unwrap_or("");
             if !namespaces.contains(namespace) || NOT_IDS.contains(&last) {
                 continue;
             }
             seen += 1;
-            if let Some((id, _)) = EXEMPT.iter().find(|(id, _)| *id == word) {
+            if let Some((id, _)) = EXEMPT.iter().find(|(id, _)| id == word) {
                 exempt_seen.insert(*id);
             } else if !(ids.contains(word) || ui_arms.contains(word)) {
-                dangling.push(format!("{file}:{line}: \"{word}\""));
+                dangling.push(format!("{file}:{}: \"{word}\"", line_of(text, *at)));
             }
         }
     }
