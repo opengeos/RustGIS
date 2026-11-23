@@ -97,8 +97,9 @@ impl CoordReadout {
     }
 
     /// The status bar's readout of the pointer: `—` off the map, and a short statement on another
-    /// body's map, where the Earth's grids name no place, rather than a wrong grid reference. It is
-    /// no wider than a reference, so the status bar keeps its room.
+    /// body's map, where the Earth's grids name no place, rather than a wrong grid reference (no
+    /// wider than that reference). Map coordinates can run wider: up to 13 characters for each
+    /// number, with three decimals far from the system's origin.
     pub fn readout(self, c: Option<Coord>, earth: bool, map: Option<&MapSystem>) -> String {
         match c {
             None => "—".to_string(),
@@ -117,31 +118,56 @@ impl CoordReadout {
     }
 }
 
+/// The name [`MapSystem::name`] gives a projection.
+fn system_name(p: &rustgis_engine::map::Projection) -> String {
+    let label = p.label();
+    if matches!(p, rustgis_engine::map::Projection::WebMercator) || label.starts_with("EPSG:") || label.starts_with("ESRI:") {
+        label
+    } else {
+        p.code()
+    }
+}
+
 /// A flat map of the Earth's own coordinates, as the map format reads them: its projection and
 /// how many of its units a screen pixel spans, which sets the decimals shown.
 pub struct MapSystem {
     flat: Flat,
     res: f64,
+    /// The system's name, never translated: see [`MapSystem::name`].
+    name: String,
 }
 
 impl MapSystem {
     /// The system of a map: `None` on the globe and on another body's map, whose flat projection
     /// is computed on the Earth's figure and so gives no coordinates of its own body.
     pub fn of(map: &rustgis_engine::map::Map) -> Option<MapSystem> {
-        (map.body().is_earth() && !map.projection.is_globe()).then(|| MapSystem { flat: Flat::of(&map.projection), res: map.camera.res })
+        (map.body().is_earth() && !map.projection.is_globe()).then(|| MapSystem {
+            flat: Flat::of(&map.projection),
+            res: map.camera.res,
+            name: system_name(&map.projection),
+        })
     }
 
     /// A system from its parts (tests).
-    pub fn new(flat: Flat, res: f64) -> MapSystem {
-        MapSystem { flat, res }
+    pub fn new(flat: Flat, res: f64, name: &str) -> MapSystem {
+        MapSystem { flat, res, name: name.to_string() }
+    }
+
+    /// The system's name, as it can be given back to `map.projection`: its EPSG or ESRI code
+    /// (`EPSG:2056`), `Web Mercator`, else the map's projection code (`robinson +lon_0=150`,
+    /// `local:7.4386,46.9511`), which, unlike a preset's or a local view's display name, names
+    /// the system exactly.
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     /// The place's easting and northing, with as many decimals as a pixel needs (none at a metre
     /// a pixel or more, up to three) and the unit: `2600000 mE  1200000 mN`, `ftE` and `ftN` in
     /// international feet, `ftUSE` and `ftUSN` in US survey feet, and `E` and `N` alone in
     /// another unit. A place on a world copy past the antimeridian reads as the same place within
-    /// ±180°. `None` where the projection doesn't reach or folds (outside a system's area of use),
-    /// as the map draws nothing there.
+    /// ±180°. `None` where the projection doesn't reach (outside the area the map draws it over,
+    /// for LV95 a 60° cap around Bern, well past Switzerland) or folds, as the map draws nothing
+    /// there.
     fn format(&self, c: Coord) -> Option<String> {
         let m = self.flat.forward_checked(Coord::new(crate::mapmenu::wrap_lon(c.x), c.y)).filter(|m| m.is_finite())?;
         let decimals = if self.res.is_finite() && self.res > 0.0 { (-self.res.log10()).ceil().clamp(0.0, 3.0) as usize } else { 0 };
@@ -246,33 +272,52 @@ mod tests {
     #[test]
     fn map_coordinates_read_in_the_maps_system() {
         let bern = Coord::new(7.4386, 46.9511);
-        let lv95 = MapSystem::new(Flat::of(&rustgis_engine::map::Projection::Custom("EPSG:2056".into())), 2.0);
+        let lv95 = MapSystem::new(Flat::of(&rustgis_engine::map::Projection::Custom("EPSG:2056".into())), 2.0, "EPSG:2056");
         let r = CoordReadout::Map.readout(Some(bern), true, Some(&lv95));
-        let (e, n) = r.split_once("  ").unwrap_or_default();
-        let (e, n) = (e.trim_end_matches(" mE").parse::<f64>().unwrap_or(0.0), n.trim_end_matches(" mN").parse::<f64>().unwrap_or(0.0));
+        let (e, n) = r.split_once("  ").expect("an easting and a northing");
+        let e: f64 = e.strip_suffix(" mE").expect("metres east").parse().expect("a number east");
+        let n: f64 = n.strip_suffix(" mN").expect("metres north").parse().expect("a number north");
         // Bern's old observatory is the origin of the Swiss grid: E 2600000, N 1200000.
         assert!((e - 2_600_000.0).abs() < 50.0 && (n - 1_200_000.0).abs() < 50.0, "{r}");
         assert!(!r.contains('.'), "{r}");
         // Zoomed in to 5 cm a pixel, two decimals.
-        let close = MapSystem::new(Flat::of(&rustgis_engine::map::Projection::Custom("EPSG:2056".into())), 0.05);
+        let close = MapSystem::new(Flat::of(&rustgis_engine::map::Projection::Custom("EPSG:2056".into())), 0.05, "EPSG:2056");
         let r = CoordReadout::Map.readout(Some(bern), true, Some(&close));
-        assert!(r.split("  ").all(|part| part.split_once('.').is_some_and(|(_, d)| d.len() == 2 + 3)), "{r}");
+        let decimals = |part: &str| part.split_once('.').map(|(_, d)| d.trim_end_matches([' ', 'm', 'E', 'N']).len());
+        assert!(r.split("  ").all(|part| decimals(part) == Some(2)), "{r}");
         // Web Mercator: the origin, and a world copy past the antimeridian.
-        let merc = MapSystem::new(Flat::Mercator, 1000.0);
+        let merc = MapSystem::new(Flat::Mercator, 1000.0, "Web Mercator");
         assert_eq!(CoordReadout::Map.readout(Some(Coord::new(0.0, 0.0)), true, Some(&merc)), "0 mE  0 mN");
         assert_eq!(
             CoordReadout::Map.readout(Some(Coord::new(370.0, 0.0)), true, Some(&merc)),
             CoordReadout::Map.readout(Some(Coord::new(10.0, 0.0)), true, Some(&merc))
         );
         // NAD83 / Texas Central (ftUS), EPSG:2277.
-        let texas = MapSystem::new(Flat::of(&rustgis_engine::map::Projection::Custom("EPSG:2277".into())), 10.0);
+        let texas = MapSystem::new(Flat::of(&rustgis_engine::map::Projection::Custom("EPSG:2277".into())), 10.0, "EPSG:2277");
         let r = CoordReadout::Map.readout(Some(Coord::new(-97.74, 30.27)), true, Some(&texas));
         assert!(r.ends_with(" ftUSN") && r.contains(" ftUSE  "), "{r}");
         // Outside the system's reach: said, not a wrong number.
         let far = CoordReadout::Map.readout(Some(Coord::new(-150.0, -60.0)), true, Some(&lv95));
         assert_eq!(far, "No map coordinates here");
+        // Its projection reaches well past Switzerland: London still has eastings and northings.
+        let london = CoordReadout::Map.readout(Some(Coord::new(-0.1276, 51.5072)), true, Some(&lv95));
+        assert!(london.ends_with(" mN"), "{london}");
         // The globe and another body's map have no flat Earth system: degrees.
         assert_eq!(CoordReadout::Map.readout(Some(bern), true, None), geom::format_lonlat(bern));
         assert!(CoordReadout::Map.hover().contains("map's coordinate system"));
+    }
+
+    /// The copied name gives the system back: a code, never a preset's or a local view's
+    /// display name.
+    #[test]
+    fn the_system_is_named_so_it_can_be_given_back() {
+        use rustgis_engine::map::Projection;
+        assert_eq!(system_name(&Projection::WebMercator), "Web Mercator");
+        assert_eq!(system_name(&Projection::from_code("EPSG:2056").expect("LV95")), "EPSG:2056");
+        for code in ["robinson +lon_0=150", "local:7.4386,46.9511"] {
+            let p = Projection::from_code(code).expect(code);
+            let name = system_name(&p);
+            assert_eq!(Projection::from_code(&name).expect(&name), p, "{name}");
+        }
     }
 }

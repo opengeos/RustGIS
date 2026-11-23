@@ -56,11 +56,16 @@ fn lat_lon(c: Coord) -> String {
 /// back from it. Decimal degrees are `lat, lon` ([`lat_lon`]); north of 84° N and south of 80° S
 /// UTM and MGRS give UPS (`north …`, `Z …`); on another body's map (`earth` false) they fall back
 /// to latitude and longitude (and the row's hover text says why). Map coordinates are the map's
-/// own system's (`map`); without one (the globe, another body) they are latitude and longitude, and
-/// where the system doesn't reach they fall back to them.
+/// own system's (`map`), followed by its name so the copy says which system they are in
+/// (`2600173 mE  1200272 mN  EPSG:2056`); without one (the globe, another body) they are latitude
+/// and longitude, and where the system doesn't reach they fall back to them.
 fn coordinate_row(c: Coord, f: CoordReadout, earth: bool, map: Option<&MapSystem>) -> (String, bool) {
     match (f, map) {
         (CoordReadout::Decimal, _) | (CoordReadout::Map, None) => (lat_lon(c), false),
+        (CoordReadout::Map, Some(m)) => match f.format(c, earth, map) {
+            Some(text) => (format!("{text}  {}", m.name()), false),
+            None => (lat_lon(c), true),
+        },
         _ => match f.format(c, earth, map) {
             Some(text) => (text, false),
             None => (lat_lon(c), true),
@@ -324,11 +329,16 @@ mod tests {
         assert_eq!(coordinate_row(p, CoordReadout::Dms, false, None), coordinate_row(p, CoordReadout::Dms, true, None));
         // Map coordinates: the map's own system's, and latitude and longitude without one (the
         // globe, another body) or where the system doesn't reach (said in the row's hover text).
-        let merc = MapSystem::new(rustgis_engine::map::projection::Flat::Mercator, 1000.0);
-        assert_eq!(coordinate_row(Coord::new(0.0, 0.0), CoordReadout::Map, true, Some(&merc)), ("0 mE  0 mN".into(), false));
+        let merc = MapSystem::new(rustgis_engine::map::projection::Flat::Mercator, 1000.0, "Web Mercator");
+        assert_eq!(coordinate_row(Coord::new(0.0, 0.0), CoordReadout::Map, true, Some(&merc)), ("0 mE  0 mN  Web Mercator".into(), false));
         assert_eq!(coordinate_row(p, CoordReadout::Map, true, None), ("33.300000, 44.400000".into(), false));
-        let lv95 =
-            MapSystem::new(rustgis_engine::map::projection::Flat::of(&rustgis_engine::map::Projection::Custom("EPSG:2056".into())), 1.0);
+        let lv95 = MapSystem::new(
+            rustgis_engine::map::projection::Flat::of(&rustgis_engine::map::Projection::Custom("EPSG:2056".into())),
+            1.0,
+            "EPSG:2056",
+        );
+        let (bern, _) = coordinate_row(Coord::new(7.4386, 46.9511), CoordReadout::Map, true, Some(&lv95));
+        assert!(bern.starts_with("2599") && bern.ends_with(" mN  EPSG:2056"), "{bern}");
         let far = Coord::new(-150.0, -60.0);
         assert_eq!(coordinate_row(far, CoordReadout::Map, true, Some(&lv95)), ("-60.000000, -150.000000".into(), true));
     }

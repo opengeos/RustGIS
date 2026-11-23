@@ -340,9 +340,12 @@ the 100 km square and the digits, truncated, `Z AC 77146 62481`. 84° N itself i
 itself is UTM. On the map of another body than the Earth the readout shows *No UTM here*
 (or *No MGRS here*) rather than a wrong reference, and degrees still read. Map coordinates read in
 degrees on the globe and on another body's map, since the map's projection is computed on the
-Earth's figure; where a map's system has no coordinates (outside a national grid's area of use)
-they read *No map coordinates here*, and the right-click menu's row copies latitude and longitude
-instead. Scripts set the format with `ui.coordinateFormat={"format":"utm"}` (`map`, `decimal`,
+Earth's figure; where the map's projection doesn't reach or folds over (the far side of a polar
+or oblique projection), they read *No map coordinates here*, and the right-click menu's row copies
+latitude and longitude instead. A projection can reach well beyond a national grid's area of use:
+London on a map in LV95 still reads eastings and northings. In map coordinates the right-click
+menu's row copies the system's name after them, `2600173 mE  1200272 mN  EPSG:2056`, so the copy
+says which system it is in. Scripts set the format with `ui.coordinateFormat={"format":"utm"}` (`map`, `decimal`,
 `dms`, `utm` or `mgrs`); without `format` it steps to the next one. A saved format this version
 doesn't know, say from a newer RustGIS, reads in map coordinates with a notice, and stays saved
 until you pick a format.
