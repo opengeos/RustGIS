@@ -87,7 +87,7 @@ pub(crate) fn read(r: &RasterLayer) -> Result<Frame, String> {
                 return Err("Original image grids require a GeoTIFF source. Export this image as a GeoTIFF and add that file.".into());
             }
             placed()?;
-            if r.reads_in_place() {
+            if r.in_place {
                 return Err("Original image grids need the image's pixels loaded whole, and this image is read in place a view at a time. Choose map metres, or add a clipped copy that opens whole.".into());
             }
             let input = rustgis_data::provenance::open(path).map_err(|e| e.to_string())?;

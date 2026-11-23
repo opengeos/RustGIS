@@ -129,6 +129,12 @@ fn read_overview(info: Arc<Info>, url: String, done: Box<dyn FnOnce(Result<Raste
                     r.apply_pam(described, rustgis_data::raster::pam::GDAL_METADATA);
                 }
                 r.source = Some(url.clone());
+                // A file on this computer: the revision its overview came from, which a read of
+                // the file's own grid is checked against.
+                #[cfg(not(target_arch = "wasm32"))]
+                if super::is_local_file(&url) {
+                    r.capture_source_file(std::path::Path::new(&url));
+                }
                 Ok(r)
             }))
         }),

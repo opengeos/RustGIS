@@ -42,6 +42,13 @@ impl FileRevision {
 }
 
 impl super::Raster {
+    /// Records the file at `path`, as it is now, as the one its pixels came from: for pixels
+    /// another reader assembled from the file (a GeoTIFF on this computer read in place), so the
+    /// checks that pair later reads of the file with them can be made.
+    pub fn capture_source_file(&mut self, path: &Path) {
+        self.source_file = Some(std::fs::metadata(path).and_then(|m| FileRevision::capture(&m)).map_err(|e| e.to_string()));
+    }
+
     fn original_revision(&self) -> std::result::Result<&FileRevision, String> {
         match &self.source_file {
             Some(Ok(original)) => Ok(original),

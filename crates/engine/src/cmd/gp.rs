@@ -715,7 +715,7 @@ impl ToolRun {
         // A bug in reading the inputs, like one in a tool, must not take the app down.
         let mut done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             crate::render::rustgis_tiles::cache::with_still(still, || {
-                let inputs = match inputs_of(snap, Some(spec), &params, Tiled::File) {
+                let inputs = match inputs_of(snap, Some(spec), &params, tiled_for(&pin)) {
                     Ok(inputs) => inputs,
                     // A Cancel while the inputs are read names the tool, as one while it runs does.
                     Err(_) if control.is_cancelled() => {
@@ -1385,6 +1385,16 @@ pub(crate) enum Tiled {
     Overview,
     /// By its path: a suite tool stages the file itself.
     ByPath,
+}
+
+/// How a run of `pin` reads a raster read in place from a file ([`Tiled`]): a plugin reads the
+/// overview the layer holds, a suite tool stages the file by its path, a built-in tool reads it.
+fn tiled_for(pin: &crate::policy::ToolPin) -> Tiled {
+    #[cfg(feature = "geolibre")]
+    if pin.resolved().source() == Some(rustgis_geolibre::SOURCE) {
+        return Tiled::ByPath;
+    }
+    if pin.plugin().is_some() { Tiled::Overview } else { Tiled::File }
 }
 
 /// [`inputs_of`] from the session as it is; `tiled` as there.
@@ -3334,7 +3344,7 @@ pub(crate) fn execute(
             let read = recording.then(|| Snapshot::owned(s));
             // A built-in tool run here (the command line, a script on its own thread) reads a
             // raster file read in place, as one the app starts on a thread does.
-            let tiled = if pin.plugin().is_none() { Tiled::File } else { Tiled::Overview };
+            let tiled = tiled_for(pin);
             let inputs = match map_inputs(s, Some(spec), params, tiled) {
                 Ok(inputs) => inputs,
                 // A batch item that can't read its input is kept in the history as a failed run.

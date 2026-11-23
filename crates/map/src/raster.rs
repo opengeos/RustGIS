@@ -294,7 +294,11 @@ impl RasterLayer {
         let tiled = in_place.is_some();
         let r = match in_place {
             Some(r) => r,
-            None => self.read_placed(path, sub, false).map_err(|e| format!("{path}: {e}"))?,
+            None => {
+                // Not read whole for a read asked to stop (a Cancel, a project replaced).
+                rustgis_data::source::remote::check_still(&rustgis_data::source::remote::current_still())?;
+                self.read_placed(path, sub, false).map_err(|e| format!("{path}: {e}"))?
+            }
         };
         self.validate_replacement(&r, path)?;
         let mut style = self.style.clone();

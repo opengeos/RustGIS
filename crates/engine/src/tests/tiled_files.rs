@@ -268,3 +268,25 @@ fn a_batch_over_a_tiled_file_reads_the_file_for_each_item() {
     }
     let _ = std::fs::remove_dir_all(&d);
 }
+
+/// Original image grids read a tiled file's own grid, as for a file held whole: its overview
+/// records the file's revision, which the grid read is checked against, and a file written again
+/// since is refused.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn an_original_image_grid_reads_a_tiled_files_grid() {
+    let d = dir("grid");
+    let path = checkerboard(&d);
+    let _held = HeldWhole::at(1_000_000);
+    let mut s = Session::new(Project::default());
+    s.run("layer.addData", &json!({"path": path})).unwrap();
+    assert!(raster(&s, "checks").tiled);
+    crate::image_grid::read(raster(&s, "checks")).unwrap();
+    // Written again (the same bytes, a new file): the revision the overview came from is gone.
+    let bytes = std::fs::read(&path).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    std::fs::write(&path, bytes).unwrap();
+    let e = crate::image_grid::read(raster(&s, "checks")).err().unwrap_or_default();
+    assert!(e.contains("changed since its pixels were loaded"), "{e}");
+    let _ = std::fs::remove_dir_all(&d);
+}
