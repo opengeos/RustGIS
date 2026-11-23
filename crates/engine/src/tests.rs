@@ -37543,6 +37543,106 @@ fn removing_another_map_or_layout_keeps_the_one_in_view() {
     assert_eq!(open(&s), None, "with the map in view, it stays in view");
 }
 
+/// Moving a map changes the project's order of maps (their tabs and the Browser's list) in one
+/// undo step, with the map in view kept in view; a move to where it is leaves no step (#2802).
+#[test]
+fn map_move_reorders_maps_keeping_the_one_in_view() {
+    let mut s = world();
+    for n in ["B", "C"] {
+        s.run("map.new", &json!({"name": n})).unwrap();
+    }
+    let first = s.project.maps[0].name.clone();
+    let names = |s: &Session| s.project.maps.iter().map(|m| m.name.clone()).collect::<Vec<_>>();
+    let order = |v: [&str; 3]| v.map(String::from).to_vec();
+    let active = |s: &Session| s.map().name.clone();
+    s.run("map.activate", &json!({"name": "B"})).unwrap();
+    s.mark_saved();
+    let depth = s.undo_depth();
+    // To the front: the map in view moves with the order.
+    s.run("map.move", &json!({"name": "c", "to": 0})).unwrap();
+    assert_eq!(names(&s), order(["C", &first, "B"]));
+    assert_eq!((active(&s), s.undo_depth()), ("B".to_string(), depth + 1));
+    assert!(s.dirty());
+    // The map in view itself, and past the end is the back.
+    s.run("map.move", &json!({"name": "B", "to": 0})).unwrap();
+    assert_eq!(names(&s), order(["B", "C", &first]));
+    s.run("map.move", &json!({"name": "B", "to": 99})).unwrap();
+    assert_eq!(names(&s), order(["C", &first, "B"]));
+    assert_eq!(active(&s), "B");
+    // Where it already is: no change, no undo step.
+    let depth = s.undo_depth();
+    for p in [json!({"name": "C", "to": 0}), json!({"name": "B", "to": 2}), json!({"name": "B", "to": 99})] {
+        s.run("map.move", &p).unwrap_or_else(|e| panic!("{p}: {e}"));
+        assert_eq!((names(&s), s.undo_depth()), (order(["C", &first, "B"]), depth), "{p}");
+    }
+    // A missing or junk position and an unknown map fail and change nothing.
+    for p in [
+        json!({"name": "B"}),
+        json!({"name": "B", "to": -1}),
+        json!({"name": "B", "to": 1.5}),
+        json!({"name": "B", "to": "x"}),
+        json!({"name": "Nope", "to": 0}),
+        json!({"to": 0}),
+    ] {
+        assert!(s.run("map.move", &p).is_err(), "{p}");
+    }
+    assert_eq!((names(&s), s.undo_depth()), (order(["C", &first, "B"]), depth));
+    // Undo and redo bring the order back with the same map in view.
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert_eq!((names(&s), active(&s)), (order(["B", "C", &first]), "B".to_string()));
+    s.run("edit.redo", &Value::Null).unwrap();
+    assert_eq!((names(&s), active(&s)), (order(["C", &first, "B"]), "B".to_string()));
+    // The order is saved with the project.
+    let mut t = Session::new(Project::default());
+    t.run("project.openText", &json!({"text": serde_json::to_string(&s.project).unwrap()})).unwrap();
+    assert_eq!((names(&t), active(&t)), (names(&s), "B".to_string()));
+    // A project of one map: moving it is a no-op.
+    let mut one = world();
+    let only = one.project.maps[0].name.clone();
+    let depth = one.undo_depth();
+    one.run("map.move", &json!({"name": only, "to": 5})).unwrap();
+    assert_eq!(one.undo_depth(), depth);
+}
+
+/// Moving a layout changes the order of layouts in one undo step, with the open layout kept open
+/// whichever moves; a move to where it is leaves no step (#2802).
+#[test]
+fn layout_move_reorders_layouts_keeping_the_open_one() {
+    let mut s = world();
+    for n in ["L1", "L2", "L3"] {
+        s.run("layout.new", &json!({"name": n})).unwrap();
+    }
+    let names = |s: &Session| s.project.layouts.iter().map(|l| l.name.clone()).collect::<Vec<_>>();
+    let open = |s: &Session| s.active_layout.and_then(|i| s.project.layouts.get(i)).map(|l| l.name.clone());
+    s.run("layout.activate", &json!({"name": "L2"})).unwrap();
+    let depth = s.undo_depth();
+    s.run("layout.move", &json!({"name": "l3", "to": 0})).unwrap();
+    assert_eq!(names(&s), ["L3", "L1", "L2"]);
+    assert_eq!((open(&s).as_deref(), s.undo_depth()), (Some("L2"), depth + 1));
+    s.run("layout.move", &json!({"name": "L2", "to": 0})).unwrap();
+    assert_eq!((names(&s), open(&s)), (vec!["L2".to_string(), "L3".into(), "L1".into()], Some("L2".to_string())));
+    s.run("layout.move", &json!({"name": "L2", "to": 99})).unwrap();
+    assert_eq!((names(&s), open(&s)), (vec!["L3".to_string(), "L1".into(), "L2".into()], Some("L2".to_string())));
+    let depth = s.undo_depth();
+    for p in [json!({"name": "L3", "to": 0}), json!({"name": "L2", "to": 99})] {
+        s.run("layout.move", &p).unwrap_or_else(|e| panic!("{p}: {e}"));
+        assert_eq!(s.undo_depth(), depth, "{p}");
+    }
+    for p in [json!({"name": "L1"}), json!({"name": "L1", "to": -1}), json!({"name": "L1", "to": "x"}), json!({"name": "Nope", "to": 0})] {
+        assert!(s.run("layout.move", &p).is_err(), "{p}");
+    }
+    assert_eq!((names(&s), s.undo_depth()), (vec!["L3".to_string(), "L1".into(), "L2".into()], depth));
+    // With the map in view, none opens.
+    s.run("layout.close", &Value::Null).unwrap();
+    s.run("layout.move", &json!({"name": "L1", "to": 0})).unwrap();
+    assert_eq!(open(&s), None);
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert_eq!(names(&s), ["L3", "L1", "L2"]);
+    let mut t = Session::new(Project::default());
+    t.run("project.openText", &json!({"text": serde_json::to_string(&s.project).unwrap()})).unwrap();
+    assert_eq!(names(&t), names(&s));
+}
+
 /// A map's name finds one map (tabs, Browser, map frames): renaming to another map's name adds a
 /// number, and a map keeps its own name in another case.
 #[test]
