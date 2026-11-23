@@ -1194,6 +1194,7 @@ fn aggregate_in(inp: &dyn Inputs, p: &Json, system: System) -> Result<ToolResult
     control::begin(rows.len());
     for (i, r) in rows.into_iter().enumerate() {
         control::reached(i);
+        // One unit per feature: its points are charged below, so a point layer keeps its pace.
         if pace.stop(1) {
             return Err(control::Cancelled.into());
         }
@@ -1517,12 +1518,13 @@ mod tests {
         let looks = |n: usize| {
             let mut d = points(&[]);
             d.push(Some(Geometry::MultiPoint(vec![Coord::new(-55.72, -12.55); n])), vec![Value::Float(1.0)]);
-            let control = control::Control::cancelled_at_look(u64::MAX);
+            let cancel = control::Control::cancelled_at_look(u64::MAX);
             let json = serde_json::json!({"system": "H3", "input": "pts", "resolution": 5});
-            crate::run_under("Aggregate", &control, || aggregate(&One(d, None), &json)).unwrap();
-            control.looked()
+            crate::run_under("Aggregate", &cancel, || aggregate(&One(d, None), &json)).unwrap();
+            cancel.looked()
         };
-        assert!(looks(2 * control::PACE_WORK / 16) >= looks(1) + 2);
+        // Three paces' worth of points: three looks within the feature, where none was before.
+        assert!(looks(3 * control::PACE_WORK / 16) >= looks(1) + 2);
         for bad in [
             serde_json::json!({"input": "nope"}),
             serde_json::json!({"input": "pts", "field": "nope"}),
