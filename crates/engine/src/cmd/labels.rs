@@ -960,28 +960,29 @@ fn convert(s: &mut Session, p: &Value) -> CmdResult {
     // said.
     let astray = std::cell::Cell::new(0usize);
     let unplaced = std::cell::Cell::new(0usize);
-    let put_at = |[x, y]: [f64; 2], at: Coord| {
+    // `None` for one left at its feature's label point, which isn't moved there any more.
+    let put_at = |[x, y]: [f64; 2]| -> Option<Coord> {
         let c = Coord::new(x, y);
         let by_map = shown.as_ref().map(|back| back.point(c).filter(|c| c.is_finite()));
         let Some(to_own) = &to_own else {
-            return match by_map {
+            return Some(match by_map {
                 None => c,
                 Some(own) => own.and_then(|own| to.point(own)).filter(|l| l.is_finite()).unwrap_or_else(|| {
                     astray.set(astray.get() + 1);
                     c
                 }),
-            };
+            });
         };
         match by_map {
-            Some(Some(own)) => own,
+            Some(Some(own)) => Some(own),
             by_map => match to_own.point(c).filter(|c| c.is_finite()) {
                 Some(own) => {
                     astray.set(astray.get() + usize::from(by_map.is_some()));
-                    own
+                    Some(own)
                 }
                 None => {
                     unplaced.set(unplaced.get() + 1);
-                    at
+                    None
                 }
             },
         }
@@ -1020,8 +1021,13 @@ fn convert(s: &mut Session, p: &Value) -> CmdResult {
             }
             // A label moved by hand becomes an annotation where it was put, and stays moved there
             // (its class's offset leaves it).
-            let put = class.moved_to(ft.id());
-            let at = put.map_or(at, |put| put_at(put, at));
+            // One that can't be placed in the layer's own system stays at its label point, and
+            // isn't moved in the annotation's labels either.
+            let was_moved = class.moved_to(ft.id()).is_some();
+            let (put, at) = match class.moved_to(ft.id()).map(|put| (put, put_at(put))) {
+                Some((put, Some(to))) => (Some(put), to),
+                Some((_, None)) | None => (None, at),
+            };
             let e = exprs.get(i).and_then(Option::as_ref);
             let number = |v: Option<f32>| v.map_or(Attr::Null, |v| Attr::Float(f64::from(v)));
             if by_size {
@@ -1036,7 +1042,7 @@ fn convert(s: &mut Session, p: &Value) -> CmdResult {
                 attrs.push(number(e.filter(|_| turns).and_then(|e| e.angle(&l.dataset, row))));
             }
             ds.push(Some(Geometry::Point(at)), attrs);
-            let flat = put.is_none() && along(class, ft.geometry());
+            let flat = !was_moved && along(class, ft.geometry());
             flattened += usize::from(flat);
             repeated += usize::from(flat && class.repeat.is_some());
             if let (Some(put), Some(new)) = (put, ds.features.last()) {

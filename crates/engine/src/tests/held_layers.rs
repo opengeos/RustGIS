@@ -2646,3 +2646,31 @@ fn a_held_layers_points_and_networks_work_in_its_own_system() {
     };
     assert_numbers_close(&costs(&ss[0]), &costs(&ss[1]), 1e-6, "OD costs (km)");
 }
+
+/// A label moved to a place the layer's own system can't hold (the South Pole, for the NSIDC
+/// north polar stereographic system) becomes annotation at its feature's label point, isn't moved there in the
+/// annotation's labels, and is said; with every label placed, nothing is said (#2032 C2e-5).
+#[test]
+fn a_moved_label_the_layers_system_cant_hold_is_said() {
+    let polar = Crs::Epsg(3413);
+    for (to, said) in [([11.0, -90.0], true), ([11.51, 48.71], false)] {
+        let mut s = session(polar);
+        let l = s.map().layer_by_name("Wells").unwrap();
+        let moved = l.dataset.features[1].id;
+        let label_point = l.dataset.features[1].geometry.clone();
+        s.run("labels.enable", &json!({"layer": "Wells", "on": true})).unwrap();
+        s.run("labels.move", &json!({"layer": "Wells", "feature": moved, "to": to})).unwrap();
+        let mark = s.notice_mark();
+        let made = s.run("labels.convert", &json!({"layer": "Wells"})).unwrap();
+        let notices: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+        assert_eq!(notices.iter().any(|n| n.contains("can't be placed in")), said, "{to:?}: {notices:?}");
+        let a = s.map().layer(made["layer"].as_u64().unwrap() as u32).unwrap();
+        assert_eq!(a.dataset.coord_crs(), polar);
+        if said {
+            assert_eq!(a.dataset.features[1].geometry, label_point, "at its label point");
+            assert!(a.labels.default.moved.is_empty(), "not moved in the annotation");
+        } else {
+            assert_eq!(a.labels.default.moved.len(), 1);
+        }
+    }
+}

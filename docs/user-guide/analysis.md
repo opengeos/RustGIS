@@ -600,8 +600,8 @@ use the smaller polar region in either direction; reversing a ring does not sele
 complement. Edges follow the shortest geodesics between vertices. The output fields remain
 `area_km2`, `perimeter_km` and `length_km`; point coordinates are unchanged. A point layer gets
 `point_x` and `point_y`: longitude and latitude, or x and y in the projected system the layer is
-held in (see above). A feature with a place that can't be given in longitude/latitude isn't
-measured, and a notice counts them.
+held in (see above). A feature with a place that can't be given in longitude/latitude, or lies
+beyond the poles (a latitude past ±90°), isn't measured, and a notice counts them.
 A ring through both poles can wind beyond one whole surface and bound no single
 region. Calculate Geometry Attributes refuses such input, with the numbers of affected rings
 and features, before changing any fields. The attribute table's Calculate Geometry does the

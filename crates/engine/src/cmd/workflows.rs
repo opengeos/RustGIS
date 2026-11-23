@@ -1999,6 +1999,9 @@ fn simulate(s: &mut Session, p: &Value) -> CmdResult {
     }
     let n = ds.features.len();
     if own {
+        // A cancel stops the sampling with the points made so far: none of them is added, as the
+        // conversion below refuses them then.
+        rustgis_data::progress::check().map_err(|e| e.to_string())?;
         (ds.held_in, ds.crs) = system;
     } else {
         hold_as(s, &mut ds, system)?;

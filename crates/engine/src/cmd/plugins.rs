@@ -645,21 +645,13 @@ impl Bridge<'_> {
                 }
                 let Some(g) = f.geometry.take() else { continue };
                 let mut ok = true;
-                if own {
-                    // As the layer holds it: refused only for a missing coordinate, as a
-                    // conversion refuses one.
-                    g.for_each_coord(|c| ok &= c.is_finite());
-                    if !ok {
-                        failed += 1;
-                        first.get_or_insert(f.id);
-                    }
-                    f.geometry = Some(g);
-                    continue;
-                }
-                if mercator {
+                // As the layer holds it when that is the system asked for: refused only for a
+                // missing coordinate, as a conversion refuses one.
+                if mercator && !own {
                     g.for_each_coord(|c| ok &= c.y.abs() <= rustgis_geom::MAX_LAT || !c.y.is_finite());
                 }
-                let g = if ok { g.map_coords(&|c| t.from_lonlat(c).unwrap_or(crate::geom::Coord::new(f64::NAN, f64::NAN))) } else { g };
+                let g =
+                    if ok && !own { g.map_coords(&|c| t.from_lonlat(c).unwrap_or(crate::geom::Coord::new(f64::NAN, f64::NAN))) } else { g };
                 g.for_each_coord(|c| ok &= c.is_finite());
                 if !ok {
                     failed += 1;

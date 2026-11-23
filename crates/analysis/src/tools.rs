@@ -6033,7 +6033,7 @@ fn merc_area_perimeter(mp: &MultiPolygon<f64>) -> (f64, f64) {
 /// In a layer's own projected system ([`Inputs::work_crs`]) the point's x and y are that system's,
 /// in its unit, as the layer holds them; areas and lengths are still measured on the ground, each
 /// feature given in longitude/latitude for it (#2032 C2e-5). A feature with a place that can't be
-/// given there gets no measures, and is counted in a notice.
+/// given there, or is given beyond the poles, gets no measures, and is counted in a notice.
 fn calculate_geometry(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     use geo::{Geodesic, Length};
     let ds = input(inp, p, "input")?;
@@ -6046,7 +6046,13 @@ fn calculate_geometry(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> 
         g: &'a Geometry,
         unplaced: &std::sync::atomic::AtomicUsize,
     ) -> Option<Cow<'a, Geometry>> {
-        let g = Dataset::converted_to_lonlat(to, g);
+        // A place given beyond the poles (a latitude past ±90°) has none either; a missing
+        // coordinate is measured as it always was.
+        let g = Dataset::converted_to_lonlat(to, g).filter(|g| {
+            let mut placed = true;
+            g.for_each_coord(|c| placed &= !(c.is_finite() && c.y.abs() > 90.0));
+            placed
+        });
         if g.is_none() {
             unplaced.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
@@ -6130,7 +6136,7 @@ fn calculate_geometry(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> 
     let unplaced = unplaced.into_inner();
     if unplaced > 0 {
         messages.push(format!(
-            "Calculate Geometry Attributes: {unplaced} feature(s) of {} have a place in {} that can't be given in longitude/latitude, and weren't measured",
+            "Calculate Geometry Attributes: {unplaced} feature(s) of {} have a place with no longitude/latitude (beyond the poles, or one {} can't give there), and weren't measured",
             ds.name,
             to.source().label()
         ));
@@ -10742,7 +10748,13 @@ mod tests {
                 vec![],
             );
             let inputs = Map(HashMap::from([("invalid".into(), ds)]));
-            assert!(crate::run("calculateGeometry", &inputs, &serde_json::json!({"input":"invalid"})).is_ok());
+            let r = crate::run("calculateGeometry", &inputs, &serde_json::json!({"input":"invalid"})).unwrap();
+            // A latitude past 90° has no place: no measures, and a notice; a missing coordinate is
+            // measured as before, and said nothing of.
+            let beyond = bad.is_finite();
+            assert_eq!(r.messages.iter().any(|m| m.contains("weren't measured")), beyond, "{bad:?}: {:?}", r.messages);
+            let out = layer(r);
+            assert_eq!(out.value(0, 0).is_null(), beyond, "{bad:?}");
         }
     }
 
@@ -10765,8 +10777,6 @@ mod tests {
         assert_eq!(out.features[0].geometry, ds.features[0].geometry);
     }
 
-    /// Calculate Geometry stores full-precision values (#513): rounding to 0.01 km² gave every
-    /// polygon under half a hectare an area of 0, and lines under 5 m a length of 0.
     /// A layer held in a projected system: a polygon is measured on the ground from its places in
     /// longitude/latitude, as the same polygon held there is, and one with a place that has none
     /// there gets no measures, said in a notice (#2032 C2e-5).
@@ -10801,6 +10811,8 @@ mod tests {
         assert!(said.iter().any(|m| m.contains("1 feature(s) of parcels") && m.contains("weren't measured")), "{said:?}");
     }
 
+    /// Calculate Geometry stores full-precision values (#513): rounding to 0.01 km² gave every
+    /// polygon under half a hectare an area of 0, and lines under 5 m a length of 0.
     #[test]
     fn calculate_geometry_keeps_small_values() {
         // A square of about 50 m (0.00045°) at the equator, and one of its sides as a line.

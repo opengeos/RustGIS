@@ -80,8 +80,12 @@ fn cost_overflows(parts: &[Vec<Coord>], weight: f64, pace: &mut crate::control::
 }
 
 impl Network {
-    /// Builds edges in source order, preserving shortest-path tie breaking and arithmetic.
+    /// Builds edges in source order, preserving shortest-path tie breaking and arithmetic. In
+    /// longitude/latitude: a layer held in another system has each line given there as it is read
+    /// (no copy of the layer); the segments of one with a place that has none there are left out,
+    /// counted as segments with invalid coordinates.
     fn build(ds: &Dataset, rows: &[usize], cost_field: Option<usize>) -> Result<Self, String> {
+        let to = ds.lonlat_conversion()?;
         let route_error = |reason, skipped, overflowing| route_error(ds, reason, skipped, overflowing);
         let mut skipped_segments = 0;
         let mut overflowing = 0;
@@ -101,7 +105,12 @@ impl Network {
         for (i, r) in rows.iter().enumerate() {
             crate::control::check()?;
             crate::control::reached(i);
-            let Some(Geometry::Line(parts)) = ds.features.get(*r).and_then(|f| f.geometry.as_ref()) else { continue };
+            let Some(line @ Geometry::Line(held)) = ds.features.get(*r).and_then(|f| f.geometry.as_ref()) else { continue };
+            let Some(line) = Dataset::converted_to_lonlat(&to, line) else {
+                skipped_segments += held.iter().map(|part| part.len().saturating_sub(1)).sum::<usize>();
+                continue;
+            };
+            let Geometry::Line(parts) = &*line else { continue };
             // A cost multiplies each edge's length; no value means 1, and zero or less closes the
             // line (impassable).
             let weight = match cost_field.map(|fi| ds.value(*r, fi).as_f64()) {
@@ -176,16 +185,16 @@ static NETWORK: Mutex<Option<CachedNetwork>> = Mutex::new(None);
 
 /// Reuses one bounded graph across calls and workers, without retaining the source features.
 /// Mutable feature access invalidates the weak allocation identity, including in-place edits.
-/// The graph is in longitude/latitude, built from `ds` given there ([`Dataset::in_lonlat`]) when
-/// it holds its coordinates in another system, and kept under `ds` as it holds them, so a layer
-/// in a projected system isn't converted again while its graph is kept (#2032 C2e-5).
+/// The graph is in longitude/latitude, each line given there as it is built when `ds` holds its
+/// coordinates in another system ([`Network::build`]), and kept under `ds` as it holds them, so a
+/// layer in a projected system isn't converted again while its graph is kept (#2032 C2e-5).
 fn network_for(
     cache: &Mutex<Option<CachedNetwork>>,
     ds: &Dataset,
     rows: &[usize],
     cost_field: Option<usize>,
 ) -> Result<Arc<Network>, String> {
-    network_keyed(cache, ds, rows, cost_field, || Network::build(&*ds.in_lonlat()?, rows, cost_field))
+    network_keyed(cache, ds, rows, cost_field, || Network::build(ds, rows, cost_field))
 }
 
 /// [`network_for`] kept under `ds`'s rows as it holds them (its system, and the datum grids
