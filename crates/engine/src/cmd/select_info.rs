@@ -194,12 +194,13 @@ fn wms_layer(s: &Session, name: &str) -> Result<usize, String> {
 /// or doesn't offer for identify, isn't asked again. The map's other layers from the same service
 /// that don't know theirs learn it too, so the capabilities are read once.
 ///
-/// Capabilities read from the internet (as their record says now) leave each layer's request held
-/// there for good (`feature_info_public`).
-fn learn(s: &mut Session, index: usize, capabilities: &[u8]) -> Result<(), String> {
+/// Capabilities read from the internet (as their record says now), or supplied by a caller that
+/// can't say where they were read (`untrusted`), leave each layer's request held there for good
+/// (`feature_info_public`). The capabilities' own address keeps its record: it is the layer's.
+fn learn(s: &mut Session, index: usize, capabilities: &[u8], untrusted: bool) -> Result<(), String> {
     let Some(t) = s.map().tiles.get(index) else { return Ok(()) };
     let Some((caps_url, _)) = ogc::wms_layer_of(&t.url) else { return Ok(()) };
-    let public = cache::ceiling_for(&caps_url) == Reach::Public;
+    let public = untrusted || cache::ceiling_for(&caps_url) == Reach::Public;
     // Read as an answer is (Latin-1 from older servers), in the app and natively alike.
     let service = ogc::parse(&caps_url, ogc::answer_text(capabilities)?.as_bytes())?;
     let info_of = |layer: String| {
@@ -235,12 +236,8 @@ fn feature_info(s: &mut Session, p: &Value) -> CmdResult {
         }
         // Capabilities supplied by anything but the app say nothing trustworthy about where they
         // were read: the requests they name are asked only on the internet.
-        if !s.policy_user()
-            && let Some((caps_url, _)) = s.map().tiles.get(index).and_then(|t| ogc::wms_layer_of(&t.url))
-        {
-            cache::restrict_to_public(&caps_url);
-        }
-        learn(s, index, caps.as_bytes()).map_err(named)?;
+        let untrusted = !s.policy_user();
+        learn(s, index, caps.as_bytes(), untrusted).map_err(named)?;
     }
     if let Some(text) = ps(p, "text") {
         if text.len() > MAX_TEXT {
@@ -310,7 +307,7 @@ fn feature_info(s: &mut Session, p: &Value) -> CmdResult {
             if fetched.origin.reach() == Reach::Public {
                 cache::restrict_to_public(caps);
             }
-            learn(s, index, &fetched.bytes).map_err(named)?;
+            learn(s, index, &fetched.bytes, false).map_err(named)?;
             step = next(s).transpose().map_err(named)?;
         }
         // Each of the service's errors asks in a format read after the last, so this ends.
@@ -396,9 +393,12 @@ mod tests {
             } else {
                 let e = r.unwrap_err();
                 assert!(e.contains(&format!("http://192.168.{n}.5/info")) && e.contains("local network"), "{e}");
+                // The layer's own capabilities address keeps its record: only the requests the
+                // supplied document names are held.
+                let caps_url = ogc::wms_layer_of(&template).unwrap().0;
+                assert_eq!(cache::ceiling_for(&caps_url), Reach::Local, "{caps_url}");
                 // The request keeps the reach it was learned at, though the user names the service
                 // directly afterwards (which clears the addresses' records).
-                let caps_url = ogc::wms_layer_of(&template).unwrap().0;
                 cache::allow_named(&caps_url);
                 cache::allow_named(&template);
                 let p = json!({"layer": "Roads", "lon": 8.5, "lat": 47.4, "request": true});

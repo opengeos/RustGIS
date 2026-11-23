@@ -307,7 +307,7 @@ pub(super) fn browse(s: &mut Session, p: &Value) -> CmdResult {
                 }
             };
             let bytes = text.as_bytes();
-            let found = match &level {
+            let mut found = match &level {
                 Level::Catalogue => catalogue(s, &c, &text, &origin, node.is_empty(), &mut out)?,
                 Level::StacRoot { api } if stac::catalog::is_static(api) => catalogs(s, bytes, &origin)?,
                 Level::StacRoot { .. } => collections(bytes)?,
@@ -321,8 +321,10 @@ pub(super) fn browse(s: &mut Session, p: &Value) -> CmdResult {
                 }
                 Level::Database | Level::DatabaseSchema { .. } | Level::DatabaseDataset { .. } | Level::Service { .. } => Found::default(),
             };
-            if matches!(&level, Level::StacCatalog { .. }) || matches!(&level, Level::StacRoot { api } if stac::catalog::is_static(api)) {
-                remember_node_origins(s, &c, &found.children, &origin, node.is_empty())?;
+            let catalog =
+                matches!(&level, Level::StacCatalog { .. }) || matches!(&level, Level::StacRoot { api } if stac::catalog::is_static(api));
+            if catalog && !remember_or_say(s, &c, &found.children, &origin, node.is_empty()) {
+                found.children.clear();
             }
             found
         }
@@ -416,8 +418,12 @@ fn remember_node_origins(s: &mut Session, c: &Connection, children: &[Value], or
     if s.browse_origins.1.len().saturating_add(added) > 16_384 {
         return Err("too many catalog nodes are open in this session; reopen the project to browse more".into());
     }
+    // A node a listing read from the internet named stays held there, though a listing read
+    // locally names it again: the narrower record is kept.
     for key in keys {
-        s.browse_origins.1.insert(key, origin.clone());
+        if !s.browse_origins.1.get(&key).is_some_and(|recorded| recorded.reach() < origin.reach()) {
+            s.browse_origins.1.insert(key, origin.clone());
+        }
     }
     Ok(())
 }
@@ -735,7 +741,7 @@ fn service(
 fn remember_or_say(s: &mut Session, c: &Connection, children: &[Value], origin: &address::Origin, root: bool) -> bool {
     let Err(e) = remember_node_origins(s, c, children, origin, root) else { return true };
     if origin.reach() == address::Reach::Public {
-        s.notify(format!("{e}: {} services this listing names are left out", children.len()), false);
+        s.notify(format!("{e}: {} entries this listing names are left out", children.len()), false);
         false
     } else {
         s.notify(format!("{e}; what this listing names is judged by its connection's address"), false);
@@ -1240,7 +1246,7 @@ mod tests {
         assert_eq!(found.children.len(), 1, "the record is still listed");
         assert_eq!(found.children[0]["children"].as_array().map(Vec::len), Some(0), "its service is left out");
         let told: Vec<_> = session.notices_since(mark).iter().map(|n| n.text.clone()).collect();
-        assert!(told.iter().any(|t| t.contains("1 services this listing names are left out")), "{told:?}");
+        assert!(told.iter().any(|t| t.contains("1 entries this listing names are left out")), "{told:?}");
     }
 
     /// The folders a service lists keep where its listing was read: a directory a catalogue read
@@ -1289,6 +1295,29 @@ mod tests {
         let folder = out["children"].as_array().unwrap().iter().find_map(|c| c["node"].as_str().map(str::to_string)).unwrap();
         let probe = super::browse(&mut session, &json!({"id": connection.id, "node": folder, "probe": true})).unwrap();
         assert_eq!(probe["fromDocument"], true, "{probe}");
+        // And a private folder it lists is left out.
+        let private = "service:arcgis:http://10.0.20.5/arcgis/rest/services";
+        let params = json!({"id": connection.id, "node": private, "answer": listing});
+        let scope = crate::policy::Scope::assistant(4_201_307, std::sync::Arc::new(Live));
+        let out = session.with_scope(scope, |s| super::browse(s, &params)).unwrap().unwrap();
+        assert!(out["children"].as_array().unwrap().iter().all(|c| c.get("node").is_none()), "{out}");
+    }
+
+    /// A node a listing read from the internet recorded stays held there when a listing read on
+    /// the local network names it again: the narrower record is kept.
+    #[test]
+    fn a_node_keeps_its_narrower_record() {
+        use crate::render::rustgis_tiles::address::{Origin, Reach};
+        let mut session = crate::Session::new(crate::Project::default());
+        let saved = session.run("connection.new", &json!({"kind":"csw","address":"https://csw-21.corp-looks-public.example/csw"})).unwrap();
+        let connection = session.connections.connections.iter().find(|c| c.id == saved["id"].as_str().unwrap()).unwrap().clone();
+        let node = json!({"node": "service:wms:https://csw-21-wms.example/wms"});
+        let public = Origin::connected(&connection.address, "93.184.216.34".parse().unwrap()).unwrap();
+        let local = Origin::connected(&connection.address, "10.0.0.5".parse().unwrap()).unwrap();
+        super::remember_node_origins(&mut session, &connection, std::slice::from_ref(&node), &public, false).unwrap();
+        super::remember_node_origins(&mut session, &connection, std::slice::from_ref(&node), &local, false).unwrap();
+        let held = super::node_origin(&session, &connection, node["node"].as_str().unwrap()).map(|o| o.reach());
+        assert_eq!(held, Some(Reach::Public));
     }
 
     #[test]
