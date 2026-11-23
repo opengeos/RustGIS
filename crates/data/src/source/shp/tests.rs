@@ -836,7 +836,8 @@ fn a_streamed_shapefile_counts_its_deleted_records() {
 /// Reads by area take each record's stored box on trust, so they find every shape only once a
 /// whole read has seen each box hold its shape (#1065): a clean file of polygons after that read,
 /// a file of points from the start (each point is its own box), and never a file whose stored box
-/// misses its shape (a stale one, left over from an edit), which reads by area leave out.
+/// misses its shape (a stale one, left over from an edit), by however little, which reads by area
+/// leave out.
 #[test]
 fn reads_by_area_find_every_shape_once_a_whole_read_has_seen_the_boxes_hold() {
     let tmp = tempfile::tempdir().unwrap();
@@ -859,6 +860,12 @@ fn reads_by_area_find_every_shape_once_a_whole_read_has_seen_the_boxes_hold() {
         b[112 + 8 * k..120 + 8 * k].copy_from_slice(&v.to_le_bytes());
     }
     std::fs::write(&stale, b).unwrap();
+    // One whose stored box misses its square by a millionth of a degree: its west side at 1e-6.
+    let short = folder.join("short.shp");
+    write_shapefile(&polygons, &short);
+    let mut b = std::fs::read(&short).unwrap();
+    b[112..120].copy_from_slice(&1e-6f64.to_le_bytes());
+    std::fs::write(&short, b).unwrap();
     let mut points = Dataset::new("pts", GeometryType::Point, vec![]);
     points.push(Some(Geometry::Point(Coord::new(1.0, 1.0))), vec![]);
     let pts = folder.join("pts.shp");
@@ -872,6 +879,9 @@ fn reads_by_area_find_every_shape_once_a_whole_read_has_seen_the_boxes_hold() {
         let s = ShpSource::open_path(&stale, "stale").unwrap();
         whole(&s);
         assert!(!s.finds_all_by_area(), "a stored box misses its square");
+        let s = ShpSource::open_path(&short, "short").unwrap();
+        whole(&s);
+        assert!(!s.finds_all_by_area(), "a stored box misses its square by a millionth of a degree");
         assert!(ShpSource::open_path(&pts, "pts").unwrap().finds_all_by_area(), "each point is its own box");
     });
 }

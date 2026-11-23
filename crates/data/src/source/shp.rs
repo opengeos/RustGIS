@@ -81,11 +81,11 @@ const BOXES_HOLD: u8 = 1;
 /// Some stored box misses part of its shape: reads by area leave that shape out.
 const BOXES_DONT: u8 = 2;
 
-/// Whether `b`, a stored box (to f32), holds `e`, allowing for the rounding to f32.
+/// Whether `b`, a stored box as [`record_box`] gives it (rounded outward to f32, as the index
+/// keeps it), holds `e`: a box that held the shape still does once rounded outward.
 fn holds(b: [f32; 4], e: &Extent) -> bool {
-    let slack = |v: f64| v.abs().max(1.0) * 1e-6;
     let [x0, y0, x1, y1] = b.map(f64::from);
-    x0 <= e.min_x + slack(e.min_x) && y0 <= e.min_y + slack(e.min_y) && x1 >= e.max_x - slack(e.max_x) && y1 >= e.max_y - slack(e.max_y)
+    x0 <= e.min_x && y0 <= e.min_y && x1 >= e.max_x && y1 >= e.max_y
 }
 
 /// Bytes read ahead from the files: shapes and rows near each other in a read share a fill.
