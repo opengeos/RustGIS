@@ -760,7 +760,7 @@ fn layer_list(names: &[&str]) -> String {
 /// longitude/latitude ([`Dataset::in_lonlat_leaving_out`]). `None` for none.
 pub fn unplaced_note(target: &str, layer: &str, n: usize) -> Option<String> {
     (n > 0).then(|| {
-        format!("{target}: {n} feature(s) of {layer} have a place that can't be given in longitude/latitude, so their geometry is left out")
+        format!("{target}: {n} feature(s) of {layer} have a place that can't be given in longitude/latitude, so their geometry is left out (and the feature, where only features with geometry are kept)")
     })
 }
 

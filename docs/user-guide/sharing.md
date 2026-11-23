@@ -71,8 +71,8 @@ layer, it applies the query to the whole source, including features outside the 
 A feature with a place that can't be given in the system written (one far past where the
 layer's own system reaches, exported in WGS 84) is written without its geometry, and the export
 says how many; a format that holds only features with geometry leaves it out. Copy, Data
-Interop, the shared web map, web layer, geodata service and locator, 3D files and map packages
-do the same. The web app downloads every format but GeoPackage and FlatGeobuf. `share.exportTable` exports a
+Interop, the shared web map, web layer, geodata service and locator, 3D files and the mobile
+map package do the same. The web app downloads every format but GeoPackage and FlatGeobuf. `share.exportTable` exports a
 standalone table. **Data › Export** also writes rasters to GeoTIFF, and **Data Interop** converts layers to
 KML, GPX or CSV with WKT. Layouts, reports and presentations export from their own tabs and panes
 (see [Layouts and Reports](layouts.md)).

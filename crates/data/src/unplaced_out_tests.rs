@@ -53,7 +53,7 @@ fn a_lonlat_copy_leaves_out_only_what_cant_be_placed() {
 #[test]
 fn an_export_writes_a_feature_it_cant_place_without_its_geometry_and_says_so() {
     let d = dir("files");
-    let lonlat_note = "1 feature(s) of lines have a place that can't be given in WGS 84 (EPSG:4326), so their geometry isn't written";
+    let lonlat_note = "1 feature(s) of lines have a place that can't be given in WGS 84 (EPSG:4326), so their geometry is left out (and the feature, in a format that holds only features with geometry)";
     // GeoJSON (longitude/latitude): written, the feature without its geometry.
     let path = d.join("lines.geojson");
     let (left_out, _, notes) = crate::io::write_path_to(&lines(true), &path, Crs::LonLat, &Default::default()).unwrap();
@@ -96,4 +96,32 @@ fn a_download_writes_a_feature_it_cant_place_without_its_geometry_and_says_so() 
     // The strict writer still refuses it, naming the feature.
     let e = crate::io::write_bytes_in(&lines(true), "geojson", Crs::LonLat).unwrap_err().to_string();
     assert!(e.contains("feature 2"), "{e}");
+}
+
+#[test]
+fn a_missing_coordinate_stays_missing_and_isnt_counted() {
+    // A vertex already missing (NaN, as GML keeps one) is no place that can't be given: the
+    // export keeps the feature's geometry, the vertex missing as it was, and counts nothing.
+    let mut ds = lines(false);
+    ds.push(
+        Some(Geometry::Line(vec![vec![
+            Coord::new(451_500.0, 5_411_500.0),
+            Coord::new(f64::NAN, f64::NAN),
+            Coord::new(452_000.0, 5_411_000.0),
+        ]])),
+        vec![Value::Text("gap".into())],
+    );
+    let (out, unplaced) = crate::io::project_leaving_out(&ds, Crs::LonLat).unwrap();
+    assert_eq!(unplaced, 0);
+    let Some(Geometry::Line(parts)) = &out.features[1].geometry else { panic!("kept: {:?}", out.features[1].geometry) };
+    let finite: Vec<bool> = parts[0].iter().map(|c| c.is_finite()).collect();
+    assert_eq!(finite, [true, false, true]);
+    // The far line beside it is still counted.
+    ds.push(
+        Some(Geometry::Line(vec![vec![Coord::new(451_500.0, 5_411_500.0), Coord::new(1e9, 5_411_500.0)]])),
+        vec![Value::Text("far east".into())],
+    );
+    let (out, unplaced) = crate::io::project_leaving_out(&ds, Crs::LonLat).unwrap();
+    assert_eq!(unplaced, 1);
+    assert!(out.features[1].geometry.is_some() && out.features[2].geometry.is_none());
 }

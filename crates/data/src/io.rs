@@ -684,7 +684,8 @@ pub fn project_leaving_out(ds: &Dataset, crs: Crs) -> Result<(Dataset, usize)> {
 }
 
 /// [`project_each`] for an export: a feature with a place the target can't hold loses its
-/// geometry rather than failing; returns how many did.
+/// geometry rather than failing; returns how many did. A coordinate that is missing already (NaN,
+/// infinite) stays missing, as [`crate::Dataset::in_lonlat`] keeps it, and loses nothing.
 pub(crate) fn project_each_leaving_out(features: &mut [crate::Feature], to: &crate::raster::Reprojection, count: bool) -> Result<usize> {
     let mut unplaced = 0usize;
     for f in features {
@@ -694,20 +695,38 @@ pub(crate) fn project_each_leaving_out(features: &mut [crate::Feature], to: &cra
             crate::progress::check()?;
         }
         if let Some(g) = f.geometry.take() {
-            f.geometry = to.whole_geometry(&g);
-            unplaced += usize::from(f.geometry.is_none());
+            let out = to.geometry(&g);
+            if lost_a_place(&g, &out) {
+                unplaced += 1;
+            } else {
+                f.geometry = Some(out);
+            }
         }
     }
     Ok(unplaced)
 }
 
+/// Whether `out`, `g` converted place for place ([`crate::raster::Reprojection::geometry`]), lost
+/// a place: one that was a number in `g` and isn't in `out`.
+fn lost_a_place(g: &Geometry, out: &Geometry) -> bool {
+    let mut was = Vec::new();
+    g.for_each_coord(|c| was.push(c.is_finite()));
+    let mut k = 0usize;
+    let mut lost = false;
+    out.for_each_coord(|c| {
+        lost |= was.get(k).copied().unwrap_or(true) && !c.is_finite();
+        k += 1;
+    });
+    lost
+}
+
 /// What an export to `target` says of the `n` features of `layer` with a place `crs` can't hold
-/// ([`project_leaving_out`]): their geometry isn't written (a format that holds only features
-/// with geometry leaves them out, and says so too). `None` for none.
+/// ([`project_leaving_out`]): their geometry is left out, and in a format that holds only
+/// features with geometry the feature too. `None` for none.
 pub fn unplaced_export_note(target: &str, layer: &str, n: usize, crs: Crs) -> Option<String> {
     let system = if crs == Crs::LonLat { "WGS 84 (EPSG:4326)".to_string() } else { crs.label() };
     (n > 0).then(|| {
-        format!("{target}: {n} feature(s) of {layer} have a place that can't be given in {system}, so their geometry isn't written")
+        format!("{target}: {n} feature(s) of {layer} have a place that can't be given in {system}, so their geometry is left out (and the feature, in a format that holds only features with geometry)")
     })
 }
 

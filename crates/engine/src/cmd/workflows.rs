@@ -2242,8 +2242,8 @@ fn converted(ds: &Dataset, p: &Value) -> Result<(String, Vec<String>), String> {
         ps(p, "nameField").and_then(|n| ds.field_index(n)).or_else(|| ds.fields.iter().position(|f| f.name.eq_ignore_ascii_case("name")));
     let format = conversion_format(p)?;
     // Every format here is longitude/latitude, whatever system the layer holds its coordinates
-    // in; the notes below read the layer itself, converting as they need.
-    // A feature with a place that can't be given there is written without its geometry, and said.
+    // in: the text and what it loses are read from the copy there. A feature with a place that
+    // can't be given there is written without its geometry, and said.
     let (lonlat, unplaced) = ds.in_lonlat_leaving_out()?;
     let text = match format {
         "geojson" => rustgis_data::io::to_geojson_text(&lonlat).map_err(|e| e.to_string())?,
@@ -2256,11 +2256,15 @@ fn converted(ds: &Dataset, p: &Value) -> Result<(String, Vec<String>), String> {
     let mut notes = rustgis_data::export_notes([(ds, ds.lonlat_extent())], target, rustgis_data::raster::Crs::LonLat);
     notes.extend(rustgis_data::unplaced_note(target, &ds.name, unplaced));
     // CSV holds a point a row, GPX a name for each feature and no areas; reading text back, CSV reads blanks as null and KML and GPX trim it.
-    notes.extend(rustgis_data::io::export_losses_notes(ds, format, name_field, target).map_err(|e| e.to_string())?);
-    // KML and GPX hold features with geometry only.
+    notes.extend(rustgis_data::io::export_losses_notes(&lonlat, format, name_field, target).map_err(|e| e.to_string())?);
+    // KML and GPX hold features with geometry only: counted in what is written, so a feature
+    // whose geometry is left out above is counted as left out too.
     if let ext @ ("kml" | "gpx") = format {
-        let without =
-            if ext == "gpx" { rustgis_data::io::gpx_left_out(ds) } else { ds.features.iter().filter(|f| f.geometry.is_none()).count() };
+        let without = if ext == "gpx" {
+            rustgis_data::io::gpx_left_out(&lonlat)
+        } else {
+            lonlat.features.iter().filter(|f| f.geometry.is_none()).count()
+        };
         notes.extend(rustgis_data::io::left_out_note(target, ext, without));
     }
     Ok((text, notes))

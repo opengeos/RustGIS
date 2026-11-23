@@ -1291,13 +1291,43 @@ impl Mesh {
 }
 
 /// A feature layer as a mesh.
+/// The longitude/latitude box of a held layer's features without those with a place that can't
+/// be given there, when it has any (`None` otherwise, and for a layer in longitude/latitude,
+/// whose box is the layer's).
+fn placed_extent(ds: &Dataset, to: &rustgis_data::raster::Reprojection) -> Result<Option<rustgis_geom::Extent>, String> {
+    if to.is_identity() {
+        return Ok(None);
+    }
+    let (mut kept, mut left_out) = (rustgis_geom::Extent::EMPTY, false);
+    for (row, g) in ds.features.iter().filter_map(|f| f.geometry.as_ref()).enumerate() {
+        if row.is_multiple_of(256) {
+            rustgis_data::progress::check().map_err(|e| e.to_string())?;
+        }
+        match Dataset::geometry_to_lonlat_by(to, g) {
+            Ok(g) => g.for_each_coord(|c| {
+                if c.is_finite() {
+                    kept.expand(c);
+                }
+            }),
+            Err(_) => left_out = true,
+        }
+    }
+    Ok(left_out.then_some(kept))
+}
+
 fn layer_mesh(s: &Session, p: &Value, keep_lines: bool) -> Result<Mesh, String> {
     let id = s.layer_id(p)?;
     let l = s.map().layer(id).ok_or("no such layer")?;
     let hf = ps(p, "heightField").map(|n| l.dataset.field_index(n).ok_or_else(|| format!("no field '{n}'"))).transpose()?;
     let base_h = f(p, "height").unwrap_or(1000.0).clamp(0.0, 1e7);
     let zs = f(p, "zScale").unwrap_or(1.0).clamp(0.0, 1e6);
-    let e = l.extent();
+    let to = l.dataset.lonlat_conversion().map_err(|e| format!("{}: {e}", l.name))?;
+    // Placed by the features it holds: a feature left out below (a place that can't be given in
+    // longitude/latitude) doesn't move the origin or the scale, through a place of it that can.
+    let e = match placed_extent(&l.dataset, &to)? {
+        Some(kept) => kept,
+        None => l.extent(),
+    };
     if e.is_empty() {
         return Err("the layer has no geometry".into());
     }
@@ -1310,7 +1340,6 @@ fn layer_mesh(s: &Session, p: &Value, keep_lines: bool) -> Result<Mesh, String> 
     };
     let mut mesh = Mesh { keep_lines, layer: l.name.clone(), ..Mesh::default() };
     let rows = l.visible_rows();
-    let to = l.dataset.lonlat_conversion().map_err(|e| format!("{}: {e}", l.name))?;
     for (row, ft) in l.dataset.features.iter().enumerate() {
         if row.is_multiple_of(256) {
             rustgis_data::progress::check().map_err(|e| e.to_string())?;

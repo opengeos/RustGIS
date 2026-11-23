@@ -165,4 +165,50 @@ fn a_streamed_conversion_writes_a_feature_it_cant_place_without_its_geometry_and
         assert_eq!(notes.len(), 1, "{format}: {notes:?}");
         assert!(notes[0].contains("1 feature(s) of lines have a place"), "{format}: {}", notes[0]);
     }
+    // Both rows are written, with their values; only the far one without its geometry.
+    let text: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(d.0.join("lines.geojson")).unwrap()).unwrap();
+    let rows: Vec<(String, bool)> = text["features"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| (f["properties"]["name"].as_str().unwrap().to_string(), f["geometry"].is_null()))
+        .collect();
+    assert_eq!(rows, [("paris".to_string(), false), ("far".to_string(), true)]);
+    let csv = std::fs::read_to_string(d.0.join("lines.csv")).unwrap();
+    assert!(csv.lines().count() == 3 && csv.contains("paris") && csv.contains("far"), "{csv}");
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn kml_counts_a_feature_it_cant_place_as_left_out_and_a_3d_model_is_placed_by_what_it_keeps() {
+    let d = dir("kml-3d");
+    // KML holds features with geometry only: the far line is left out of it, and counted so.
+    let mut s = session(&d, true);
+    let mark = s.notice_mark();
+    s.run("data.convert", &json!({"layer": "lines", "format": "kml"})).unwrap();
+    let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+    assert!(said.iter().any(|t| t.contains("1 feature") && t.contains("left out") && !t.contains("can't be given")), "{said:?}");
+    // What it writes is checked in longitude/latitude, as written, not in the layer's metres.
+    assert!(said.iter().all(|t| !t.contains("won't read back")), "{said:?}");
+    // A line left out of a 3D model doesn't move it through a place of it that converts (here
+    // 750 km east of Paris): the model of the line at Paris is the one made without it.
+    let obj = |far: bool| {
+        let mut s = session(&d, false);
+        if far {
+            let id = s.map().layers.iter().find(|l| l.name == "lines").unwrap().id;
+            let l = s.map_mut().layer_mut(id).unwrap();
+            let line = rustgis_data::Geometry::Line(vec![vec![
+                rustgis_geom::Coord::new(1_200_000.0, 5_411_000.0),
+                rustgis_geom::Coord::new(1e9, 5_411_000.0),
+            ]]);
+            l.dataset.push(Some(line), vec![rustgis_data::Value::Text("far".into())]);
+            l.touch_geometry();
+        }
+        let path = d.0.join(format!("lines-{far}.obj"));
+        s.run("share.export3d", &json!({"layer": "lines", "path": path})).unwrap();
+        std::fs::read_to_string(path).unwrap().lines().filter(|l| l.starts_with("v ")).map(str::to_string).collect::<Vec<_>>()
+    };
+    let (alone, beside) = (obj(false), obj(true));
+    assert!(!alone.is_empty());
+    assert_eq!(alone, beside);
 }
