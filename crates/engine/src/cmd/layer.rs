@@ -2822,7 +2822,11 @@ fn add_picked(
             })
             .map(|(_, r)| {
                 let mut said = r.report.clone();
-                said.messages.drain(..usize::from(r.dataset.zm_dropped).min(said.messages.len()));
+                // The layer's own Z/M note leads its messages; it is said by that layer. A note
+                // that reports another loss is never taken for it.
+                if r.dataset.zm_dropped && said.messages.first().is_some_and(|n| n.loss.is_none()) {
+                    said.messages.drain(..1);
+                }
                 (r.dataset.source.clone(), said)
             })
             .collect();
