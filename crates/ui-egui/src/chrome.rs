@@ -476,7 +476,8 @@ pub fn status_bar(app: &mut RustGisApp, ui: &mut Ui) {
                 // them isn't.
                 let system = format.system(app.session.map(), app.session.active_layer);
                 let mut text = format.readout(kept, earth, system.as_ref());
-                if let Some(s) = system.as_ref().filter(|_| format == crate::CoordReadout::Layer) {
+                // Named only beside a position: with none yet, the dash stands alone.
+                if let Some(s) = system.as_ref().filter(|_| format == crate::CoordReadout::Layer && kept.is_some()) {
                     text = format!("{text}  {}", s.name());
                 }
                 let resp = ui.add(

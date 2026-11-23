@@ -154,9 +154,8 @@ fn layer_conversion(crs: rustgis_engine::data::raster::Crs) -> Option<rustgis_en
     static LAST: std::sync::Mutex<Option<(rustgis_engine::data::raster::Crs, rustgis_engine::data::raster::Transformer)>> =
         std::sync::Mutex::new(None);
     let mut last = LAST.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some((kept, t)) = last.as_ref().filter(|(kept, _)| *kept == crs) {
-        let _ = kept;
-        return Some(t.clone());
+    if let Some(t) = last.as_ref().filter(|(kept, _)| *kept == crs).map(|(_, t)| t.clone()) {
+        return Some(t);
     }
     let t = crs.transformer().ok()?;
     *last = Some((crs, t.clone()));
@@ -205,10 +204,8 @@ impl MapSystem {
             return None;
         }
         let l = map.layer(active?)?;
-        let crs = match &l.raster {
-            Some(r) => r.data.as_ref()?.crs,
-            None => l.dataset.crs?,
-        };
+        // A raster's system is its pixels', as Go To XY reads it.
+        let crs = rustgis_engine::cmd::navigate::layer_coordinates_system(l)?;
         if crs.is_geographic() || crs.is_geocentric() || crs.is_planetary() {
             return None;
         }

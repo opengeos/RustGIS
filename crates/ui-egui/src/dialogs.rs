@@ -444,7 +444,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                 // A grid reference, once typed, is where Go goes: the X and Y boxes gray out.
                 let earth = app.session.map().body().is_earth();
                 let by_grid = earth && !app.dialogs.text.trim().is_empty();
-                let systems = xy_systems(app.session.map());
+                let (systems, left_out) = xy_systems(app.session.map());
                 // A system gone (its layer removed or renamed) leaves degrees, and the boxes empty:
                 // their numbers were in that system, not degrees.
                 if !systems.iter().any(|(id, _)| *id == app.dialogs.xy_system) {
@@ -476,6 +476,17 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                                     if ui.selectable_label(*id == app.dialogs.xy_system, label).clicked() {
                                         picked = Some(id.clone());
                                     }
+                                }
+                                // Said, not dropped quietly: the systems past the first ones listed.
+                                if left_out > 0 {
+                                    let n = left_out.to_string();
+                                    ui.label(
+                                        egui::RichText::new(crate::i18n::fmt(
+                                            "{n} more layers' systems not listed; map.goToXY takes any by its layer's name",
+                                            &[("n", &n)],
+                                        ))
+                                        .color(t.text_dim),
+                                    );
                                 }
                             })
                             .response
@@ -1120,12 +1131,13 @@ pub fn open_dxf_path(app: &mut RustGisApp, path: &str) -> Result<Value, String> 
 
 /// The systems Go To XY offers, as (what `map.goToXY` takes as `crs`, its label): degrees; on a
 /// flat map of the Earth, the map's own; and each layer read in a projected system, by name (at
-/// most 20, the first of each system).
-fn xy_systems(map: &rustgis_engine::map::Map) -> Vec<(String, String)> {
+/// most [`XY_LAYER_SYSTEMS`], the first of each system). Also how many more systems the layers
+/// have that the list leaves out, for the list to say.
+fn xy_systems(map: &rustgis_engine::map::Map) -> (Vec<(String, String)>, usize) {
     let mut v = vec![(String::new(), tl!("Degrees (longitude, latitude)").to_string())];
     if map.body().is_earth() && !map.projection.is_globe() {
         v.push(("map".into(), crate::i18n::fmt("The map's system ({system})", &[("system", &map.projection.label())])));
-        let mut seen = Vec::new();
+        let (mut seen, mut left_out) = (Vec::new(), Vec::new());
         for l in &map.layers {
             // A layer named `map` would be taken for the map's own system, and one whose name another
             // layer has first would be taken for that one.
@@ -1139,7 +1151,11 @@ fn xy_systems(map: &rustgis_engine::map::Map) -> Vec<(String, String)> {
             }) else {
                 continue;
             };
-            if seen.contains(&crs) || seen.len() >= 20 {
+            if seen.contains(&crs) || left_out.contains(&crs) {
+                continue;
+            }
+            if seen.len() >= XY_LAYER_SYSTEMS {
+                left_out.push(crs);
                 continue;
             }
             seen.push(crs);
@@ -1148,9 +1164,14 @@ fn xy_systems(map: &rustgis_engine::map::Map) -> Vec<(String, String)> {
                 crate::i18n::fmt("Layer {layer} ({system})", &[("layer", &l.name), ("system", &short(&crs.definition_text()))]),
             ));
         }
+        return (v, left_out.len());
     }
-    v
+    (v, 0)
 }
+
+/// The most layers' systems Go To XY's list offers, so a project of many doesn't make it a long
+/// scroll; the others are said under it, and still taken by a layer's name in `map.goToXY`.
+const XY_LAYER_SYSTEMS: usize = 20;
 
 /// The system a Go To XY entry (`id`, as [`xy_systems`] lists it) names now: degrees, the map's
 /// projection, or the system a layer was read in, by its definition (not the list's wording,
