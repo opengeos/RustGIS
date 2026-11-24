@@ -248,8 +248,9 @@ and nothing changes until **Calculate** is clicked. On a layer, each previewed r
 layer's calculation rules and checks (domains, allowed combinations of values, constraint rules) as
 Calculate would, and a row they would refuse says so in Calculate's words:
 `Preview: 15 · 30 · 45 (refused: 45 isn't allowed in v (its domain))`. Calculate refuses the whole
-edit when any of its rows is refused, so rows the preview doesn't show can still refuse it, as can
-an area the edit reads that is ambiguous.
+edit when any of its rows is refused, so rows the preview doesn't show can still refuse it. An area
+the edit reads that is ambiguous refuses it too, and the preview doesn't say so, even for a row it
+shows.
 
 A `(` typed closes itself, the cursor inside, unless text follows it or it's in a text or a field
 name; so does a `'` or `"` where a value can start (at the start, after a space, `(`, `,` or an
