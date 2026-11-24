@@ -792,7 +792,10 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>>
             .push(crate::loss::Note::loss(crate::loss::LossCode::DroppedOverLimit, "the extract is larger than RustGIS reads at once: the rest is left out (use a smaller extract; on the desktop, files over 256 MB open through GDAL when it is installed)"));
     }
     if missing > 0 {
-        report.messages.push(format!("{missing} ways or relations refer to nodes or ways the file doesn't hold"));
+        report.messages.push(crate::loss::Note::loss(
+            crate::loss::LossCode::DroppedFeature,
+            format!("{missing} ways or relations refer to nodes or ways the file doesn't hold"),
+        ));
     }
     for (count, one, many) in [
         (
@@ -1285,6 +1288,7 @@ pub(crate) mod tests {
         assert_eq!(layers.iter().map(|(ds, _)| ds.features.len()).collect::<Vec<_>>(), [1, 2, 2]);
         assert_eq!(layers[0].1.skipped, 1);
         assert_eq!(layers[0].1.messages.texts().collect::<Vec<_>>(), ["1 ways or relations refer to nodes or ways the file doesn't hold"]);
+        assert_eq!(layers[0].1.messages[0].loss, Some(crate::loss::LossCode::DroppedFeature));
         assert!(layers.iter().skip(1).all(|(_, report)| report.skipped == 0 && report.messages.is_empty()));
     }
 

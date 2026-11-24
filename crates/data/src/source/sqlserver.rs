@@ -797,6 +797,18 @@ fn fine_times_said(fine: &[String], found: Option<&[usize]>, complete: bool) -> 
     notes
 }
 
+/// The condition that keeps only `family`'s geometries in column `g` (none for every family), as
+/// a read and the date-time probe both ask for them.
+fn family_clause(g: &str, family: Option<Family>) -> String {
+    let Some(f) = family else { return String::new() };
+    let dim = match f {
+        Family::Points => 0,
+        Family::Lines => 1,
+        Family::Polygons => 2,
+    };
+    format!(" AND {g}.STDimension() = {dim}")
+}
+
 impl SqlServerSource {
     /// Opens one family of a spatial column. `crs` supplies the coordinate system for SRID 0.
     pub fn open(conn: Arc<Conn>, table: Table, family: Option<Family>, crs: Option<&str>) -> Result<Self> {
@@ -860,7 +872,12 @@ impl SqlServerSource {
             })
             .filter_map(|r| text_of(at(r, 0)))
             .collect();
-        notes.extend(fine_times_note(&conn, &from, &format!("{g} IS NOT NULL AND {g}.STSrid = {raw_srid}"), &fine));
+        notes.extend(fine_times_note(
+            &conn,
+            &from,
+            &format!("{g} IS NOT NULL AND {g}.STSrid = {raw_srid}{}", family_clause(&g, family)),
+            &fine,
+        ));
         let keys = conn.query("SELECT k.COLUMN_NAME FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS c JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE k ON k.CONSTRAINT_SCHEMA = c.CONSTRAINT_SCHEMA AND k.CONSTRAINT_NAME = c.CONSTRAINT_NAME WHERE c.CONSTRAINT_TYPE = 'PRIMARY KEY' AND c.TABLE_SCHEMA = @P1 AND c.TABLE_NAME = @P2", &[&table.schema, &table.name])?;
         let mut key = if keys.len() == 1 { keys.first().and_then(|r| text_of(at(r, 0))) } else { None };
         // The registered ObjectID column is the feature id when the table has it.
@@ -968,7 +985,8 @@ impl SqlServerSource {
             .into_iter()
             .filter_map(|f| f.geometry)
             .filter_map(|g| self.reproject.read(g))
-            .fold(Extent::EMPTY, |e, p| e.union(&p.lonlat))
+            .filter_map(|p| p.lonlat)
+            .fold(Extent::EMPTY, |e, l| e.union(&l))
     }
 
     fn filter(&self, window: Option<&str>) -> String {
@@ -978,22 +996,15 @@ impl SqlServerSource {
             let ty = if self.geography { "geography" } else { "geometry" };
             w.push_str(&format!(" AND {g}.Filter({ty}::STGeomFromText('{window}', {})) = 1", self.raw_srid));
         }
-        if let Some(f) = self.family {
-            let dim = match f {
-                Family::Points => 0,
-                Family::Lines => 1,
-                Family::Polygons => 2,
-            };
-            w.push_str(&format!(" AND {g}.STDimension() = {dim}"));
-        }
+        w.push_str(&family_clause(&g, self.family));
         w
     }
 
     /// A row read as a feature: the id, the geometry (as the table holds it, in its own system)
-    /// and the fields, in the order of the select, with the geometry's box in longitude/latitude.
-    /// `None` without an id or a geometry RustGIS reads and places. A value of a date field that
-    /// isn't a date RustGIS holds is null, counted in `unread` ([`Batch::unread_dates`]).
-    fn row_feature(&self, r: &Row, unread: &mut Vec<usize>) -> Option<(Feature, Extent)> {
+    /// and the fields, in the order of the select, with the geometry's box in longitude/latitude
+    /// (`None` for one with no place there, [`Reproject::read`]). `None` without an id or a
+    /// geometry RustGIS reads. A value of a date field that isn't a date RustGIS holds is null, counted in `unread` ([`Batch::unread_dates`]).
+    fn row_feature(&self, r: &Row, unread: &mut Vec<usize>) -> Option<(Feature, Option<Extent>)> {
         let id = id_of(at(r, 0))?;
         let super::Placed { geometry, lonlat } = self.reproject.read(wkb::decode(bytes_of(at(r, 1))?)?)?;
         let attrs = self.info.fields.iter().enumerate().map(|(k, f)| attr_of(f.ty, at(r, k + 2), unread, k)).collect();
@@ -1054,7 +1065,7 @@ impl SqlServerSource {
                 continue;
             };
             // Kept as the table holds it, placed in longitude/latitude to compare with the view.
-            if req.extent.is_none_or(|e| lonlat.intersects(&e)) {
+            if Reproject::within(lonlat.as_ref(), req.extent.as_ref()) {
                 super::add_unread_dates(&mut out.unread_dates, &unread);
                 out.features.push(f);
             }
