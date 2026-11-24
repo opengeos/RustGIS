@@ -44002,6 +44002,12 @@ fn layout_charts_draw_a_line_round_their_bars() {
     assert!(s.run("layout.update", &json!({"element": rect, "barOutline": {}})).unwrap_err().contains("only charts"));
     let p = json!({"kind": "table", "layer": "Places", "barOutline": {}});
     assert!(s.run("layout.addElement", &p).unwrap_err().contains("only charts"));
+    // A null asks for none, which another kind has: taken as not given, as every chart key's
+    // null is and as the help says, and nothing changes.
+    let before = s.project.layouts[0].element(rect as u32).cloned();
+    s.run("layout.update", &json!({"element": rect, "barOutline": null})).unwrap();
+    assert_eq!(s.project.layouts[0].element(rect as u32).cloned(), before);
+    s.run("layout.addElement", &json!({"kind": "rectangle", "barOutline": null})).unwrap();
 }
 
 /// A stack field with more values than the key has colours gathers the rest in its Other, and
