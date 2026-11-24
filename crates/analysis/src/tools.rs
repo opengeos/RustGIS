@@ -2170,9 +2170,10 @@ impl MaskCache {
 /// largest size of the masks one feature meets, together (found for each batch first, standing
 /// for their union); as many threads run as fit, at that much work each, in half the scratch
 /// budget, and their recent unions of several masks share `cache_bytes` (by default the other
-/// half of [`crate::parallel::scratch_budget`]). The masks' edge indexes ([`MaskEdges`]) are
-/// shared by the threads and kept for the run: only grid references to the masks' edges, which
-/// the run holds already.
+/// half of [`crate::parallel::scratch_budget`], less the masks' edge indexes). The masks' edge
+/// indexes ([`MaskEdges`]) are shared by the threads and kept for the run: grid references to the
+/// masks' edges, about three times the masks' coordinates, made when a polygon feature first needs
+/// a mask's (holding each of its edges' boxes meanwhile, twice its coordinates, on one thread).
 fn clip_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>, cache_bytes: Option<usize>) -> Result<ToolResult, String> {
     let ds = input(inp, p, "input")?;
     let clip_ds = input(inp, p, "clip")?;
@@ -2254,6 +2255,10 @@ fn clip_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>, cache_bytes: Opti
     // one mask (at most all of them). Its size is taken as theirs together, which it doesn't
     // exceed by much (an overlay adds a vertex where edges cross, and takes away the overlaps).
     let mask_bytes: Vec<usize> = masks.iter().map(|(m, _)| kept_union_bytes(&[], m)).collect();
+    // The masks' edge indexes ([`MaskEdges`]) hold about three times their masks' coordinates, at
+    // most (2.3 times on the benchmark's block groups, 3.1 on a smaller set): all of them, for the
+    // run.
+    let index_bytes = mask_bytes.iter().fold(0usize, |a, &b| a.saturating_add(b)).saturating_mul(3);
     let union_bytes = |near: &[usize]| match near {
         [] | [_] => 0,
         _ => near.iter().filter_map(|&i| mask_bytes.get(i)).fold(0usize, |a, &b| a.saturating_add(b)),
@@ -2282,7 +2287,10 @@ fn clip_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>, cache_bytes: Opti
         // Single candidates reuse their normalized mask. Each thread keeps eight recent multi-mask
         // unions, so alternating neighbourhoods can reuse work too, the least recently used going
         // first; the threads' unions together stay within their share of the scratch memory.
-        let cache_cap = cache_bytes.unwrap_or_else(|| crate::parallel::scratch_budget() / 2) / clip_threads.max(1);
+        // The masks' edge indexes come out of the unions' share, whether or not they have been
+        // made yet: they are shared by the threads and kept for the run.
+        let cache_cap =
+            cache_bytes.unwrap_or_else(|| (crate::parallel::scratch_budget() / 2).saturating_sub(index_bytes)) / clip_threads.max(1);
         let clipped = crate::parallel::try_map_on(
             batch,
             clip_threads,
