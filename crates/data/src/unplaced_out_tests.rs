@@ -147,3 +147,49 @@ fn an_infinite_coordinate_stays_as_it_is_and_isnt_placed() {
     assert_eq!(parts[0][2].y, f64::INFINITY);
     assert!(parts[0][0].is_finite() && parts[0][3].is_finite());
 }
+
+/// A Shapefile whose `.prj` gives a shape no place in longitude/latitude keeps it as the file holds
+/// it, says so, and leaves the layer whole (#2032 C2f-4b): nothing is lost, so Define Projection
+/// stays open. When no shape has one, its system is said not to fit.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_shapefile_keeps_a_shape_with_no_longitude_latitude_place() {
+    let d = dir("kept-shp");
+    for (far_only, file) in [(false, "some.shp"), (true, "all.shp")] {
+        let mut raw = Dataset::new("points", crate::GeometryType::Point, vec![Field::new("name", FieldType::Text)]);
+        if !far_only {
+            raw.push(Some(Geometry::Point(Coord::new(451_000.0, 5_411_000.0))), vec![Value::Text("paris".into())]);
+        }
+        raw.push(Some(Geometry::Point(Coord::new(1e12, 1e12))), vec![Value::Text("far".into())]);
+        let path = d.join(file);
+        crate::io::write_path(&raw, &path).unwrap();
+        std::fs::write(path.with_extension("prj"), crate::raster::wkt::to_wkt(utm31()).unwrap()).unwrap();
+        let (ds, report) = crate::io::read_path(&path).unwrap();
+        assert_eq!(ds.coord_crs(), utm31());
+        assert!(!ds.crs_incomplete);
+        let far = ds.features.rows().last().and_then(|r| r.geometry().cloned());
+        assert_eq!(far, Some(Geometry::Point(Coord::new(1e12, 1e12))), "kept as the file holds it");
+        let said: Vec<&str> = report.messages.texts().collect();
+        let expected = if far_only {
+            "none of the shapes has a place in longitude/latitude from EPSG:32631"
+        } else {
+            "1 shapes have a place in EPSG:32631"
+        };
+        assert!(said.iter().any(|m| m.contains(expected) && m.contains("kept as the file holds them")), "{said:?}");
+        assert_eq!(ds.in_lonlat_leaving_out().unwrap().1, 1);
+    }
+}
+
+/// A delimited text file's rows with no place in longitude/latitude from the system given are
+/// kept as the file holds them, and said (#2032 C2f-4b).
+#[test]
+fn a_csv_keeps_a_row_with_no_longitude_latitude_place() {
+    let text = "name,x,y\nparis,451000,5411000\nfar,1e12,1e12\n";
+    let opts = crate::io::CsvOptions { x: Some("x".into()), y: Some("y".into()), crs: Some(utm31()), ..Default::default() };
+    let (ds, report) = crate::io::read_csv_with(text, "pts", &opts).unwrap();
+    assert_eq!(ds.features.len(), 2);
+    assert_eq!(ds.features.rows().last().and_then(|r| r.geometry().cloned()), Some(Geometry::Point(Coord::new(1e12, 1e12))));
+    let said: Vec<&str> = report.messages.texts().collect();
+    assert!(said.iter().any(|m| m.contains("1 rows have a place in EPSG:32631") && m.contains("kept as the file holds them")), "{said:?}");
+    assert_eq!(report.skipped, 0);
+}

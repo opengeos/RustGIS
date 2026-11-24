@@ -245,7 +245,7 @@ fn an_answer_without_a_coordinate_system_is_said_to_be_read_as_longitude_latitud
 }
 
 #[test]
-fn coordinates_past_longitude_latitude_lose_their_geometry_and_the_layer_says_so() {
+fn coordinates_past_longitude_latitude_are_kept_and_the_layer_says_so() {
     // Web Mercator: 1,113,195 m is 10°; 1,000,000,000 m comes out near 8,983°, beyond the world.
     let bytes = answer(&[
         message(8, &number(1, 3857)),
@@ -255,10 +255,16 @@ fn coordinates_past_longitude_latitude_lose_their_geometry_and_the_layer_says_so
     ]);
     let (ds, report) = read(&bytes, "t").unwrap();
     assert!(ds.features[0].geometry.is_some());
-    assert_eq!(ds.features[1].geometry, None);
-    // Defining the projection again can't bring it back.
-    assert!(ds.crs_incomplete);
-    assert_eq!(report.messages, ["1 features have coordinates outside their coordinate system: they are kept without geometry"]);
+    // Kept as the answer gives it, and not drawn (#2032 C2f-4b): nothing was lost, so a
+    // projection can still be defined.
+    assert_eq!(ds.features[1].geometry, Some(Geometry::Point(c(1e9, 0.0))));
+    assert!(!ds.crs_incomplete);
+    assert_eq!(
+        report.messages,
+        [
+            "1 features have a place that can't be given in longitude/latitude (coordinates outside their coordinate system): they are kept as the answer gives them, but don't draw"
+        ]
+    );
 }
 
 #[test]

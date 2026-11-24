@@ -1067,14 +1067,19 @@ fn load(
                             Ok(to) => {
                                 ds.held_in = job.crs;
                                 ds.crs = Some(job.crs);
-                                // Every place the layer keeps has one in longitude/latitude, as when
-                                // it was converted there: a feature with one that hasn't is kept
-                                // without geometry. Each place is converted to be checked; the layer
-                                // keeps its own.
-                                let lost = convert_features(&mut ds, |c| to.point(c).filter(|l| l.is_finite()).map(|_| c));
+                                // A feature with a place that can't be given in longitude/latitude
+                                // is kept as read, and counted: it doesn't draw (#2032 C2f-4b). Each
+                                // place is converted to be checked; the layer keeps its own.
+                                let lost = ds
+                                    .features
+                                    .rows()
+                                    .filter_map(|r| r.geometry())
+                                    .filter(|g| Dataset::converted_to_lonlat(&to, g).is_none())
+                                    .count();
                                 if lost > 0 {
                                     messages.push(format!(
-                                        "{layer_name}: {lost} features couldn't be converted to longitude/latitude and have no geometry"
+                                        "{layer_name}: {lost} features have a place in {} that can't be given in longitude/latitude: they are kept as read, but don't draw",
+                                        job.crs.label()
                                     ));
                                 }
                             }

@@ -410,15 +410,11 @@ fn read_table(name: &str, t: &[u8], x: &[u8], wkid: Option<u32>) -> Result<Optio
                 Err(()) => report.skipped += 1,
             }
         }
-        // Kept as the file holds it, in its own system, when it has a place in longitude/latitude.
-        let geometry = match (geometry, &to_lonlat) {
-            (Some(g), Some(t)) => {
-                let ok = crate::io::places_in_lonlat(&g, t);
-                unprojected += usize::from(!ok);
-                ok.then_some(g)
-            }
-            (g, _) => g,
-        };
+        // Kept as the file holds it, in its own system; counted when it has no place in
+        // longitude/latitude.
+        if let (Some(g), Some(t)) = (&geometry, &to_lonlat) {
+            unprojected += usize::from(!crate::io::places_in_lonlat(g, t));
+        }
         ds.push_next(geometry, attrs);
     }
     let rounded: usize = rounded_dates.iter().sum();
@@ -439,7 +435,7 @@ fn read_table(name: &str, t: &[u8], x: &[u8], wkid: Option<u32>) -> Result<Optio
     if unprojected > 0 {
         report
             .messages
-            .push(format!("{unprojected} features have coordinates outside their coordinate system: they are kept without geometry"));
+            .push(format!("{unprojected} features have a place that can't be given in longitude/latitude (coordinates outside their coordinate system): they are kept as the file holds them, but don't draw"));
     }
     if zm {
         // The table declares them for every shape.

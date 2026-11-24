@@ -664,9 +664,10 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>>
                 Some((_, true)) => g.map_coords(&|c| Coord::new(c.y, c.x)),
                 _ => g,
             });
-            // A place that can't be given in longitude/latitude is kept as a missing coordinate
-            // (NaN), as it was when the reader converted the file: the layer is drawn, saved and
-            // measured without it, as before. Its box in longitude/latitude from the rest.
+            // A place that can't be given in longitude/latitude is kept as the file holds it, and
+            // counted: its feature doesn't draw, and each step that needs longitude/latitude
+            // leaves it out and says so (#2032 C2f-4b). Its box in longitude/latitude from the
+            // rest.
             let mut e = rustgis_geom::Extent::EMPTY;
             let g = match (&transform, g) {
                 (Some((Some(t), _)), Some(g)) => {
@@ -682,7 +683,7 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>>
                         _ if !c.is_finite() => c,
                         _ => {
                             missing.set(true);
-                            Coord::new(f64::NAN, f64::NAN)
+                            c
                         }
                     });
                     unplaced += usize::from(missing.get());
@@ -727,7 +728,7 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>>
             let what = if unplaced == 1 { "feature has" } else { "features have" };
             let system = file_srs.map_or_else(String::new, |(c, _)| format!(" in {}", c.label()));
             rep.messages.push(format!(
-                "{}: {unplaced} {what} places{system} that can't be given in longitude/latitude; they are kept as missing coordinates and don't draw",
+                "{}: {unplaced} {what} places{system} that can't be given in longitude/latitude; they are kept as the file holds them, but don't draw",
                 ds.name
             ));
         }
@@ -886,11 +887,11 @@ mod tests {
         assert!(layers[0].1.messages.iter().all(|m| !m.contains("written as Null")), "no marker, no notice: {:?}", layers[0].1.messages);
     }
 
-    /// A place a file's system can't give in longitude/latitude is kept missing (NaN), as when the
-    /// reader converted the file, so the layer's places that convert are still read in
-    /// longitude/latitude; its other places keep the file's numbers.
+    /// A place a file's system can't give in longitude/latitude is kept as the file holds it, and
+    /// said: its feature doesn't draw, and a step in longitude/latitude leaves it out (#2032
+    /// C2f-4b).
     #[test]
-    fn a_place_with_no_longitude_latitude_is_kept_missing() {
+    fn a_place_with_no_longitude_latitude_is_kept_as_the_file_holds_it() {
         let gml = r#"<ogr:FeatureCollection xmlns:ogr="http://ogr.maptools.org/" xmlns:gml="http://www.opengis.net/gml">
 <gml:featureMember><ogr:roads fid="roads.0"><ogr:geometryProperty><gml:LineString srsName="EPSG:32633"><gml:coordinates>500000,4649776 1e15,4649776</gml:coordinates></gml:LineString></ogr:geometryProperty></ogr:roads></gml:featureMember>
 </ogr:FeatureCollection>"#;
@@ -899,10 +900,11 @@ mod tests {
         assert_eq!(ds.coord_crs(), Crs::Epsg(32633));
         let Some(Geometry::Line(parts)) = &ds.features[0].geometry else { panic!("a line") };
         assert_eq!(parts[0][0], Coord::new(500000.0, 4649776.0), "the file's numbers");
-        assert!(parts[0][1].x.is_nan() && parts[0][1].y.is_nan(), "{:?}", parts[0][1]);
+        assert_eq!(parts[0][1], Coord::new(1e15, 4649776.0), "the file's numbers");
         assert!(serde_json::to_string(ds).is_ok(), "saves");
-        assert!(layers[0].1.messages.iter().any(|m| m.contains("1 feature has places")), "{:?}", layers[0].1.messages);
-        assert!(ds.in_lonlat().is_ok());
+        let said = &layers[0].1.messages;
+        assert!(said.iter().any(|m| m.contains("1 feature has places") && m.contains("kept as the file holds them")), "{said:?}");
+        assert_eq!(ds.in_lonlat_leaving_out().unwrap().1, 1);
     }
 
     #[test]

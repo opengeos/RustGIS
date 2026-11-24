@@ -77,9 +77,6 @@ pub struct GeoJsonSource {
     /// The coordinate system the file declares (its `crs`), converting what's read to
     /// longitude/latitude.
     reproject: Reproject,
-    /// The features (by place) the declared system can't convert: in no read, and not counted.
-    /// Sorted.
-    failed: Vec<u32>,
     /// Features left out when it was opened for geometry that couldn't be read.
     unreadable: usize,
 }
@@ -231,26 +228,17 @@ impl GeoJsonSource {
             notes.push(format!("{} features had unreadable geometry", scan.skipped));
         }
         let reproject = Reproject::known(declared_crs(&rest, &mut notes)?);
-        // The declaration may come after the features, so only now can each be tried: those the
-        // declared system can't convert are found here (and left out of every read, the count,
-        // the extent and the geometry type), as they are when the file is read whole.
-        let mut failed = Vec::new();
+        // The declaration may come after the features, so only now can each be tried: those with
+        // a place the declared system can't give in longitude/latitude are counted and said, and
+        // kept as the file holds them (they don't draw), as when the file is read whole; the
+        // extent in longitude/latitude is that of the rest.
         let mut extent = scan.extent;
         if let Some(t) = reproject.transformer() {
+            let crs = reproject.crs();
             file.rewind()?;
             let pass = convert_pass(&mut file, &scan.places, t)?;
             extent = pass.extent;
-            for (kept, lost) in scan.kinds.iter_mut().zip(pass.dropped) {
-                *kept = kept.saturating_sub(lost);
-            }
-            if !pass.failed.is_empty() {
-                notes.push(format!(
-                    "{} features couldn't be converted from {} to longitude/latitude and were skipped",
-                    pass.failed.len(),
-                    reproject.label()
-                ));
-            }
-            failed = pass.failed;
+            notes.extend(crate::io::kept_unplaced_note("", "features", pass.unplaced, pass.placed == 0, crs));
         } else {
             // Only coordinates read as they are can be longitude/latitude with the two swapped;
             // a declared system's features were converted above, and those that don't fit left out.
@@ -269,20 +257,19 @@ impl GeoJsonSource {
             geometry_type,
             fields: scan.schema.fields(),
             extent,
-            count: Some((scan.places.len() - failed.len()) as u64),
+            count: Some(scan.places.len() as u64),
             crs: reproject.label(),
             indexed: false,
             notes: notes.into(),
             zm_dropped: false,
         };
-        // Features the declared system can't convert are left out, and so are their heights.
-        let zm = scan.zm.iter().filter(|i| failed.binary_search(i).is_err()).count() as u64;
+        let zm = scan.zm.len() as u64;
         if zm > 0 {
             info.drop_zm(Some(zm));
         }
         let unreadable = scan.skipped;
         version.check(&file)?;
-        Ok(GeoJsonSource { info, path: path.to_path_buf(), version, places: scan.places, boxes: scan.boxes, reproject, failed, unreadable })
+        Ok(GeoJsonSource { info, path: path.to_path_buf(), version, places: scan.places, boxes: scan.boxes, reproject, unreadable })
     }
 
     /// The features a request matches, in file order: every one without an extent; otherwise
@@ -303,7 +290,7 @@ impl GeoJsonSource {
                 Some((true, _)) => false,
                 Some((false, [x0, y0, x1, y1])) => b[0] <= x1 && b[2] >= x0 && b[1] <= y1 && b[3] >= y0,
             };
-            (i as u32, in_box && self.failed.binary_search(&(i as u32)).is_err())
+            (i as u32, in_box)
         })
     }
 }
@@ -325,12 +312,8 @@ impl FeatureSource for GeoJsonSource {
         self.reproject.crs()
     }
 
-    fn lost_to_crs(&self) -> bool {
-        !self.failed.is_empty()
-    }
-
     fn skipped_at_open(&self) -> usize {
-        self.unreadable + self.failed.len()
+        self.unreadable
     }
 
     fn visits_extent_chunks(&self) -> bool {
@@ -450,18 +433,21 @@ impl GeoJsonSource {
         let json = read_place(f, pos, buf, place).ok_or(())?;
         let geometry = geojson_geometry(&json).map_err(|_| ())?;
         // Kept as the file holds it, in its own system; its own box answers a request given in
-        // that system ([`Request::own`]), else its box in longitude/latitude.
+        // that system ([`Request::own`]), else its box in longitude/latitude. One without
+        // geometry, or with a place that can't be given in longitude/latitude, doesn't meet a
+        // box in longitude/latitude; a read with no box takes it.
         let own = self.reproject.own_box(req);
-        let placed = match (own, self.reproject.transformer(), &geometry) {
-            (Some(_), _, g) => g.as_ref().map(crate::Geometry::extent),
-            (None, Some(t), Some(g)) => Some(lonlat_box(g, t).ok_or(())?),
-            (None, _, g) => g.as_ref().map(crate::Geometry::extent),
-        };
-        // One without geometry doesn't match an extent.
-        let outside = match (&placed, own.or(req.extent)) {
-            (_, None) => false,
-            (None, Some(_)) => true,
-            (Some(e), Some(r)) => !e.intersects(&r),
+        let outside = match (own, req.extent) {
+            (Some(r), _) => geometry.as_ref().is_none_or(|g| !g.extent().intersects(&r)),
+            (None, None) => false,
+            (None, Some(r)) => {
+                let placed = match (self.reproject.transformer(), &geometry) {
+                    (Some(t), Some(g)) => lonlat_box(g, t),
+                    (None, g) => g.as_ref().map(crate::Geometry::extent),
+                    (_, None) => None,
+                };
+                placed.is_none_or(|e| !e.intersects(&r))
+            }
         };
         if outside || !wanted() {
             return Ok(None);
@@ -498,11 +484,11 @@ fn read_place(f: &mut BufReader<impl Read + Seek>, pos: &mut u64, buf: &mut Vec<
 
 /// What a pass over a file's features converts to longitude/latitude finds.
 struct Pass {
-    /// Places of the features the transformer can't convert (see [`geometry_to_lonlat`]), sorted.
-    failed: Vec<u32>,
-    /// Points, lines and polygons among them (as [`Scan::kinds`]).
-    dropped: [usize; 3],
-    /// The extent, in longitude/latitude, of those it can.
+    /// Features with geometry the transformer can't give in longitude/latitude (see
+    /// [`geometry_to_lonlat`]), and those it can.
+    unplaced: usize,
+    placed: usize,
+    /// The extent, in longitude/latitude, of every place that converts.
     extent: Extent,
 }
 
@@ -510,7 +496,7 @@ struct Pass {
 fn convert_pass(file: &mut File, places: &[Place], t: &crate::raster::Transformer) -> Result<Pass> {
     let mut f = BufReader::with_capacity(BUFFER, file);
     let (mut pos, mut buf) = (0u64, Vec::new());
-    let mut pass = Pass { failed: Vec::new(), dropped: [0; 3], extent: Extent::EMPTY };
+    let mut pass = Pass { unplaced: 0, placed: 0, extent: Extent::EMPTY };
     // Counted as a step of its own, a feature at a time every so many.
     crate::progress::begin(places.len());
     for (i, place) in places.iter().enumerate() {
@@ -521,14 +507,16 @@ fn convert_pass(file: &mut File, places: &[Place], t: &crate::raster::Transforme
         if let Some(json) = read_place(&mut f, &mut pos, &mut buf, place)
             && let Ok(Some(g)) = geojson_geometry(&json)
         {
-            match geometry_to_lonlat(&g, t) {
-                Some(g) => pass.extent = pass.extent.union(&g.extent()),
-                None => {
-                    pass.failed.push(i as u32);
-                    if let Some(slot) = pass.dropped.get_mut(kind_slot(g.kind())) {
-                        *slot += 1;
-                    }
+            // The extent as a layer read whole gives it ([`crate::Dataset::lonlat_extent`]):
+            // every place that converts to a finite one, beyond longitude/latitude too.
+            g.for_each_coord(|c| {
+                if let Some(l) = t.to_lonlat(c).filter(|l| l.is_finite()) {
+                    pass.extent.expand(l);
                 }
+            });
+            match geometry_to_lonlat(&g, t) {
+                Some(_) => pass.placed += 1,
+                None => pass.unplaced += 1,
             }
         }
     }

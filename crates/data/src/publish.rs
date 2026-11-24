@@ -1517,9 +1517,10 @@ mod tests {
         }
     }
 
-    /// An unconverted source shape cannot supply geometry to a new geometry-less feature.
+    /// A source shape with no place in longitude/latitude is read as the file holds it (#2032
+    /// C2f-4b), so a publish of an attribute edit writes it back unchanged, to the bit.
     #[test]
-    fn an_unconverted_shape_cannot_be_copied_to_a_geometryless_feature() {
+    fn a_shape_with_no_longitude_latitude_place_is_written_back_unchanged() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("parcels.shp");
         let mut native = Dataset::new("parcels", GeometryType::Point, vec![Field::new("OWNER", FieldType::Text)]);
@@ -1529,11 +1530,15 @@ mod tests {
         let crs = Crs::parse("EPSG:32616").unwrap();
         std::fs::write(path.with_extension("prj"), crate::raster::wkt::to_wkt(crs).unwrap()).unwrap();
         let (mut ds, sync) = read(&path);
-        assert_eq!(ds.features.iter().filter(|f| f.geometry.is_none()).count(), 1);
-        ds.push(None, vec![Value::Text("new".into())]);
-        let error = shapefile(&ds, &path, &sync).err().expect("unconverted shapes must not be assigned to new features").to_string();
-        assert!(error.contains("source shape 1") && error.contains("converted") && error.contains("nothing was written"), "{error}");
-        assert!(sync.files.changed(&path).unwrap().is_empty());
+        assert_eq!(ds.features.iter().filter(|f| f.geometry.is_none()).count(), 0);
+        let mut rows: Vec<_> = ds.features.iter().cloned().collect();
+        rows[1].attrs[0] = Value::Text("edited".into());
+        ds.features = rows.into();
+        shapefile(&ds, &path, &sync).unwrap();
+        let (back, _) = read(&path);
+        let shapes: Vec<Option<Geometry>> = back.features.iter().map(|f| f.geometry.clone()).collect();
+        assert_eq!(shapes, [Some(Geometry::Point(Coord::new(1e30, 1e30))), Some(Geometry::Point(Coord::new(500_000.0, 0.0)))]);
+        assert_eq!(back.features.row(1).unwrap().value(0), &Value::Text("edited".into()));
     }
 
     /// After deletion, persistent layer ids differ from file row numbers. An attribute-only

@@ -625,10 +625,11 @@ fn what_a_file_says_of_its_coordinate_system_is_checked() {
     assert!(says(&out, "coordinates are not longitude/latitude"), "{:?}", messages_of(&out));
 }
 
-/// A geometry the coordinate system can't convert is lost, which defining the projection again can't
-/// bring back, so the layer says so. With none converted the system is wrong: an error.
+/// A geometry the coordinate system can't convert is kept as the file holds it and said; it doesn't
+/// draw. With none converted the system seems wrong: said so, and kept, so Define Projection can
+/// set the right one (#2032 C2f-4b).
 #[test]
-fn objects_that_cant_be_converted_mark_the_layer() {
+fn objects_that_cant_be_converted_are_kept_and_said() {
     let triangle =
         |a: i64| json!({"type": "LandUse", "geometry": [{"type": "MultiSurface", "lod": "1", "boundaries": [[[a, a + 1, a + 2]]]}]});
     let near = [[0.0, 0.0, 0.0], [1000.0, 0.0, 0.0], [1000.0, 1000.0, 0.0]];
@@ -636,16 +637,18 @@ fn objects_that_cant_be_converted_mark_the_layer() {
     let vertices: Vec<[f64; 3]> = near.iter().chain(&far).copied().collect();
     let bytes = doc(json!(vertices), json!({"a": triangle(0), "b": triangle(3)}));
     let out = read("m.city.json", &bytes, Some(Crs::WebMercator)).unwrap();
-    assert!(out[0].0.crs_incomplete);
-    assert!(says(&out, "1 city objects have coordinates outside their coordinate system"), "{:?}", messages_of(&out));
+    assert!(!out[0].0.crs_incomplete);
+    assert!(out[0].0.features.rows().all(|r| r.geometry().is_some()), "both kept");
+    assert!(says(&out, "1 city objects have a place in EPSG:3857 that can't be given in longitude/latitude"), "{:?}", messages_of(&out));
     let bytes = doc(json!(vertices), json!({"a": triangle(0)}));
     let out = read("m.city.json", &bytes, Some(Crs::WebMercator)).unwrap();
     assert!(!out[0].0.crs_incomplete);
     // Only that the system given goes over the one the file names (`doc`'s EPSG:4326).
     assert_eq!(messages_of(&out), vec!["the file names EPSG:4326, and is read in EPSG:3857, the coordinate system given".to_string()]);
     let bytes = doc(json!(vertices), json!({"b": triangle(3)}));
-    let e = read("m.city.json", &bytes, Some(Crs::WebMercator)).unwrap_err().to_string();
-    assert!(e.contains("no object could be converted"), "{e}");
+    let out = read("m.city.json", &bytes, Some(Crs::WebMercator)).unwrap();
+    assert!(out[0].0.features.rows().all(|r| r.geometry().is_some()));
+    assert!(says(&out, "none of the city objects has a place in longitude/latitude from EPSG:3857"), "{:?}", messages_of(&out));
 }
 
 /// An object is counted once in a notice, however many of its geometry families it loses.
@@ -664,7 +667,7 @@ fn an_object_losing_several_families_is_counted_once() {
         }),
     );
     let out = read("m.city.json", &bytes, Some(Crs::WebMercator)).unwrap();
-    assert!(says(&out, "1 city objects have coordinates outside their coordinate system"), "{:?}", messages_of(&out));
+    assert!(says(&out, "1 city objects have a place in EPSG:3857 that can't be given in longitude/latitude"), "{:?}", messages_of(&out));
 }
 
 /// A byte order mark doesn't hide a model, and a file named only `.city.json` still names its layer.
