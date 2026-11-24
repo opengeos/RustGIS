@@ -2144,7 +2144,7 @@ fn layer_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, scale: f64, reorder: 
                     ("renderer", tl_raw!(rl.style.renderer.label())),
                 ],
             ),
-            None if rl.error.is_none() && rl.in_place => tl!("Reading in place…").to_string(),
+            None if rl.error.is_none() && rl.reads_in_place() => tl!("Reading in place…").to_string(),
             None => crate::i18n::fmt(
                 "The raster's data couldn't be read: {error}",
                 &[("error", rl.error.as_deref().or(rl.path.as_deref()).unwrap_or(""))],
@@ -2634,18 +2634,23 @@ fn catalog(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         egui::Frame::NONE.inner_margin(egui::Margin::symmetric(10, 8)).show(ui, |ui| {
             egui::CollapsingHeader::new(egui::RichText::new(tl!("Maps")).font(semibold(12.5))).default_open(true).show(ui, |ui| {
                 let maps: Vec<String> = app.session.project.maps.iter().map(|m| m.name.clone()).collect();
+                let mut rows = Vec::with_capacity(maps.len());
                 for (i, m) in maps.iter().enumerate() {
-                    ui.horizontal(|ui| {
+                    let row = ui.horizontal(|ui| {
                         let (r, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
                         icons::paint(ui.painter(), r, "map", t.icon, t.accent);
                         let active = i == app.session.project.active_map;
-                        let resp = ui.selectable_label(active, m);
+                        // Dragged to another place among the maps, as its tab is (#2829).
+                        let resp = ui.selectable_label(active, m).interact(Sense::drag());
+                        crate::mapview::drag_tab(ui, &resp, false, m);
                         if resp.clicked() {
                             let _ = app.run("map.activate", json!({"name": m}));
                         }
                         resp.context_menu(|ui| map_menu(app, ui, m));
                     });
+                    rows.push(row.response.rect);
                 }
+                crate::mapview::tab_drop(app, ui, t, &rows, &maps, false, true);
             });
             let toolboxes =
                 egui::CollapsingHeader::new(egui::RichText::new(tl!("Toolboxes")).font(semibold(12.5))).id_salt("browser_toolboxes");
@@ -2681,25 +2686,31 @@ fn catalog(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             let layouts: Vec<String> = app.session.project.layouts.iter().map(|l| l.name.clone()).collect();
             if !layouts.is_empty() {
                 egui::CollapsingHeader::new(egui::RichText::new(tl!("Layouts")).font(semibold(12.5))).default_open(true).show(ui, |ui| {
-                    for n in layouts {
-                        ui.horizontal(|ui| {
+                    let mut rows = Vec::with_capacity(layouts.len());
+                    for n in &layouts {
+                        let row = ui.horizontal(|ui| {
                             let (r, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
                             icons::paint(ui.painter(), r, "new_layout", t.icon, t.accent);
-                            let resp = ui.selectable_label(
-                                app.session
-                                    .project
-                                    .layouts
-                                    .get(app.session.active_layout.unwrap_or(usize::MAX))
-                                    .is_some_and(|l| l.name == n),
-                                &n,
-                            );
+                            let resp = ui
+                                .selectable_label(
+                                    app.session
+                                        .project
+                                        .layouts
+                                        .get(app.session.active_layout.unwrap_or(usize::MAX))
+                                        .is_some_and(|l| l.name == *n),
+                                    n,
+                                )
+                                .interact(Sense::drag());
+                            crate::mapview::drag_tab(ui, &resp, true, n);
                             if resp.clicked() {
                                 let _ = app.run("layout.activate", json!({"name": n}));
                                 app.ui.tab = "Publish".into();
                             }
-                            resp.context_menu(|ui| layout_menu(app, ui, &n));
+                            resp.context_menu(|ui| layout_menu(app, ui, n));
                         });
+                        rows.push(row.response.rect);
                     }
+                    crate::mapview::tab_drop(app, ui, t, &rows, &layouts, true, true);
                 });
             }
             let styles: Vec<String> = app.session.project.styles.iter().map(|st| st.name.clone()).collect();
@@ -7148,7 +7159,7 @@ fn raster_details(ui: &mut Ui, rl: &rustgis_engine::map::RasterLayer, t: &Tokens
     let Some(d) = &rl.data else {
         // Read in place, its overview is on its way until it lands, or fails (said why).
         match &rl.error {
-            None if rl.in_place => {
+            None if rl.reads_in_place() => {
                 ui.label(egui::RichText::new(tl!("Reading in place…")).color(t.text_dim));
             }
             error => {
@@ -7166,7 +7177,7 @@ fn raster_details(ui: &mut Ui, rl: &rustgis_engine::map::RasterLayer, t: &Tokens
     let e = d.extent();
     let unit = if d.crs.is_geographic() { "°" } else { " m" };
     // Read in place, the map draws the full image: its size and cell size, not the overview's.
-    let full = d.overview.filter(|_| rl.in_place);
+    let full = d.overview.filter(|_| rl.reads_in_place());
     let (w, h) = full.unwrap_or((d.width, d.height));
     let (cx, cy) = d.cell_size();
     let (cx, cy) = (cx * f64::from(d.width) / f64::from(w.max(1)), cy * f64::from(d.height) / f64::from(h.max(1)));
@@ -7188,7 +7199,7 @@ fn raster_details(ui: &mut Ui, rl: &rustgis_engine::map::RasterLayer, t: &Tokens
     ];
     match d.overview {
         // Read in place: the overview is what the layer holds.
-        Some(_) if rl.in_place => {
+        Some(_) if rl.reads_in_place() => {
             rows.insert(
                 1,
                 (
@@ -7201,7 +7212,7 @@ fn raster_details(ui: &mut Ui, rl: &rustgis_engine::map::RasterLayer, t: &Tokens
             );
         }
         Some((fw, fh)) => rows.insert(1, ("Full size", format!("{fw} × {fh}"))),
-        None if rl.in_place => rows.insert(1, ("Read", tl!("In place").to_string())),
+        None if rl.reads_in_place() => rows.insert(1, ("Read", tl!("In place").to_string())),
         None => {}
     }
     let value_w = (ui.available_width() - 140.0).max(80.0);
@@ -7282,7 +7293,7 @@ fn raster_symbology(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
     let Some(rl) = l.raster.clone() else { return };
     let Some(d) = rl.data.clone() else {
         // Read in place, its overview is on its way until it lands, or fails (as Details says).
-        if rl.error.is_none() && rl.in_place {
+        if rl.error.is_none() && rl.reads_in_place() {
             ui.label(egui::RichText::new(tl!("Reading in place…")).color(t.text_dim));
         } else {
             ui.label(egui::RichText::new(tl!("The raster's data couldn't be read.")).color(t.red));

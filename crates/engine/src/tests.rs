@@ -17,6 +17,8 @@ mod services_own;
 #[cfg(not(target_arch = "wasm32"))]
 #[path = "tests/sources_own.rs"]
 mod sources_own;
+#[path = "tests/unplaced_edits.rs"]
+mod unplaced_edits;
 #[path = "tests/unplaced_gp.rs"]
 mod unplaced_gp;
 #[path = "tests/unplaced_out.rs"]
@@ -76,6 +78,9 @@ mod service_logins;
 
 #[path = "tests/scopes_and_redaction.rs"]
 mod scopes_and_redaction;
+
+#[path = "tests/tiled_files.rs"]
+mod tiled_files;
 
 #[path = "tests/elevation_tiles.rs"]
 mod elevation_tiles;
@@ -2212,14 +2217,20 @@ fn loading_a_streamed_layer_whole_says_the_date_times_it_rounded() {
 /// to dates: values read as empty and date-times rounded; a clean read says nothing.
 #[test]
 fn an_export_says_what_its_whole_read_did_to_dates() {
+    use rustgis_data::loss::{LossCode, Note};
     let lost = rustgis_map::Unreadable {
         rows: 0,
-        dates: Some("1 value isn't a date and was read as empty, in 'day'".into()),
-        rounded: Some("1 date-time was rounded to the microsecond, as more digits than that aren't kept, in 'at'".into()),
+        dates: Some(Note::loss(LossCode::DroppedValue, "1 value isn't a date and was read as empty, in 'day'")),
+        rounded: Some(Note::loss(
+            LossCode::ChangedRounded,
+            "1 date-time was rounded to the microsecond, as more digits than that aren't kept, in 'at'",
+        )),
         ..Default::default()
     };
+    let notes = crate::cmd::share::read_date_notes("out.geojson", "Sites", &lost);
+    assert_eq!(notes.iter().map(|n| n.loss).collect::<Vec<_>>(), [Some(LossCode::DroppedValue), Some(LossCode::ChangedRounded)]);
     assert_eq!(
-        crate::cmd::share::read_date_notes("out.geojson", "Sites", &lost),
+        notes.iter().map(Note::as_str).collect::<Vec<_>>(),
         [
             "out.geojson: Sites: 1 value isn't a date and was read as empty, in 'day' (empty in the export)",
             "out.geojson: Sites: 1 date-time was rounded to the microsecond, as more digits than that aren't kept, in 'at' when read for the export",
@@ -2692,8 +2703,8 @@ fn svg_image_markers_that_dont_draw_are_said_with_why() {
             "Image markers in \"Cities\", \"Rivers\" are SVGs with more than 40,000 XML nodes or nested deeper than 64 levels and are drawn as circles",
         ),
         (
-            MarkerRefusal::SvgFontRadius,
-            "Image markers in \"Cities\", \"Rivers\" are SVGs with a radius in em or ex, whose size RustGIS can't know, and are drawn as circles",
+            MarkerRefusal::SvgUnknownRadius,
+            "Image markers in \"Cities\", \"Rivers\" are SVGs with a radius whose size RustGIS can't know (in em or ex, or in % of a size in em, ex or %), and are drawn as circles",
         ),
         (MarkerRefusal::SvgTooSmall, "Image markers in \"Cities\", \"Rivers\" are SVGs too small to draw and are drawn as circles"),
         (MarkerRefusal::SvgNotUtf8, "Image markers in \"Cities\", \"Rivers\" are SVGs that aren't UTF-8 text and are drawn as circles"),
@@ -2727,6 +2738,83 @@ fn an_svg_picture_marker_fixture_opens_drawn_or_said() {
     };
     assert!(rustgis_render::picture_marker_draws(picture(0)));
     assert!(picture(1).base64().starts_with("PHN2Zy") && !rustgis_render::picture_marker_draws(picture(1)));
+    // Saving names the SVGs for a reader of PNG and JPEG markers only to refuse (#2266 part E1b).
+    assert_eq!(serde_json::to_value(&s.project).unwrap()["requires"], json!(["picture-markers", "svg-markers"]));
+}
+
+/// An SVG image marker requires `svg-markers` as well as `picture-markers` wherever it is saved:
+/// a symbol's, a stroke's markers, a dot fill, what No Fill hid and a saved style, in a project, a
+/// map file and a layer file. A reader of PNG and JPEG markers only would draw it as a circle. A
+/// PNG, or text that doesn't start as XML, requires `picture-markers` alone; text that starts as
+/// XML counts as an SVG, as the renderer tells one, without reading it (#2266 part E1b).
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn an_svg_image_marker_requires_svg_markers_wherever_it_is_saved() {
+    use base64::Engine;
+    let b64 = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+    let svg = b64(br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 4"><rect width="8" height="4" fill="#c81e1e"/></svg>"##);
+    let mut png = Vec::new();
+    image::RgbaImage::from_pixel(8, 4, image::Rgba([200, 30, 30, 255]))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    let png = b64(&png);
+    let pictures = json!(["picture-markers"]);
+    let both = json!(["picture-markers", "svg-markers"]);
+    let requires = |p: &Project| serde_json::to_value(p).unwrap()["requires"].clone();
+    // Removed however the test ends, and its own each run (the process id alone can repeat).
+    struct Dir(std::path::PathBuf);
+    impl Drop for Dir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+    let dir = Dir(std::env::temp_dir().join(format!("rustgis-svg-markers-{}-{nanos}", std::process::id())));
+    std::fs::create_dir_all(&dir.0).unwrap();
+    let file = |s: &mut Session, command: &str, mut params: Value, name: &str| {
+        let path = dir.0.join(name);
+        params["path"] = json!(path.display().to_string());
+        s.run(command, &params).unwrap();
+        serde_json::from_slice::<Value>(&std::fs::read(&path).unwrap()).unwrap()["requires"].clone()
+    };
+    // `<html>`: XML that isn't an SVG, which the renderer refuses when it reads it.
+    for (image, expected) in [(png.as_str(), &pictures), (svg.as_str(), &both), ("bm90IGFuIGltYWdl", &pictures), ("PGh0bWw+", &both)] {
+        // A symbol's (set directly: the command refuses an image that is neither), in the
+        // project, a map file and a layer file.
+        let mut s = world();
+        let cities = s.map().layer_by_name("Cities").unwrap().id;
+        let picture = rustgis_map::Marker::Picture(rustgis_map::Picture::new(image));
+        s.map_mut().layer_mut(cities).unwrap().renderer.map_symbols(|sym| sym.marker = picture);
+        assert_eq!(&requires(&s.project), expected, "symbol {image}");
+        assert_eq!(&file(&mut s, "map.save", json!({}), "map.rgismap"), expected, "map file {image}");
+        assert_eq!(&file(&mut s, "layer.save", json!({"layer": "Cities"}), "cities.rgislayer"), expected, "layer file {image}");
+        // And the map file a map package holds, for a computer and for a phone.
+        for mobile in [false, true] {
+            let pkg = dir.0.join("map.rgismpk");
+            s.run("map.package", &json!({"path": pkg.display().to_string(), "mobile": mobile})).unwrap();
+            let entries = rustgis_data::zip::read_matching(&std::fs::read(&pkg).unwrap(), |n| n.ends_with(".rgismap")).unwrap();
+            let packed: Value = serde_json::from_slice(&entries[0].1).unwrap();
+            assert_eq!(&packed["requires"], expected, "package {image}, mobile: {mobile}");
+        }
+        // A saved style keeps it once the layer no longer does.
+        s.run("style.new", &json!({"layer": "Cities", "name": "Icons"})).unwrap();
+        s.run("layer.marker", &json!({"layer": "Cities", "shape": "circle"})).unwrap();
+        assert_eq!(&requires(&s.project), expected, "style {image}");
+    }
+    for (image, expected) in [(&png, &pictures), (&svg, &both)] {
+        // A stroke's markers.
+        let mut s = world();
+        s.run("layer.lineStrokes", &json!({"layer": "Rivers", "strokes": [{"width": 1}, {"markers": {"image": image}}]})).unwrap();
+        assert_eq!(&requires(&s.project), expected, "stroke");
+        assert_eq!(&file(&mut s, "layer.save", json!({"layer": "Rivers"}), "rivers.rgislayer"), expected, "stroke layer file");
+        // A dot fill, and what No Fill hid of it.
+        let (mut s, id) = no_fill_layer(false);
+        s.run("layer.fillLayers", &json!({"layer": id, "fills": [{"pattern": "dots", "image": image}]})).unwrap();
+        assert_eq!(&requires(&s.project), expected, "dot fill");
+        s.run("layer.noFill", &Value::Null).unwrap();
+        assert!(s.map().layer(id).unwrap().hidden_fills.is_some());
+        assert_eq!(&requires(&s.project), expected, "hidden by No Fill");
+    }
 }
 
 /// A saved image marker that is a GIF (which the desktop's decoder reads and the web's doesn't)
@@ -9285,6 +9373,126 @@ fn saved_label_weights_are_required_by_name() {
     s.run("style.new", &json!({"layer": "Cities", "name": "Heavy"})).unwrap();
     s.run("labels.placement", &json!({"layer": "Cities", "weight": 5})).unwrap();
     assert_eq!(serde_json::to_value(&s.project).unwrap()["requires"], json!(["label-weight"]));
+}
+
+/// A label class takes a clearance (#2828): the points kept free of other labels round its
+/// labels, 0 to 100, 2 by default. A fraction is kept; a number out of range is held and said,
+/// junk refused, null back to 2. It undoes in one step, keeps a lock, is saved only when it isn't
+/// 2, and then requires `label-clearance`, which an older reader refuses rather than drop.
+#[test]
+fn a_label_class_takes_a_clearance() {
+    let mut s = world();
+    let id = s.map().layer_by_name("Cities").unwrap().id;
+    let clearances = |s: &Session| {
+        let l = &s.map().layer(id).unwrap().labels;
+        (l.default.clearance, l.classes.first().map(|c| c.clearance))
+    };
+    let said = |s: &Session, mark| s.notices_since(mark).iter().map(|n| n.text.clone()).collect::<Vec<_>>();
+    assert_eq!(clearances(&s), (2.0, None));
+    let mark = s.notice_mark();
+    s.run("labels.placement", &json!({"layer": "Cities", "clearance": 10})).unwrap();
+    assert_eq!(clearances(&s), (10.0, None));
+    assert!(said(&s, mark).is_empty(), "{:?}", said(&s, mark));
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(clearances(&s), (2.0, None), "undoes");
+    // A fraction is kept, as a text number is read.
+    s.run("labels.placement", &json!({"layer": "Cities", "clearance": 2.5})).unwrap();
+    assert_eq!(clearances(&s).0, 2.5);
+    s.run("labels.placement", &json!({"layer": "Cities", "clearance": "0"})).unwrap();
+    assert_eq!(clearances(&s).0, 0.0);
+    for (given, kept, note) in [(json!(500), 100.0, "clearance 500 adjusted to 100"), (json!(-3), 0.0, "clearance -3 adjusted to 0")] {
+        let mark = s.notice_mark();
+        s.run("labels.placement", &json!({"layer": "Cities", "clearance": given})).unwrap();
+        assert_eq!(clearances(&s).0, kept, "{given}");
+        let notes = said(&s, mark);
+        assert!(notes.iter().any(|n| n.contains(note)), "{given}: {notes:?}");
+    }
+    for bad in [json!("wide"), json!(true), json!([1])] {
+        let err = s.run("labels.placement", &json!({"layer": "Cities", "clearance": bad})).unwrap_err();
+        assert!(err.contains("clearance must be a number of points from 0 to 100 (null: 2)"), "{bad}: {err}");
+    }
+    s.run("labels.placement", &json!({"layer": "Cities", "clearance": null})).unwrap();
+    assert_eq!(clearances(&s), (2.0, None), "null: back to 2");
+    // The class named, not Default.
+    s.run("labels.class.add", &json!({"layer": "Cities", "name": "Big"})).unwrap();
+    s.run("labels.placement", &json!({"layer": "Cities", "class": "Big", "clearance": 12})).unwrap();
+    assert_eq!(clearances(&s), (2.0, Some(12.0)));
+    // A lock holds: the labels it keeps stay where they are.
+    let key = (id, 0, 0, 0);
+    s.map_mut().label_lock = Some(vec![(key, rustgis_map::LockedPlace { place: 0, callout: None })]);
+    s.run("labels.placement", &json!({"layer": "Cities", "class": "Big", "clearance": 6})).unwrap();
+    assert!(s.map().label_lock.is_some(), "a clearance keeps the lock");
+    // Saved, it requires `label-clearance`, and reads back.
+    let saved = serde_json::to_value(&s.project).unwrap();
+    assert_eq!(saved["requires"], json!(["label-clearance"]));
+    let read = Project::from_json(&saved.to_string()).unwrap();
+    let layer = read.maps[0].layers.iter().find(|l| l.id == id).unwrap();
+    assert_eq!(layer.labels.classes[0].clearance, 6.0);
+    // Back to 2 everywhere: nothing to require, and nothing saved.
+    s.run("labels.placement", &json!({"layer": "Cities", "class": "Big", "clearance": 2})).unwrap();
+    let saved = serde_json::to_value(&s.project).unwrap();
+    assert!(saved.get("requires").is_none());
+    assert!(!saved.to_string().contains("clearance"), "a clearance of 2 isn't written");
+    // The fixture (`label_clearance.rgis`) reads back as saved, saying nothing.
+    let mut fixture = Project::from_json(include_str!("../../../schema/fixtures/label_clearance.rgis")).unwrap();
+    assert_eq!(fixture.maps[0].layers[0].labels.default.clearance, 6.5);
+    assert!(fixture.take_read_notices(&crate::project::ALL_PARTS).is_empty());
+    assert_eq!(serde_json::to_value(&fixture).unwrap()["requires"], json!(["label-clearance"]));
+    // A clearance out of range or junk in a file is held, and said once.
+    let mut damaged = serde_json::to_value(&world().project).unwrap();
+    damaged["maps"][0]["layers"][0]["labels"]["clearance"] = json!(999);
+    damaged["maps"][0]["layers"][1]["labels"]["clearance"] = json!("x");
+    let read = Session::new(Project::from_json(&damaged.to_string()).unwrap());
+    assert_eq!(read.map().layers[0].labels.default.clearance, 100.0);
+    assert_eq!(read.map().layers[1].labels.default.clearance, 2.0);
+    let notes: Vec<_> = read.notices.iter().filter(|n| n.text.contains("label clearance")).map(|n| n.text.clone()).collect();
+    assert!(notes.len() == 1 && notes[0].contains("2 label clearance(s)"), "{notes:?}");
+}
+
+/// A clearance other than 2 saved in a task, a model's step or a script, or in a saved style, also
+/// requires `label-clearance`: an older reader would run the step, or apply the style, without
+/// it, saying nothing (#2828). A clearance of 2 or null needs nothing: that is what an older
+/// reader keeps.
+#[test]
+fn saved_label_clearances_are_required_by_name() {
+    let s = world();
+    let with_task = |params: Value| {
+        let mut project = s.project.clone();
+        project.tasks = vec![
+            serde_json::from_value(
+                json!({"name": "Clear", "steps": [{"title": "Clear", "command": "labels.placement", "params": params}]}),
+            )
+            .unwrap(),
+        ];
+        serde_json::to_value(&project).unwrap().get("requires").cloned()
+    };
+    for clearance in [json!(8), json!(0), json!("8"), json!(2.5), json!(500)] {
+        assert_eq!(
+            with_task(json!({"layer": "Cities", "position": "above", "clearance": clearance})),
+            Some(json!(["label-clearance"])),
+            "{clearance}"
+        );
+    }
+    for nothing in [
+        json!({"layer": "Cities", "clearance": 2}),
+        json!({"layer": "Cities", "clearance": null}),
+        json!({"layer": "Cities", "position": "above"}),
+    ] {
+        assert_eq!(with_task(nothing.clone()), None, "{nothing}");
+    }
+    // In a script, too.
+    let script = json!({"script": "labels.placement {\"layer\": \"Cities\", \"clearance\": 9}"});
+    let mut project = s.project.clone();
+    project.tasks = vec![
+        serde_json::from_value(json!({"name": "Script", "steps": [{"title": "Run", "command": "script.run", "params": script}]})).unwrap(),
+    ];
+    assert_eq!(serde_json::to_value(&project).unwrap()["requires"], json!(["label-clearance"]));
+    // A saved style keeps the clearance its layer had.
+    let mut s = world();
+    s.run("labels.placement", &json!({"layer": "Cities", "clearance": 7})).unwrap();
+    s.run("style.new", &json!({"layer": "Cities", "name": "Roomy"})).unwrap();
+    s.run("labels.placement", &json!({"layer": "Cities", "clearance": 2})).unwrap();
+    assert_eq!(serde_json::to_value(&s.project).unwrap()["requires"], json!(["label-clearance"]));
 }
 
 /// A label class takes an offset with its placement and a background with its text symbol; junk
@@ -20653,6 +20861,84 @@ fn plugins_fetch_documents_with_network() {
     rustgis_plugins::unload("eng-fetch");
 }
 
+/// A service's collections at `local`, on this computer, whose one layer is there too (nothing
+/// listens on port 9, so a read that is tried fails at once), and a catalogue's answer for a
+/// catalogue on the local network linking to a service there: `(listing, search)`, each with its
+/// document given as `text`.
+fn local_service_and_catalogue(local: &str, catalogue: &str) -> (Value, Value) {
+    let items = format!("{local}/parcels/items");
+    let collections =
+        json!({"collections":[{"id":"parcels","title":"Parcels","links":[{"rel":"items","type":"application/geo+json","href":items}]}]});
+    let record = format!(
+        r#"<csw:GetRecordsResponse xmlns:csw="http://www.opengis.net/cat/csw/2.0.2" xmlns:dc="http://purl.org/dc/elements/1.1/"><csw:SearchResults numberOfRecordsMatched="1"><csw:Record><dc:identifier>a</dc:identifier><dc:title>A</dc:title><dc:URI protocol="OGC:WMS">{catalogue}/wms</dc:URI></csw:Record></csw:SearchResults></csw:GetRecordsResponse>"#
+    );
+    (json!({"url": local, "type": "ogcapi", "text": collections.to_string()}), json!({"url": catalogue, "text": record}))
+}
+
+/// Plugins reach only the internet, and so does the service discovery one starts: a service or
+/// catalogue address on this computer or the local network is refused for a plugin, naming it and
+/// why, by every command that discovers a service or searches a catalogue, and nothing is added.
+#[test]
+fn a_plugin_cannot_discover_a_service_off_the_internet() {
+    let mut s = world();
+    let id = "eng-service-local";
+    plugin(id, &["network", "edit"]);
+    let (local, catalogue) = ("http://127.0.0.1:9/ogc/collections", "http://192.168.21.4/csw");
+    let (listing, search) = local_service_and_catalogue(local, catalogue);
+    let with = |extra: Value| {
+        let mut p = listing.clone();
+        if let (Some(p), Some(extra)) = (p.as_object_mut(), extra.as_object()) {
+            p.extend(extra.clone());
+        }
+        p
+    };
+    for (op, p, url) in [
+        ("service.add", with(json!({"layer": "parcels"})), local),
+        ("service.add", json!({"url": "http://127.0.0.1:9/wms", "type": "wms", "layer": "roads"}), "http://127.0.0.1:9/wms"),
+        ("service.layers", listing.clone(), local),
+        ("service.coverage", with(json!({"layer": "parcels"})), local),
+        ("service.groupPlan", listing.clone(), local),
+        ("service.import", with(json!({"name": "Parcels"})), local),
+        ("catalog.search", search.clone(), catalogue),
+    ] {
+        let e = forward(&mut s, id, op, p).unwrap_err();
+        assert!(e.contains(url) && e.contains("plugins fetch only from the internet, not this computer or the local network"), "{op}: {e}");
+    }
+    assert!(s.map().layers.iter().all(|l| l.name != "Parcels" && l.name != "roads"), "nothing was added");
+    rustgis_plugins::unload(id);
+}
+
+/// The user's own service and catalogue on this computer and the local network are read as ever:
+/// only a plugin's discovery is held to the internet.
+#[test]
+fn the_users_own_local_service_is_still_discovered() {
+    let mut s = world();
+    let (listing, search) = local_service_and_catalogue("http://127.0.0.1:9/ogc/collections", "http://192.168.21.4/csw");
+    let own = s.run("service.layers", &listing).unwrap();
+    assert_eq!(own["layers"].as_array().map_or(0, Vec::len), 1, "{own}");
+    let own = s.run("catalog.search", &search).unwrap();
+    assert_eq!(own["records"][0]["links"].as_array().map_or(0, Vec::len), 1, "{own}");
+}
+
+/// A document a plugin supplies for a service on the internet has what it names held there: its
+/// link into the local network is refused, naming it, as is a catalogue answer's.
+#[test]
+fn a_document_a_plugin_supplies_names_only_the_internet() {
+    let mut s = world();
+    let id = "eng-service-text";
+    plugin(id, &["network"]);
+    let linked = "http://10.0.21.5/collections";
+    let landing = json!({"links":[{"rel":"data","type":"application/json","href":linked}]}).to_string();
+    let p = json!({"url": "https://gis-21.corp-looks-public.example/ogc", "type": "ogcapi", "text": landing});
+    let e = forward(&mut s, id, "service.layers", p).unwrap_err();
+    assert!(e.contains(linked) && e.contains("local network"), "{e}");
+    let (_, search) = local_service_and_catalogue("http://127.0.0.1:9/ogc/collections", "http://192.168.21.4/csw");
+    let search = json!({"url": "https://csw-21.corp-looks-public.example/csw", "text": search["text"]});
+    let out = forward(&mut s, id, "catalog.search", search).unwrap();
+    assert_eq!(out["records"][0]["links"].as_array().map_or(0, Vec::len), 0, "{out}");
+    rustgis_plugins::unload(id);
+}
+
 /// Where nothing may wait (the browser), `host.fetch` answers pending: the command is undone,
 /// quietly, and runs again once the answer is in, when the cache answers.
 #[test]
@@ -26544,7 +26830,7 @@ fn an_arcgis_services_picture_markers_draw_their_images() {
     let texts: Vec<_> = s.notices.iter().map(|n| n.text.as_str()).collect();
     let said = "Places: the service's symbology came in, except: picture markers whose image isn't a PNG, JPEG or SVG RustGIS reads, drawn as circles";
     assert!(texts.contains(&said), "{texts:?}");
-    assert_eq!(serde_json::to_value(&s.project).unwrap()["requires"], json!(["picture-markers"]));
+    assert_eq!(serde_json::to_value(&s.project).unwrap()["requires"], json!(["picture-markers", "svg-markers"]));
 }
 
 /// An ArcGIS layer's description, read before its features, doesn't count against their budget:
@@ -45548,7 +45834,7 @@ fn postgis_dates_live() {
         let src = postgis::PostgisSource::open(conn, t, None, None).unwrap();
         let b = src.read(&Request { extent: None, limit: 100, own: None }).unwrap();
         let note = rustgis_data::source::unread_dates_note(&src.info().fields, &b.unread_dates);
-        assert_eq!(note.as_deref(), Some("2 values aren't dates and were read as empty, in 'd', 'ts'"));
+        assert_eq!(note.as_ref().map(rustgis_data::loss::Note::as_str), Some("2 values aren't dates and were read as empty, in 'd', 'ts'"));
         let f = b.features.iter().find(|f| f.id == 1).unwrap();
         assert_eq!(f.attrs.get(3).map(ToString::to_string).as_deref(), Some("2026-03-05T12:30:00Z"));
     }

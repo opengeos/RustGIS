@@ -127,7 +127,9 @@ Projects, map files and layer files whose symbology draws an image as a marker (
 a symbol's, a stacked stroke's or a dot fill's, saved styles included), or whose replayable
 commands set one (an `image` in `layer.marker`, a `layer.lineStrokes` stroke's markers or a
 `layer.fillLayers` fill), require `picture-markers`:
-an older reader must refuse them rather than fail on the marker or lose it.
+an older reader must refuse them rather than fail on the marker or lose it. Where such an image
+is an SVG, they also require `svg-markers`: a reader of PNG and JPEG markers only would draw it
+as a circle and refuse the command that sets it.
 
 Projects, model files and web tools that save a percent-slope function require `slope-percent`:
 an older reader must refuse them rather than run the saved function in degrees. Project
@@ -168,6 +170,11 @@ labels as without it and saving them again without the weights. So do projects w
 a saved style, or a saved `labels.placement` step (in a task, a model or a script) with a weight
 other than 5: an older reader would apply the style, or run the step, without the weight, saying
 nothing.
+
+Likewise a label class keeping other than 2 points free round its labels (`labels.placement` with a
+`clearance`) requires `label-clearance`, in a layer, a saved style or a saved `labels.placement`
+step: an older reader would place the labels 2 points apart and save them again without the
+clearances, or run the step without it.
 
 Projects with an ink on a legend, colorbar, table or chart (`color` on those elements) require
 `layout-element-ink`, so an older reader refuses them instead of drawing those elements in dark

@@ -94,8 +94,8 @@ draws a circle, so the point still shows. By command:
 layer.marker={"layer":"Peaks","char":"▲","font":"DejaVu Sans","size":12}
 ```
 
-A marker can also be an **image**: a PNG or JPEG picked with **Image…** at the end of **Shape**
-(choose it again for another image), or a PNG, JPEG or SVG given by command as base64 (at most
+A marker can also be an **image**: a PNG, JPEG or SVG file picked with **Image…** at the end of
+**Shape** (choose it again for another image), or given by command as base64 (at most
 2 MiB of base64 text, an image of about 1.5 MiB). A PNG or JPEG may have at most 2048 × 2048
 pixels (by area: a 4096 × 1024 strip is taken). Other formats, such as GIF, aren't taken: a file
 in another format, one too large, or one that doesn't decode is said in a notice, with why, and
@@ -111,12 +111,13 @@ repeats, nor one with a marker on a shape inside another marker (drawn on each o
 wherever it is). An arc is counted as the curves it is drawn with, more the larger its radius:
 one of more than 200 curves isn't taken, nor is a circle, an ellipse or a rounded corner whose
 radius is in em or ex, which may come to any size. A radius in % is counted as that share of the
-largest size the SVG gives itself, unless its own width or height is in em or ex, or a size
-inside it is in %, em or ex. Each image is decoded once until RustGIS restarts, and kept
-decoded, at most 700 pixels a side: in all at most
-256 megapixels of different marker images and 128 MiB once decoded (as many images as it keeps,
-at 177 × 177 each), so that a crafted file can't hold it for minutes; past it a new image is
-refused, or drawn as a circle, with a notice saying so, until RustGIS is restarted. A vector
+largest size the SVG gives itself; such a radius isn't taken either when the SVG's own width or
+height is in em or ex, or when the width or height of an `<svg>`, `<symbol>` or `<use>` inside it
+is in %, em or ex. Each image is decoded once until RustGIS restarts,
+and kept decoded, at most 700 pixels a side: in all at most 256 megapixels of different marker
+images and 128 MiB once decoded (as many images as it keeps, at 177 × 177 each), so that a
+crafted file can't hold it for minutes; past it a new image is refused, or drawn as a circle,
+with a notice saying so, until RustGIS is restarted. A vector
 export keeps a compressed copy of each image it draws, at most about as much again (some 256 MiB
 in all), which counts too and leaves less for new images.
 Its size is its width, and it is as tall as its proportions make it, as QGIS draws a raster image
@@ -650,6 +651,14 @@ Turn labels on per layer (Labeling › Labels › **Label**), then:
   win over the towns' without moving the river layer above them, which would change what draws
   on top (`labels.placement={"layer": "Rivers", "weight": 8}`; a fraction is rounded and a number
   past 0 or 10 brought to it, with a notice; `null` is 5).
+- **Clearance** (Labeling pane › Position): the room, in points, a class's labels keep free of
+  other labels (0 to 100, 2 to start with, the room every label kept before). Two labels keep
+  both their clearances apart: a river's name with 10 keeps a town's with 2 at least 12 points
+  away, so some labels that fitted before are left out or try their other places. 0 lets the
+  class's labels come as close as their halos and backgrounds allow. It counts round the text
+  only, not an icon; vector tile labels keep their style's own padding
+  (`labels.placement={"layer": "Rivers", "clearance": 10}`; a number past 0 or 100 is brought to
+  it, with a notice; `null` is 2).
 - **Callouts** (Labeling pane › Position): a label crowded off its spot moves to the nearest free
   spot nearby, and a line is drawn from its feature to the text, as QGIS's callouts. **at most**
   sets how long the line may be (5 to 500 points, 40 to start with): a label with no free spot
@@ -669,8 +678,9 @@ Turn labels on per layer (Labeling › Labels › **Label**), then:
   moves and old label locks because replacement data can reuse feature ids, with a counted notice
   and undo restoration. Opening a project, importing a map or styles, or adding a layer file
   reports invalid, duplicate or excess moved-label entries that were ignored, callout lengths that
-  were adjusted, label weights that were not a whole number from 0 to 10, and Show all labels
-  settings that were not true or false. A callout length given
+  were adjusted, label weights that were not a whole number from 0 to 10, label clearances that
+  were not a number from 0 to 100 points, and Show all labels settings that were not true or
+  false. A callout length given
   to `labels.placement` outside 5 to 500 points is brought within range with a notice. Clean
   settings give no such notice.
 - **Font**: the labels' font family, any installed on the computer (Labeling pane › Symbol

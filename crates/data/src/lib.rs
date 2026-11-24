@@ -548,6 +548,54 @@ impl Dataset {
         Self::geometry_to_lonlat_by(&self.shown_conversion()?, g)
     }
 
+    /// What a whole read of a source says of the features it kept as the source holds them
+    /// ([`source::Reproject::place`]): how many have a place that can't be given in
+    /// longitude/latitude, and whether those that convert come out beyond it, as a file read
+    /// whole says them (#2032 C2f-4b). One pass, each place converted to be checked and none kept,
+    /// looking at Cancel every 256 features; nothing while its coordinates are longitude/latitude
+    /// or its system can't be converted (the map says that).
+    pub fn kept_unplaced_notes(&self) -> std::result::Result<Vec<String>, String> {
+        let Ok(to) = self.lonlat_conversion() else { return Ok(Vec::new()) };
+        if to.is_identity() {
+            return Ok(Vec::new());
+        }
+        let (mut unplaced, mut placed, mut beyond) = (0usize, 0usize, 0usize);
+        for (i, g) in self.features.rows().filter_map(RowRef::geometry).enumerate() {
+            stop_when_asked(i)?;
+            let (mut ok, mut e) = (true, Extent::EMPTY);
+            g.for_each_coord(|c| match to.point(c) {
+                Some(l) => e.expand(l),
+                None if !c.is_finite() => {}
+                None => ok = false,
+            });
+            if ok {
+                placed += 1;
+                beyond += usize::from(e.beyond_lonlat());
+            } else {
+                unplaced += 1;
+            }
+        }
+        let crs = self.coord_crs();
+        Ok(io::kept_unplaced_note("features", unplaced, placed == 0, crs)
+            .into_iter()
+            .chain(io::beyond_lonlat_note("features", beyond, crs))
+            .collect())
+    }
+
+    /// [`Dataset::geometry_to_lonlat`] of `g`, feature `id`'s geometry, for an edit of that one
+    /// feature: refused naming the layer and the feature when one of its places can't be given in
+    /// longitude/latitude, so it can't be edited there.
+    pub fn feature_to_lonlat<'a>(&self, id: u64, g: &'a Geometry) -> std::result::Result<Cow<'a, Geometry>, String> {
+        let to = self.shown_conversion()?;
+        Self::converted_to_lonlat(&to, g).ok_or_else(|| {
+            format!(
+                "{}: feature {id} has a place in {} that can't be given in longitude/latitude, so it can't be edited there",
+                self.name,
+                to.source().label()
+            )
+        })
+    }
+
     /// [`Dataset::geometry_to_lonlat`] by `to`, its [`Dataset::lonlat_conversion`] made once for
     /// many geometries: refused, naming its system, when one of the geometry's places can't be
     /// converted.
@@ -716,10 +764,10 @@ pub struct ReadReport {
     pub synced: Option<sync::Synced>,
     /// What a read of a source says of values in date fields that weren't dates
     /// ([`source::unread_dates_note`]), also in `messages`: for a caller that says only this.
-    pub unread_dates: Option<String>,
+    pub unread_dates: Option<loss::Note>,
     /// What it says of date-times it rounded to the microsecond ([`source::rounded_dates_note`]),
     /// also in `messages`.
-    pub rounded_dates: Option<String>,
+    pub rounded_dates: Option<loss::Note>,
     /// The extrusion the reader suggests for the layer (a city model's volumes): applied when the
     /// layer is added, and only then; a reload keeps the layer's own.
     pub extrusion: Option<SuggestedExtrusion>,
