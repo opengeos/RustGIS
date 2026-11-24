@@ -314,9 +314,9 @@ pub struct MapView {
     /// Non-owning source identity for the held vertex gesture; never persisted with the project.
     pub(crate) vertex_drag_owner: Option<crate::vertexedit::DragOwner>,
     /// The selected features Edit Vertices last said it can't give handles to (their place can't
-    /// be given in longitude/latitude), by map index, layer and row, so it says so once per
-    /// selection.
-    pub(crate) vertex_unplaced_said: Vec<(usize, u32, usize)>,
+    /// be given in longitude/latitude), by map index, live layer ([`rustgis_engine::map::Layer::instance_id`])
+    /// and row, so it says so once per selection.
+    pub(crate) vertex_unplaced_said: Vec<(usize, u64, usize)>,
     /// What those features were last looked for under, so they aren't looked for each frame.
     pub(crate) vertex_unplaced_seen: Option<u64>,
     /// Session-only opt-in for coincident polygon moves; never saved with a project or preference.

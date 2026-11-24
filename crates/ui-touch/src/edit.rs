@@ -83,10 +83,7 @@ pub(crate) fn unplaced(app: &RustGisApp, id: u32, row: usize) -> Option<String> 
     let l = app.session.map().layer(id)?;
     let f = l.dataset.features.row(row)?;
     l.dataset.feature_to_lonlat(f.id(), f.geometry()?).err()?;
-    Some(rustgis_ui_egui::i18n::fmt(
-        "{layer}: feature {id} has a place in {system} that can't be given in longitude/latitude, so its vertices can't be edited there",
-        &[("layer", &l.name), ("id", &f.id().to_string()), ("system", &l.dataset.coord_crs().label())],
-    ))
+    Some(rustgis_ui_egui::unplaced_feature_notice(&l.name, f.id(), &l.dataset.coord_crs().label()))
 }
 
 /// Whether putting vertex `v` of `shape` at `at` (`move`), or a new one there after it
