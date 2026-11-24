@@ -49,7 +49,8 @@ On an iPhone the project is written whole beside the original and then put in it
 failed save leaves the original as it was. Android has no way to swap a file in like that: the app
 first keeps a complete copy of the project in its own storage, then writes over the original. If
 that write fails partway, the original may be damaged; the message says so and names the copy,
-and the next **Save** asks where to save.
+and the next **Save** asks where to save. If the app is ended while it writes, the next start says so
+in the same way.
 
 !!! warning
     Remove Unused Copies looks only at the project in the window. A copy that another project

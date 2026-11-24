@@ -517,6 +517,7 @@ fn write_back_reason(reason: &str) -> String {
         "code:unwritable" => tl!("the file can't be written to").to_string(),
         "code:stalled" => tl!("the file took no more bytes").to_string(),
         "code:short" => tl!("the file doesn't hold all of the project after writing it").to_string(),
+        "code:unfinished" => tl!("the app ended before it was written").to_string(),
         other => other.to_string(),
     }
 }
@@ -925,6 +926,7 @@ mod tests {
             ("code:storage", "the app's storage can't be written to"),
             ("code:stalled", "the file took no more bytes"),
             ("code:short", "the file doesn't hold all of the project after writing it"),
+            ("code:unfinished", "the app ended before it was written"),
             ("Permission denied", "Permission denied"),
         ] {
             assert_eq!(write_back_reason(code), worded);

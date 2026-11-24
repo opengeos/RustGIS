@@ -99,6 +99,7 @@ public class MainActivity extends NativeActivity {
     protected void onCreate(android.os.Bundle saved) {
         super.onCreate(saved);
         current = this;
+        reportUnfinishedWriteBacks();
         // A photo being taken when Android ended the app (the camera app in front): its file.
         if (saved != null && saved.getString("photo") != null) {
             photo = new File(saved.getString("photo"));
@@ -580,6 +581,8 @@ public class MainActivity extends NativeActivity {
                     // Said below: the write failed.
                 }
             }
+            // Said now: the copy is marked so the next start doesn't say it again.
+            markReported(copy);
             return writeBackFailed(name, e, copy);
         }
     }
@@ -598,6 +601,51 @@ public class MainActivity extends NativeActivity {
     /** Text that fits in one field of an event: no tab or line break. */
     private static String oneField(String text) {
         return text.replaceAll("[\\t\\r\\n]", " ");
+    }
+
+    /** Whether this process has looked for write-backs an earlier one didn't finish. */
+    private static boolean unfinishedLooked;
+
+    /**
+     * Says, once a process, each write-back an earlier process didn't finish (the app ended while
+     * it wrote): its complete copy is still in files/saved, unmarked, and the document may be
+     * damaged (opened "rwt", it was emptied first). Each is marked once said.
+     */
+    private void reportUnfinishedWriteBacks() {
+        if (unfinishedLooked) {
+            return;
+        }
+        unfinishedLooked = true;
+        File[] dirs = new File(getFilesDir(), "saved").listFiles();
+        if (dirs == null) {
+            return;
+        }
+        for (File dir : dirs) {
+            File[] files = dir.listFiles();
+            if (files == null || new File(dir, REPORTED).exists()) {
+                continue;
+            }
+            for (File copy : files) {
+                if (copy.isFile() && !copy.getName().equals(REPORTED)) {
+                    markReported(copy);
+                    add(writeBackFailed(copy.getName(), new java.io.IOException(DocumentWrite.UNFINISHED), copy));
+                }
+            }
+        }
+    }
+
+    /** The mark beside a kept copy whose failure has been said. */
+    private static final String REPORTED = ".reported";
+
+    private static void markReported(File copy) {
+        File folder = copy.getParentFile();
+        if (folder != null) {
+            try {
+                new File(folder, REPORTED).createNewFile();
+            } catch (java.io.IOException e) {
+                // Said again on a later start at worst.
+            }
+        }
     }
 
     /** Removes a file and its folder, once that is empty. */

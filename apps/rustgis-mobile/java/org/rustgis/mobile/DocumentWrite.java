@@ -19,6 +19,7 @@ final class DocumentWrite {
     static final String UNWRITABLE = "code:unwritable";
     static final String STALLED = "code:stalled";
     static final String SHORT = "code:short";
+    static final String UNFINISHED = "code:unfinished";
 
     private DocumentWrite() {}
 
