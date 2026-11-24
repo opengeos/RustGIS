@@ -4030,6 +4030,9 @@ pub(crate) fn read_shapefile_parts(parts: ShapefileParts, name: &str, crs: Optio
     }
     .map_err(fmt)?;
     let mut ds = Dataset::new(name, GeometryType::None, fields);
+    // A system given or in a `.prj` (even one that can't be used, said on its own) isn't one
+    // RustGIS assumed.
+    let declared = crs.is_some() || parts.prj.is_some();
     let to_lonlat = match crs {
         Some(c) => {
             ds.crs = Some(c);
@@ -4196,10 +4199,14 @@ pub(crate) fn read_shapefile_parts(parts: ShapefileParts, name: &str, crs: Optio
     // (one that doesn't match them), counted; or as they are without a system to convert from.
     match ds.crs.filter(|_| to_lonlat.is_some()) {
         Some(c) => report.messages.extend(beyond_lonlat_note("shapes", beyond, c)),
-        None if ds.extent().beyond_lonlat() => report.messages.push(crate::loss::Note::loss(
-            crate::loss::LossCode::AssumedCrs,
-            "coordinates are not longitude/latitude; RustGIS reads them as WGS 84 and they may draw out of place",
-        )),
+        None if ds.extent().beyond_lonlat() => {
+            let text = "coordinates are not longitude/latitude; RustGIS reads them as WGS 84 and they may draw out of place";
+            report.messages.push(if declared {
+                crate::loss::Note::plain(text)
+            } else {
+                crate::loss::Note::loss(crate::loss::LossCode::AssumedCrs, text)
+            });
+        }
         None => {}
     }
     if report.skipped > 0 {

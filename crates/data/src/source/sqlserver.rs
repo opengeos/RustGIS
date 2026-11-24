@@ -1289,9 +1289,12 @@ mod tests {
             fine_times_said(&fine, Some(&[0, 1]), true).texts().collect::<Vec<_>>(),
             ["date-times in 'logged' hold 100-nanosecond digits: they're read to the microsecond, the last digit left out"]
         );
+        assert_eq!(fine_times_said(&fine, Some(&[0, 1]), true)[0].loss, Some(crate::loss::LossCode::ChangedRounded));
         assert!(fine_times_said(&fine, Some(&[0, 0]), true).is_empty());
+        // What only may have been rounded is said without a code.
         let notes = fine_times_said(&fine, Some(&[0, 0]), false);
         assert!(notes.len() == 1 && notes[0].starts_with("date-times in 'seen', 'logged' may hold"), "{notes:?}");
+        assert_eq!(notes[0].loss, None);
         // Columns that have them are named apart from those that may.
         let notes = fine_times_said(&fine, Some(&[1, 0]), false);
         assert!(
@@ -1300,6 +1303,7 @@ mod tests {
                 && notes[1].starts_with("date-times in 'logged' may hold"),
             "{notes:?}"
         );
+        assert_eq!((notes[0].loss, notes[1].loss), (Some(crate::loss::LossCode::ChangedRounded), None));
         assert!(fine_times_said(&fine, Some(&[1, 1]), false).len() == 1);
         // A look that failed says so, naming every column.
         let notes = fine_times_said(&fine, None, true);
@@ -1307,6 +1311,7 @@ mod tests {
             notes.len() == 1 && notes[0].starts_with("date-times in 'seen', 'logged' may hold") && notes[0].contains("couldn't be checked"),
             "{notes:?}"
         );
+        assert_eq!(notes[0].loss, None);
         assert!(fine_times_said(&[], Some(&[]), false).is_empty() && fine_times_said(&[], None, false).is_empty());
         // A seventh digit of a second is cut; the offset after it stays.
         assert_eq!(to_micros("2026-03-05T14:30:00.1234567+02:00"), "2026-03-05T14:30:00.123456+02:00");

@@ -176,9 +176,13 @@ impl ShpSource {
         if table.rows != index.count {
             notes.push(format!("the .shp holds {} shapes and the .dbf {} rows; rows are matched by position", index.count, table.rows));
         }
+        let prj = if crs.is_none() { crate::raster::read_prj(path) } else { None };
+        // A system given or in a `.prj` (even one that can't be used, said on its own) isn't one
+        // RustGIS assumed, as for a Shapefile read whole.
+        let declared = crs.is_some() || prj.is_some();
         let reproject = match crs {
             Some(c) => Reproject::from_crs(c, &mut notes),
-            None => shp_reproject(crate::raster::read_prj(path).as_deref(), &mut notes)?,
+            None => shp_reproject(prj.as_deref(), &mut notes)?,
         };
         // The records' own boxes frame the layer, as the index holds them (rounded outward to f32);
         // with none (no records, or every shape null, empty or not a number) it has no extent,
@@ -232,10 +236,12 @@ impl ShpSource {
         }
         let extent = native.map_or(Extent::EMPTY, |n| reproject.extent_to_lonlat(&n));
         if reproject.is_lonlat() && extent.beyond_lonlat() {
-            notes.push(crate::loss::Note::loss(
-                crate::loss::LossCode::AssumedCrs,
-                "coordinates are not longitude/latitude; RustGIS reads them as WGS 84 and they may draw out of place",
-            ));
+            let text = "coordinates are not longitude/latitude; RustGIS reads them as WGS 84 and they may draw out of place";
+            notes.push(if declared {
+                crate::loss::Note::plain(text)
+            } else {
+                crate::loss::Note::loss(crate::loss::LossCode::AssumedCrs, text)
+            });
         }
         let (names, not_utf8) = read_names(&dbf, table.columns.len(), &encoding)?;
         notes.extend(crate::dbf::not_utf8_names_note(&not_utf8, encoding.name()));
@@ -398,7 +404,7 @@ impl ShpSource {
                 .into_iter()
                 .chain(deleted_note(deleted, false))
                 .map(crate::loss::Note::from)
-                .chain(crate::io::nonfinite_note(&self.info.fields, &nonfinite))
+                .chain(nonfinite_note(&self.info.fields, &nonfinite, false))
                 .collect(),
             not_utf8,
         })
@@ -545,7 +551,7 @@ impl FeatureSource for ShpSource {
                 .into_iter()
                 .chain(deleted_note(deleted, !late && !complete))
                 .map(crate::loss::Note::from)
-                .chain(crate::io::nonfinite_note(&self.info.fields, &nonfinite))
+                .chain(nonfinite_note(&self.info.fields, &nonfinite, !late && !complete))
                 .collect(),
             not_utf8,
         })
@@ -614,6 +620,13 @@ fn boxed_off_note(n: u64, sampled: bool, late: bool) -> Vec<String> {
 
 /// The note for `n` records marked deleted in the `.dbf`, left out with their shapes; of those
 /// read when the read is `sampled`.
+/// The numbers in the `.dbf` that aren't finite, read as empty ([`crate::io::nonfinite_note`]); a
+/// `sampled` read counts only the records it read, and says so, as [`deleted_note`] does.
+fn nonfinite_note(fields: &[crate::Field], counts: &[usize], sampled: bool) -> Option<crate::loss::Note> {
+    let note = crate::io::nonfinite_note(fields, counts)?;
+    Some(if sampled { note.map_text(|t| format!("in the records read (a sample of the layer, which may hold more), {t}")) } else { note })
+}
+
 fn deleted_note(n: usize, sampled: bool) -> Option<String> {
     if sampled && n > 0 {
         return Some(format!(

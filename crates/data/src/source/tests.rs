@@ -2534,6 +2534,13 @@ fn shapefile_in_place_says_numbers_that_arent_finite() {
         assert!(notes[0].as_str().ends_with(said), "{messages:?}");
         assert_eq!(notes[0].loss, Some(crate::loss::LossCode::DroppedValue));
     }
+    // A read of a sample (here the first and third records) counts only what it read, and says so.
+    let some = open_path(&p, None).unwrap().read(&Request { limit: 2, ..Request::all() }).unwrap();
+    assert!(!some.complete);
+    let sampled: Vec<_> = some.notes.iter().filter(|m| m.contains("finite")).collect();
+    assert_eq!(sampled.len(), 1, "{:?}", some.notes);
+    assert_eq!(sampled[0].as_str(), format!("in the records read (a sample of the layer, which may hold more), {said}"));
+    assert_eq!(sampled[0].loss, Some(crate::loss::LossCode::DroppedValue));
     // Finite numbers and a blank one say nothing, in place or whole.
     let p = d.join("clean.shp");
     write_shapefile(&ds, &p);
@@ -2566,7 +2573,20 @@ fn shapefile_in_place_reprojects_from_its_prj() {
     // Without the .prj the coordinates are taken as they are, and that's said.
     std::fs::remove_file(p.with_extension("prj")).unwrap();
     let src = open_path(&p, None).unwrap();
-    assert!(src.info().notes.iter().any(|n| n.contains("not longitude/latitude")), "{:?}", src.info().notes);
+    let said: Vec<_> = src.info().notes.iter().filter(|n| n.contains("not longitude/latitude")).collect();
+    assert_eq!(said.len(), 1, "{:?}", src.info().notes);
+    assert_eq!(said[0].loss, Some(crate::loss::LossCode::AssumedCrs), "assumed without a .prj");
+    // A .prj that says WGS 84 gives the system, so nothing is assumed: the same note, uncoded,
+    // as a whole read says it.
+    let wgs84 = r#"GEOGCS["GCS_WGS_1984",DATUM["D_WGS_1984",SPHEROID["WGS_1984",6378137.0,298.257223563]],PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]]"#;
+    std::fs::write(p.with_extension("prj"), wgs84).unwrap();
+    let src = open_path(&p, None).unwrap();
+    let said: Vec<_> = src.info().notes.iter().filter(|n| n.contains("not longitude/latitude")).collect();
+    assert_eq!(said.len(), 1, "{:?}", src.info().notes);
+    assert_eq!(said[0].loss, None, "declared in the .prj");
+    let (_, whole) = crate::io::read_path(&p).unwrap();
+    let said: Vec<_> = whole.messages.iter().filter(|n| n.contains("not longitude/latitude")).collect();
+    assert_eq!((said.len(), said.first().and_then(|n| n.loss)), (1, None), "{:?}", whole.messages);
 }
 
 #[test]

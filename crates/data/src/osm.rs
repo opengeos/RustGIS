@@ -826,7 +826,7 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>>
     ] {
         if count > 0 {
             let subject = if count == 1 { one } else { many };
-            report.messages.push(format!("{count} {subject}"));
+            report.messages.push(crate::loss::Note::loss(crate::loss::LossCode::DroppedGeometry, format!("{count} {subject}")));
         }
     }
     if containment_limited > 0 {
@@ -1325,7 +1325,9 @@ pub(crate) mod tests {
             assert_eq!(parts[0].len(), rings);
             assert_eq!(parts[0][0], vec![Coord::new(0.0, 0.0), Coord::new(10.0, 0.0), Coord::new(0.0, 10.0), Coord::new(0.0, 0.0)]);
             assert_eq!(report.skipped, 0, "no feature was skipped");
-            report.messages.clone()
+            // Parts of a polygon that is kept are its geometry's loss, not a feature's.
+            assert!(report.messages.iter().all(|m| m.loss == Some(crate::loss::LossCode::DroppedGeometry)), "{report:?}");
+            report.messages.texts().map(str::to_string).collect::<Vec<_>>()
         };
         assert!(kept(clean, 2).is_empty());
         for (bytes, message) in cases {
