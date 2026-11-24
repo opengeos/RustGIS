@@ -8399,7 +8399,7 @@ fn place_labels_with_previews(
                 }
             }
             // Checked where it ends up, after a callout moved it: a duplicate takes no room and isn't
-            // shown as unplaced, as it wasn't short of room.
+            // shown as unplaced, even when it was also short of room, as being a duplicate comes first.
             if duplicate(&l) {
                 // A tilted view's other bands are places of the same label: none of them shows.
                 if grouped {
