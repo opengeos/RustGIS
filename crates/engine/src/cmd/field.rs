@@ -269,7 +269,9 @@ fn build_package(s: &mut Session, p: &Value, notes: &mut rustgis_data::loss::Not
     // naming them as before (the phone points them at the unpacked files); coming back, those
     // taken in the field (and those that came from home, under their paths there).
     let photos = if coming_back {
-        take_photos(&mut map, &mut budget, s.project.field_origin.as_ref().map_or("", |o| o.package.as_str()))?
+        // Room for the package's own entries, as going out.
+        let most_entries = usize::from(u16::MAX).saturating_sub(entries.len() + 16);
+        take_photos(&mut map, &mut budget, s.project.field_origin.as_ref().map_or("", |o| o.package.as_str()), most_entries)?
     } else {
         // Room for the package's own entries (its project, README, notes, marker and index).
         let most_entries = usize::from(u16::MAX).saturating_sub(entries.len() + 16);
@@ -1115,12 +1117,14 @@ fn collect_photos(map: &rustgis_map::Map, budget: &mut u64, most_entries: usize)
 /// carried: home has it, so it takes none of the package's room, and a feature whose photos the
 /// field left alone names them as home does. Each row is a counted step, Cancel looked at before
 /// it.
-fn take_photos(map: &mut rustgis_map::Map, budget: &mut u64, package: &str) -> Result<Photos, String> {
+fn take_photos(map: &mut rustgis_map::Map, budget: &mut u64, package: &str, most_entries: usize) -> Result<Photos, String> {
     let mut found = Photos::default();
     // Each photo's entry and the path it was named by, for the way back.
     let mut index = String::new();
     let mut placed: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     let mut taken = std::collections::HashSet::new();
+    // The next number to try for each name: photos sharing one don't each count up from 2.
+    let mut next: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
     // The files already said (missing, not pictures, too large, or unread): each said once,
     // however many name it.
     let mut said = std::collections::HashSet::new();
@@ -1188,10 +1192,10 @@ fn take_photos(map: &mut rustgis_map::Map, budget: &mut u64, package: &str) -> R
                 found.unread.push(format!("{path} (its name holds a tab or a line break)"));
                 return path.to_string();
             }
-            // Past the budget, or past what the computer reads of the index (its line as long as it
-            // can be, with a numbered name): it stays on the phone.
+            // Past the budget, past what the computer reads of the index (its line as long as it can
+            // be, with a numbered name), or past the entries a package holds: it stays on the phone.
             let longest_line = PHOTOS.len() + 8 + file.file_name().map_or(0, |n| n.len()) + path.len() + 2;
-            if size > *budget || (index.len() + longest_line) as u64 > MAX_INDEX {
+            if size > *budget || (index.len() + longest_line) as u64 > MAX_INDEX || found.entries.len() >= most_entries {
                 said.insert(path.to_string());
                 found.too_large.push(path.to_string());
                 return path.to_string();
@@ -1201,8 +1205,10 @@ fn take_photos(map: &mut rustgis_map::Map, budget: &mut u64, package: &str) -> R
                     *budget = budget.saturating_sub(bytes.len() as u64);
                     let stem = file.file_name().map(|n| plain_name(&n.to_string_lossy())).unwrap_or_else(|| "photo.jpg".into());
                     let mut name = stem.clone();
-                    for n in 2.. {
+                    let from = next.entry(stem.to_ascii_lowercase()).or_insert(2);
+                    for n in *from.. {
                         if taken.insert(name.to_ascii_lowercase()) {
+                            *from = n;
                             break;
                         }
                         name = format!("{n}-{stem}");
