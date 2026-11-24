@@ -181,6 +181,55 @@ fn targets(app: &RustGisApp) -> Vec<(u32, usize, Cow<'_, Geometry>)> {
     out
 }
 
+/// The selected features [`targets`] leaves out, by layer and row, while Edit Vertices is on:
+/// those with a place that can't be given in longitude/latitude (#2032 C2f-4b), where handles are
+/// drawn and dragged. On a map in the layer's own system such a feature is drawn and selected.
+fn unplaced_targets(app: &RustGisApp) -> Vec<(u32, usize)> {
+    let m = app.session.map();
+    if app.session.tool != rustgis_engine::Tool::EditVertices || !m.editing.settings.enabled {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for l in m.layers.iter().filter(|l| m.shows(l) && !l.selection.is_empty() && !l.is_raster() && !l.graphics && !l.is_streamed()) {
+        for r in l.selection.iter().take(MAX_FEATURES) {
+            if let Some(g) = l.dataset.features.get(*r).and_then(|f| f.geometry.as_ref())
+                && l.dataset.geometry_to_lonlat(g).is_err()
+            {
+                out.push((l.id, *r));
+            }
+        }
+    }
+    out
+}
+
+/// Says once per selection which selected features Edit Vertices gives no handles to, by layer:
+/// one is named, several counted ([`unplaced_targets`]).
+pub(crate) fn say_unplaced(app: &mut RustGisApp) {
+    let left = unplaced_targets(app);
+    if left == app.map.vertex_unplaced_said {
+        return;
+    }
+    let mut said = Vec::new();
+    for layer in left.iter().map(|(l, _)| *l).collect::<std::collections::BTreeSet<_>>() {
+        let Some(l) = app.session.map().layer(layer) else { continue };
+        let rows: Vec<usize> = left.iter().filter(|(id, _)| *id == layer).map(|(_, r)| *r).collect();
+        let text = match rows.as_slice() {
+            [r] => l.dataset.features.get(*r).and_then(|f| l.dataset.feature_to_lonlat(f.id, f.geometry.as_ref()?).err()),
+            rows => Some(format!(
+                "{}: {} of the selected features have a place in {} that can't be given in longitude/latitude, so their vertices can't be edited there",
+                l.name,
+                rows.len(),
+                l.dataset.coord_crs().label()
+            )),
+        };
+        said.extend(text);
+    }
+    app.map.vertex_unplaced_said = left;
+    for text in said {
+        app.session.notify(text, true);
+    }
+}
+
 /// The screen points of an edge's ends, when both are in view.
 fn edge_on_screen(app: &RustGisApp, rect: Rect, a: Coord, b: Coord) -> Option<(Pos2, Pos2)> {
     Some((lonlat_to_screen(app, rect, a)?, lonlat_to_screen(app, rect, b)?))
@@ -540,6 +589,39 @@ mod tests {
         app.run("ui.moveSharedVertices", json!({"on":true})).unwrap();
         app.session.clear_history();
         app
+    }
+
+    /// A selected feature with a place that can't be given in longitude/latitude gets no handles,
+    /// and that is said once for the selection, naming it (#2032 C2f-4b); several are counted.
+    #[test]
+    fn a_selected_feature_with_no_place_in_longitude_latitude_is_said_once() {
+        let mut app = app([square(0.), square(2.), square(4.)].into_iter());
+        let id = app.session.active_layer.unwrap();
+        let utm = rustgis_engine::data::raster::Crs::from_epsg(32631).unwrap();
+        let layer = app.session.map_mut().layer_mut(id).unwrap();
+        layer.dataset.hold_in(utm).unwrap();
+        let far =
+            |x: f64| Geometry::Polygon(vec![vec![vec![Coord::new(x, 0.), Coord::new(1e9, 0.), Coord::new(x, 1.), Coord::new(x, 0.)]]]);
+        layer.dataset.features[0].geometry = Some(far(500_000.));
+        app.session.map_mut().editing.settings.enabled = true;
+        let mark = app.session.notice_mark();
+        say_unplaced(&mut app);
+        say_unplaced(&mut app);
+        let said: Vec<String> = app.session.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(said[0].contains("feature 0 has a place") && said[0].contains("can't be edited there"), "{said:?}");
+        assert!(targets(&app).is_empty());
+        // Two of them, selected: counted, once.
+        let layer = app.session.map_mut().layer_mut(id).unwrap();
+        layer.dataset.features[1].geometry = Some(far(500_100.));
+        layer.selection = vec![0, 1, 2];
+        let mark = app.session.notice_mark();
+        say_unplaced(&mut app);
+        say_unplaced(&mut app);
+        let said: Vec<String> = app.session.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(said[0].contains("2 of the selected features"), "{said:?}");
+        assert_eq!(targets(&app).len(), 1);
     }
 
     /// A held gesture scans once, retains no rows, reprojects after camera changes, and drops

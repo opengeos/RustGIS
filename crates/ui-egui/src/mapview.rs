@@ -313,6 +313,9 @@ pub struct MapView {
     pub vertex_drag: Option<crate::vertexedit::VertexDrag>,
     /// Non-owning source identity for the held vertex gesture; never persisted with the project.
     pub(crate) vertex_drag_owner: Option<crate::vertexedit::DragOwner>,
+    /// The selected features Edit Vertices last said it can't give handles to (their place can't
+    /// be given in longitude/latitude), so it says so once per selection.
+    pub(crate) vertex_unplaced_said: Vec<(u32, usize)>,
     /// Session-only opt-in for coincident polygon moves; never saved with a project or preference.
     pub move_shared_vertices: bool,
     /// A sketch vertex clicked on an edge follows that edge from the previous vertex (Trace);
@@ -450,6 +453,7 @@ impl Default for MapView {
             vertex_owner: None,
             vertex_drag: None,
             vertex_drag_owner: None,
+            vertex_unplaced_said: Vec::new(),
             move_shared_vertices: false,
             trace_edges: false,
             sketch_full_said: false,
@@ -810,6 +814,7 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
     crate::modelbuilder::follow_view(app);
     view_tabs(app, ui, &t);
     crate::vertexedit::cancel_stale_drag(app);
+    crate::vertexedit::say_unplaced(app);
     if app.mb.shown() {
         crate::modelbuilder::show(app, ui);
         return;

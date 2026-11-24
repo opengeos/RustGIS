@@ -67,12 +67,21 @@ pub(crate) fn shape(app: &RustGisApp, id: u32, row: usize) -> Option<Geometry> {
     shape_ref(app, id, row).map(std::borrow::Cow::into_owned)
 }
 
-/// [`shape`], borrowed while the layer's coordinates are longitude/latitude (as every layer's are
-/// today): what is drawn and checked each frame isn't copied for it. Converted from the layer's
-/// own coordinates otherwise; `None` when it can't be.
+/// [`shape`], borrowed while the layer's coordinates are longitude/latitude: what is drawn and
+/// checked each frame isn't copied for it. Converted from the layer's own coordinates otherwise;
+/// `None` when it can't be ([`unplaced`] says why).
 pub(crate) fn shape_ref(app: &RustGisApp, id: u32, row: usize) -> Option<std::borrow::Cow<'_, Geometry>> {
     let l = app.session.map().layer(id)?;
     l.dataset.geometry_to_lonlat(l.dataset.features.get(row)?.geometry.as_ref()?).ok()
+}
+
+/// Why the shape of the feature in row `row` of layer `id` can't be edited here ([`shape_ref`] is
+/// `None`): one of its places can't be given in longitude/latitude, said naming the layer and the
+/// feature. `None` when it can be, or the row is gone.
+pub(crate) fn unplaced(app: &RustGisApp, id: u32, row: usize) -> Option<String> {
+    let l = app.session.map().layer(id)?;
+    let f = l.dataset.features.get(row)?;
+    l.dataset.feature_to_lonlat(f.id, f.geometry.as_ref()?).err()
 }
 
 /// Whether putting vertex `v` of `shape` at `at` (`move`), or a new one there after it
