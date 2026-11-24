@@ -355,20 +355,24 @@ impl GeometryLosses {
 
     /// Emits one counted notice per kind, only for nonzero totals.
     fn report(&self, name: &str, report: &mut ReadReport) {
-        for (count, one, many) in [
-            (self.unreadable.get(), "unreadable KML coordinate tuple", "unreadable KML coordinate tuples"),
-            (self.holes, "unreadable KML polygon hole", "unreadable KML polygon holes"),
+        use crate::loss::LossCode::{DroppedGeometry, DroppedRing};
+        // Each is a part of a placemark's geometry left out (of one kept, or of one skipped
+        // whole, which is said on its own).
+        for (count, one, many, code) in [
+            (self.unreadable.get(), "unreadable KML coordinate tuple", "unreadable KML coordinate tuples", DroppedGeometry),
+            (self.holes, "unreadable KML polygon hole", "unreadable KML polygon holes", DroppedRing),
             (
                 self.short_lines,
                 "KML line part with fewer than two usable coordinates",
                 "KML line parts with fewer than two usable coordinates",
+                DroppedGeometry,
             ),
-            (self.excess_points, "excess KML Point coordinate tuple", "excess KML Point coordinate tuples"),
-            (self.polygons, "KML polygon without a usable outer ring", "KML polygons without a usable outer ring"),
+            (self.excess_points, "excess KML Point coordinate tuple", "excess KML Point coordinate tuples", DroppedGeometry),
+            (self.polygons, "KML polygon without a usable outer ring", "KML polygons without a usable outer ring", DroppedGeometry),
         ] {
             if count > 0 {
                 let (subject, verb) = if count == 1 { (one, "was") } else { (many, "were") };
-                report.messages.push(format!("{name}: {count} {subject} {verb} left out"));
+                report.messages.push(crate::loss::Note::loss(code, format!("{name}: {count} {subject} {verb} left out")));
             }
         }
     }
@@ -800,13 +804,16 @@ mod tests {
             assert_eq!(layers[0].dataset.features[0].attrs[0], Value::Text("kept".into()));
             assert!(!layers[0].dataset.zm_dropped, "discarded rings do not set a retained point's altitude flag");
             assert_eq!(
-                layers[0].report.messages,
+                layers[0].report.messages.texts().collect::<Vec<_>>(),
                 [
                     "a: 2 unreadable KML coordinate tuples were left out",
                     "a: 1 unreadable KML polygon hole was left out",
                     "a: 2 KML polygons without a usable outer ring were left out"
                 ]
             );
+            use crate::loss::LossCode::{DroppedGeometry, DroppedRing};
+            let codes: Vec<_> = layers[0].report.messages.iter().map(|m| m.loss).collect();
+            assert_eq!(codes, [Some(DroppedGeometry), Some(DroppedRing), Some(DroppedGeometry)]);
             for clean in [
                 "<Polygon/>",
                 "<Polygon><outerBoundaryIs><LinearRing><coordinates> </coordinates></LinearRing></outerBoundaryIs><innerBoundaryIs/><innerBoundaryIs><LinearRing><coordinates> </coordinates></LinearRing></innerBoundaryIs></Polygon>",
@@ -830,7 +837,7 @@ mod tests {
             );
             assert!(layers.iter().all(|l| !l.dataset.zm_dropped && l.dataset.features[0].attrs[0] == Value::Text("kept".into())));
             assert_eq!(
-                layers[0].report.messages,
+                layers[0].report.messages.texts().collect::<Vec<_>>(),
                 [
                     "a: 2 unreadable KML coordinate tuples were left out",
                     "a: 2 KML line parts with fewer than two usable coordinates were left out"
@@ -890,6 +897,9 @@ mod tests {
                     "a: 2 excess KML Point coordinate tuples were left out"
                 ]
             );
+            use crate::loss::LossCode::{DroppedGeometry, DroppedRing};
+            let codes: Vec<_> = layers.iter().flat_map(|l| l.report.messages.iter().map(|m| m.loss)).collect();
+            assert_eq!(codes, [Some(DroppedGeometry), Some(DroppedRing), Some(DroppedGeometry), Some(DroppedGeometry)]);
         }
         let clean = read("a.kml", br#"<kml><Placemark><MultiGeometry><Point><coordinates>1,2</coordinates></Point><LineString/><LineString><coordinates> </coordinates></LineString><Polygon><outerBoundaryIs><LinearRing><coordinates>0,0 4,0 4,4 0,0</coordinates></LinearRing></outerBoundaryIs><innerBoundaryIs/><innerBoundaryIs><LinearRing><coordinates> </coordinates></LinearRing></innerBoundaryIs></Polygon></MultiGeometry></Placemark></kml>"#).unwrap();
         assert!(clean[0].report.messages.is_empty());

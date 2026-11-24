@@ -539,17 +539,22 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>>
                     continue;
                 }
                 let s = g.attribute("srsName").or_else(|| g.descendants().find_map(|d| d.attribute("srsName")));
+                // A system RustGIS doesn't know is said only for a geometry read in it.
+                let mut unknown = None;
                 if let Some(s) = s {
                     match srs(s) {
                         Some(found) => {
                             file_srs.get_or_insert(found);
                         }
-                        None => unknown_srs = Some(s.to_string()),
+                        None => unknown = Some(s.to_string()),
                     }
                 }
                 let (dims, lost) = (Cell::new(false), Cell::new(0));
                 match geometry(&g, &dims, &lost) {
                     Some(gm) => {
+                        if unknown.is_some() {
+                            unknown_srs = unknown;
+                        }
                         zm = dims.get();
                         rings_lost += lost.get();
                         geom = Some(gm);
@@ -730,7 +735,11 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>>
         rep.skipped = kind.skipped;
         if kind.skipped > 0 {
             let what = if kind.skipped == 1 { "feature" } else { "features" };
-            rep.messages.push(format!("{}: {} {what} had geometry that couldn't be read", ds.name, kind.skipped));
+            // Kept, without the geometry.
+            rep.messages.push(crate::loss::Note::loss(
+                crate::loss::LossCode::DroppedGeometry,
+                format!("{}: {} {what} had geometry that couldn't be read", ds.name, kind.skipped),
+            ));
         }
         if unplaced > 0 {
             let what = if unplaced == 1 { "feature has" } else { "features have" };
@@ -1424,6 +1433,30 @@ mod tests {
         assert!(!said(&lossy[0], "couldn't be read") && said(&lossy[1], "t parks: 1 feature had geometry that couldn't be read"));
         let clean = read("t.gml", two("<gml:Point><gml:pos>10 49</gml:pos></gml:Point>").as_bytes()).unwrap();
         assert!(clean.iter().all(|l| l.1.skipped == 0 && !said(l, "couldn't be read")));
+        // The feature is kept, without its geometry.
+        assert_eq!(lossy[1].0.features.len(), 1);
+        let note = lossy[1].1.messages.iter().find(|m| m.contains("couldn't be read")).unwrap();
+        assert_eq!(note.loss, Some(crate::loss::LossCode::DroppedGeometry));
+    }
+
+    /// A system RustGIS doesn't know is said, as assumed, only for a geometry read in it: one that
+    /// names it and can't be read places nothing there.
+    #[test]
+    fn an_unknown_system_is_said_only_for_a_geometry_read_in_it() {
+        let member = |g: &str| doc(&format!("<wfs:member><app:roads><app:g>{g}</app:g></app:roads></wfs:member>"));
+        let unknown = |layers: &[(Dataset, ReadReport)]| {
+            layers
+                .iter()
+                .flat_map(|l| l.1.messages.iter())
+                .filter(|m| m.contains("unknown coordinate system"))
+                .map(|m| m.loss)
+                .collect::<Vec<_>>()
+        };
+        let read_in_it =
+            read("t.gml", member(r#"<gml:Point srsName="urn:x-unknown:99"><gml:pos>10 48</gml:pos></gml:Point>"#).as_bytes()).unwrap();
+        assert_eq!(unknown(&read_in_it), [Some(crate::loss::LossCode::AssumedCrs)]);
+        let failed = read("t.gml", member(r#"<gml:Solid srsName="urn:x-unknown:99"/>"#).as_bytes()).unwrap();
+        assert!(unknown(&failed).is_empty(), "{:?}", failed[0].1.messages);
     }
 
     /// #1620: unread property names come in document order, and a `gml:description` value is no shape.
