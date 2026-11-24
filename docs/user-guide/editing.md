@@ -72,9 +72,8 @@ you edit the value or choose units; click **Apply elevation** to apply the new i
   projection or a geographic system), Move, Rotate and Scale work in the layer's own coordinates,
   as the analysis tools do: Move steps the distances east and north along its grid, measured flat
   in its unit (so in UTM a kilometre on the grid is between about 0.999 and 1.0004 km on the
-  ground, and its
-  north is grid north; Ground to grid below corrects ground distances and directions to it),
-  following the system's axes when they point west, south or north first; Rotate turns clockwise
+  ground, and its north is grid north; Ground to grid below corrects ground distances and
+  directions to it), following the system's axes when they point west, south or north first; Rotate turns clockwise
   with grid north up, and Scale scales, about the middle of the feature's extent there. The rest
   of this paragraph, about Web Mercator and the ground, is for the other layers.
   A selected feature with a place that can't be given in longitude/latitude (one far past where
