@@ -1916,11 +1916,12 @@ impl ElementKind {
         })
     }
 
-    /// Whether a chart faces another: mirrored, on a fixed maximum or with its labels hidden, which
-    /// a chart had no way to before #2487 part 4: an older reader would draw it the usual way
-    /// round, on its bars' own scale, labelled, and save it again without.
+    /// Whether a chart faces another: mirrored, given a maximum or with its labels hidden, which a
+    /// chart had no way to before #2487 part 4: an older reader would draw it the usual way round,
+    /// on its bars' own scale, labelled, and save it again without. A stored maximum counts even
+    /// where it isn't read (not above 0): it is written back, so an older reader would drop it.
     pub fn chart_uses_facing(&self) -> bool {
-        matches!(self, ElementKind::Chart { mirror, max, hide_labels, .. } if *mirror || *hide_labels || chart_max(*max).is_some())
+        matches!(self, ElementKind::Chart { mirror, max, hide_labels, .. } if *mirror || *hide_labels || max.is_some())
     }
 }
 
