@@ -399,10 +399,18 @@ fn read_layout(r: Sparse) -> Result<Parse> {
     if geo.3 {
         lost.push(super::geotiff::NO_EPSG_GEOGRAPHIC.to_string());
     }
-    let copyright = match super::geotiff::copyright_tag(&mut dec) {
-        Ok(c) => c,
+    // Its bytes asked for when not read yet, as the other tags' are.
+    let copyright = match tag(&mut dec, Tag::Copyright)? {
+        Ok(None) => None,
+        Ok(Some(v)) => match v.into_string() {
+            Ok(c) => Some(c.trim().to_string()),
+            Err(e) => {
+                lost.push(format!("its Copyright tag: it isn't ASCII text ({e}), so it is left out"));
+                None
+            }
+        },
         Err(e) => {
-            lost.push(e);
+            lost.push(format!("its Copyright tag: it can't be read ({e}), so it is left out"));
             None
         }
     };

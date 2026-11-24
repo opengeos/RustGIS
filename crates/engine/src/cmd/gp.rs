@@ -1496,12 +1496,18 @@ pub(crate) fn tiled_inputs(
     // reads no pixels through the run's inputs.
     let Some(spec) = spec.filter(|t| t.id != "rasterToPmtiles") else { return Ok(read) };
     let mut seen = std::collections::HashSet::new();
-    let (mut overviews, mut held_overviews) = (Vec::new(), Vec::new());
+    let (mut overviews, mut held_overviews, mut rounded) = (Vec::new(), Vec::new(), Vec::new());
     for parameter in spec.params {
         let value = params.get(parameter.name).unwrap_or(&Value::Null);
         let names: Vec<&str> = match parameter.kind {
             ParamKind::RasterLayer => value.as_str().into_iter().collect(),
             ParamKind::RasterLayers => rustgis_analysis::layer_list(value).unwrap_or_default(),
+            // A suite tool stages any layer a parameter names, whatever its kind.
+            _ if tiled == Tiled::ByPath => match value {
+                Value::String(t) => t.split(';').map(str::trim).collect(),
+                Value::Array(v) => v.iter().filter_map(Value::as_str).collect(),
+                _ => continue,
+            },
             _ => continue,
         };
         for name in names {
@@ -1559,6 +1565,10 @@ pub(crate) fn tiled_inputs(
                 }
             };
             held.push(count);
+            let n: u64 = r.rounded.iter().sum();
+            if n > 0 {
+                rounded.push(format!("{} {n}", l.name));
+            }
             if let Some((fw, fh)) = r.overview {
                 overviews.push(format!("{} at its {} × {} overview of the {fw} × {fh} raster", l.name, r.width, r.height));
             }
@@ -1570,6 +1580,12 @@ pub(crate) fn tiled_inputs(
         messages.push(format!(
             "read as the layer holds it, as plugin tools don't read a raster read in place from its file: {}",
             held_overviews.join("; ")
+        ));
+    }
+    if !rounded.is_empty() {
+        messages.push(format!(
+            "values rounded to 32-bit floats as the file was read for the run, the tool's results built on them: {}",
+            rounded.join("; ")
         ));
     }
     if !overviews.is_empty() {
