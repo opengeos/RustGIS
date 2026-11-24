@@ -527,6 +527,7 @@ impl MapView {
             self.split_gpu = None;
             self.live_rev = None;
             self.gpu_turn_declined = None;
+            self.vertex_unplaced_said.clear();
             self.labels.clear();
             self.label_lonlat.clear();
             self.label_map.clear();

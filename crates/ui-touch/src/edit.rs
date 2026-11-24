@@ -69,7 +69,8 @@ pub(crate) fn shape(app: &RustGisApp, id: u32, row: usize) -> Option<Geometry> {
 
 /// [`shape`], borrowed while the layer's coordinates are longitude/latitude: what is drawn and
 /// checked each frame isn't copied for it. Converted from the layer's own coordinates otherwise;
-/// `None` when it can't be ([`unplaced`] says why).
+/// `None` when it can't be (for a feature whose place can't be given in longitude/latitude,
+/// [`unplaced`] says why).
 pub(crate) fn shape_ref(app: &RustGisApp, id: u32, row: usize) -> Option<std::borrow::Cow<'_, Geometry>> {
     let l = app.session.map().layer(id)?;
     l.dataset.geometry_to_lonlat(l.dataset.features.get(row)?.geometry.as_ref()?).ok()

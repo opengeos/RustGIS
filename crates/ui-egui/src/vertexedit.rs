@@ -6,7 +6,7 @@
 use std::borrow::Cow;
 
 use egui::{Color32, Painter, Pos2, Rect, Stroke, vec2};
-use rustgis_engine::data::{Feature, Geometry, VertexId};
+use rustgis_engine::data::{Dataset, Feature, Geometry, VertexId};
 use rustgis_engine::geom::Coord;
 use serde_json::json;
 
@@ -189,13 +189,20 @@ fn unplaced_targets(app: &RustGisApp) -> Vec<(u32, usize)> {
     if app.session.tool != rustgis_engine::Tool::EditVertices || !m.editing.settings.enabled {
         return Vec::new();
     }
-    let mut out = Vec::new();
+    // The features `targets` looks at, in its order and up to its cap, so a feature past it (which
+    // gets no handles either way) isn't counted; each layer's conversion made once.
+    let (mut out, mut seen) = (Vec::new(), 0usize);
     for l in m.layers.iter().filter(|l| m.shows(l) && !l.selection.is_empty() && !l.is_raster() && !l.graphics && !l.is_streamed()) {
-        for r in l.selection.iter().take(MAX_FEATURES) {
-            if let Some(g) = l.dataset.features.get(*r).and_then(|f| f.geometry.as_ref())
-                && l.dataset.geometry_to_lonlat(g).is_err()
-            {
-                out.push((l.id, *r));
+        let to = l.dataset.shown_conversion();
+        for r in &l.selection {
+            if seen >= MAX_FEATURES {
+                return out;
+            }
+            if let Some(g) = l.dataset.features.get(*r).and_then(|f| f.geometry.as_ref()) {
+                seen += 1;
+                if to.as_ref().map_or(true, |to| Dataset::converted_to_lonlat(to, g).is_none()) {
+                    out.push((l.id, *r));
+                }
             }
         }
     }
@@ -215,11 +222,9 @@ pub(crate) fn say_unplaced(app: &mut RustGisApp) {
         let rows: Vec<usize> = left.iter().filter(|(id, _)| *id == layer).map(|(_, r)| *r).collect();
         let text = match rows.as_slice() {
             [r] => l.dataset.features.get(*r).and_then(|f| l.dataset.feature_to_lonlat(f.id, f.geometry.as_ref()?).err()),
-            rows => Some(format!(
-                "{}: {} of the selected features have a place in {} that can't be given in longitude/latitude, so their vertices can't be edited there",
-                l.name,
-                rows.len(),
-                l.dataset.coord_crs().label()
+            rows => Some(crate::i18n::fmt(
+                "{layer}: {count} of the selected features have a place in {system} that can't be given in longitude/latitude, so their vertices can't be edited there",
+                &[("layer", &l.name), ("count", &rows.len().to_string()), ("system", &l.dataset.coord_crs().label())],
             )),
         };
         said.extend(text);
@@ -598,12 +603,17 @@ mod tests {
         let mut app = app([square(0.), square(2.), square(4.)].into_iter());
         let id = app.session.active_layer.unwrap();
         let utm = rustgis_engine::data::raster::Crs::from_epsg(32631).unwrap();
+        app.session.map_mut().editing.settings.enabled = true;
+        app.session.map_mut().layer_mut(id).unwrap().dataset.hold_in(utm).unwrap();
+        // Placed features: nothing to say.
+        let mark = app.session.notice_mark();
+        say_unplaced(&mut app);
+        assert!(app.session.notices_since(mark).is_empty());
+        assert_eq!(targets(&app).len(), 1);
         let layer = app.session.map_mut().layer_mut(id).unwrap();
-        layer.dataset.hold_in(utm).unwrap();
         let far =
             |x: f64| Geometry::Polygon(vec![vec![vec![Coord::new(x, 0.), Coord::new(1e9, 0.), Coord::new(x, 1.), Coord::new(x, 0.)]]]);
         layer.dataset.features[0].geometry = Some(far(500_000.));
-        app.session.map_mut().editing.settings.enabled = true;
         let mark = app.session.notice_mark();
         say_unplaced(&mut app);
         say_unplaced(&mut app);
