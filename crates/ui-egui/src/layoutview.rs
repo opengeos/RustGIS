@@ -2334,7 +2334,10 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                                             .suffix(" pt"),
                                     )
                                     .labelled_by(input_label.id);
-                                if drag.settled(ui, &r, &mut w) && (w - o.width).abs() > 1e-6 {
+                                // A width typed and left as the box is turned off in the same
+                                // frame is let go: sent after the null, it would bring the outline
+                                // back. `settled` still runs, so the edit is cleared.
+                                if drag.settled(ui, &r, &mut w) && on && (w - o.width).abs() > 1e-6 {
                                     update(app, json!({"barOutline": {"width": w}}));
                                 }
                             }

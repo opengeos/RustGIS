@@ -4527,7 +4527,7 @@ impl ChartBars<'_> {
     /// values, labels and title, and is laid once between two stretches, centred where they meet,
     /// so a see-through one reads the same everywhere. So that every stretch keeps its colour, the
     /// edge's line narrows to a third of the bar's thickness and of its first and last stretches,
-    /// and each line between two stretches to a third of either.
+    /// and each line between two stretches to a third of either, kept within the edge's line.
     fn bar(&self, pm: &mut Canvas, stretches: &[(f32, f32, Rgba)], cross: (f32, f32), across: bool) {
         // A box from where it starts and how long it is along the run, and across it.
         let rect = |along: f32, run: f32, across_at: f32, thick: f32| {
@@ -4547,16 +4547,27 @@ impl ChartBars<'_> {
             return;
         }
         let ink = paint(o.color, 1.0);
-        let (x, y, w, h) = rect(lo + line / 2.0, hi - lo - line, cross.0 + line / 2.0, cross.1 - line);
-        if let Some(edge) = Rect::from_xywh(x, y, w, h) {
-            let stroke = Stroke { width: line, ..Stroke::default() };
-            pm.stroke_path(&PathBuilder::from_rect(edge), &ink, &stroke, Transform::identity(), None);
+        // The edge's line as four boxes that don't overlap, filled rather than stroked: a stroke
+        // thinner than a pixel is drawn a pixel wide, past the bar's end.
+        for (along, run, across_at, thick) in [
+            (lo, hi - lo, cross.0, line),
+            (lo, hi - lo, cross.0 + cross.1 - line, line),
+            (lo, line, cross.0 + line, cross.1 - 2.0 * line),
+            (hi - line, line, cross.0 + line, cross.1 - 2.0 * line),
+        ] {
+            let (x, y, w, h) = rect(along, run, across_at, thick);
+            if let Some(side) = Rect::from_xywh(x, y, w, h) {
+                pm.fill_rect(side, &ink, Transform::identity(), None);
+            }
         }
-        // Between two stretches, inside the edge's line so the two don't overlap.
+        // Between two stretches, inside the edge's line so the two don't overlap, and kept there
+        // along the bar too: a stretch drawn a pixel long though its share is shorter has the
+        // next start inside it, near the bar's end.
         for pair in order.windows(2) {
-            let ((_, a), (at, b)) = (pair[0], pair[1]);
+            let &[(_, a), (at, b)] = pair else { continue };
             let d = line.min(a / 3.0).min(b / 3.0);
-            let (x, y, w, h) = rect(at - d / 2.0, d, cross.0 + line, cross.1 - 2.0 * line);
+            let (from, to) = ((at - d / 2.0).max(lo + line), (at + d / 2.0).min(hi - line));
+            let (x, y, w, h) = rect(from, to - from, cross.0 + line, cross.1 - 2.0 * line);
             if let Some(divider) = Rect::from_xywh(x, y, w, h) {
                 pm.fill_rect(divider, &ink, Transform::identity(), None);
             }
@@ -5063,6 +5074,25 @@ mod tests {
         chart(&mut c, Rect::from_xywh(0.0, 0.0, 200.0, 120.0).unwrap(), &sliver, &look, INK, 1.0, false);
         let greens = (0..200).filter(|x| c.pixmap().pixel(*x, 25).is_some_and(|p| p.green() > 150 && p.red() < 100)).count();
         assert!(greens > 0, "the thin stretch keeps its green");
+        // A first stretch drawn a pixel long though its share is far shorter: the next starts
+        // inside it, and the line, a third of a pixel, still stays inside the bar, between the
+        // stretches and round them (a stroke that thin is drawn a pixel wide), across and as
+        // columns.
+        let tiny = rustgis_map::layout::ChartData { stretches: vec![vec![0.001, 9.999]], ..sliver };
+        for orientation in [rustgis_map::layout::Orientation::Horizontal, rustgis_map::layout::Orientation::Vertical] {
+            let mut plain = Canvas::new(200, 120).unwrap();
+            let bare = ChartLook { bar_outline: None, orientation, ..look };
+            chart(&mut plain, Rect::from_xywh(0.0, 0.0, 200.0, 120.0).unwrap(), &tiny, &bare, INK, 1.0, false);
+            let mut lined = Canvas::new(200, 120).unwrap();
+            chart(&mut lined, Rect::from_xywh(0.0, 0.0, 200.0, 120.0).unwrap(), &tiny, &ChartLook { orientation, ..look }, INK, 1.0, false);
+            // Nothing where the bar itself paints nothing.
+            let spilt = (0..200)
+                .flat_map(|x| (0..120).map(move |y| (x, y)))
+                .filter(|(x, y)| plain.pixmap().pixel(*x, *y).is_some_and(|p| p.alpha() == 0))
+                .filter(|(x, y)| lined.pixmap().pixel(*x, *y).is_some_and(|p| p.alpha() > 0 && p.red() > p.green()))
+                .count();
+            assert_eq!(spilt, 0, "{orientation:?}: the lines round and between the stretches stay inside the bar");
+        }
     }
 
     /// Hidden labels leave their column, or their row under columns, to the bars.
