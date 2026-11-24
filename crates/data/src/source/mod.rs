@@ -185,7 +185,7 @@ impl SourceInfo {
     pub(crate) fn drop_zm(&mut self, features: Option<u64>) {
         if !self.zm_dropped && features != Some(0) {
             self.zm_dropped = true;
-            self.notes.push(crate::zm_note(features));
+            self.notes.push(crate::loss::Note::loss(crate::loss::LossCode::DroppedZm, crate::zm_note(features)));
         }
     }
 
@@ -231,6 +231,12 @@ impl Request {
     pub fn all() -> Self {
         Request { extent: None, limit: MAX_LIMIT, own: None }
     }
+}
+
+/// A box over the whole plane: as [`Request::own`], every feature in the source's own system,
+/// those longitude/latitude can't place included (a map in that system draws them as they are).
+pub fn whole_plane() -> Extent {
+    Extent::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::INFINITY)
 }
 
 /// Refuses an unknown count rather than reporting an unbounded view as empty. A zero-limit
@@ -419,6 +425,27 @@ pub trait FeatureSource: Send + Sync {
     fn visit_chunks(&self, _extent: Option<Extent>, _bytes: usize, _visit: &mut dyn FnMut(Vec<Feature>) -> Result<()>) -> Result<Batch> {
         Err(DataError::Unsupported("a source that can't be read a chunk at a time".into()))
     }
+    /// Whether [`FeatureSource::visit_ids_chunks`] is available.
+    fn visits_ids(&self) -> bool {
+        false
+    }
+    /// The features with these ids ([`Feature::id`], in order), visited a chunk at a time in
+    /// source order, as [`FeatureSource::visit_chunks`] visits them: for a read of features
+    /// someone already knows by id. Ids the source doesn't hold are left out.
+    fn visit_ids_chunks(&self, _ids: &[u64], _bytes: usize, _visit: &mut dyn FnMut(Vec<Feature>) -> Result<()>) -> Result<Batch> {
+        Err(DataError::Unsupported("a source that can't be read by feature id".into()))
+    }
+    /// [`FeatureSource::visit_chunks`] for a whole request, its box in the source's own system
+    /// ([`Request::own`]) too (one over the whole plane, [`whole_plane`], reads every feature as a
+    /// map in that system draws them): a source that reads one this way tests each feature's own box
+    /// against it, converting nothing. One that doesn't visits every feature when given a box in
+    /// its own system, never fewer than it holds (its extent, in longitude/latitude, may hold
+    /// less), and reads the extent otherwise (no box, or one in another system).
+    fn visit_request_chunks(&self, req: &Request, bytes: usize, visit: &mut dyn FnMut(Vec<Feature>) -> Result<()>) -> Result<Batch> {
+        // A box in another system is read as if absent, as `Request::own` has it.
+        let in_own = req.own.is_some_and(|(crs, _)| crs == self.coord_crs());
+        self.visit_chunks(if in_own { None } else { req.extent }, bytes, visit)
+    }
     fn info(&self) -> &SourceInfo;
     /// The coordinate system of the features it gives: a file read in place gives them as the file
     /// holds them, in its own system (Shapefile, GeoPackage, FlatGeobuf, GeoParquet, GeoJSON); a
@@ -429,9 +456,10 @@ pub trait FeatureSource: Send + Sync {
         crate::raster::Crs::LonLat
     }
 
-    /// Whether a read given its box in the source's own system ([`Request::own`]) tests its
-    /// features against that box (a file read in place, PostGIS), so a map in that system keeps
-    /// its window in map units for it. A source that reads by the longitude/latitude extent
+    /// Whether a read ([`FeatureSource::read`]) given its box in the source's own system
+    /// ([`Request::own`]) tests its features against that box (a file read in place, PostGIS), so
+    /// a map in that system keeps its window in map units for it. A complete visit does so only
+    /// where the source says so through [`FeatureSource::visit_request_chunks`]. A source that reads by the longitude/latitude extent
     /// whatever it is given (another database, a service, a converted copy) says no: its window is
     /// kept in longitude/latitude, as it reads.
     fn reads_own_box(&self) -> bool {
@@ -1014,7 +1042,8 @@ impl Reproject {
             if !g.is_finite() {
                 return None;
             }
-            let inside = g.extent().intersects(&own);
+            // A box over the whole plane holds every shape, one with no place (an empty part) too.
+            let inside = own == whole_plane() || g.extent().intersects(&own);
             return Some(Fitted { geometry: g, inside });
         }
         let Placed { geometry, lonlat } = self.read(g)?;

@@ -1956,6 +1956,12 @@ fn disk_note(app: &RustGisApp, layer: Option<&Layer>, tile: Option<usize>) -> Op
 /// file again (and Source File State), not Reload Data, which can't read it again; with edits,
 /// Publish to Source refuses to overwrite the change and Export Features keeps them.
 pub(crate) fn layer_note(app: &mut RustGisApp, l: &Layer, ctx: &egui::Context) -> Option<(String, String, Option<bool>)> {
+    let note = file_note(app, l, ctx);
+    linked_note(l, note)
+}
+
+/// [`layer_note`] before "(linked)": what [`disk_note`] and `syncmark` say.
+fn file_note(app: &mut RustGisApp, l: &Layer, ctx: &egui::Context) -> Option<(String, String, Option<bool>)> {
     #[cfg(not(target_arch = "wasm32"))]
     {
         use crate::diskwatch::Status;
@@ -1991,6 +1997,26 @@ pub(crate) fn layer_note(app: &mut RustGisApp, l: &Layer, ctx: &egui::Context) -
         let _ = ctx;
         disk_note(app, Some(l), None)
     }
+}
+
+/// "(linked)" for a layer read in place from a local file (#2350), with the file and what linking
+/// means, joined with `other` (a change on disk): "(linked, changed on disk)". A layer streamed
+/// from a service or a database has no file and says nothing; a raster is always linked, so it
+/// isn't marked either.
+fn linked_note(l: &Layer, other: Option<(String, String, Option<bool>)>) -> Option<(String, String, Option<bool>)> {
+    let Some(path) = l.linked_file().filter(|_| l.is_streamed()) else { return other };
+    let linked = crate::i18n::fmt(
+        "Linked to {path}: read in place, a view at a time. The project keeps where the file is, not its features: to edit it or define its projection, Load All Features first.",
+        &[("path", path)],
+    );
+    Some(match other {
+        Some((note, detail, tint)) if !note.is_empty() => {
+            let inner = note.trim().trim_start_matches('(').trim_end_matches(')');
+            (crate::i18n::fmt("(linked, {note})", &[("note", inner)]), format!("{linked}\n{detail}"), tint)
+        }
+        Some((_, detail, tint)) => (tl!("(linked)").to_string(), format!("{linked}\n{detail}"), tint),
+        None => (tl!("(linked)").to_string(), linked, None),
+    })
 }
 
 /// A layer's row and, expanded, its legend; returns the rectangle of both. With `reorder` off
@@ -7800,6 +7826,8 @@ pub(crate) fn map_menu(app: &mut RustGisApp, ui: &mut Ui, m: &str) {
         let _ = app.run("layer.paste", json!({"map": m}));
         ui.close();
     }
+    let at = app.session.project.maps.iter().position(|x| x.name == m);
+    move_buttons(app, ui, "map.move", m, at, app.session.project.maps.len());
     // A project keeps at least one map (`map.remove` refuses the last).
     let delete = ui.add_enabled(app.session.project.maps.len() > 1, egui::Button::new(tl!("Delete")));
     if delete.on_disabled_hover_text(tl!("A project keeps at least one map")).clicked() {
@@ -7808,7 +7836,22 @@ pub(crate) fn map_menu(app: &mut RustGisApp, ui: &mut Ui, m: &str) {
     }
 }
 
-/// A layout's menu, in the Browser and on its view tab: rename, duplicate, delete.
+/// Move Up and Move Down, between separators, for the map or layout `name` at `at` of `count`:
+/// one place in the project's order (`cmd`, `map.move` or `layout.move`), as its tabs and the
+/// Browser show it (#2802).
+fn move_buttons(app: &mut RustGisApp, ui: &mut Ui, cmd: &str, name: &str, at: Option<usize>, count: usize) {
+    let Some(at) = at else { return };
+    ui.separator();
+    for (label, to, can) in [(tl!("Move Up"), at.saturating_sub(1), at > 0), (tl!("Move Down"), at + 1, at + 1 < count)] {
+        if ui.add_enabled(can, egui::Button::new(label)).clicked() {
+            let _ = app.run(cmd, json!({"name": name, "to": to}));
+            ui.close();
+        }
+    }
+    ui.separator();
+}
+
+/// A layout's menu, in the Browser and on its view tab: rename, duplicate, move, delete.
 pub(crate) fn layout_menu(app: &mut RustGisApp, ui: &mut Ui, n: &str) {
     if ui.button(tl!("Rename…")).clicked() {
         let _ = app.run("ui.dialog", json!({"name": "renameLayout", "target": n}));
@@ -7821,6 +7864,8 @@ pub(crate) fn layout_menu(app: &mut RustGisApp, ui: &mut Ui, n: &str) {
         }
         ui.close();
     }
+    let at = app.session.project.layouts.iter().position(|x| x.name == n);
+    move_buttons(app, ui, "layout.move", n, at, app.session.project.layouts.len());
     if ui.button(tl!("Delete")).clicked() {
         app.map.deleting = Some(crate::mapview::Deletion::Layout(n.to_string()));
         ui.close();
@@ -7831,6 +7876,45 @@ pub(crate) fn layout_menu(app: &mut RustGisApp, ui: &mut Ui, n: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A layer linked to its file says so after its name, with the file and what linking means
+    /// (#2350); a copy, and the same layer once Load All Features copies it, don't. Another note
+    /// (a change on disk) goes with it.
+    #[test]
+    fn a_layer_linked_to_its_file_says_so() {
+        use rustgis_engine::data::{Coord, Dataset, Field, FieldType, Geometry, GeometryType, Value as V};
+        let dir = tempfile::tempdir().unwrap();
+        let mut ds = Dataset::new("points", GeometryType::Point, vec![Field::new("name", FieldType::Text)]);
+        ds.push(Some(Geometry::Point(Coord::new(1.0, 1.0))), vec![V::Text("a".into())]);
+        let path = dir.path().join("points.fgb");
+        rustgis_engine::data::io::write_path(&ds, &path).unwrap();
+        let mut app = RustGisApp::new(rustgis_engine::Session::new(rustgis_engine::Project::default()));
+        let ctx = egui::Context::default();
+        let add = |app: &mut RustGisApp, stream: bool| {
+            app.session.run("layer.addData", &serde_json::json!({"path": path, "stream": stream})).unwrap()["layer"].as_u64().unwrap()
+                as u32
+        };
+        let note = |app: &mut RustGisApp, id: u32| {
+            let l = app.session.map().layer(id).unwrap().clone();
+            layer_note(app, &l, &ctx)
+        };
+        let linked = add(&mut app, true);
+        let (shown, detail, _) = note(&mut app, linked).unwrap();
+        assert_eq!(shown, "(linked)");
+        assert!(detail.contains(&*path.display().to_string()) && detail.contains("Load All Features"), "{detail}");
+        let copied = add(&mut app, false);
+        assert_eq!(note(&mut app, copied), None);
+        app.session.run("layer.loadAll", &serde_json::json!({"layer": linked})).unwrap();
+        assert_eq!(note(&mut app, linked), None, "Load All Features makes it a copy");
+        // With another note: one parenthesis, both details.
+        let again = add(&mut app, true);
+        let l = app.session.map().layer(again).unwrap().clone();
+        let other = Some(("(changed on disk)".to_string(), "Changed on disk.".to_string(), Some(false)));
+        let (shown, detail, tint) = linked_note(&l, other).unwrap();
+        assert_eq!(shown, "(linked, changed on disk)");
+        assert!(detail.ends_with("\nChanged on disk."), "{detail}");
+        assert_eq!(tint, Some(false));
+    }
 
     /// An editor sends back an image that draws as it is, and one refused for itself (not an
     /// image) as the circle it is drawn as, counted. The rule is render's

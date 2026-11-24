@@ -1263,6 +1263,7 @@
           "layout-chart-look",
           "layout-chart-classes",
           "layout-chart-stack",
+          "layout-chart-facing",
           "field-generation",
           "field-package",
           "field-conflicts",
@@ -1274,6 +1275,7 @@
           "native-coordinates",
           "layout-text-size",
           "label-guide",
+          "label-weight",
           "project-crs",
           "dggs-system",
           "layout-scale-bar-details"
@@ -1368,6 +1370,7 @@
     "layout-chart-look",
     "layout-chart-classes",
     "layout-chart-stack",
+    "layout-chart-facing",
     "field-generation",
     "field-package",
     "field-conflicts",
@@ -1379,6 +1382,7 @@
     "native-coordinates",
     "layout-text-size",
     "label-guide",
+    "label-weight",
     "project-crs",
     "dggs-system",
     "layout-scale-bar-details"

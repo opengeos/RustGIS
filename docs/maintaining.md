@@ -162,6 +162,13 @@ Projects, map files and layer files with a label class curved along a guide line
 of placing those labels as without it and saving them again without the guide. A saved
 `labels.placement` command with a guide needs nothing: an older RustGIS refuses the key when it runs.
 
+Projects, map files and layer files with a label class weighing other than 5 (`labels.placement`
+with a `weight`) require `label-weight`, so an older reader refuses them instead of placing their
+labels as without it and saving them again without the weights. So do projects with such a class in
+a saved style, or a saved `labels.placement` step (in a task, a model or a script) with a weight
+other than 5: an older reader would apply the style, or run the step, without the weight, saying
+nothing.
+
 Projects with an ink on a legend, colorbar, table or chart (`color` on those elements) require
 `layout-element-ink`, so an older reader refuses them instead of drawing those elements in dark
 grey and saving them again without it. Saved `layout.addElement` and `layout.update` commands
@@ -213,6 +220,15 @@ chart doesn't draw it stacked (ungrouped, or not summing or counting, which comm
 let go). Saved `layout.addElement` commands for a chart and `layout.update` commands that set a
 `stack` field require it too (only a chart takes the key); `""` needs nothing. A saved
 `layout.import` whose `text` has such a chart requires it as well.
+
+Projects with a layout chart that faces another (`mirror`, a `max` or `hide_labels` on a chart
+element; a `max` not above 0, only in a hand-edited file, is let go on read and said as a value out
+of range) require `layout-chart-facing`, so an older reader refuses them instead of drawing
+the chart the usual way round, on its bars' own scale and labelled, and saving it again without
+(#2487 part 4). Saved `layout.addElement` commands for a chart and `layout.update` commands that
+set `"mirror": true`, a `max` above 0 or `"hideLabels": true` require it too (only a chart takes
+the keys); `false`, `null` and `"auto"` need nothing. A saved `layout.import` whose `text` has
+such a chart requires it as well.
 
 Projects with a map frame whose border isn't the default dark grey 0.8 pt line (`border_color`,
 `border_width` on a map frame, a width of 0 drawing none) require `layout-frame-border`, so an
