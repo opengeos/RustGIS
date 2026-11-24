@@ -2300,6 +2300,8 @@ fn script(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, fit: bool) {
     // `out.cursor_range` is None while the box isn't focused.
     let size = vec2(ui.available_width(), script_cursor_height(ui));
     ui.allocate_ui_with_layout(size, egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        // The row keeps only what's drawn in it: its height, with no label in it yet.
+        ui.set_min_height(size.y);
         let cursor = egui::widgets::text_edit::TextEditState::load(ui.ctx(), box_id).and_then(|s| s.cursor.char_range());
         if let Some(range) = cursor {
             let (line, col) = line_col(&app.workflow.script, range.primary.index.0);
@@ -3192,6 +3194,7 @@ mod tests {
             .build_ui_state(|ui, app: &mut RustGisApp| script_pane(app, ui, &Tokens::light()), app);
         h.run();
         assert!(h.query_by_label_contains("Ln ").is_none(), "no cursor yet");
+        let no_cursor = h.get_by_label("Clear").rect();
         let box_id = egui::Id::unique("script_text");
         let set = |h: &mut egui_kittest::Harness<'_, RustGisApp>, range: CCursorRange| {
             let mut state = egui::widgets::text_edit::TextEditState::load(&h.ctx, box_id).unwrap_or_default();
@@ -3205,6 +3208,7 @@ mod tests {
         let label = h.get_by_label("Ln 2, Col 251").rect();
         let clear = h.get_by_label("Clear").rect();
         assert!(!label.intersects(clear) && label.bottom() <= clear.top(), "above the buttons, clear of them: {label:?} {clear:?}");
+        assert_eq!(clear, no_cursor, "the buttons stay where they were before the box had a cursor");
         // Not focused, it still says where the cursor is.
         assert!(!h.ctx.memory(|m| m.has_focus(box_id)));
         set(&mut h, CCursorRange::one(CCursor::new(3)));
