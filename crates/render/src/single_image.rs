@@ -359,7 +359,7 @@ pub(crate) fn draw(pm: &mut Pixmap, req: &Request, t: &TileLayer, view: &View, f
     let key = format!("{} {}", req.system.epsg, req.base);
     let opacity = t.opacity.clamp(0.0, 1.0);
     let blend = crate::blend_mode(t.blend);
-    let quality = crate::native_tiles::filter(t);
+    let quality = crate::native_tiles::sampling(t);
     // In another system than the map's, warped into place piece by piece (one affine placing
     // would leave it off where the systems bend apart).
     let warped = req.warp;

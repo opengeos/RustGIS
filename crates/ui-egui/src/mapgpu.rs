@@ -680,8 +680,8 @@ const KEPT_TILE_BYTES: u64 = 64 << 20;
 struct TileTextures {
     /// By the picture's address, with the picture itself held weakly: the tile cache keeps the
     /// picture alive, and once it lets go the texture goes too (the weak reference keeps the
-    /// address from being reused until then), and whether it's sampled nearest.
-    by_picture: std::collections::HashMap<(usize, bool), TileTexture>,
+    /// address from being reused until then).
+    by_picture: std::collections::HashMap<usize, TileTexture>,
     /// Counts scenes: when each texture was last drawn.
     scene: u64,
 }
@@ -689,6 +689,9 @@ struct TileTextures {
 struct TileTexture {
     picture: std::sync::Weak<Payload>,
     bind: wgpu::BindGroup,
+    /// The same texture sampled nearest, for a layer set to nearest-neighbour resampling
+    /// (#2804): one upload whichever way the layers that draw it sample it.
+    nearest_bind: wgpu::BindGroup,
     texture: Arc<Owned<wgpu::Texture>>,
     used: u64,
     bytes: u64,
@@ -704,12 +707,13 @@ impl TileTextures {
         r: &GpuMapRenderer,
         q: &TileQuad,
     ) -> Option<(wgpu::BindGroup, Arc<Owned<wgpu::Texture>>)> {
-        let key = (Arc::as_ptr(&q.picture) as usize, q.nearest);
+        let key = Arc::as_ptr(&q.picture) as usize;
         if let Some(t) = self.by_picture.get_mut(&key)
             && t.picture.upgrade().is_some_and(|p| Arc::ptr_eq(&p, &q.picture))
         {
             t.used = self.scene;
-            return Some((t.bind.clone(), t.texture.clone()));
+            let bind = if q.nearest { &t.nearest_bind } else { &t.bind };
+            return Some((bind.clone(), t.texture.clone()));
         }
         let pm = q.pixmap()?;
         let (w, h) = (pm.width(), pm.height());
@@ -738,34 +742,36 @@ impl TileTextures {
             size,
         );
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("mapgpu_tile_bind"),
-            layout: &r.image_layout,
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(if q.nearest { &r.nearest_sampler } else { &r.sampler }),
-                },
-            ],
-        });
+        let bind_with = |sampler: &wgpu::Sampler| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("mapgpu_tile_bind"),
+                layout: &r.image_layout,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(sampler) },
+                ],
+            })
+        };
+        let (bind, nearest_bind) = (bind_with(&r.sampler), bind_with(&r.nearest_sampler));
+        let chosen = if q.nearest { nearest_bind.clone() } else { bind.clone() };
         let texture = Arc::new(texture);
         let t = TileTexture {
             picture: Arc::downgrade(&q.picture),
-            bind: bind.clone(),
+            bind,
+            nearest_bind,
             texture: texture.clone(),
             used: self.scene,
             bytes: u64::from(w) * u64::from(h) * 4,
         };
         self.by_picture.insert(key, t);
-        Some((bind, texture))
+        Some((chosen, texture))
     }
 
     /// Ends a scene: drops the textures of pictures the tile cache let go, and past
     /// [`KEPT_TILE_BYTES`] those unused longest, but never one the scene just drew.
     fn end_scene(&mut self) {
         self.by_picture.retain(|_, t| t.picture.strong_count() > 0);
-        let mut old: Vec<(u64, u64, (usize, bool))> =
+        let mut old: Vec<(u64, u64, usize)> =
             self.by_picture.iter().filter(|(_, t)| t.used != self.scene).map(|(k, t)| (t.used, t.bytes, *k)).collect();
         if old.iter().map(|o| o.1).sum::<u64>() > KEPT_TILE_BYTES {
             old.sort_unstable_by_key(|o| std::cmp::Reverse(o.0));

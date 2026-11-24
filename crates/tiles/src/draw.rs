@@ -174,6 +174,9 @@ pub fn draw(pm: &mut Pixmap, spec: &Spec, opacity: f32, frame: &Frame, labels: b
     // a map moving across them only puts them in place.
     if let Some(pictures) = crate::picture::cover(&r, frame, &frame.extent(w, h), None, &mut out.pending, &mut out.error) {
         for it in &pictures {
+            // A picture already holds its raster layers as their `raster-resampling` drew them
+            // (crisp blocks for `nearest`): placed between its zoom levels it is blended as the
+            // style's shapes in it are, a picture of the map rather than of the source's pixels.
             draw_raster(pm, it, frame, opacity, false);
         }
         if labels {

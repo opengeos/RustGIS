@@ -1771,7 +1771,10 @@ fn tile_row(app: &mut RustGisApp, ui: &mut Ui, i: usize, moves: [bool; 2], reord
         })
         .on_hover_text(tl!("How the layer's colours combine with the tile layers and basemap beneath."));
         // Picture tiles drawn larger or smaller than their own pixels: blended, or each a block (#2804).
-        if !matches!(tile.kind, TileKind::Vector | TileKind::Style) {
+        // Not for one drawing shapes: vector tiles, a style, or an archive read as holding vector
+        // tiles.
+        let vector_archive = rustgis_engine::render::tile_source_layers(tile).is_some();
+        if !matches!(tile.kind, TileKind::Vector | TileKind::Style) && !vector_archive {
             use rustgis_engine::map::raster::Resampling;
             crate::widgets::submenu(ui, &crate::i18n::fmt("Resampling: {how}", &[("how", tl_raw!(tile.resampling.label()))]), |ui| {
                 for r in Resampling::ALL {

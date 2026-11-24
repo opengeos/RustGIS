@@ -23226,6 +23226,39 @@ fn identify_reports_vector_tile_features() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// A vector tile archive draws shapes, not pictures: once it's read, `map.setTiles` refuses a
+/// resampling it would ignore (#2804).
+#[test]
+fn a_vector_archive_refuses_resampling() {
+    use crate::render::rustgis_tiles::{mvt, pmtiles};
+    let road =
+        mvt::Feature { id: None, kind: mvt::GeomKind::LineString, geometry: vec![vec![[0.0, 2048.0], [4096.0, 2048.0]]], props: vec![] };
+    let tile = mvt::encode(&mvt::Tile { layers: vec![mvt::Layer { name: "roads".into(), extent: 4096, features: vec![road] }] });
+    let new = pmtiles::NewArchive {
+        tile_type: pmtiles::TileType::Mvt,
+        gzipped_tiles: false,
+        bounds: [-180.0, -85.0, 180.0, 85.0],
+        metadata: json!({"vector_layers": [{"id": "roads"}]}),
+    };
+    let dir = std::env::temp_dir().join(format!("rustgis-vector-resampling-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("roads.pmtiles");
+    std::fs::write(&path, pmtiles::write(vec![(0, 0, 0, tile)], &new).unwrap()).unwrap();
+    let mut s = Session::new(Project::default());
+    s.run("layer.addData", &json!({"path": path.display().to_string()})).unwrap();
+    // The archive's header arrives in the background.
+    for _ in 0..500 {
+        if s.run("map.tiles", &json!({})).unwrap()[0].get("sourceLayers").is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10)); // test-wait: the archive's header is read on another thread
+    }
+    let err = s.run("map.setTiles", &json!({"index": 0, "resampling": "nearest"})).unwrap_err();
+    assert!(err.contains("picture tiles"), "{err}");
+    assert_eq!(s.map().tiles[0].resampling, rustgis_map::raster::Resampling::Bilinear);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A vector archive's source layers are listed by `map.tiles`; one switched off with
 /// `map.setTiles {hiddenLayers}` isn't identified, the setting undoes and is kept with the project,
 /// and a bad list is refused without changing anything.

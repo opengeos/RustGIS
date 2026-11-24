@@ -189,7 +189,7 @@ pub(crate) fn draw(pm: &mut Pixmap, n: &Native, t: &TileLayer, view: &View, flat
         Some(((x * k) as f32, (y * k) as f32))
     };
     let opacity = t.opacity.clamp(0.0, 1.0);
-    let quality = filter(t);
+    let quality = sampling(t);
     let (mut pending, mut error) = (false, None);
     for p in pictures {
         // A WMTS tile past the service's coverage is routine; a WMS picture (any area asked) isn't.
@@ -301,7 +301,7 @@ pub(crate) fn paint(
 
 /// How a tile layer's pictures are sampled where they're drawn at another size: blended, or
 /// each pixel a block (#2804).
-pub(crate) fn filter(t: &rustgis_map::TileLayer) -> FilterQuality {
+pub(crate) fn sampling(t: &rustgis_map::TileLayer) -> FilterQuality {
     match t.resampling {
         rustgis_map::raster::Resampling::Nearest => FilterQuality::Nearest,
         rustgis_map::raster::Resampling::Bilinear => FilterQuality::Bilinear,
