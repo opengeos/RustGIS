@@ -1192,6 +1192,12 @@ fn publication_layout(app: &mut RustGisApp, profile: &rustgis_engine::cmd::layou
     if let Some(style) = style {
         p["style"] = json!(style);
     }
+    make_publication(app, p);
+}
+
+/// Runs `layout.publication` with `p`, as the menu and the wizard make a publication layout: its
+/// warnings said and the Publish tab opened; true when the layout was made.
+pub(crate) fn make_publication(app: &mut RustGisApp, p: Value) -> bool {
     // The view's extent may not be known (an empty map): said, and the tab stays.
     match app.run("layout.publication", p) {
         Ok(r) => {
@@ -1201,14 +1207,18 @@ fn publication_layout(app: &mut RustGisApp, profile: &rustgis_engine::cmd::layou
                 app.session.notify(said.join("\n"), false);
             }
             app.ui.tab = "Publish".into();
+            true
         }
-        Err(e) => app.session.notify(e, true),
+        Err(e) => {
+            app.session.notify(e, true);
+            false
+        }
     }
 }
 
 /// A sheet style's name in the menu and what it looks like, `tl!` literals (as
 /// [`publication_label`]); `None` for a style added without them.
-fn publication_style(id: &str) -> Option<(&'static str, &'static str)> {
+pub(crate) fn publication_style(id: &str) -> Option<(&'static str, &'static str)> {
     Some(match id {
         "classic" => (tl!("Classic"), tl!("The title over the map, the sources and the reference in boxes under it.")),
         "banner" => (tl!("Banner"), tl!("The title and subtitle in a band of colour across the top.")),
@@ -1223,7 +1233,7 @@ fn publication_style(id: &str) -> Option<(&'static str, &'static str)> {
 /// A publication figure's name in the menu: a `tl!` literal each, so the catalogs find it (the
 /// engine's labels, which it matches in English); `None` for a figure added without one. Sheets
 /// are named by their page size, as New Layout names it.
-fn publication_label(id: &str) -> Option<&'static str> {
+pub(crate) fn publication_label(id: &str) -> Option<&'static str> {
     Some(match id {
         "figure-1col" => tl!("Journal figure, 1 column (90 mm)"),
         "figure-1.5col" => tl!("Journal figure, 1.5 columns (140 mm)"),
@@ -1241,7 +1251,7 @@ fn publication_sheet(size: &str, orientation: &str) -> Option<&'static rustgis_e
 }
 
 /// A page size as the menus name it: `A4 (210 × 297 mm)`, its name translated.
-fn page_label(label: &str, w: f64, h: f64) -> String {
+pub(crate) fn page_label(label: &str, w: f64, h: f64) -> String {
     format!("{} ({w:.0} × {h:.0} mm)", tl!(label))
 }
 
@@ -1291,6 +1301,12 @@ fn project_group(app: &mut RustGisApp, ui: &mut Ui) {
                         publication_layout(app, profile, None);
                         ui.close();
                     }
+                }
+                // The same layout asked step by step: its texts and accent too (#2850).
+                ui.separator();
+                if ui.button(tl!("Publication Layout Wizard…")).clicked() {
+                    let _ = app.run("ui.dialog", json!({"name": "publicationWizard"}));
+                    ui.close();
                 }
             });
             ui.separator();
@@ -6867,6 +6883,36 @@ mod tests {
         assert_eq!(h.state().session.project.layouts.len(), before + 3);
         let l = h.state().session.project.layouts.last().unwrap();
         assert!(l.elements.iter().all(|e| e.name != "Panel Box" && e.name != "Title"), "a figure, its title left to the caption");
+    }
+
+    /// New Layout › Publication Layout › Publication Layout Wizard… opens the wizard and closes
+    /// the menu, with nothing made yet (#2850).
+    #[test]
+    fn the_publication_menu_opens_the_wizard() {
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1600.0, 1000.0)).build_ui_state(
+            move |ui, app: &mut RustGisApp| {
+                if !fonts {
+                    crate::theme::install_fonts(ui.ctx(), &[], None);
+                    fonts = true;
+                    return;
+                }
+                ui.horizontal(|ui| project_group(app, ui));
+            },
+            cities(),
+        );
+        h.run();
+        let before = h.state().session.project.layouts.len();
+        h.get_by_label("New Layout").click();
+        h.run();
+        h.get_by_label("Publication Layout").hover();
+        h.run();
+        h.get_by_label("Publication Layout Wizard…").click();
+        h.run();
+        assert_eq!(h.state().dialogs.open, Some("publicationWizard"));
+        assert!(h.state().dialogs.publication.is_some());
+        assert_eq!(h.state().session.project.layouts.len(), before, "nothing made yet");
+        assert!(h.query_by_label("Publication Layout Wizard…").is_none(), "the menu closed");
     }
 
     /// A submenu of short rows (a sheet's styles) opens at least SUBMENU_MIN_W wide, not as a
