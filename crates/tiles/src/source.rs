@@ -50,12 +50,15 @@ pub struct Spec {
     /// Source layers left out (`roads`, `pois`): the style layers drawing them are dropped, so
     /// they neither draw nor are picked.
     pub hidden_layers: Vec<String>,
+    /// Picture tiles drawn at a size other than their own keep each pixel a block
+    /// (`raster-resampling: nearest`) instead of blending them (#2804).
+    pub nearest: bool,
 }
 
 impl Spec {
     fn key(&self) -> String {
         format!(
-            "{:?}|{}:{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+            "{:?}|{}:{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
             self.kind,
             self.url.len(),
             self.url,
@@ -68,7 +71,8 @@ impl Spec {
             // Each name with its length, so ["a,b"] and ["a", "b"] differ.
             self.layers.iter().map(|l| format!("{}:{l}", l.len())).collect::<String>(),
             self.style_layers,
-            self.hidden_layers.iter().map(|l| format!("{}:{l}", l.len())).collect::<String>()
+            self.hidden_layers.iter().map(|l| format!("{}:{l}", l.len())).collect::<String>(),
+            self.nearest
         )
     }
 }
@@ -609,8 +613,17 @@ fn raster_style(spec: &Spec) -> Value {
             "type": "raster", "tiles": templates(spec), "tileSize": spec.tile_size,
             "minzoom": spec.min_zoom, "maxzoom": spec.max_zoom,
         }},
-        "layers": [{"id": "raster", "type": "raster", "source": "raster"}],
+        "layers": [raster_layer(spec)],
     })
+}
+
+/// The one layer of a style drawing picture tiles, crisp when the spec asks.
+fn raster_layer(spec: &Spec) -> Value {
+    let mut layer = json!({"id": "raster", "type": "raster", "source": "raster"});
+    if spec.nearest {
+        layer["paint"] = json!({"raster-resampling": "nearest"});
+    }
+    layer
 }
 
 /// A tile archive (PMTiles or MBTiles), as far as styling it goes.
@@ -639,7 +652,7 @@ fn archive_style(spec: &Spec, info: Archive) -> Option<Value> {
                 "type": "raster", "tiles": tiles, "tileSize": spec.tile_size,
                 "minzoom": minzoom, "maxzoom": maxzoom, "attribution": attribution,
             }},
-            "layers": [{"id": "raster", "type": "raster", "source": "raster"}],
+            "layers": [raster_layer(spec)],
         }));
     }
     let source = json!({"type": "vector", "tiles": tiles, "minzoom": minzoom, "maxzoom": maxzoom, "attribution": attribution});
@@ -852,6 +865,7 @@ mod tests {
             layers: Vec::new(),
             style_layers: String::new(),
             hidden_layers: Vec::new(),
+            nearest: false,
         }
     }
 

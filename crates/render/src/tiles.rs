@@ -168,6 +168,7 @@ pub fn spec(t: &TileLayer) -> Spec {
         layers: t.layers.clone(),
         style_layers: t.style_layers.clone(),
         hidden_layers: t.hidden_layers.clone(),
+        nearest: t.resampling == rustgis_map::raster::Resampling::Nearest,
     }
 }
 
@@ -628,6 +629,7 @@ fn quad(p: &rustgis_tiles::Placement, origin: [f64; 2]) -> TileQuad {
             ((p.at.max_y - c.min_y) / h) as f32,
         ],
         opacity: p.opacity,
+        nearest: p.nearest,
     }
 }
 

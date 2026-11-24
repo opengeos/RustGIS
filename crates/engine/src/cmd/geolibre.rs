@@ -537,6 +537,7 @@ fn finish_archive(s: &mut Session, p: &Value, bytes: Vec<u8>) -> CmdResult {
             loaded.visible = t.visible;
             loaded.opacity = t.opacity;
             loaded.blend = t.blend;
+            loaded.resampling = t.resampling;
             loaded.name = t.name.clone();
             *t = loaded;
         }
