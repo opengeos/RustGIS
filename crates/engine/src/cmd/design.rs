@@ -2966,11 +2966,16 @@ pub(crate) fn new_feature_inputs(input: &super::InputContext<'_>, p: &Json) -> R
         return Ok(inputs);
     }
     let mut inputs = super::Inputs::primary(s, p)?;
-    if let Elevation::Surface(name) = &s.map().editing.settings.elevation {
-        inputs.layers.extend(surface_layer(input, name).map(|l| (s.map().instance_id(), l.id)));
+    include_new_feature_surface(input, &mut inputs);
+    Ok(inputs)
+}
+
+/// Every new feature may sample the configured elevation raster, even in a newly created layer.
+pub(super) fn include_new_feature_surface(input: &super::InputContext<'_>, inputs: &mut super::Inputs) {
+    if let Elevation::Surface(name) = &input.map().editing.settings.elevation {
+        inputs.layers.extend(surface_layer(input, name).map(|l| (input.map().instance_id(), l.id)));
         inputs.state = json!({"surface":name});
     }
-    Ok(inputs)
 }
 
 #[cfg(test)]

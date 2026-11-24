@@ -2836,6 +2836,16 @@ fn edit_tab(app: &mut RustGisApp, ui: &mut Ui) {
         );
     });
     group(ui, "Features", |ui| {
+        small(
+            ui,
+            app,
+            "goto_xy",
+            "Create Point by Coordinates…",
+            "Create a point at typed coordinates, in the selected point layer or a new Points layer.",
+            "ui.dialog",
+            json!({"name":"createPointXY"}),
+            false,
+        );
         let gt = app.session.active_layer.and_then(|id| app.session.map().layer(id)).map(|l| l.geometry_type());
         let (tool, icon) = match gt {
             Some(GeometryType::Polyline) => (Tool::CreateLine, "line_tool"),
