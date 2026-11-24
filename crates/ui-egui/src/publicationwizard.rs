@@ -160,7 +160,7 @@ fn size_step(ui: &mut egui::Ui, d: &mut Draft) {
         ui.end_row();
         ui.label(tl!("Orientation"));
         ui.add_enabled_ui(!d.figure(), |ui| {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.radio_value(&mut d.orientation, Orientation::Auto, tl!("Auto")).on_hover_text(tl!("The way the map comes out larger."));
                 ui.radio_value(&mut d.orientation, Orientation::Portrait, tl!("Portrait"));
                 ui.radio_value(&mut d.orientation, Orientation::Landscape, tl!("Landscape"));
@@ -246,7 +246,7 @@ fn review_step(ui: &mut egui::Ui, d: &Draft) {
             return;
         }
         let turned = match d.orientation {
-            Orientation::Auto => tl!("Auto"),
+            Orientation::Auto => tl!("Auto: the way the map comes out larger"),
             Orientation::Portrait => tl!("Portrait"),
             Orientation::Landscape => tl!("Landscape"),
         };
@@ -273,6 +273,9 @@ fn review_step(ui: &mut egui::Ui, d: &Draft) {
     }
 }
 
+/// The wizard's width.
+const WIDTH: f32 = 380.0;
+
 /// The height every step takes: the style step's six styles and their descriptions.
 const STEP_HEIGHT: f32 = 300.0;
 
@@ -295,10 +298,12 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
         .collapsible(false)
         .resizable(false)
         .auto_sized()
+        // One width on every step and in every language: a long row wraps instead of widening it.
+        .max_width(WIDTH)
         .pivot(egui::Align2::CENTER_CENTER)
         .default_pos(ctx.content_rect().center())
         .show(ctx, |ui| {
-            ui.set_width(380.0);
+            ui.set_width(WIDTH);
             let steps = d.steps();
             let at = steps.iter().position(|s| *s == d.step).unwrap_or(0);
             let heading = i18n::fmt(
@@ -307,20 +312,20 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
             );
             ui.label(egui::RichText::new(heading).strong());
             ui.separator();
-            // Every step as tall as the tallest (the styles and their descriptions), so the
-            // window keeps its size and Next stays under the pointer from step to step.
-            // `set_min_height`, not `allocate_ui_with_layout`, which in egui 0.37 keeps only what
-            // was drawn.
-            ui.vertical(|ui| {
-                ui.set_min_height(STEP_HEIGHT);
-                match d.step {
+            // Every step in a box of one size, so the window keeps its size and Next stays under
+            // the pointer from step to step: as tall as the tallest step (the styles and their
+            // descriptions) in English, a step that runs longer in another language scrolling
+            // inside it, its text wrapped to its width rather than widening the window.
+            egui::ScrollArea::vertical().id_salt("publication_wizard_step").max_height(STEP_HEIGHT).auto_shrink([false, false]).show(
+                ui,
+                |ui| match d.step {
                     Step::Size => size_step(ui, &mut d),
                     Step::Style => style_step(ui, &mut d),
                     Step::Texts => texts_step(ui, &mut d),
                     Step::Accent => accent_step(ui, &mut d, t.accent),
                     Step::Review => review_step(ui, &d),
-                }
-            });
+                },
+            );
             ui.separator();
             let size = egui::vec2(84.0, 28.0);
             ui.horizontal(|ui| {
@@ -582,9 +587,32 @@ mod tests {
         app.dialogs.publication.as_mut().unwrap().step = Step::Review;
         let mut h = harness(app);
         assert!(h.query_by_label("Made with RustGIS · the date").is_some());
+        assert!(h.query_by_label("Auto: the way the map comes out larger").is_some(), "the turn, decided at Create");
         h.state_mut().dialogs.publication.as_mut().unwrap().size = "figure-1col".into();
         h.run_steps(2);
         assert!(h.query_by_label_contains("its caption").is_some(), "a figure's texts aren't drawn");
+    }
+
+    /// Next stays where it was in a language whose descriptions run longer: a step taller than
+    /// the others scrolls inside its height rather than growing the window.
+    #[test]
+    fn next_stays_in_place_in_a_longer_language() {
+        for code in ["de", "el"] {
+            let mut app = app();
+            // As the app applies its language each frame (`chosen_lang`), which the harness skips.
+            crate::i18n::set_current(crate::i18n::Lang::from_code(code).unwrap());
+            open(&mut app);
+            let mut h = harness(app);
+            let next = crate::i18n::t("Next").to_string();
+            assert_ne!(next, "Next", "{code}: the language changed");
+            let at = |h: &egui_kittest::Harness<'static, RustGisApp>| h.get_by_role_and_label(Role::Button, &next).rect();
+            let first = at(&h);
+            for _ in 0..3 {
+                h.get_by_role_and_label(Role::Button, &next).click();
+                h.run_steps(4);
+                assert_eq!(at(&h), first, "{code}: {:?}", step(&h));
+            }
+        }
     }
 
     /// Cancel closes the wizard with nothing made, and the next opening starts over.
