@@ -2320,7 +2320,7 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                                     update(app, json!({"barOutline": {"color": crate::theme::rgba(c).hex()}}));
                                 }
                                 let mut w = o.width;
-                                let drag = Dragged::lend(ui, drag_key("bar_outline"), &mut w);
+                                let drag = Dragged::lend(ui, drag_key("barOutline"), &mut w);
                                 let max = rustgis_engine::map::layout::MAX_CHART_OUTLINE_WIDTH;
                                 let r = ui
                                     .add(

@@ -4520,14 +4520,19 @@ fn mirrored(align: text::Align) -> text::Align {
 }
 
 impl ChartBars<'_> {
-    /// A bar from its stretches, each its start and length along the bar's run and its colour,
-    /// across `cross` (start and size), `across` for bars running across, with the look's
-    /// outline (#2487 part 4b). The line runs just inside the bar's edge, so it takes no room the
-    /// bars leave to their values, labels and title, and once between two stretches, centred on
-    /// where they meet, so a see-through one is laid once everywhere. It narrows to a third of a
-    /// bar, or of a stretch, thinner than three times it, so every stretch keeps its colour.
+    /// A bar, filled stretch by stretch, with the look's outline round it (#2487 part 4b). Each
+    /// stretch is its start and length along the bar and its colour; `cross` is where the bar
+    /// starts across its run and how thick it is, and `across` says it runs across (else down).
+    /// The line runs just inside the bar's edge, so it takes no room the bars leave to their
+    /// values, labels and title, and is laid once between two stretches, centred where they meet,
+    /// so a see-through one reads the same everywhere. So that every stretch keeps its colour, the
+    /// edge's line narrows to a third of the bar's thickness and of its first and last stretches,
+    /// and each line between two stretches to a third of either.
     fn bar(&self, pm: &mut Canvas, stretches: &[(f32, f32, Rgba)], cross: (f32, f32), across: bool) {
-        let rect = |at: f32, len: f32, from: f32, size: f32| if across { (at, from, len, size) } else { (from, at, size, len) };
+        // A box from where it starts and how long it is along the run, and across it.
+        let rect = |along: f32, run: f32, across_at: f32, thick: f32| {
+            if across { (along, across_at, run, thick) } else { (across_at, along, thick, run) }
+        };
         for (at, len, colour) in stretches {
             let (x, y, w, h) = rect(*at, *len, cross.0, cross.1);
             fill(pm, *colour, x, y, w, h);
