@@ -113,7 +113,7 @@ fn a_large_local_tiled_geotiff_draws_its_full_image_zoomed_in() {
     let notes = said(&s, mark);
     assert!(
         notes.iter().any(|n| n.starts_with("checks: read in place: the map draws its 1024 × 1024 pixels")
-            && n.contains("geoprocessing tools read the file")
+            && n.contains("geoprocessing tools and the commands that make a raster read the file")
             && n.contains("read a 512 × 512 overview")),
         "{notes:?}"
     );
@@ -296,4 +296,40 @@ fn an_original_image_grid_reads_a_tiled_files_grid() {
     std::fs::write(&path, bytes).unwrap();
     let e = crate::image_grid::read(raster(&s, "checks")).err().unwrap_or_default();
     assert!(e.contains("changed since its pixels were loaded"), "{e}");
+}
+
+/// A command that makes a raster reads the file, not the overview the layer holds, as it runs
+/// where the caller waits and as the app runs it on another thread: an index over the file has
+/// its 1024 × 1024 pixels, and a resample by 2 of it 512 × 512. Two criteria of a suitability on
+/// the same layer read its file once. The full image fits, so nothing is said of an overview.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_command_that_makes_a_raster_reads_a_tiled_file_at_its_full_size() {
+    use crate::cmd::workflows::{raster_land, raster_start};
+    let d = dir("made");
+    let path = checkerboard(&d);
+    let _held = HeldWhole::at(1_000_000);
+    let mut s = Session::new(Project::default());
+    s.run("layer.addData", &json!({"path": path})).unwrap();
+    assert!(raster(&s, "checks").tiled);
+    let size = |s: &Session, name: &str| raster(s, name).data.as_ref().map(|r| (r.width, r.height, r.overview));
+    let mark = s.notice_mark();
+    s.run("raster.index", &json!({"layer": "checks", "index": "ndvi", "red": 1, "nir": 2, "name": "index"})).unwrap();
+    assert_eq!(size(&s, "index"), Some((1024, 1024, None)), "where the caller waits");
+    // As the app runs it: started here, made on its own thread, added when run again.
+    let p = json!({"layer": "checks", "operation": "resample", "factor": 2, "name": "halved"});
+    let run = raster_start(&mut s, "raster.process", &p).unwrap();
+    let id = run.id;
+    let made = run.run(&rustgis_analysis::control::Control::new()).unwrap();
+    assert!(raster_land(&mut s, id, made).unwrap());
+    s.run("raster.process", &json!({"ran": id})).unwrap();
+    assert_eq!(size(&s, "halved"), Some((512, 512, None)), "on the run's thread");
+    let reads = || crate::cmd::gp::TILED_READS.with(std::cell::Cell::get);
+    let before = reads();
+    let criterion = json!({"layer": "checks", "ranges": [[0, 255, 1]]});
+    s.run("analysis.suitability", &json!({"criteria": [criterion, criterion], "name": "suits"})).unwrap();
+    assert_eq!(reads() - before, 1, "the file read once for the run");
+    assert_eq!(size(&s, "suits"), Some((1024, 1024, None)));
+    let notes = said(&s, mark);
+    assert!(!notes.iter().any(|n| n.contains("finest level") || n.contains("rounded")), "{notes:?}");
 }
