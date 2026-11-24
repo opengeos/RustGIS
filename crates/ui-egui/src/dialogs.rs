@@ -3165,7 +3165,7 @@ fn calculation_preview(rows: &[rustgis_engine::cmd::edit::CalculationPreview]) -
                 if self.1 > LONGEST {
                     return Err(std::fmt::Error);
                 }
-                self.0.push(if c.is_control() { ' ' } else { c });
+                self.0.push(if c.is_control() || matches!(c, '\u{2028}' | '\u{2029}') { ' ' } else { c });
                 self.1 += 1;
             }
             Ok(())
@@ -4150,14 +4150,18 @@ mod tests {
         assert!(h.query_by_label_contains("Preview:").is_none(), "no rows, no preview");
     }
 
-    /// A text value in the preview breaks no line (#2817): a line break or tab in it reads as a
-    /// space, and a long one is cut at forty characters.
+    /// A text value in the preview breaks no line (#2817): a line break (Unicode's line and
+    /// paragraph separators too) or tab in it reads as a space, and a long one is cut at forty
+    /// characters.
     #[test]
     fn a_calculation_preview_stays_on_one_line() {
         use rustgis_engine::cmd::edit::CalculationPreview;
         use rustgis_engine::data::Value;
         let row = |value: Value| CalculationPreview { row: 0, value, lost: None };
-        assert_eq!(super::calculation_preview(&[row(Value::Text("a\nb\tc".into())), row(Value::Int(7))]), "Preview: a b c · 7");
+        assert_eq!(
+            super::calculation_preview(&[row(Value::Text("a\nb\tc\u{2028}d\u{2029}e".into())), row(Value::Int(7))]),
+            "Preview: a b c d e · 7"
+        );
         let long = format!("{}\n{}", "x".repeat(39), "y".repeat(10_000));
         assert_eq!(super::calculation_preview(&[row(Value::Text(long))]), format!("Preview: {} …", "x".repeat(39)));
     }
