@@ -360,10 +360,7 @@ pub fn read_page_within(bytes: &[u8], name: &str, limit: usize) -> Result<Page> 
         && crate::filegdb::crs_of_code(code) != Some(crate::raster::Crs::LonLat)
     {
         unread_code = true;
-        report.messages.push(crate::loss::Note::loss(
-            crate::loss::LossCode::AssumedCrs,
-            format!("coordinate system {code} can't be used; coordinates are read as longitude/latitude"),
-        ));
+        report.messages.push(format!("coordinate system {code} can't be used; coordinates are read as longitude/latitude"));
     }
 
     let layer_type = match shape_kind {

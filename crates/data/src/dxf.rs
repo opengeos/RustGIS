@@ -1680,19 +1680,13 @@ pub fn read(file_name: &str, bytes: &[u8], opts: &Options) -> Result<Vec<(Datase
     }
     if !d.unread.is_empty() {
         let kinds: Vec<String> = d.unread.iter().map(|(k, n)| format!("{n} {k}")).collect();
-        report.messages.push(crate::loss::Note::loss(
-            crate::loss::LossCode::DroppedFeature,
-            format!("entities RustGIS doesn't draw were left out: {}", kinds.join(", ")),
-        ));
+        report.messages.push(format!("entities RustGIS doesn't draw were left out: {}", kinds.join(", ")));
     }
     let skipped = d.bad + out.cut;
     report.skipped = skipped;
     if skipped > 0 {
-        report.messages.push(crate::loss::Note::loss(
-            crate::loss::LossCode::DroppedFeature,
-            format!(
-                "{skipped} entities couldn't be read or placed (missing blocks, blocks nested too deep or in a cycle) and were left out"
-            ),
+        report.messages.push(format!(
+            "{skipped} entities couldn't be read or placed (missing blocks, blocks nested too deep or in a cycle) and were left out"
         ));
     }
     let transformer = match opts.crs.filter(|c| *c != Crs::LonLat) {

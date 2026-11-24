@@ -193,10 +193,7 @@ pub fn read(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Vec<(Data
         }
         for (i, f) in elements(&s, "F").enumerate() {
             if i >= MAX_FACES {
-                report.messages.push(crate::loss::Note::loss(
-                    crate::loss::LossCode::DroppedOverLimit,
-                    format!("surface '{sname}' has more than {MAX_FACES} faces: the rest are left out"),
-                ));
+                report.messages.push(format!("surface '{sname}' has more than {MAX_FACES} faces: the rest are left out"));
                 break;
             }
             // Invisible faces (i="1") are holes in the surface.

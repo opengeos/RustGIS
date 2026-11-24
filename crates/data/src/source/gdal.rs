@@ -528,14 +528,16 @@ fn convert_one_fresh_in(dir: &Path, src: &Path, layer: &str, family: Option<Fami
 }
 
 /// A counted loss, or an honest diagnostic when a nonempty replacement's source count is unknown.
-fn conversion_count_note(layer: &str, expected: Option<u64>, actual: u64, nonempty: bool) -> Option<String> {
+fn conversion_count_note(layer: &str, expected: Option<u64>, actual: u64, nonempty: bool) -> Option<crate::loss::Note> {
     match expected {
-        Some(expected) if actual < expected => {
-            Some(format!("{layer}: GDAL conversion left out {} of {expected} source features", expected - actual))
-        }
-        None if nonempty => Some(format!(
-            "{layer}: couldn't check how many source features GDAL's conversion kept because the source count is unknown; features may have been left out"
+        Some(expected) if actual < expected => Some(crate::loss::Note::loss(
+            crate::loss::LossCode::DroppedFeature,
+            format!("{layer}: GDAL conversion left out {} of {expected} source features", expected - actual),
         )),
+        // Only a possible loss: said without a code.
+        None if nonempty => Some(crate::loss::Note::plain(format!(
+            "{layer}: couldn't check how many source features GDAL's conversion kept because the source count is unknown; features may have been left out"
+        ))),
         _ => None,
     }
 }
@@ -1231,13 +1233,13 @@ mod tests {
     fn unknown_nonempty_conversion_counts_are_reported_and_known_clean_counts_are_silent() {
         let note = conversion_count_note("source", None, 1, true).unwrap();
         assert!(note.contains("source count is unknown") && note.contains("features may have been left out"));
+        assert_eq!(note.loss, None, "only a possible loss");
         assert!(conversion_count_note("source", Some(1), 1, true).is_none());
         assert!(conversion_count_note("source", Some(0), 0, false).is_none());
         assert!(conversion_count_note("source", None, 0, false).is_none());
-        assert_eq!(
-            conversion_count_note("source", Some(3), 1, true).as_deref(),
-            Some("source: GDAL conversion left out 2 of 3 source features")
-        );
+        let short = conversion_count_note("source", Some(3), 1, true).unwrap();
+        assert_eq!(short.as_str(), "source: GDAL conversion left out 2 of 3 source features");
+        assert_eq!(short.loss, Some(crate::loss::LossCode::DroppedFeature));
     }
 
     /// Indexed FlatGeobuf conversion drops empty polygons in GDAL, before RustGIS reads it.

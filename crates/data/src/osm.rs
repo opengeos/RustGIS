@@ -768,10 +768,7 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>>
     let mut report = ReadReport { skipped: missing + short_ways + no_closed_outer, ..ReadReport::default() };
     if osm.omitted_members > 0 {
         let members = if osm.omitted_members == 1 { "relation member" } else { "relation members" };
-        report.messages.push(crate::loss::Note::loss(
-            crate::loss::LossCode::DroppedOverLimit,
-            format!("{} {members} left out at the per-relation limit of {MAX_MEMBERS}", osm.omitted_members),
-        ));
+        report.messages.push(format!("{} {members} left out at the per-relation limit of {MAX_MEMBERS}", osm.omitted_members));
     }
     if short_ways > 0 {
         let subject = if short_ways == 1 { "tagged way left out because it has" } else { "tagged ways left out because they have" };
