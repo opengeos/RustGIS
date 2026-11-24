@@ -32,6 +32,8 @@ pub struct Draft {
     pub orientation: Orientation,
     pub style: String,
     pub title: String,
+    /// Whether the title was typed; until then it is the active map's name, as the menu's.
+    pub title_typed: bool,
     pub subtitle: String,
     pub note: String,
     pub sources: String,
@@ -52,6 +54,7 @@ impl Draft {
             orientation: Orientation::Auto,
             style: "classic".into(),
             title: s.map().name.clone(),
+            title_typed: false,
             subtitle: String::new(),
             note: String::new(),
             sources: String::new(),
@@ -102,15 +105,15 @@ impl Draft {
             p["author"] = json!("");
         }
         if let Some(c) = self.accent {
-            p["accent"] = json!(format!("#{:02X}{:02X}{:02X}", c.r(), c.g(), c.b()));
+            p["accent"] = json!(hex(c));
         }
         p
     }
+}
 
-    /// The size as the menu names it: `A4 (210 × 297 mm)`, or a figure's name.
-    fn size_label(&self) -> String {
-        size_label(&self.size)
-    }
+/// A colour as `layout.publication` takes it: `#RRGGBB`.
+fn hex(c: egui::Color32) -> String {
+    format!("#{:02X}{:02X}{:02X}", c.r(), c.g(), c.b())
 }
 
 /// A page size's or a figure's name, as New Layout › Publication Layout lists it.
@@ -141,7 +144,7 @@ fn size_step(ui: &mut egui::Ui, d: &mut Draft) {
     egui::Grid::new("publication_wizard_size").num_columns(2).spacing(egui::vec2(8.0, 8.0)).show(ui, |ui| {
         let label = ui.label(tl!("Size"));
         egui::ComboBox::from_id_salt("publication_wizard_size_pick")
-            .selected_text(d.size_label())
+            .selected_text(size_label(&d.size))
             .width(260.0)
             .show_ui(ui, |ui| {
                 for (id, ..) in PAGES {
@@ -166,8 +169,14 @@ fn size_step(ui: &mut egui::Ui, d: &mut Draft) {
         ui.end_row();
     });
     if d.figure() {
-        ui.label(egui::RichText::new(tl!("A figure is the map edge to edge: its title and sources go in its caption.")).small().weak());
+        figure_note(ui);
     }
+}
+
+/// What a figure leaves out, said where its size is picked and in the review: the texts and
+/// accent typed for a sheet aren't drawn on it.
+fn figure_note(ui: &mut egui::Ui) {
+    ui.label(egui::RichText::new(tl!("A figure is the map edge to edge: its title, texts and style go in its caption.")).small().weak());
 }
 
 /// The style step: each sheet style, by the name and description the menu gives it.
@@ -187,7 +196,10 @@ fn texts_step(ui: &mut egui::Ui, d: &mut Draft) {
             ui.add(egui::TextEdit::singleline(text).hint_text(hint).desired_width(260.0)).labelled_by(label.id);
             ui.end_row();
         };
-        line(ui, tl!("Title"), &mut d.title, tl!("No title"));
+        let label = ui.label(tl!("Title"));
+        let title = ui.add(egui::TextEdit::singleline(&mut d.title).hint_text(tl!("No title")).desired_width(260.0)).labelled_by(label.id);
+        d.title_typed |= title.changed();
+        ui.end_row();
         line(ui, tl!("Subtitle"), &mut d.subtitle, "");
         let label = ui.label(tl!("Note"));
         ui.add(egui::TextEdit::multiline(&mut d.note).desired_rows(3).desired_width(260.0)).labelled_by(label.id);
@@ -196,7 +208,7 @@ fn texts_step(ui: &mut egui::Ui, d: &mut Draft) {
         let label = ui.label(tl!("Credit line"));
         ui.add_enabled(
             !d.no_author,
-            egui::TextEdit::singleline(&mut d.author).hint_text(tl!("Made with RustGIS and the date")).desired_width(260.0),
+            egui::TextEdit::singleline(&mut d.author).hint_text(tl!("Made with RustGIS · the date")).desired_width(260.0),
         )
         .labelled_by(label.id);
         ui.end_row();
@@ -209,7 +221,7 @@ fn texts_step(ui: &mut egui::Ui, d: &mut Draft) {
 /// The accent step: the style's own colour, or one picked.
 fn accent_step(ui: &mut egui::Ui, d: &mut Draft, own: egui::Color32) {
     let mut picked = d.accent.is_some();
-    if ui.checkbox(&mut picked, tl!("Pick the accent colour")).changed() {
+    if ui.checkbox(&mut picked, tl!("Pick a colour of your own")).changed() {
         d.accent = picked.then_some(own);
     }
     if let Some(c) = &mut d.accent {
@@ -229,7 +241,7 @@ fn review_step(ui: &mut egui::Ui, d: &Draft) {
             ui.label(value);
             ui.end_row();
         };
-        row(tl!("Size"), d.size_label());
+        row(tl!("Size"), size_label(&d.size));
         if d.figure() {
             return;
         }
@@ -248,15 +260,17 @@ fn review_step(ui: &mut egui::Ui, d: &Draft) {
         let credit = if d.no_author {
             none.to_string()
         } else if d.author.trim().is_empty() {
-            tl!("Made with RustGIS and the date").to_string()
+            tl!("Made with RustGIS · the date").to_string()
         } else {
             d.author.trim().to_string()
         };
         row(tl!("Credit line"), credit);
-        let accent =
-            d.accent.map(|c| format!("#{:02X}{:02X}{:02X}", c.r(), c.g(), c.b())).unwrap_or_else(|| tl!("The style's own").to_string());
+        let accent = d.accent.map(hex).unwrap_or_else(|| tl!("The style's own").to_string());
         row(tl!("Accent"), accent);
     });
+    if d.figure() {
+        figure_note(ui);
+    }
 }
 
 /// The height every step takes: the style step's six styles and their descriptions.
@@ -269,6 +283,10 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
         app.dialogs.open = None;
         return;
     };
+    // A map opened meanwhile titles its sheet, as the menu titles it at the click.
+    if !d.title_typed {
+        d.title.clone_from(&app.session.map().name);
+    }
     let t = Tokens::get(ctx);
     let (mut open, mut close, mut create) = (true, false, false);
     egui::Window::new(tl!("Publication Layout Wizard"))
@@ -388,7 +406,7 @@ mod tests {
         assert_eq!((d.step, d.size.as_str(), d.orientation, d.style.as_str()), (Step::Size, "a4", Orientation::Auto, "classic"));
         assert_eq!(d.title, name);
         assert!(d.subtitle.is_empty() && d.note.is_empty() && d.sources.is_empty() && d.author.is_empty());
-        assert!((d.accent, d.no_author) == (None, false));
+        assert!(d.accent.is_none() && !d.no_author);
         assert_eq!(app.dialogs.open, Some("publicationWizard"));
         app.dialogs.publication.as_mut().unwrap().subtitle = "Kept".into();
         open(&mut app);
@@ -531,6 +549,42 @@ mod tests {
             click(&mut h, "Next");
             assert_eq!(at(&h), first, "{:?}", step(&h));
         }
+    }
+
+    /// Until the title is edited, it is the active map's name, as the menu titles a sheet: a map
+    /// opened while the wizard is open titles its sheet; a title typed stays.
+    #[test]
+    fn the_title_follows_the_active_map_until_it_is_edited() {
+        let mut app = app();
+        open(&mut app);
+        let mut h = harness(app);
+        h.state_mut().run("map.new", json!({"name": "Rivers"})).unwrap();
+        h.run_steps(2);
+        assert_eq!(h.state().dialogs.publication.as_ref().unwrap().title, "Rivers");
+        click(&mut h, "Next");
+        click(&mut h, "Next");
+        h.get_by_label("Title").focus();
+        h.run_steps(1);
+        h.get_by_label("Title").type_text(" basins");
+        h.run_steps(2);
+        assert_eq!(h.state().dialogs.publication.as_ref().unwrap().title, "Rivers basins");
+        h.state_mut().run("map.new", json!({"name": "Lakes"})).unwrap();
+        h.run_steps(2);
+        assert_eq!(h.state().dialogs.publication.as_ref().unwrap().title, "Rivers basins", "typed, so kept");
+    }
+
+    /// The review says what will be drawn: the default credit line as the sheet writes it, and for
+    /// a figure, that its texts and accent are left to the caption.
+    #[test]
+    fn the_review_says_what_will_be_drawn() {
+        let mut app = app();
+        open(&mut app);
+        app.dialogs.publication.as_mut().unwrap().step = Step::Review;
+        let mut h = harness(app);
+        assert!(h.query_by_label("Made with RustGIS · the date").is_some());
+        h.state_mut().dialogs.publication.as_mut().unwrap().size = "figure-1col".into();
+        h.run_steps(2);
+        assert!(h.query_by_label_contains("its caption").is_some(), "a figure's texts aren't drawn");
     }
 
     /// Cancel closes the wizard with nothing made, and the next opening starts over.
