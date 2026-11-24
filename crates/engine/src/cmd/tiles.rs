@@ -927,8 +927,9 @@ fn read_local_header(t: &TileLayer, wait: web_time::Duration) {
 pub(crate) fn resampling(p: &Value) -> Result<Option<rustgis_map::raster::Resampling>, String> {
     match p.get("resampling") {
         None | Some(Value::Null) => Ok(None),
+        // A name with no letters (blank, or separators alone, which `from_name` drops) names none.
         Some(Value::String(name)) => Some(name.trim())
-            .filter(|n| !n.is_empty())
+            .filter(|n| n.chars().any(char::is_alphanumeric))
             .and_then(rustgis_map::raster::Resampling::from_name)
             .map(Some)
             .ok_or_else(|| format!("unknown resampling '{name}': nearest or bilinear")),
@@ -1150,7 +1151,9 @@ mod tests {
         assert!(s.run("edit.undo", &json!({})).is_ok());
         assert_eq!(of(&s, "Base"), Some(Resampling::Bilinear));
         assert!(s.run("map.setTiles", &json!({"name": "Base", "resampling": "cubic"})).is_err());
-        assert!(s.run("map.setTiles", &json!({"name": "Base", "resampling": " "})).is_err());
+        for blank in [" ", "-", "_"] {
+            assert!(s.run("map.setTiles", &json!({"name": "Base", "resampling": blank})).is_err(), "{blank:?}");
+        }
         let vector = json!({"url": "https://v.example.com/{z}/{x}/{y}.pbf", "kind": "vector", "name": "Roads"});
         assert!(s.run("map.addTiles", &vector).is_ok());
         assert!(s.run("map.setTiles", &json!({"name": "Roads", "resampling": "nearest"})).is_err());
