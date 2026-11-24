@@ -3839,6 +3839,10 @@ fn geopackage_count_is_the_one_gdal_keeps_when_it_keeps_one() {
         rusqlite::Connection::open(&path).unwrap().execute_batch(&sql).unwrap();
         let src = open_path(&path, Some("parcels")).unwrap();
         assert_eq!(src.info().count, Some(count), "{case}");
+        // A preview gets the rows there are, whatever the count says: a count past them (an
+        // `INSERT OR REPLACE` leaves it high, a file may say any number) doesn't thin it.
+        let preview = src.read(&Request { extent: None, limit: 100, own: None }).unwrap();
+        assert_eq!((preview.features.len(), preview.complete), (3, true), "{case}");
     }
 }
 

@@ -36,6 +36,10 @@ pub struct GpkgSource {
     /// The database file and its identity when opened ([`file_identity`]), for a traversal on a
     /// connection of its own to check it reads the same file.
     file: Option<(PathBuf, Option<(u64, u64)>)>,
+    /// Whether `info.count` is the count GDAL keeps ([`kept_count`]) rather than the rows counted:
+    /// it may be past them (an `INSERT OR REPLACE` leaves it high, a file may say any number), so
+    /// a read doesn't start its sample's step from it.
+    count_kept: bool,
 }
 
 impl Drop for GpkgSource {
@@ -156,11 +160,12 @@ fn has_table(conn: &Connection, name: &str) -> Result<bool> {
 /// (`trigger_insert_feature_count_<table>` and `trigger_delete_feature_count_<table>`, which add or
 /// take one per insert and delete); GDAL answers a table's count with it too, and it is as right
 /// as GDAL's: a row an `INSERT OR REPLACE` puts out fires no delete trigger (SQLite's
-/// `recursive_triggers` is off by default), so such writes leave it high. GDAL may drop the
-/// triggers while it writes and create them again when it saves the file, so a file without them
-/// may hold an out-of-date count. `None` then, when there is no such table or row (a file GDAL
-/// didn't write), or when the count isn't a whole number from zero up (NULL, text, a negative):
-/// the table is counted instead.
+/// `recursive_triggers` is off by default), so such writes leave it high. A read doesn't start
+/// its sample's step from it (`GpkgSource::count_kept`), so a preview still gets the rows there
+/// are. GDAL may drop the triggers while it writes and create them again when it saves the file,
+/// so a file without them may hold an out-of-date count. `None` then, when there is no such table
+/// or row (a file GDAL didn't write), or when the count isn't a whole number from zero up (NULL,
+/// text, a negative): the table is counted instead.
 fn kept_count(conn: &Connection, table: &str) -> Option<i64> {
     conn.query_row(
         "SELECT feature_count FROM gpkg_ogr_contents
@@ -342,7 +347,18 @@ impl GpkgSource {
             zm_dropped: false,
         };
         let file = Some((path.to_path_buf(), id));
-        let mut src = GpkgSource { info, conn: Mutex::new(Some(conn)), table, geom, pk, rtree, reproject, temp: None, file };
+        let mut src = GpkgSource {
+            info,
+            conn: Mutex::new(Some(conn)),
+            table,
+            geom,
+            pk,
+            rtree,
+            reproject,
+            temp: None,
+            file,
+            count_kept: kept.is_some(),
+        };
         if src.info.geometry_type == GeometryType::None {
             src.info.geometry_type = src.peek_kind();
         }
@@ -536,9 +552,13 @@ impl FeatureSource for GpkgSource {
                 let sql = format!("SELECT {} FROM {}", self.select_list(), quote(&self.table));
                 let mut st = conn.prepare(&sql).map_err(err)?;
                 let mut rows = st.query([]).map_err(err)?;
-                // A whole read knows its count; an extent, bounded natively or not, is matched as it goes.
-                let mut sample =
-                    if req.extent.is_none() { Sampler::with_total(limit, self.info.count.unwrap_or(0)) } else { Sampler::new(limit) };
+                // A whole read knows its count, unless the file's own; an extent, bounded natively
+                // or not, is matched as it goes.
+                let mut sample = if req.extent.is_none() && !self.count_kept {
+                    Sampler::with_total(limit, self.info.count.unwrap_or(0))
+                } else {
+                    Sampler::new(limit)
+                };
                 crate::progress::begin(self.info.count.and_then(|n| usize::try_from(n).ok()).unwrap_or(0));
                 while let Some(r) = rows.next().map_err(err)? {
                     crate::progress::step(1)?;
