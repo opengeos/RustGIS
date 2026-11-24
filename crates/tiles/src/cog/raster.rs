@@ -155,6 +155,7 @@ fn read_overview(info: Arc<Info>, url: String, done: Box<dyn FnOnce(Result<Raste
                     r.color = ColorHint::Palette(table.clone());
                 }
                 r.lost = i.layout.lost.clone();
+                r.copyright.clone_from(&i.layout.copyright);
                 if let Some(described) = &i.layout.described {
                     r.apply_pam(described, rustgis_data::raster::pam::GDAL_METADATA);
                 }
