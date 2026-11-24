@@ -1418,13 +1418,13 @@ mod tests {
             let saved = serde_json::to_value(Project::from_json(&one.to_string()).unwrap()).unwrap();
             assert_eq!(saved["requires"], json!(["layout-chart-facing"]), "{key}");
         }
-        // A hand-edited maximum not above 0 draws as automatic, but it is kept and written back,
-        // so an older reader must refuse it rather than drop it.
+        // A hand-edited maximum not above 0 is let go on read (and said), so it is neither written
+        // back nor required.
         let mut kept = base.clone();
         kept["layouts"][0]["elements"][1]["kind"]["Chart"]["max"] = json!(-5.0);
         let saved_kept = serde_json::to_value(Project::from_json(&kept.to_string()).unwrap()).unwrap();
-        assert_eq!(saved_kept["requires"], json!(["layout-chart-facing"]));
-        assert_eq!(saved_kept["layouts"][0]["elements"][1]["kind"]["Chart"]["max"], json!(-5.0));
+        assert!(saved_kept.get("requires").is_none());
+        assert!(saved_kept["layouts"][0]["elements"][1]["kind"]["Chart"].get("max").is_none());
         let mut document = base.clone();
         document["tasks"] = json!([{"name": "Task", "steps": [{"title": "Chart", "command": "layout.import", "params": {"text": saved["layouts"][0].to_string()}}]}]);
         let imported = serde_json::to_value(Project::from_json(&document.to_string()).unwrap()).unwrap();

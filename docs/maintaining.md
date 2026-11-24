@@ -221,8 +221,8 @@ let go). Saved `layout.addElement` commands for a chart and `layout.update` comm
 `layout.import` whose `text` has such a chart requires it as well.
 
 Projects with a layout chart that faces another (`mirror`, a `max` or `hide_labels` on a chart
-element, a `max` not above 0 in a hand-edited file too, since it is written back) require
-`layout-chart-facing`, so an older reader refuses them instead of drawing
+element; a `max` not above 0, only in a hand-edited file, is let go on read and said as a value out
+of range) require `layout-chart-facing`, so an older reader refuses them instead of drawing
 the chart the usual way round, on its bars' own scale and labelled, and saving it again without
 (#2487 part 4). Saved `layout.addElement` commands for a chart and `layout.update` commands that
 set `"mirror": true`, a `max` above 0 or `"hideLabels": true` require it too (only a chart takes

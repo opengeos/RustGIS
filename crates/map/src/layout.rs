@@ -1918,8 +1918,8 @@ impl ElementKind {
 
     /// Whether a chart faces another: mirrored, given a maximum or with its labels hidden, which a
     /// chart had no way to before #2487 part 4: an older reader would draw it the usual way round,
-    /// on its bars' own scale, labelled, and save it again without. A stored maximum counts even
-    /// where it isn't read (not above 0): it is written back, so an older reader would drop it.
+    /// on its bars' own scale, labelled, and save it again without. A maximum not above 0 is let go
+    /// when the layout is read ([`Layout::clamp`]), so a stored one is always drawn to.
     pub fn chart_uses_facing(&self) -> bool {
         matches!(self, ElementKind::Chart { mirror, max, hide_labels, .. } if *mirror || *hide_labels || max.is_some())
     }
@@ -2641,6 +2641,9 @@ impl Layout {
                     text.truncate(end);
                 }
                 ElementKind::Table { rows, .. } => *rows = (*rows).clamp(1, 500),
+                // A maximum the chart can't draw to (only a hand-edited file has one) gives it its
+                // bars' own scale back, counted with the values out of range (#2487 part 4).
+                ElementKind::Chart { max, .. } => *max = chart_max(*max),
                 ElementKind::ScaleBar { divisions, text_size, .. } => {
                     *divisions = (*divisions).clamp(1, MAX_SCALE_DIVISIONS);
                     *text_size = layout_text_in_range(*text_size, SCALE_BAR_TEXT_PT);
@@ -4038,6 +4041,27 @@ mod tests {
         assert_eq!(frame(Some(" "), GridKind::Measured), (true, 0, 0));
         assert_eq!(frame(Some("EPSG:2056"), GridKind::Measured), (false, 1, 0), "said on its own, not as a value out of range");
         assert_eq!(frame(None, GridKind::Graticule), (false, 1, 0));
+    }
+
+    /// A chart's maximum not above 0, which only a hand-edited file holds and the chart can't
+    /// draw to, is let go on read (the chart on its bars' own scale) and counted as a value out of
+    /// range, so the project says so (#2487 part 4); one above 0 is kept.
+    #[test]
+    fn a_charts_maximum_not_above_zero_is_repaired_and_counted() {
+        for (max, kept, adjusted) in [(-5.0, None, 1), (0.0, None, 1), (40.0, Some(40.0), 0)] {
+            let mut l: Layout = serde_json::from_value(serde_json::json!({
+                "name": "L", "width": 120, "height": 90, "elements": [
+                    {"id": 1, "name": "Frame", "x": 10, "y": 10, "w": 60, "h": 70,
+                     "kind": {"MapFrame": {"map": "Map", "center": {"x": 0, "y": 0}, "scale": 1000000}}},
+                    {"id": 2, "name": "Chart", "x": 75, "y": 10, "w": 35, "h": 40,
+                     "kind": {"Chart": {"frame": 1, "layer": "Places", "field": "people", "max": max}}}
+                ]
+            }))
+            .unwrap();
+            let r = l.clamp();
+            let ElementKind::Chart { max: m, .. } = &l.elements[1].kind else { panic!("a chart") };
+            assert_eq!((*m, r.elements_adjusted), (kept, adjusted), "{max}");
+        }
     }
 
     #[test]
