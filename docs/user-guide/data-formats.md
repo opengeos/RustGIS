@@ -802,7 +802,7 @@ Projection can set the one that does. Such a feature doesn't draw (the map says 
 out), and each step that needs longitude/latitude (an export in WGS 84, a tool, an edit) leaves it
 out and says so, or refuses naming it where leaving it out would lose it (a write-back, a sync of an
 offline area holding it) or a plugin tool takes the layer; a Field Package's list of changes brings
-it back in its own system;
+it back in its own system while the computer holds the layer there;
 written back in its own system, it is exact. A system that converts a place to beyond ±180.5°
 longitude or ±90.5° latitude (Web Mercator a billion metres east is 8983°) doesn't fit either: such
 a feature is kept and draws out of place. Shapefile, GeoJSON, CSV, MapInfo, DXF, LandXML, ArcGIS

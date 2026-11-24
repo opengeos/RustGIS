@@ -218,10 +218,12 @@ Where a change meets one made on the computer since the package was made:
   A return by the list of changes brings such a feature back as it is held: the list gives the
   shapes of a layer held in its own coordinate system in that system, so they come back exactly,
   with no round trip through longitude/latitude. If the computer now holds the layer in another
-  system, the shapes are converted, and such a feature refuses the return, naming it. A list in a
+  system, the shapes are converted, and such a feature the list changes refuses the return,
+  naming it. A list in a
   layer's own system needs a RustGIS that reads it (an older one refuses it, saying a newer
-  RustGIS made it); a package whose layers are all in longitude/latitude sends one any release
-  reads.
+  RustGIS made it); a list that changes no layer held in its own system is one any release
+  reads. A phone with an older RustGIS than the one that opened the package finds no copy of a
+  layer held in its own system, and sends the package back as a whole map, saying so.
 
 Each of these keeps the version that lost on the offline area: the computer's values and shape
 the phone's replaced, the phone's edits to a feature deleted on the computer, the computer's feature

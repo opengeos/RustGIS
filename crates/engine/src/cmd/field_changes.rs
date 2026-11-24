@@ -47,6 +47,15 @@ const RECORD: usize = 8 + 8 + 4 + 16;
 const MAX_ROW: u32 = 256 << 20;
 /// The file listing a given copy's layers, written last: a folder without it is incomplete.
 const LAYERS: &str = "layers.json";
+/// [`LAYERS`] for a copy with a layer in its own system ([`BaseLayer::crs`]), which a release
+/// before #2032 C2f-4b-5 doesn't look for: it would read that layer's rows as longitude/latitude,
+/// so it finds no copy instead, and the package goes back as a whole map, which it says.
+const LAYERS_V2: &str = "layers.v2.json";
+
+/// The file listing the copy in `dir`, when it is complete.
+fn layers_file(dir: &Path) -> Option<PathBuf> {
+    [LAYERS_V2, LAYERS].into_iter().map(|name| dir.join(name)).find(|p| p.is_file())
+}
 
 /// The changes of one returning package.
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -292,7 +301,7 @@ impl GivenRows {
 
     /// Whether this device keeps them already.
     pub(crate) fn kept(&self) -> bool {
-        base_dir(&self.package).is_some_and(|d| d.join(LAYERS).is_file())
+        base_dir(&self.package).is_some_and(|d| layers_file(&d).is_some())
     }
 }
 
@@ -430,7 +439,7 @@ pub(crate) fn keep_rows(s: &mut Session, _p: &serde_json::Value) -> crate::CmdRe
 pub(crate) fn keep_base(given: &GivenRows) -> Kept {
     rustgis_data::progress::check().map_err(|e| e.to_string())?;
     let dir = base_dir(&given.package).ok_or("this device gives RustGIS no folder of its own to keep the field package's rows in")?;
-    if dir.join(LAYERS).is_file() {
+    if layers_file(&dir).is_some() {
         return Ok(Vec::new());
     }
     // Its return sent before it was opened again, maybe in an earlier run: nothing is kept.
@@ -484,7 +493,7 @@ fn publish(part: &Path, dir: &Path) -> Result<(), String> {
     }
     match std::fs::rename(part, dir) {
         Ok(()) => Ok(()),
-        Err(_) if dir.join(LAYERS).is_file() => Ok(()),
+        Err(_) if layers_file(dir).is_some() => Ok(()),
         Err(e) => Err(format!("{}: {e}", dir.display())),
     }
 }
@@ -545,7 +554,7 @@ fn write_base(given: &GivenRows, dir: &Path) -> Result<(), String> {
         });
     }
     progress::check().map_err(|e| e.to_string())?;
-    let list = dir.join(LAYERS);
+    let list = dir.join(if layers.iter().any(|l| l.crs.is_some()) { LAYERS_V2 } else { LAYERS });
     std::fs::write(&list, serde_json::to_vec(&layers).map_err(|e| e.to_string())?).map_err(io(&list))
 }
 
@@ -616,8 +625,8 @@ fn read_row(file: &mut std::fs::File, e: &Entry, fields: usize) -> Result<BaseRo
 /// left out, as a sync leaves it, and named in [`Changes::gone`]. Cancel is looked at between rows.
 pub(crate) fn list(map: &rustgis_map::Map, package: &str) -> Result<Option<Changes>, String> {
     use rustgis_data::progress;
-    let Some(dir) = base_dir(package).filter(|d| d.join(LAYERS).is_file()) else { return Ok(None) };
-    let list_path = dir.join(LAYERS);
+    let Some(dir) = base_dir(package) else { return Ok(None) };
+    let Some(list_path) = layers_file(&dir) else { return Ok(None) };
     let text = std::fs::read(&list_path).map_err(|e| format!("{}: {e}", list_path.display()))?;
     let given: Vec<BaseLayer> = serde_json::from_slice(&text).map_err(|e| format!("{}: {e}", list_path.display()))?;
     let mut changes = Changes { version: VERSION, package: package.to_string(), layers: Vec::new(), gone: Vec::new() };
@@ -802,10 +811,23 @@ pub(crate) fn apply(s: &mut Session, ai: usize, edited: &rustgis_map::Map, chang
             converted = given_in_lonlat(lc, listed).map_err(error)?;
             &converted
         };
-        let theirs = if native { std::borrow::Cow::Borrowed(&ol.dataset) } else { ol.dataset.in_lonlat().map_err(error)? };
+        // Converted, a feature with a place that can't be given in longitude/latitude loses its
+        // shape there: one the list doesn't touch stays as it is (at home as stored, by
+        // `merged_from_lonlat`); one it touches refuses the return, naming it.
+        let touched: HashSet<u64> =
+            lc.added.iter().copied().chain(lc.deleted.iter().map(|g| g.id)).chain(lc.edited.iter().map(|g| g.id)).collect();
+        let theirs = if native {
+            std::borrow::Cow::Borrowed(&ol.dataset)
+        } else {
+            let (lonlat, _) = ol.dataset.in_lonlat_leaving_out().map_err(error)?;
+            unplaced_touched(&ol.dataset, &lonlat, &touched).map_err(error)?;
+            lonlat
+        };
         let held = (!native && sl.dataset.coord_crs() != Crs::LonLat).then(|| sl.dataset.clone());
-        if held.is_some() {
-            sl.dataset = sl.dataset.in_lonlat().map_err(error)?.into_owned();
+        if let Some(own) = &held {
+            let (lonlat, _) = own.in_lonlat_leaving_out().map_err(error)?;
+            unplaced_touched(own, &lonlat, &touched).map_err(error)?;
+            sl.dataset = lonlat.into_owned();
         }
         // A shape that lost is kept in longitude/latitude ([`AreaConflict::geometry`]): from the
         // layer's own system when it is changed there, a place that can't be given there as NaN,
@@ -952,6 +974,22 @@ pub(crate) fn apply(s: &mut Session, ai: usize, edited: &rustgis_map::Map, chang
         "conflicts": done.conflicts.len() + done.kept.len(),
         "renumbered": done.renumbered,
     }))
+}
+
+/// Refuses, naming it, a feature `touched` names whose shape `own` holds but its conversion to
+/// longitude/latitude, `lonlat` (row for row), left out: one of its places can't be given there.
+fn unplaced_touched(own: &rustgis_data::Dataset, lonlat: &rustgis_data::Dataset, touched: &HashSet<u64>) -> Result<(), String> {
+    match own
+        .features
+        .rows()
+        .zip(lonlat.features.rows())
+        .find(|(o, l)| touched.contains(&o.id()) && o.geometry().is_some() && l.geometry().is_none())
+    {
+        Some((o, _)) => {
+            Err(format!("feature {} has a place in {} that can't be given in longitude/latitude", o.id(), own.coord_crs().label()))
+        }
+        None => Ok(()),
+    }
 }
 
 /// `lc` with the shapes it gives put in longitude/latitude from `crs`, the system it gives them in,
@@ -1229,6 +1267,26 @@ mod tests {
         assert!(refused.contains("damaged") && refused.contains("feature 7"), "{refused}");
     }
 
+    /// A copy with a layer held in its own system lists its layers in [`LAYERS_V2`], which a release
+    /// before it doesn't look for, so that release sends the package back as a whole map rather
+    /// than read the layer's rows as longitude/latitude; one in longitude/latitude only, in
+    /// [`LAYERS`], as before. This release reads either.
+    #[test]
+    fn a_copy_with_a_layer_in_its_own_system_is_listed_where_older_releases_dont_look() {
+        let held = crate::sample::world_project();
+        let mut native = held.clone();
+        native.maps[0].layers[0].dataset.hold_in(Crs::from_epsg(8857).unwrap()).unwrap();
+        for (project, file, other) in [(&held, LAYERS, LAYERS_V2), (&native, LAYERS_V2, LAYERS)] {
+            let id = crate::project::field_id().unwrap();
+            assert!(keep_base(&GivenRows::of(project, &id)).unwrap().is_empty());
+            let dir = base_dir(&id).unwrap();
+            assert!(dir.join(file).is_file() && !dir.join(other).exists(), "{file}");
+            assert!(GivenRows::of(project, &id).kept());
+            let map = project.maps.first().unwrap();
+            assert!(list(map, &id).unwrap().unwrap().layers.is_empty(), "{file}: nothing changed");
+        }
+    }
+
     /// A folder a racing send removed first is gone, not a failure to remove it.
     #[test]
     fn letting_go_of_a_folder_already_gone_says_nothing() {
@@ -1348,7 +1406,7 @@ mod tests {
     /// A list of a version RustGIS writes (1 and 2) is read; any other is refused: a newer one asks
     /// for a newer RustGIS.
     #[test]
-    fn a_list_of_another_version_is_refused() {
+    fn a_list_of_a_version_rustgis_writes_is_read_and_another_refused() {
         let id = "0123456789abcdef0123456789abcdef";
         let list = |v: u32| format!(r#"{{"version":{v},"package":"{id}","layers":[]}}"#);
         assert!(Changes::read(list(1).as_bytes(), id).is_ok());

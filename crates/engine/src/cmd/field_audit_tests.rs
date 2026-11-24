@@ -783,8 +783,7 @@ fn a_list_in_a_layers_own_system_comes_back_to_a_layer_held_in_another() {
     home.map_mut().layer_mut(hc).unwrap().dataset.hold_in(Crs::WebMercator).unwrap();
     let (done, said) = bring_back(&temp, &mut a, &mut home, "a");
     // Home's shapes were converted too (a round trip through longitude/latitude), so the moved
-    // one reads as changed at home as well: the field's wins, and that is said, as with a list in
-    // longitude/latitude.
+    // one may read as changed at home as well; the field's wins either way.
     assert_eq!(done["updated"].as_u64(), Some(1), "{done} {said:?}");
     assert_eq!(value_of(&home, hc, edited, &name).as_deref(), Some("Moved too"));
     assert_eq!(home.map().layer(hc).unwrap().dataset.coord_crs(), Crs::WebMercator);
@@ -793,6 +792,54 @@ fn a_list_in_a_layers_own_system_comes_back_to_a_layer_held_in_another() {
     // 1 km east in Equal Earth, about 1 km east in Web Mercator too.
     let Geometry::Point(was) = Crs::from_epsg(8857).unwrap().to(Crs::WebMercator).unwrap().geometry(&Geometry::Point(c)) else { panic!() };
     assert!((now.x - was.x) > 500.0 && (now.x - was.x) < 2000.0 && (now.y - was.y).abs() < 100.0, "{now:?} {was:?}");
+}
+
+/// A layer the phone holds in its own system while home holds it in longitude/latitude: a feature
+/// there with no place in longitude/latitude that the list doesn't touch doesn't refuse the
+/// return; once the list touches it, it does, naming it.
+#[test]
+fn only_a_feature_the_list_touches_can_refuse_a_converted_return() {
+    use rustgis_data::{Coord, Geometry, raster::Crs};
+    let temp = Temp::new("native-list-untouched");
+    let mut home = home(&temp);
+    let hc = layer(&home, "Cities");
+    home.map_mut().layer_mut(hc).unwrap().dataset.hold_in(Crs::from_epsg(8857).unwrap()).unwrap();
+    let (_, out) = package(&mut home, &json!({"name": "Day", "extent": AREA})).unwrap();
+    // Home holds the layer in longitude/latitude now.
+    home.map_mut().layer_mut(hc).unwrap().dataset.hold_in(Crs::LonLat).unwrap();
+    // The phone's copy as given holds a feature with no place in longitude/latitude (Equal Earth
+    // a billion metres east), as one edited in the layer's own system would be.
+    let dir = temp.0.join("a");
+    let (text, _) = unpack_into(&out, &dir).unwrap();
+    let mut project = project_in(&text, &dir).unwrap();
+    let package_id = project.field_origin.as_ref().unwrap().package.clone();
+    let ci = project.maps[0].layers.iter().position(|l| l.name == "Cities").unwrap();
+    let far = project.maps[0].layers[ci].dataset.features[1].id;
+    project.maps[0].layers[ci].dataset.features[1].geometry = Some(Geometry::Point(Coord::new(1e9, 0.0)));
+    project.given = Some(std::sync::Arc::new(crate::cmd::field_changes::GivenRows::of(&project, &package_id)));
+    let mut a = Session::new(project);
+    a.opened_package = Some(temp.0.join("a.rgisfield"));
+    a.run("offline.keepRows", &Value::Null).unwrap();
+    let cities = layer(&a, "Cities");
+    let name = text_field(&a, cities);
+    let edited = a.map().layer(cities).unwrap().dataset.features[0].id;
+    a.run("edit.setValue", &json!({"layer": cities, "row": 0, "field": name, "value": "Kept"})).unwrap();
+    // Untouched: the edit comes back.
+    let (_, back) = package(&mut a, &Value::Null).unwrap();
+    let path = temp.0.join("a-back.rgisfield");
+    std::fs::write(&path, &back).unwrap();
+    let mut trial = Session::new(home.project.clone());
+    trial.path = home.path.clone();
+    let done = trial.run("offline.bringBack", &json!({"path": path.display().to_string()})).unwrap();
+    assert_eq!(done["updated"].as_u64(), Some(1), "{done}");
+    assert_eq!(value_of(&trial, hc, edited, &name).as_deref(), Some("Kept"));
+    // Touched (its value edited too): it refuses, named, and nothing changes.
+    a.run("edit.setValue", &json!({"layer": cities, "row": 1, "field": name, "value": "Far"})).unwrap();
+    let (_, back) = package(&mut a, &Value::Null).unwrap();
+    std::fs::write(&path, &back).unwrap();
+    let err = home.run("offline.bringBack", &json!({"path": path.display().to_string()})).unwrap_err();
+    assert!(err.contains(&format!("feature {far} has a place")), "{err}");
+    assert_ne!(value_of(&home, hc, edited, &name).as_deref(), Some("Kept"));
 }
 
 /// A list of a version this RustGIS doesn't write is refused, as is one of version 1 that gives a
