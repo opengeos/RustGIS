@@ -588,34 +588,26 @@ pub fn allow_named(url: &str) {
     }
 }
 
-thread_local! {
-    /// Whether this thread's requests are held to the internet ([`held_to_public`]).
-    static HELD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-/// Runs `f` with every address this thread asks for in it read only from the internet when `held`
-/// (a plugin's command: plugins reach only the internet), whatever is recorded of the address,
-/// so the requests a command derives from the address it was given (a listing, a search, a next
-/// page) are held as that address is. Nested calls only add to it; it is restored when `f`
-/// returns or panics. Requests made later or on another thread follow what is recorded
+/// Runs `f` with every address asked for in it read only from the internet when `held` (a
+/// plugin's command: plugins reach only the internet), whatever is recorded of the address, so
+/// the requests a command derives from the address it was given (a listing, a search, a next
+/// page) are held as that address is. The hold is part of the request context
+/// ([`rustgis_data::source::remote::held_still`]): the workers that carry the context on, as they
+/// carry cancellation, are held too. Requests made later outside it follow what is recorded
 /// ([`restrict_to_public`]).
 pub fn held_to_public<T>(held: bool, f: impl FnOnce() -> T) -> T {
-    /// Puts back the hold from before, however `f` ends.
-    struct Restore(bool);
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            HELD.with(|h| h.set(self.0));
-        }
+    if !held {
+        return f();
     }
-    let _restore = Restore(HELD.with(|h| h.replace(h.get() || held)));
-    f()
+    let still = rustgis_data::source::remote::held_still(Arc::new(|| true));
+    with_optional_still(Some(still), f)
 }
 
 /// The network reach ceiling recorded for `url`: [`crate::address::Reach::Public`] when a web
 /// document named it, or while this thread's requests are [`held_to_public`],
 /// [`crate::address::Reach::Local`] otherwise.
 pub fn ceiling_for(url: &str) -> crate::address::Reach {
-    if HELD.with(std::cell::Cell::get) {
+    if rustgis_data::source::remote::requests_held() {
         return crate::address::Reach::Public;
     }
     let base = canonical_resource(url);
@@ -7867,6 +7859,17 @@ Connection: close
         assert_eq!(ceiling_for(&derived), crate::address::Reach::Local);
         let held = held_to_public(true, || {
             held_to_public(false, || assert_eq!(ceiling_for(&derived), crate::address::Reach::Public, "nested, still held"));
+            // A worker carrying the request context on, as readers carry cancellation, is held.
+            let context = current_still();
+            let worker = derived.clone();
+            let ceiling = std::thread::scope(|scope| {
+                std::thread::Builder::new()
+                    .spawn_scoped(scope, move || with_optional_still(context, || ceiling_for(&worker)))
+                    .unwrap()
+                    .join()
+                    .unwrap()
+            });
+            assert_eq!(ceiling, crate::address::Reach::Public, "a worker carrying the context");
             download_blocking(&derived)
         });
         let e = held.unwrap_err();
