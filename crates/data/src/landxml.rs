@@ -244,7 +244,7 @@ pub fn read(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Vec<(Data
                 placed += usize::from(has);
                 lost += usize::from(!has);
             }
-            rep.messages.extend(crate::io::kept_unplaced_note("", "features", lost, placed == 0, *c));
+            rep.messages.extend(crate::io::kept_unplaced_note("features", lost, placed == 0, *c));
         }
         out.push((ds, rep));
     }

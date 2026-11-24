@@ -573,9 +573,9 @@ pub(crate) fn finish(
         let mut objects = HashSet::new();
         for row in &mut rows {
             // Kept as the file holds it, in its system; marked, as it doesn't draw, when it has no
-            // place in longitude/latitude (as `geometry_to_lonlat` would give it).
+            // place in longitude/latitude.
             if let Some(g) = &row.geometry
-                && crate::io::lonlat_box(g, &to_lonlat).is_none()
+                && !crate::io::places_in_lonlat(g, &to_lonlat)
             {
                 (row.unconverted, row.draws) = (true, false);
                 objects.insert(row.object);
@@ -1154,7 +1154,7 @@ pub(crate) fn messages(c: &Counts) -> Vec<String> {
     );
     say(c.nested_instances, format!("{} implicit geometries inside a prototype aren't placed", c.nested_instances));
     say(c.tin_reliefs, format!("{} TINRelief objects aren't drawn and are left out", c.tin_reliefs));
-    if let Some(note) = c.crs.and_then(|crs| crate::io::kept_unplaced_note("", "city objects", c.unconverted, c.all_unconverted, crs)) {
+    if let Some(note) = c.crs.and_then(|crs| crate::io::kept_unplaced_note("city objects", c.unconverted, c.all_unconverted, crs)) {
         say(c.unconverted, note);
     }
     say(

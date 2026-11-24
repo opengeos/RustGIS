@@ -1644,21 +1644,10 @@ pub(crate) fn is_epsg_or_crs84_name(name: &str) -> bool {
     up == "CRS84" || up == "OGC:CRS84" || up.strip_prefix("OGC:").and_then(|rest| tail(rest, ':')).is_some_and(|c| c == "CRS84")
 }
 
-/// A geometry in longitude/latitude from the coordinates `t` converts: `None` when a coordinate
-/// can't be converted or comes out beyond longitude/latitude (a declared system that doesn't match
-/// the coordinates).
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn geometry_to_lonlat(g: &Geometry, t: &crate::raster::Transformer) -> Option<Geometry> {
-    let mut ok = true;
-    let out = g.map_coords(&|c| t.to_lonlat(c).unwrap_or(Coord::new(f64::NAN, f64::NAN)));
-    out.for_each_coord(|c: Coord| ok &= c.is_finite() && c.x.abs() <= 180.5 && c.y.abs() <= 90.5);
-    ok.then_some(out)
-}
-
 /// Whether every coordinate of `g`, in the system `t` converts, has a place in longitude/latitude
 /// (a finite one): a reader keeps the geometry as the file holds it, held in its system
-/// ([`Dataset::held_in`]), when it does, and leaves the feature's geometry out when it doesn't,
-/// as one it couldn't convert. Each coordinate is converted to be checked, none is kept.
+/// ([`Dataset::held_in`]), either way, and counts those that don't ([`kept_unplaced_note`]).
+/// Each coordinate is converted to be checked, none is kept.
 pub(crate) fn places_in_lonlat(g: &Geometry, t: &crate::raster::Transformer) -> bool {
     places_lonlat_extent(g, t).is_some()
 }
@@ -1691,25 +1680,38 @@ pub(crate) fn lonlat_box(g: &Geometry, t: &crate::raster::Transformer) -> Option
 }
 
 /// What a reader says of the `n` of its `what` (features, shapes, rows) it keeps as the file holds
-/// them, held in `crs`, though a place of theirs can't be given in longitude/latitude (or comes
-/// out beyond it): they don't draw (the map says so too), and every other step that needs
-/// longitude/latitude leaves them out and says so (#2032 C2f-4b). `all` when none of the file's
-/// has a place there: then its system doesn't seem to match its coordinates, and Define
-/// Projection can set the one that does, as nothing was lost. `None` for none.
-pub(crate) fn kept_unplaced_note(name: &str, what: &str, n: usize, all: bool, crs: Crs) -> Option<String> {
-    let name = if name.is_empty() { String::new() } else { format!("{name}: ") };
+/// them, held in `crs`, though a place of theirs can't be given in longitude/latitude: they don't
+/// draw (the map says so too), and every other step that needs longitude/latitude leaves them out
+/// and says so (#2032 C2f-4b). `all` when none of the file's has a place there: then its system
+/// doesn't seem to match its coordinates, and Define Projection can set the one that does, as
+/// nothing was lost. `None` for none.
+pub(crate) fn kept_unplaced_note(what: &str, n: usize, all: bool, crs: Crs) -> Option<String> {
     (n > 0).then(|| {
         if all {
             format!(
-                "{name}none of the {what} has a place in longitude/latitude from {}: it doesn't seem to be their coordinate system. They are kept as the file holds them, but don't draw; Define Projection can set the right one",
+                "none of the {what} has a place in longitude/latitude from {}: it doesn't seem to be their coordinate system. They are kept as the file holds them, but don't draw; Define Projection can set the right one",
                 crs.label()
             )
         } else {
-            format!(
-                "{name}{n} {what} have a place in {} that can't be given in longitude/latitude: they are kept as the file holds them, but don't draw",
-                crs.label()
-            )
+            let system = crs.label();
+            if n == 1 {
+                format!("one of the {what} has a place in {system} that can't be given in longitude/latitude: it is kept as the file holds it, but doesn't draw")
+            } else {
+                format!("{n} {what} have a place in {system} that can't be given in longitude/latitude: they are kept as the file holds them, but don't draw")
+            }
         }
+    })
+}
+
+/// What a reader says when the places of its features that do convert from `crs` come out beyond
+/// longitude/latitude (`placed`, their box there): the system may not match the coordinates,
+/// and they may draw out of place.
+pub(crate) fn beyond_lonlat_note(placed: &rustgis_geom::Extent, crs: Crs) -> Option<String> {
+    placed.beyond_lonlat().then(|| {
+        format!(
+            "coordinates are not longitude/latitude once converted from {}; it may not match them, and they may draw out of place",
+            crs.label()
+        )
     })
 }
 
@@ -1955,18 +1957,22 @@ impl Collector {
         let declared = declared_crs(root, &mut said)?;
         report.messages.extend(said);
         let (mut unconverted, mut placed) = (0usize, 0usize);
+        let mut placed_extent = rustgis_geom::Extent::EMPTY;
         // Only features kept count toward the heights dropped.
         let mut zm = 0usize;
         // Features kept, as longitude/latitude, with a latitude past the poles.
         let mut swapped = 0usize;
         for (n, (geom, values, had_z)) in self.features.into_iter().enumerate() {
             // Kept as the file holds it, in its declared system, and counted when it has no place
-            // in longitude/latitude (as [`geometry_to_lonlat`] would give it), as when the file is
-            // read in place.
+            // in longitude/latitude ([`places_in_lonlat`]), as when the file is read in place.
             if let (Some((_, t)), Some(g)) = (&declared, &geom) {
-                let has = lonlat_box(g, t).is_some();
-                placed += usize::from(has);
-                unconverted += usize::from(!has);
+                match places_lonlat_extent(g, t) {
+                    Some(e) => {
+                        placed += 1;
+                        placed_extent = placed_extent.union(&e);
+                    }
+                    None => unconverted += 1,
+                }
             }
             let mut attrs = vec![Value::Null; ds.fields.len()];
             for (i, v) in values {
@@ -1983,7 +1989,8 @@ impl Collector {
         if let Some((crs, _)) = &declared {
             ds.crs = Some(*crs);
             ds.held_in = *crs;
-            report.messages.extend(kept_unplaced_note("", "features", unconverted, placed == 0, *crs));
+            report.messages.extend(kept_unplaced_note("features", unconverted, placed == 0, *crs));
+            report.messages.extend(beyond_lonlat_note(&placed_extent, *crs));
         }
         report.messages.extend(swapped_latitude_note(swapped));
         // Last, as a source read in place notes it.
@@ -2985,15 +2992,22 @@ pub(crate) fn read_rows(
         // Kept as the file holds them, in its system; counted where they have no place in
         // longitude/latitude.
         ds.held_in = c;
-        let (mut lost, mut placed) = (0usize, 0usize);
+        let (mut lost, mut placed, mut placed_extent) = (0usize, 0usize, rustgis_geom::Extent::EMPTY);
         for g in ds.features.iter().filter_map(|f| f.geometry.as_ref()) {
-            let has = places_in_lonlat(g, &t);
-            placed += usize::from(has);
-            lost += usize::from(!has);
+            match places_lonlat_extent(g, &t) {
+                Some(e) => {
+                    placed += 1;
+                    placed_extent = placed_extent.union(&e);
+                }
+                None => lost += 1,
+            }
         }
-        report.messages.extend(kept_unplaced_note("", "rows", lost, placed == 0, c));
+        report.messages.extend(kept_unplaced_note("rows", lost, placed == 0, c));
+        report.messages.extend(beyond_lonlat_note(&placed_extent, c));
     }
-    let read_as_degrees = crs.is_none_or(Crs::is_geographic);
+    // Read as longitude/latitude as they are: no system given, or longitude/latitude itself. A
+    // row a given system can't place is said above, as kept.
+    let read_as_degrees = crs.is_none_or(|c| c == Crs::LonLat);
     let (mut outside, mut zero) = (0usize, 0usize);
     for f in &ds.features {
         crate::progress::check()?;
@@ -4176,7 +4190,7 @@ pub(crate) fn read_shapefile_parts(parts: ShapefileParts, name: &str, crs: Optio
         ));
     }
     if let Some(c) = ds.crs.filter(|_| to_lonlat.is_some()) {
-        report.messages.extend(kept_unplaced_note("", "shapes", unconverted, converted == 0, c));
+        report.messages.extend(kept_unplaced_note("shapes", unconverted, converted == 0, c));
     }
     Ok((ds, report))
 }

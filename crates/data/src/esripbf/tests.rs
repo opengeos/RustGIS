@@ -255,14 +255,15 @@ fn coordinates_past_longitude_latitude_are_kept_and_the_layer_says_so() {
     ]);
     let (ds, report) = read(&bytes, "t").unwrap();
     assert!(ds.features[0].geometry.is_some());
-    // Kept as the answer gives it, and not drawn (#2032 C2f-4b): nothing was lost, so a
-    // projection can still be defined.
+    // Kept as the answer gives it (#2032 C2f-4b), and said: it converts beyond
+    // longitude/latitude, so it draws out of place. Nothing was lost, so a projection can still be
+    // defined.
     assert_eq!(ds.features[1].geometry, Some(Geometry::Point(c(1e9, 0.0))));
     assert!(!ds.crs_incomplete);
     assert_eq!(
         report.messages,
         [
-            "1 features have a place that can't be given in longitude/latitude (coordinates outside their coordinate system): they are kept as the answer gives them, but don't draw"
+            "coordinates are not longitude/latitude once converted from the answer's coordinate system; it may not match them, and they may draw out of place"
         ]
     );
 }

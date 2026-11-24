@@ -1713,7 +1713,7 @@ pub fn read(file_name: &str, bytes: &[u8], opts: &Options) -> Result<Vec<(Datase
                 }
             }
             ds.features.retain(|f| f.geometry.is_some());
-            rep.messages.extend(crate::io::kept_unplaced_note("", "features", lost, placed == 0, *c));
+            rep.messages.extend(crate::io::kept_unplaced_note("features", lost, placed == 0, *c));
         }
         if transformer.is_none() {
             for (_, loss) in losses {

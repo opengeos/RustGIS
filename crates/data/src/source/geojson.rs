@@ -13,8 +13,7 @@ use std::path::{Path, PathBuf};
 
 use super::{Batch, FeatureSource, Reproject, Request, Sampler, SourceInfo, clamp_limit, stride};
 use crate::io::{
-    FeatureSink, Schema, declared_crs, geojson_attrs, geojson_geometry, geojson_has_z, geometry_to_lonlat, latitude_past_poles, lonlat_box,
-    swapped_latitude_note,
+    FeatureSink, Schema, declared_crs, geojson_attrs, geojson_geometry, geojson_has_z, latitude_past_poles, swapped_latitude_note,
 };
 use crate::{DataError, Feature, GeometryType, Result};
 use rustgis_geom::Extent;
@@ -238,7 +237,8 @@ impl GeoJsonSource {
             file.rewind()?;
             let pass = convert_pass(&mut file, &scan.places, t)?;
             extent = pass.extent;
-            notes.extend(crate::io::kept_unplaced_note("", "features", pass.unplaced, pass.placed == 0, crs));
+            notes.extend(crate::io::kept_unplaced_note("features", pass.unplaced, pass.placed == 0, crs));
+            notes.extend(crate::io::beyond_lonlat_note(&pass.placed_extent, crs));
         } else {
             // Only coordinates read as they are can be longitude/latitude with the two swapped;
             // a declared system's features were converted above, and those that don't fit left out.
@@ -314,6 +314,11 @@ impl FeatureSource for GeoJsonSource {
 
     fn skipped_at_open(&self) -> usize {
         self.unreadable
+    }
+
+    /// Counted when it was opened, as a file read whole counts them.
+    fn says_unplaced_at_open(&self) -> bool {
+        true
     }
 
     fn visits_extent_chunks(&self) -> bool {
@@ -442,7 +447,7 @@ impl GeoJsonSource {
             (None, None) => false,
             (None, Some(r)) => {
                 let placed = match (self.reproject.transformer(), &geometry) {
-                    (Some(t), Some(g)) => lonlat_box(g, t),
+                    (Some(t), Some(g)) => crate::io::places_lonlat_extent(g, t),
                     (None, g) => g.as_ref().map(crate::Geometry::extent),
                     (_, None) => None,
                 };
@@ -485,9 +490,10 @@ fn read_place(f: &mut BufReader<impl Read + Seek>, pos: &mut u64, buf: &mut Vec<
 /// What a pass over a file's features converts to longitude/latitude finds.
 struct Pass {
     /// Features with geometry the transformer can't give in longitude/latitude (see
-    /// [`geometry_to_lonlat`]), and those it can.
+    /// [`crate::io::places_in_lonlat`]), and those it can, with their box there.
     unplaced: usize,
     placed: usize,
+    placed_extent: Extent,
     /// The extent, in longitude/latitude, of every place that converts.
     extent: Extent,
 }
@@ -496,7 +502,7 @@ struct Pass {
 fn convert_pass(file: &mut File, places: &[Place], t: &crate::raster::Transformer) -> Result<Pass> {
     let mut f = BufReader::with_capacity(BUFFER, file);
     let (mut pos, mut buf) = (0u64, Vec::new());
-    let mut pass = Pass { unplaced: 0, placed: 0, extent: Extent::EMPTY };
+    let mut pass = Pass { unplaced: 0, placed: 0, placed_extent: Extent::EMPTY, extent: Extent::EMPTY };
     // Counted as a step of its own, a feature at a time every so many.
     crate::progress::begin(places.len());
     for (i, place) in places.iter().enumerate() {
@@ -514,8 +520,11 @@ fn convert_pass(file: &mut File, places: &[Place], t: &crate::raster::Transforme
                     pass.extent.expand(l);
                 }
             });
-            match geometry_to_lonlat(&g, t) {
-                Some(_) => pass.placed += 1,
+            match crate::io::places_lonlat_extent(&g, t) {
+                Some(e) => {
+                    pass.placed += 1;
+                    pass.placed_extent = pass.placed_extent.union(&e);
+                }
                 None => pass.unplaced += 1,
             }
         }

@@ -468,7 +468,7 @@ pub fn read(mif: &str, mid: Option<&str>, name: &str) -> Result<(Dataset, ReadRe
         ds.push_next(g, attrs);
     }
     if let (Some(_), Some(c)) = (&t, crs) {
-        report.messages.extend(crate::io::kept_unplaced_note("", "objects", lost, placed == 0, c));
+        report.messages.extend(crate::io::kept_unplaced_note("objects", lost, placed == 0, c));
     }
     report.messages.extend(crate::source::null_text_note(&ds.fields, &null_text));
     ds.geometry_type = crate::io::dominant_type(&ds);

@@ -426,16 +426,18 @@ pub fn shapefile(ds: &Dataset, path: &Path, synced: &Synced) -> Result<Published
 /// holds its coordinates in ([`Dataset::coord_crs`]). Given the file as read and in its own
 /// coordinates (`as_held`, the same rows), a feature of a layer held in longitude/latitude whose
 /// shape is the one read takes the file's coordinates as they are; any other is projected. A native
-/// shape that failed conversion is refused: missing geometry cannot identify its source shape.
+/// shape the read left without geometry is refused: missing geometry cannot identify its source
+/// shape.
 fn in_file<'a>(ds: &'a Dataset, crs: Option<Crs>, as_held: Option<(&Dataset, &Dataset)>) -> Result<std::borrow::Cow<'a, Dataset>> {
-    // A native shape the read couldn't place (left without geometry) can't be told apart from a
-    // feature without one, whatever system the layer holds its coordinates in.
+    // A native shape the read left without geometry (a coordinate that isn't a number; one with
+    // no place in longitude/latitude is kept, #2032 C2f-4b) can't be told apart from a feature
+    // without one, whatever system the layer holds its coordinates in.
     if let Some((read, raw)) = as_held {
         for (i, (f, r)) in read.features.iter().zip(raw.features.iter()).enumerate() {
             crate::progress::check()?;
             if f.geometry.is_none() && r.geometry.is_some() {
                 return Err(DataError::Format(format!(
-                    "source shape {} couldn't be converted from the source projection when it was read, so its native geometry can't be matched safely; check the source projection and add the file again; nothing was written",
+                    "source shape {} was read without its geometry (a coordinate that isn't a number), so its native geometry can't be matched safely; add the file again; nothing was written",
                     i + 1
                 )));
             }

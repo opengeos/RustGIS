@@ -2954,12 +2954,14 @@ fn geojson_features_that_cant_be_converted_are_skipped_and_counted() {
         );
         let (ds, messages, info_crs) = geojson_paths("far.geojson", &text);
         assert_eq!(ds.features.iter().map(|f| f.id).collect::<Vec<_>>(), [1, 2, 3], "{crs}: ids are the features' places in the file");
-        assert!(
-            messages.iter().any(|m| m.contains(&format!(
-                "1 features have a place in {crs} that can't be given in longitude/latitude: they are kept as the file holds them"
-            ))),
-            "{crs}: {messages:?}"
-        );
+        // UTM can't convert it; Web Mercator converts it to beyond longitude/latitude, where it
+        // draws out of place, and says that.
+        let expected = if crs == "EPSG:32617" {
+            format!("one of the features has a place in {crs} that can't be given in longitude/latitude: it is kept as the file holds it")
+        } else {
+            format!("coordinates are not longitude/latitude once converted from {crs}")
+        };
+        assert!(messages.iter().any(|m| m.contains(&expected)), "{crs}: {messages:?}");
         assert_eq!(info_crs, crs);
         assert!(!ds.crs_incomplete, "{crs}: nothing was lost");
         let Some(Geometry::Point(c)) = ds.features.first().and_then(|f| f.geometry.clone()) else { panic!("a point") };
@@ -2986,18 +2988,13 @@ fn geojson_kept_unplaced_features_set_the_geometry_type() {
     let (ds, _, _) = geojson_paths("kinds.geojson", &merc_collection(&[MERC_BAD, MERC_POLY, MERC_BAD]));
     assert_eq!(ds.geometry_type, GeometryType::Point);
     assert_eq!(ds.features.len(), 3);
-    // Nothing that can be placed: kept, said as a system that doesn't seem to match, and a
-    // projection can still be defined.
+    // Nothing in its place: kept, said as coordinates its system puts beyond longitude/latitude,
+    // and a projection can still be defined.
     let (ds, messages, _) = geojson_paths("none.geojson", &merc_collection(&[MERC_BAD, MERC_BAD]));
     assert_eq!(ds.geometry_type, GeometryType::Point);
     assert!(ds.features.len() == 2 && !ds.crs_incomplete);
     assert_eq!(messages.len(), 1, "{messages:?}");
-    assert!(
-        messages[0].contains("none of the features has a place in longitude/latitude from EPSG:3857")
-            && messages[0].contains("Define Projection"),
-        "{}",
-        messages[0]
-    );
+    assert!(messages[0].contains("coordinates are not longitude/latitude once converted from EPSG:3857"), "{}", messages[0]);
 }
 
 #[test]

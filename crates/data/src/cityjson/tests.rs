@@ -636,19 +636,23 @@ fn objects_that_cant_be_converted_are_kept_and_said() {
     let far = [[1e12, 0.0, 0.0], [1e12 + 1000.0, 0.0, 0.0], [1e12 + 1000.0, 1000.0, 0.0]];
     let vertices: Vec<[f64; 3]> = near.iter().chain(&far).copied().collect();
     let bytes = doc(json!(vertices), json!({"a": triangle(0), "b": triangle(3)}));
-    let out = read("m.city.json", &bytes, Some(Crs::WebMercator)).unwrap();
+    let out = read("m.city.json", &bytes, Some(Crs::Epsg(32631))).unwrap();
     assert!(!out[0].0.crs_incomplete);
     assert!(out[0].0.features.rows().all(|r| r.geometry().is_some()), "both kept");
-    assert!(says(&out, "1 city objects have a place in EPSG:3857 that can't be given in longitude/latitude"), "{:?}", messages_of(&out));
+    assert!(
+        says(&out, "one of the city objects has a place in EPSG:32631 that can't be given in longitude/latitude"),
+        "{:?}",
+        messages_of(&out)
+    );
     let bytes = doc(json!(vertices), json!({"a": triangle(0)}));
-    let out = read("m.city.json", &bytes, Some(Crs::WebMercator)).unwrap();
+    let out = read("m.city.json", &bytes, Some(Crs::Epsg(32631))).unwrap();
     assert!(!out[0].0.crs_incomplete);
     // Only that the system given goes over the one the file names (`doc`'s EPSG:4326).
-    assert_eq!(messages_of(&out), vec!["the file names EPSG:4326, and is read in EPSG:3857, the coordinate system given".to_string()]);
+    assert_eq!(messages_of(&out), vec!["the file names EPSG:4326, and is read in EPSG:32631, the coordinate system given".to_string()]);
     let bytes = doc(json!(vertices), json!({"b": triangle(3)}));
-    let out = read("m.city.json", &bytes, Some(Crs::WebMercator)).unwrap();
+    let out = read("m.city.json", &bytes, Some(Crs::Epsg(32631))).unwrap();
     assert!(out[0].0.features.rows().all(|r| r.geometry().is_some()));
-    assert!(says(&out, "none of the city objects has a place in longitude/latitude from EPSG:3857"), "{:?}", messages_of(&out));
+    assert!(says(&out, "none of the city objects has a place in longitude/latitude from EPSG:32631"), "{:?}", messages_of(&out));
 }
 
 /// An object is counted once in a notice, however many of its geometry families it loses.
@@ -666,8 +670,12 @@ fn an_object_losing_several_families_is_counted_once() {
             "b": {"type": "LandUse", "geometry": [surface(3), line]},
         }),
     );
-    let out = read("m.city.json", &bytes, Some(Crs::WebMercator)).unwrap();
-    assert!(says(&out, "1 city objects have a place in EPSG:3857 that can't be given in longitude/latitude"), "{:?}", messages_of(&out));
+    let out = read("m.city.json", &bytes, Some(Crs::Epsg(32631))).unwrap();
+    assert!(
+        says(&out, "one of the city objects has a place in EPSG:32631 that can't be given in longitude/latitude"),
+        "{:?}",
+        messages_of(&out)
+    );
 }
 
 /// A byte order mark doesn't hide a model, and a file named only `.city.json` still names its layer.
