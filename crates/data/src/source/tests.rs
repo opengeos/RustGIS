@@ -3785,6 +3785,63 @@ fn gpkg_tables(path: &Path) -> Vec<String> {
     st.query_map([], |r| r.get(0)).unwrap().collect::<std::result::Result<_, _>>().unwrap()
 }
 
+/// A table's count is the one GDAL keeps in `gpkg_ogr_contents`, when it keeps one with the
+/// triggers that keep it up to date, so a large table isn't scanned to count it (#2849); else its
+/// rows are counted, as before. A table with Z or M on every geometry is still scanned, as that
+/// scan also counts its geometries.
+#[test]
+fn geopackage_count_is_the_one_gdal_keeps_when_it_keeps_one() {
+    let workspace = tempfile::tempdir().unwrap();
+    let mut parcels = Dataset::new("parcels", GeometryType::Point, vec![Field::new("apn", FieldType::Text)]);
+    for i in 0..3 {
+        parcels.push(Some(Geometry::Point(Coord::new(f64::from(i), 2.0))), vec![Value::Text(format!("00{i}"))]);
+    }
+    // The table of counts and the triggers GDAL keeps it with, as GDAL writes them.
+    let kept = "DROP TABLE IF EXISTS gpkg_ogr_contents;
+                CREATE TABLE gpkg_ogr_contents (table_name TEXT NOT NULL PRIMARY KEY, feature_count INTEGER DEFAULT NULL);
+                CREATE TRIGGER \"trigger_insert_feature_count_parcels\" AFTER INSERT ON \"parcels\" BEGIN UPDATE gpkg_ogr_contents
+                  SET feature_count = feature_count + 1 WHERE lower(table_name) = lower('parcels'); END;
+                CREATE TRIGGER \"trigger_delete_feature_count_parcels\" AFTER DELETE ON \"parcels\" BEGIN UPDATE gpkg_ogr_contents
+                  SET feature_count = feature_count - 1 WHERE lower(table_name) = lower('parcels'); END;";
+    // The file's three rows, against what the table of counts says.
+    let cases = [
+        ("kept", format!("{kept} INSERT INTO gpkg_ogr_contents VALUES ('parcels', 250000);"), 250_000),
+        ("kept zero", format!("{kept} INSERT INTO gpkg_ogr_contents VALUES ('parcels', 0);"), 0),
+        ("upper-case name", format!("{kept} INSERT INTO gpkg_ogr_contents VALUES ('PARCELS', 7);"), 7),
+        // The column's INTEGER affinity stores text digits as a number.
+        ("digits as text", format!("{kept} INSERT INTO gpkg_ogr_contents VALUES ('parcels', '250000');"), 250_000),
+        // Without either trigger nothing kept it up to date (GDAL drops them while it writes).
+        (
+            "no insert trigger",
+            format!("{kept} INSERT INTO gpkg_ogr_contents VALUES ('parcels', 250000); DROP TRIGGER trigger_insert_feature_count_parcels;"),
+            3,
+        ),
+        (
+            "no delete trigger",
+            format!("{kept} INSERT INTO gpkg_ogr_contents VALUES ('parcels', 250000); DROP TRIGGER trigger_delete_feature_count_parcels;"),
+            3,
+        ),
+        ("null", format!("{kept} INSERT INTO gpkg_ogr_contents VALUES ('parcels', NULL);"), 3),
+        ("no table", "DROP TABLE IF EXISTS gpkg_ogr_contents;".to_string(), 3),
+        ("no row", format!("{kept} INSERT INTO gpkg_ogr_contents VALUES ('roads', 9);"), 3),
+        ("negative", format!("{kept} INSERT INTO gpkg_ogr_contents VALUES ('parcels', -5);"), 3),
+        ("text", format!("{kept} INSERT INTO gpkg_ogr_contents VALUES ('parcels', 'many');"), 3),
+        ("fraction", format!("{kept} INSERT INTO gpkg_ogr_contents VALUES ('parcels', 2.5);"), 3),
+        (
+            "z on every geometry",
+            format!("{kept} INSERT INTO gpkg_ogr_contents VALUES ('parcels', 250000); UPDATE gpkg_geometry_columns SET z = 1;"),
+            3,
+        ),
+    ];
+    for (case, sql, count) in cases {
+        let path = workspace.path().join(format!("{}.gpkg", case.replace(' ', "-")));
+        crate::io::write_path(&parcels, &path).unwrap();
+        rusqlite::Connection::open(&path).unwrap().execute_batch(&sql).unwrap();
+        let src = open_path(&path, Some("parcels")).unwrap();
+        assert_eq!(src.info().count, Some(count), "{case}");
+    }
+}
+
 /// Text in a date-time field with digits past the microsecond is written as a read takes it: as
 /// that date-time, to the millisecond and counted, not kept as text a read would call no date.
 #[test]

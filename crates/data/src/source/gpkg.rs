@@ -151,6 +151,26 @@ fn has_table(conn: &Connection, name: &str) -> Result<bool> {
     .map_err(err)
 }
 
+/// The feature count GDAL keeps for `table` in `gpkg_ogr_contents`, used as the table's count
+/// when the file also has the two triggers that keep it up to date
+/// (`trigger_insert_feature_count_<table>` and `trigger_delete_feature_count_<table>`, which add or
+/// take one per insert and delete, RustGIS's edits included); GDAL answers a table's count with it
+/// too. GDAL may drop the triggers while it writes and create them again when it saves the file,
+/// so a file without them may hold an out-of-date count. `None` then, when there is no such table
+/// or row (a file GDAL didn't write), or when the count isn't a whole number from zero up (NULL,
+/// text, a negative): the table is counted instead.
+fn kept_count(conn: &Connection, table: &str) -> Option<i64> {
+    conn.query_row(
+        "SELECT feature_count FROM gpkg_ogr_contents
+         WHERE lower(table_name) = lower(?1) AND typeof(feature_count) = 'integer' AND feature_count >= 0
+           AND (SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND lower(name) IN
+                (lower('trigger_insert_feature_count_' || ?1), lower('trigger_delete_feature_count_' || ?1))) = 2",
+        [table],
+        |r| r.get(0),
+    )
+    .ok()
+}
+
 fn feature_tables(conn: &Connection) -> Result<Vec<String>> {
     if !has_geometry_columns(conn)? {
         if !has_table(conn, "gpkg_contents")? {
@@ -280,15 +300,20 @@ impl GpkgSource {
                 Ok((r.get(0)?, r.get(1)?))
             })
             .ok();
-        // Rows; with Z or M declared for every geometry, also the rows with one (what the note on
-        // them counts), in the same scan. Counting geometries reads every blob, so only then.
+        // Rows: the count GDAL keeps ([`kept_count`]), so a large table isn't scanned to count it
+        // (#2849), else counted. With Z or M declared for every geometry, also the rows with one
+        // (what the note on them counts), in the same scan. Counting geometries reads every blob,
+        // so only then.
         let mandatory = zm.is_some_and(|(z, m)| z == 1 || m == 1);
         let counted = if mandatory { format!("COUNT({})", quote(&geom)) } else { "0".into() };
-        let counts = conn
-            .query_row(&format!("SELECT COUNT(*), {counted} FROM {}", quote(&table)), [], |r| {
+        let kept = if mandatory { None } else { kept_count(&conn, &table) };
+        // The second value is read only when `mandatory`, which a kept count never is.
+        let counts = kept.map(|n| (n, 0)).or_else(|| {
+            conn.query_row(&format!("SELECT COUNT(*), {counted} FROM {}", quote(&table)), [], |r| {
                 Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
             })
-            .ok();
+            .ok()
+        });
         let count = counts.and_then(|(n, _)| u64::try_from(n).ok());
         let geometries = counts.filter(|_| mandatory).and_then(|(_, g)| u64::try_from(g).ok());
         let geometry_type = match geom_type.to_ascii_uppercase().as_str() {
