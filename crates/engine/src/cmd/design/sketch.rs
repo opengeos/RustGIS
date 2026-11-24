@@ -185,9 +185,9 @@ pub(super) fn trace(s: &mut Session, p: &Value) -> CmdResult {
     };
     // Traced in longitude/latitude, from the layer's own coordinates.
     let l = s.map().layer(id).ok_or("no such row")?;
-    let feature = l.dataset.features.get(row).ok_or("no such row")?;
-    let own = feature.geometry.as_ref().ok_or("the feature has no shape")?;
-    let g = l.dataset.feature_to_lonlat(feature.id, own)?;
+    let feature = l.dataset.features.row(row).ok_or("no such row")?;
+    let own = feature.geometry().ok_or("the feature has no shape")?;
+    let g = l.dataset.feature_to_lonlat(feature.id(), own)?;
     let t = sketch_edit::trace(&g, from, to, part)?;
     let path: Vec<[f64; 2]> = t.path.iter().map(|c| [c.x, c.y]).collect();
     // How far each point was moved onto the edge, so a far-off point isn't taken silently.

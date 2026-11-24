@@ -1144,7 +1144,7 @@ fn modify(s: &mut Session, change: impl FnMut((u32, usize), &Geometry) -> Result
     modify_in(s, Space::LonLat, change)
 }
 
-/// Where [`modify_in`] gives a change each geometry.
+/// Where [`modify_in`] gives each geometry to a change.
 #[derive(Clone, Copy, PartialEq)]
 enum Space {
     /// In longitude/latitude, written back in the layer's own coordinates, keeping what the
@@ -1262,9 +1262,9 @@ fn edit_vertex(s: &mut Session, p: &Json) -> CmdResult {
     };
     // In longitude/latitude, from the layer's own coordinates (`replace_geometry` writes it back).
     let l = s.map().layer(id).ok_or("no such row")?;
-    let feature = l.dataset.features.get(row).ok_or("no such row")?;
-    let own = feature.geometry.as_ref().ok_or("the feature has no shape")?;
-    let g = l.dataset.feature_to_lonlat(feature.id, own)?.into_owned();
+    let feature = l.dataset.features.row(row).ok_or("no such row")?;
+    let own = feature.geometry().ok_or("the feature has no shape")?;
+    let g = l.dataset.feature_to_lonlat(feature.id(), own)?.into_owned();
     let (g, v) = match ps(p, "action").ok_or("action is required")? {
         "move" => (g.move_vertex(v, at()?).ok_or("no such vertex")?, v),
         "insert" => {
@@ -1381,7 +1381,7 @@ fn merge(s: &mut Session, _: &Json) -> CmdResult {
     // A feature with a place that can't be given there refuses the merge, naming it: the merged
     // shape would lose that place.
     let with_ids: Vec<(u64, &Geometry)> =
-        sel.iter().filter_map(|r| l.dataset.features.get(*r)).filter_map(|f| Some((f.id, f.geometry.as_ref()?))).collect();
+        sel.iter().filter_map(|r| l.dataset.features.row(*r)).filter_map(|f| Some((f.id(), f.geometry()?))).collect();
     let originals: Vec<&Geometry> = with_ids.iter().map(|(_, g)| *g).collect();
     let geoms: Vec<Geometry> =
         with_ids.iter().map(|(fid, g)| l.dataset.feature_to_lonlat(*fid, g).map(std::borrow::Cow::into_owned)).collect::<Result<_, _>>()?;
@@ -2585,6 +2585,7 @@ fn check_topology(inputs: &[TopologyInput], tol: f64) -> Result<TopologyChecked,
         }
         // In longitude/latitude, a feature with a place that can't be given there is read
         // without its geometry, so the rule checks the rest, and is said with a count.
+        let mut left_out = false;
         let (work, data, by) = match own {
             Some((crs, by)) => (crs, std::borrow::Cow::Borrowed(&i.data), by),
             None => {
@@ -2598,12 +2599,14 @@ fn check_topology(inputs: &[TopologyInput], tol: f64) -> Result<TopologyChecked,
                     .count();
                 if left > 0 {
                     unplaced.push(format!("{} on '{}': {left} feature(s) of '{}'", i.rule.label(), i.layer, i.layer));
+                    left_out = true;
                 }
                 let by = match &i.by {
                     Some(b) => {
                         let (by, left) = b.in_lonlat_leaving_out().map_err(|e| named(&b.name, &i.by_layer, e))?;
                         if left > 0 {
                             unplaced.push(format!("{} on '{}': {left} feature(s) of '{}'", i.rule.label(), i.layer, i.by_layer));
+                            left_out = true;
                         }
                         Some(by)
                     }
@@ -2635,7 +2638,9 @@ fn check_topology(inputs: &[TopologyInput], tol: f64) -> Result<TopologyChecked,
             (TopologyRule::MustBeCoveredBy { .. }, None) => t::Checked { errors: Vec::new(), complete: true, skipped: 0 },
         };
         rustgis_data::progress::check().map_err(|_| cancelled())?;
-        if !checked.complete || checked.skipped > 0 {
+        // A feature left out for want of a place can make its neighbours' issues (a gap where it
+        // lay, a dangle where it joined, a point it covered): the rule is said to be incomplete.
+        if !checked.complete || checked.skipped > 0 || left_out {
             incomplete.push(i.rule.label().to_string());
         }
         if checked.skipped > 0 {
@@ -2727,6 +2732,12 @@ pub(crate) fn topology_ahead(s: &Session, p: &Json) -> Option<super::reads::Read
 /// command line call commands one at a time on the session and use each answer before the next,
 /// so they check where they ask, with the work limit of a run that can't be cancelled. A registered
 /// window owner refuses an unprepared nonempty check instead of computing it inline.
+/// One issue as `topology.validate` answers it. `located` is false for an issue at a place that
+/// can't be given in longitude/latitude, whose `lon` and `lat` are then null.
+fn issue_json(e: &crate::TopologyIssue) -> Json {
+    json!({"rule": e.rule, "layer": e.layer, "rows": e.rows, "lon": e.lon, "lat": e.lat, "located": e.lon.is_finite() && e.lat.is_finite()})
+}
+
 fn topology_validate(s: &mut Session, p: &Json) -> CmdResult {
     let tol = topology_tolerance(p);
     let inputs = topology_checks(s);
@@ -2765,12 +2776,7 @@ fn topology_validate(s: &mut Session, p: &Json) -> CmdResult {
         let answer = found
             .as_ref()
             .map(|checked| {
-                let first: Vec<Json> = checked
-                    .errors
-                    .iter()
-                    .take(1000)
-                    .map(|e| json!({"rule": e.rule, "layer": e.layer, "rows": e.rows, "lon": e.lon, "lat": e.lat}))
-                    .collect();
+                let first: Vec<Json> = checked.errors.iter().take(1000).map(issue_json).collect();
                 json!({"errors": checked.errors.len(), "first": first, "incomplete": checked.incomplete})
             })
             .map_err(Clone::clone);
@@ -2836,8 +2842,7 @@ fn topology_validate(s: &mut Session, p: &Json) -> CmdResult {
         ));
     }
     let n = errors.len();
-    let out: Vec<Json> =
-        errors.iter().take(1000).map(|e| json!({"rule": e.rule, "layer": e.layer, "rows": e.rows, "lon": e.lon, "lat": e.lat})).collect();
+    let out: Vec<Json> = errors.iter().take(1000).map(issue_json).collect();
     s.topology_errors = errors;
     // Count layers once even when several rules read the same unreadable query. Bound
     // NoticeText::list nesting independently of the number of rules or layers.
@@ -3006,11 +3011,12 @@ mod tests {
     }
 
     /// A held layer with an error at a place that can't be given in longitude/latitude (checked in
-    /// its own system, #2032 C2e-5) is refused, naming the layer once; a covering layer the
-    /// checked one's system can't hold is checked in longitude/latitude, where its place that
-    /// can't be given there is refused, named as that layer, not the one checked.
+    /// its own system, #2032 C2e-5) keeps it with no place, counted, under the layer's map name;
+    /// a covering layer the checked one's system can't hold is checked in longitude/latitude,
+    /// where its feature with no place there is left out, named as that layer as the map has it,
+    /// and the rule is said to be incomplete (#2032 C2f-4b-1c).
     #[test]
-    fn a_topology_refusal_names_its_layer_once() {
+    fn a_topology_check_names_what_it_cant_place_by_the_maps_names() {
         let held = |name: &str, kind: GeometryType, far: bool| {
             let mut ds = rustgis_data::Dataset::new(name, kind, vec![]);
             ds.hold_in(rustgis_data::raster::Crs::Epsg(32632)).unwrap();
@@ -3028,17 +3034,13 @@ mod tests {
         };
         let mut s = Session::new(crate::Project::default());
         s.map_mut().add_dataset(held("Parcels", GeometryType::Polyline, true));
-        s.run("topology.rules", &json!({"add": {"rule": "mustNotHaveDangles", "layer": "Parcels"}})).unwrap();
-        let Err(e) = check_topology(&topology_checks(&s), 1.0) else { panic!("the check is refused") };
-        assert!(e.starts_with("Parcels: feature"), "{e}");
-        assert_eq!(e.matches("Parcels").count(), 1, "{e}");
-        // A checked layer whose map name isn't its data's (a name taken on a clash) is named as
-        // the map has it, once.
+        // A checked layer whose map name isn't its data's (a name taken on a clash).
         s.map_mut().layers.iter_mut().find(|l| l.name == "Parcels").unwrap().name = "Parcels (2)".into();
         s.map_mut().editing.topology = vec![TopologyRule::MustNotHaveDangles { layer: "Parcels (2)".into() }];
-        let Err(e) = check_topology(&topology_checks(&s), 1.0) else { panic!("the check is refused") };
-        assert!(e.starts_with("Parcels (2): feature"), "{e}");
-        assert_eq!(e.matches("Parcels").count(), 1, "{e}");
+        let checked = check_topology(&topology_checks(&s), 1.0).unwrap();
+        assert_eq!(checked.errors.len(), 2, "both ends dangle");
+        assert!(checked.errors.iter().all(|e| e.layer == "Parcels (2)" && !e.lon.is_finite()), "{:?}", checked.errors);
+        assert_eq!(checked.unlocated, 2);
 
         let mut s = Session::new(crate::Project::default());
         s.map_mut().add_dataset(held("Cities", GeometryType::Point, false));
@@ -3046,18 +3048,13 @@ mod tests {
         let mut countries = held("Countries", GeometryType::Polygon, true);
         countries.held_in = rustgis_data::raster::Crs::Epsg(32633);
         s.map_mut().add_dataset(countries);
-        s.run("topology.rules", &json!({"add": {"rule": "mustBeCoveredBy", "layer": "Cities", "by": "Countries"}})).unwrap();
-        let Err(e) = check_topology(&topology_checks(&s), 1.0) else { panic!("the check is refused") };
-        assert!(e.starts_with("Countries: feature"), "{e}");
-        assert!(!e.contains("Cities"), "{e}");
-        // A covering layer whose map name isn't its data's (a name taken on a clash) is named as
-        // the map has it.
+        // A covering layer whose map name isn't its data's.
         s.map_mut().layers.iter_mut().find(|l| l.name == "Countries").unwrap().name = "Borders".into();
         s.map_mut().editing.topology = vec![TopologyRule::MustBeCoveredBy { layer: "Cities".into(), by: "Borders".into() }];
-        let Err(e) = check_topology(&topology_checks(&s), 1.0) else { panic!("the check is refused") };
-        assert!(e.starts_with("Borders: feature"), "{e}");
-        assert_eq!(e.matches("Countries").count() + e.matches("Borders").count(), 1, "{e}");
-        assert!(!e.contains("Cities"), "{e}");
+        let checked = check_topology(&topology_checks(&s), 1.0).unwrap();
+        assert_eq!(checked.unplaced, vec!["Must Be Covered By on 'Cities': 1 feature(s) of 'Borders'".to_string()]);
+        assert_eq!(checked.incomplete.len(), 1);
+        assert_eq!(checked.errors.len(), 1, "the city, its covering polygon left out");
     }
 
     #[test]

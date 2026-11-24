@@ -210,8 +210,9 @@ Where a change meets one made on the computer since the package was made:
   known.
 - A feature of a computer's layer held in its own coordinate system with a place that can't be
   given in longitude/latitude (one far past where that system reaches) stays as stored when it
-  lies outside the area. One the area holds can't be compared with the phone's: a **Sync**, or a
-  package that goes back as a whole map, is refused, naming it.
+  lies outside the area when the area is synced (**Sync**, or a package that goes back as a whole
+  map); one the area holds can't be compared with the phone's, and the sync is refused, naming it.
+  A return by the list of changes is refused for any such feature of the layer, naming it.
 
 Each of these keeps the version that lost on the offline area: the computer's values and shape
 the phone's replaced, the phone's edits to a feature deleted on the computer, the computer's feature

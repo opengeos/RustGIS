@@ -201,7 +201,7 @@ fn a_paste_leaves_out_what_the_layer_cant_hold() {
     let (out, said) = run(&mut s, "edit.paste", json!({"layer": "plain"}));
     assert_eq!(out["pasted"], 1, "the line it can place");
     assert_eq!(said.len(), 1, "{said:?}");
-    assert!(said[0].contains("Paste: 1 feature has a place plain") && said[0].contains("so it wasn't pasted"), "{}", said[0]);
+    assert!(said[0].contains("Paste: 1 feature has a place that layer plain") && said[0].contains("so it wasn't pasted"), "{}", said[0]);
     assert_eq!(s.map().layer_by_name("plain").unwrap().dataset.features.len(), 2);
 }
 
@@ -213,9 +213,14 @@ fn a_topology_check_leaves_out_what_it_cant_place() {
         let mut s = session(far);
         s.run("topology.rules", &json!({"add": {"rule": "mustNotSelfIntersect", "layer": "areas"}})).unwrap();
         s.run("topology.rules", &json!({"add": {"rule": "mustNotHaveDangles", "layer": "lines"}})).unwrap();
-        let (_, said) = run(&mut s, "topology.validate", json!({"toleranceM": 1.0}));
+        let mark = s.notice_mark();
+        let (out, said) = run(&mut s, "topology.validate", json!({"toleranceM": 1.0}));
         // The near line's two ends dangle.
         assert_eq!(s.topology_errors.len(), 2, "{:?}", s.topology_errors);
+        assert!(out["first"].as_array().unwrap().iter().all(|e| e["located"] == true), "{out}");
+        // A feature left out may make its neighbours' issues: its rules are said to be incomplete.
+        let incomplete = s.notices_since(mark).iter().any(|n| n.text.contains("weren't checked completely"));
+        assert_eq!(incomplete, far);
         if far {
             assert_eq!(said.len(), 1, "{said:?}");
             assert!(
@@ -243,8 +248,10 @@ fn a_topology_issue_it_cant_place_is_kept_without_a_place() {
     lines.push(Some(Geometry::Line(vec![vec![Coord::new(600_000.0, 5_000_000.0), FAR]])), vec![]);
     crate::cmd::layer::add_dataset(&mut s, lines);
     s.run("topology.rules", &json!({"add": {"rule": "mustNotHaveDangles", "layer": "paths"}})).unwrap();
-    let (_, said) = run(&mut s, "topology.validate", json!({"toleranceM": 1.0}));
+    let (out, said) = run(&mut s, "topology.validate", json!({"toleranceM": 1.0}));
     assert_eq!(s.topology_errors.len(), 4, "every end dangles: {:?}", s.topology_errors);
+    let errors = out["first"].as_array().unwrap();
+    assert_eq!(errors.iter().filter(|e| e["located"] == false && e["lon"].is_null()).count(), 1, "{out}");
     let unlocated = s.topology_errors.iter().filter(|e| !e.lon.is_finite()).count();
     assert_eq!(unlocated, 1, "{:?}", s.topology_errors);
     assert_eq!(said.len(), 1, "{said:?}");

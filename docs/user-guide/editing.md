@@ -173,8 +173,10 @@ you edit the value or choose units; click **Apply elevation** to apply the new i
   on the ground; there, a feature with a place that can't be given in longitude/latitude (one
   far past where its layer's own system reaches) is left out of the check, and a notice names
   the rules and counts them. An error at a place that can't be given in longitude/latitude is
-  listed with its features but has no place for the Error Inspector to zoom to, and a notice
-  counts them.
+  listed with its features but has no place for the Error Inspector to zoom to (in
+  `topology.validate`'s answer, `located` is false and `lon` and `lat` are null), and a notice
+  counts them. A rule that left a feature out is said to be checked incompletely, since its
+  neighbours' issues there (a gap where it lay, a dangle where it joined) may not be real.
   On the desktop the check runs in the background, so the map stays in use: the status bar
   shows **Error Inspector** with its progress and **Cancel**, and a check that can be cancelled
   takes any amount of work (a gaps rule first joins all its polygons in one step, which
@@ -465,8 +467,8 @@ Copy (++ctrl+c++) and Cut (++ctrl+x++) take selected features from one layer: th
 if it has a selection, otherwise the first layer with selected features. Paste (++ctrl+v++)
 adds them to the layer selected in Layers, matching fields by name and converting values to the
 destination field types; unmatched fields stay empty. Geometry types must match. A feature with a
-place the destination layer's coordinate system can't hold is left out, and a notice counts them. **Paste Special**
-adds them as a new layer instead. Copied features also go on the system clipboard as GeoJSON, so
+place the destination layer's coordinate system can't hold is left out, and a notice counts them.
+**Paste Special** adds them as a new layer instead. Copied features also go on the system clipboard as GeoJSON, so
 they can be pasted into another RustGIS window or a text editor, and GeoJSON copied elsewhere
 pastes into RustGIS. **Copy Path** copies the selected layer's data source path.
 
