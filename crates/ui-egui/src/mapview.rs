@@ -317,6 +317,8 @@ pub struct MapView {
     /// be given in longitude/latitude), by map index, live layer ([`rustgis_engine::map::Layer::instance_id`])
     /// and row, so it says so once per selection.
     pub(crate) vertex_unplaced_said: Vec<(usize, u64, usize)>,
+    /// Whether there were more than those, the notice saying "at least" so many.
+    pub(crate) vertex_unplaced_more: bool,
     /// What those features were last looked for under, so they aren't looked for each frame.
     pub(crate) vertex_unplaced_seen: Option<u64>,
     /// Session-only opt-in for coincident polygon moves; never saved with a project or preference.
@@ -457,6 +459,7 @@ impl Default for MapView {
             vertex_drag: None,
             vertex_drag_owner: None,
             vertex_unplaced_said: Vec::new(),
+            vertex_unplaced_more: false,
             vertex_unplaced_seen: None,
             move_shared_vertices: false,
             trace_edges: false,
@@ -532,6 +535,7 @@ impl MapView {
             self.live_rev = None;
             self.gpu_turn_declined = None;
             self.vertex_unplaced_said.clear();
+            self.vertex_unplaced_more = false;
             self.vertex_unplaced_seen = None;
             self.labels.clear();
             self.label_lonlat.clear();

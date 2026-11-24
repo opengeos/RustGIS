@@ -215,8 +215,9 @@ fn unplaced_targets(app: &RustGisApp) -> (Vec<(u32, usize)>, bool) {
 
 /// What [`unplaced_targets`] depends on: the map and each layer it looks at (the live layer, its
 /// replacement and geometry revisions and rows' allocation, which any mutable row access renews,
-/// its system, the map system it is shown through, and its selection). While it is unchanged, the
-/// selection isn't converted again each frame.
+/// its system, the map system it is shown through, and its selection: its length and the rows the
+/// scan can reach, at most [`MAX_FEATURES`] placed and [`MAX_UNPLACED`] not, so a large selection
+/// isn't hashed whole each frame). While it is unchanged, the selection isn't converted again.
 fn unplaced_signature(app: &RustGisApp) -> u64 {
     use std::hash::{Hash, Hasher};
     let m = app.session.map();
@@ -225,7 +226,8 @@ fn unplaced_signature(app: &RustGisApp) -> u64 {
     for l in m.layers.iter().filter(|l| m.shows(l) && !l.selection.is_empty() && !l.is_raster() && !l.graphics && !l.is_streamed()) {
         let rows = l.dataset.features.allocation_key().as_ptr() as usize;
         let revisions = (l.instance_id(), l.replacement_revision(), l.geometry_rev, rows);
-        (revisions, l.dataset.coord_crs(), l.dataset.shown_in, &l.selection).hash(&mut h);
+        let reached = l.selection.get(..l.selection.len().min(MAX_FEATURES + MAX_UNPLACED)).unwrap_or_default();
+        (revisions, l.dataset.coord_crs(), l.dataset.shown_in, l.selection.len(), reached).hash(&mut h);
     }
     h.finish()
 }
@@ -247,6 +249,7 @@ pub(crate) fn say_unplaced(app: &mut RustGisApp) {
     if app.session.tool != rustgis_engine::Tool::EditVertices || !app.session.map().editing.settings.enabled {
         // Coming back to the tool says the selection again.
         app.map.vertex_unplaced_said.clear();
+        app.map.vertex_unplaced_more = false;
         app.map.vertex_unplaced_seen = None;
         return;
     }
@@ -262,7 +265,8 @@ pub(crate) fn say_unplaced(app: &mut RustGisApp) {
     let m = app.session.map();
     let live = |id: u32| m.layer(id).map_or(0, |l| l.instance_id());
     let left: Vec<(usize, u64, usize)> = found.iter().map(|(l, r)| (map, live(*l), *r)).collect();
-    if left == app.map.vertex_unplaced_said {
+    // Whether there were more goes with them: past the bound, the count turns to "at least".
+    if (&left, more) == (&app.map.vertex_unplaced_said, app.map.vertex_unplaced_more) {
         return;
     }
     let text = match (found.as_slice(), more) {
@@ -294,6 +298,7 @@ pub(crate) fn say_unplaced(app: &mut RustGisApp) {
         }
     };
     app.map.vertex_unplaced_said = left;
+    app.map.vertex_unplaced_more = more;
     if let Some(text) = text {
         app.session.notify(text, true);
     }
@@ -759,6 +764,14 @@ mod tests {
         layer.dataset.held_in = rustgis_engine::data::raster::Crs::from_epsg(32631).unwrap();
         layer.touch_geometry();
         layer.selection = (0..MAX_UNPLACED + 5).collect();
+        // Exactly the bound: counted as it is.
+        app.session.map_mut().layer_mut(id).unwrap().selection = (0..MAX_UNPLACED).collect();
+        let mark = app.session.notice_mark();
+        say_unplaced(&mut app);
+        let said: Vec<String> = app.session.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+        assert!(said.len() == 1 && said[0].contains(&format!(": {MAX_UNPLACED} of the selected")), "{said:?}");
+        // One more: the same features found, and more, which is said.
+        app.session.map_mut().layer_mut(id).unwrap().selection = (0..MAX_UNPLACED + 5).collect();
         let (found, more) = unplaced_targets(&app);
         assert!(found.len() == MAX_UNPLACED && more);
         let mark = app.session.notice_mark();
