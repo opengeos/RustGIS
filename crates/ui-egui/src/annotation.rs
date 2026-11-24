@@ -173,7 +173,6 @@ pub(crate) fn show_grid_result(app: &mut RustGisApp, result: Landed) {
         Err(_) => app.session.notify(tl!("The original image grid result could not be displayed."), true),
     }
 }
-/// Only new objects use this choice. Existing objects keep their own frozen frame.
 /// The grid new shapes use without an image: the target layer's own when it is held in a
 /// projected system (#2032 C2f-6), else Web Mercator grid metres.
 pub(crate) fn layer_frame(app: &RustGisApp) -> Frame {
@@ -202,6 +201,7 @@ pub(crate) fn grid_units(frame: &Frame) -> Option<String> {
     ))
 }
 
+/// Only new objects use this choice. Existing objects keep their own frozen frame.
 pub(crate) fn drawing_frame(app: &RustGisApp) -> Result<Frame, String> {
     if !app.annotation.pixels {
         return Ok(layer_frame(app));

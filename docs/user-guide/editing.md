@@ -244,7 +244,8 @@ ground-distance metres. Choosing **No image** restores that grid. When the targe
 in a projected system with an EPSG code (UTM, a national grid; not Web Mercator, another world
 projection or a geographic system), that choice is the **Layer's own grid** instead: one grid
 unit per unit of the layer's system, y down (a grid y is minus the northing), and a shape built
-in it is written in the layer's own coordinates as built, with no conversion. Under Edit, the same choices
+in it is written in the layer's own coordinates as built, with no conversion. Web Mercator grid
+metres are then not offered for new shapes; a command takes them with `"frame": {"epsg": 3857}`. Under Edit, the same choices
 are in Editing → New shape grid when a circle or rotated box tool is active. Grid changes affect
 new shapes; existing shapes retain their own construction grid when moved, resized or rotated.
 Undo/Redo retain those constructions within the session.
@@ -606,7 +607,8 @@ keep their current selection when opening the map menu.
 1. Choose Circle or Rotated Box and a construction grid. The shape defaults to the active
    Circle or Rotated Box tool when opening conversion; other tools default to Circle. The default is the layer's own grid when
    it has one (as for drawing), else **Web Mercator grid metres**, not ground metres, also for
-   `edit.previewShapeConversion` without `frame`. Choose an open GeoTIFF to fit in its **original image pixels**,
+   `edit.previewShapeConversion` without `frame` (`"frame": {"epsg": 3857}` asks for Web
+   Mercator there). Choose an open GeoTIFF to fit in its **original image pixels**,
    preserving the source affine transform, including rotation and shear, rather than using a
    display overview. Local GeoTIFFs and embedded/browser-uploaded GeoTIFFs are supported; remote
    original grids must be downloaded and added first. An unreadable or unsupported source gives

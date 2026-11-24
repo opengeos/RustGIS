@@ -68,17 +68,21 @@ impl Frame {
     pub fn crs(&self) -> Option<Crs> {
         self.grid().ok().map(|g| g.crs())
     }
+    /// Whether it is a projected system's own grid ([`Frame::for_crs`]) other than Web
+    /// Mercator's: one grid unit per unit of the system, not an image's pixels.
+    pub fn is_system_grid(&self) -> bool {
+        let d = Self::default();
+        self.epsg != d.epsg
+            && self.width == d.width
+            && self.height == d.height
+            && self.affine == d.affine
+            && self.crs().is_some_and(rustgis_analysis::works_in)
+    }
     /// The construction grid of a layer held in `crs` (#2032 C2f-6): its own system, one grid
     /// unit per unit of it, y down (so a grid y is minus its northing), when it is a projected
     /// system with an EPSG code that construction grids take
     /// ([`rustgis_analysis::works_in`]); Web Mercator grid metres ([`Frame::default`]) otherwise.
     /// A shape built in it is written in the layer's own coordinates as built.
-    /// Whether it is a system's own grid ([`Frame::for_crs`]) other than Web Mercator's: one
-    /// grid unit per unit of the system, not an image's pixels.
-    pub fn is_system_grid(&self) -> bool {
-        let d = Self::default();
-        self.epsg != d.epsg && self.width == d.width && self.height == d.height && self.affine == d.affine
-    }
     pub fn for_crs(crs: Crs) -> Self {
         let own = Self { epsg: u32::from(crs.epsg()), ..Self::default() };
         if crs.epsg() != 0 && rustgis_analysis::works_in(crs) && own.crs() == Some(crs) { own } else { Self::default() }
