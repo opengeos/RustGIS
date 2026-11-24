@@ -2387,9 +2387,13 @@ pub fn scale_bar_box_width_pt(ground_per_pt: f64, width_pt: f64, bar: &ElementKi
     if !same(width_pt) {
         return Some(width_pt);
     }
-    // A narrower box draws a bar no longer: the narrowest one that draws this one, halved for.
+    // A narrower box draws a bar no longer: the narrowest one that draws this one, halved for, to
+    // a hundredth of a point: a frame dragged measures its box on every move, so no further.
     let (mut lo, mut hi) = (0.0, width_pt);
     for _ in 0..48 {
+        if hi - lo <= 0.01 {
+            break;
+        }
         let mid = (lo + hi) / 2.0;
         if same(mid) { hi = mid } else { lo = mid }
     }
