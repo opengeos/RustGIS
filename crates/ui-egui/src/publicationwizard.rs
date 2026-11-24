@@ -207,11 +207,8 @@ fn texts_step(ui: &mut egui::Ui, d: &mut Draft) {
         ui.end_row();
         line(ui, tl!("Sources"), &mut d.sources, "");
         let label = ui.label(tl!("Credit line"));
-        ui.add_enabled(
-            !d.no_author,
-            egui::TextEdit::singleline(&mut d.author).hint_text(tl!("Made with RustGIS · today's date")).desired_width(260.0),
-        )
-        .labelled_by(label.id);
+        ui.add_enabled(!d.no_author, egui::TextEdit::singleline(&mut d.author).hint_text(default_credit()).desired_width(260.0))
+            .labelled_by(label.id);
         ui.end_row();
         ui.label("");
         ui.checkbox(&mut d.no_author, tl!("No credit line"));
@@ -269,7 +266,7 @@ fn review_step(ui: &mut egui::Ui, d: &Draft) {
         let credit = if d.no_author {
             none.to_string()
         } else if d.author.trim().is_empty() {
-            tl!("Made with RustGIS · today's date").to_string()
+            default_credit().to_string()
         } else {
             d.author.trim().to_string()
         };
@@ -280,6 +277,12 @@ fn review_step(ui: &mut egui::Ui, d: &Draft) {
     if d.figure() {
         figure_note(ui);
     }
+}
+
+/// How the wizard names the credit line `layout.publication` writes when none is given
+/// ("Made with RustGIS · {date}", dated when the layout is made).
+fn default_credit() -> &'static str {
+    tl!("Made with RustGIS · today's date")
 }
 
 /// The wizard's width.
