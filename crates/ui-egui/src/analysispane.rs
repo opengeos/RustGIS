@@ -59,6 +59,9 @@ pub struct Workflow {
     /// runs, in the order asked, for [`script_ran`] to tell as each lands: where it stopped is read
     /// in that script, whatever the box holds by then.
     script_started: std::collections::VecDeque<(u64, web_time::Instant, u64, String)>,
+    /// While [`start_script`] asks for a run: one refused as it's asked lands at once, ahead of any
+    /// still running, and is the last in [`Self::script_started`], not the first.
+    script_asking: bool,
     /// When the last Script pane run landed: one waiting behind it started then, not when asked.
     script_landed: Option<web_time::Instant>,
     /// The project the Script pane's script, results and count are for
@@ -2134,6 +2137,7 @@ fn start_script(app: &mut RustGisApp, script: String) {
     if let Some(last) = app.workflow.script_last.as_mut() {
         last.stopped_at = None;
     }
+    app.workflow.script_asking = true;
     #[cfg(not(target_arch = "wasm32"))]
     let _ = crate::readjob::run_then(app, "script.run", json!({"script": script}), Some(script_ran));
     #[cfg(target_arch = "wasm32")]
@@ -2141,6 +2145,7 @@ fn start_script(app: &mut RustGisApp, script: String) {
         let r = app.run("script.run", json!({"script": script}));
         script_ran(app, crate::Landed::Ran(r));
     }
+    app.workflow.script_asking = false;
 }
 
 /// A Script pane run as it lands, in the pane: its number, how long it took, and each line's
@@ -2148,8 +2153,9 @@ fn start_script(app: &mut RustGisApp, script: String) {
 fn script_ran(app: &mut RustGisApp, landed: crate::Landed) {
     let now = web_time::Instant::now();
     let opened = app.session.opened;
-    let (asked_at, asked, asked_in, ran_script) =
-        app.workflow.script_started.pop_front().unwrap_or_else(|| (0, now, opened, app.workflow.script.clone()));
+    let queue = &mut app.workflow.script_started;
+    let this = if std::mem::take(&mut app.workflow.script_asking) { queue.pop_back() } else { queue.pop_front() };
+    let (asked_at, asked, asked_in, ran_script) = this.unwrap_or_else(|| (0, now, opened, app.workflow.script.clone()));
     // Asked in a project since replaced and not run (left as another opened, or cancelled): the
     // pane started blank for the new one, and its notice is the session's.
     if asked_in != opened && !matches!(landed, crate::Landed::Ran(_)) {
@@ -2996,6 +3002,38 @@ mod tests {
         h.run();
         assert_eq!(h.state().workflow.script, "map.zoomFull", "not while a run is under way");
         assert!(h.state().session.notices.iter().any(|n| n.text == "Wait for the run to finish"), "{:?}", h.state().session.notices);
+    }
+
+    /// A run refused as it's asked, while another runs on a thread, lands at once as its own: each
+    /// one's stop is read in the script it was asked with, and the one on the thread keeps its
+    /// own when it lands (#2815).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_run_refused_while_another_runs_keeps_each_ones_script() {
+        let mut app = RustGisApp::with_sample();
+        app.reads_off_frame = true;
+        let at = |app: &RustGisApp| stopped_at(app).map(|s| (s.line, s.column));
+        let first = "gp.run {\"tool\": \"buffer\", \"params\": {\"input\": \"Cities\", \"distance\": 100}}\nlayer.rename {\"layer\": \"Nope\", \"name\": \"x\"}";
+        app.workflow.script = first.to_string();
+        start_script(&mut app, first.to_string());
+        assert!(script_running(&app));
+        // Refused before it can wait behind the first: its error names its line 1.
+        let refused = "map.zoomFull\nraster.imageGrid {}";
+        app.workflow.script = refused.to_string();
+        start_script(&mut app, refused.to_string());
+        let e = app.workflow.script_last.as_ref().and_then(|r| r.error.clone()).unwrap_or_default();
+        assert!(e.starts_with("line 1 (map.zoomFull)"), "{e}");
+        assert_eq!(at(&app), Some((1, None)), "read in the refused script");
+        // The first lands: its stop, line 2, is read in its own script.
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while crate::readjob::land(&mut app) {
+            assert!(std::time::Instant::now() < end, "the script never landed");
+            std::thread::sleep(std::time::Duration::from_millis(5)); // test-wait: polling for the run to land
+        }
+        assert!(!script_running(&app));
+        assert_eq!(at(&app), None, "the box holds the refused script");
+        app.workflow.script = first.to_string();
+        assert_eq!(at(&app), Some((2, None)), "read in the first script");
     }
 
     /// A run that stops marks its line, and its column for JSON that doesn't read, while the script
