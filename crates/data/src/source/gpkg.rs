@@ -154,8 +154,7 @@ fn has_table(conn: &Connection, name: &str) -> Result<bool> {
 /// The feature count GDAL keeps for `table` in `gpkg_ogr_contents`, used as the table's count
 /// when the file also has the two triggers that keep it up to date
 /// (`trigger_insert_feature_count_<table>` and `trigger_delete_feature_count_<table>`, which add or
-/// take one per insert and delete, RustGIS's edits included); GDAL answers a table's count with it
-/// too. GDAL may drop the triggers while it writes and create them again when it saves the file,
+/// take one per insert and delete); GDAL answers a table's count with it too. GDAL may drop the triggers while it writes and create them again when it saves the file,
 /// so a file without them may hold an out-of-date count. `None` then, when there is no such table
 /// or row (a file GDAL didn't write), or when the count isn't a whole number from zero up (NULL,
 /// text, a negative): the table is counted instead.
@@ -307,15 +306,18 @@ impl GpkgSource {
         let mandatory = zm.is_some_and(|(z, m)| z == 1 || m == 1);
         let counted = if mandatory { format!("COUNT({})", quote(&geom)) } else { "0".into() };
         let kept = if mandatory { None } else { kept_count(&conn, &table) };
-        // The second value is read only when `mandatory`, which a kept count never is.
-        let counts = kept.map(|n| (n, 0)).or_else(|| {
-            conn.query_row(&format!("SELECT COUNT(*), {counted} FROM {}", quote(&table)), [], |r| {
-                Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
-            })
-            .ok()
-        });
+        // The rows, and the geometries when `mandatory`.
+        let counts: Option<(i64, Option<i64>)> = match kept {
+            Some(n) => Some((n, None)),
+            None => conn
+                .query_row(&format!("SELECT COUNT(*), {counted} FROM {}", quote(&table)), [], |r| {
+                    Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
+                })
+                .ok()
+                .map(|(n, g)| (n, mandatory.then_some(g))),
+        };
         let count = counts.and_then(|(n, _)| u64::try_from(n).ok());
-        let geometries = counts.filter(|_| mandatory).and_then(|(_, g)| u64::try_from(g).ok());
+        let geometries = counts.and_then(|(_, g)| g).and_then(|g| u64::try_from(g).ok());
         let geometry_type = match geom_type.to_ascii_uppercase().as_str() {
             "POINT" | "MULTIPOINT" => GeometryType::Point,
             "LINESTRING" | "MULTILINESTRING" | "CURVE" | "MULTICURVE" => GeometryType::Polyline,
