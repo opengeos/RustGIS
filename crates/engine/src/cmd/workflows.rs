@@ -162,7 +162,11 @@ impl Input {
                 None => {
                     let (raster, count) = super::gp::read_tiled(name, path)?;
                     let k = (path.clone(), name.clone(), raster, count);
-                    RUN_READS.with(|r| r.borrow_mut().as_mut().map(|read| read.push(k.clone())));
+                    RUN_READS.with(|r| {
+                        if let Some(read) = r.borrow_mut().as_mut() {
+                            read.push(k.clone());
+                        }
+                    });
                     k
                 }
             };
@@ -202,10 +206,38 @@ thread_local! {
     static RUN_READS: std::cell::RefCell<Option<Vec<RunRead>>> = const { std::cell::RefCell::new(None) };
 }
 
+/// [`RUN_READS`] for one run while it lives: put back as it was before when the run ends
+/// ([`RunReads::end`]), or as it unwinds from a panic, so nothing a run read is kept, or read
+/// from its file, past it.
+#[cfg(not(target_arch = "wasm32"))]
+struct RunReads(Option<Option<Vec<RunRead>>>);
+
+#[cfg(not(target_arch = "wasm32"))]
+impl RunReads {
+    fn start() -> RunReads {
+        RunReads(Some(RUN_READS.with(|r| r.borrow_mut().replace(Vec::new()))))
+    }
+
+    /// What the run read, [`RUN_READS`] put back as it was.
+    fn end(&mut self) -> Vec<RunRead> {
+        let outer = self.0.take().flatten();
+        RUN_READS.with(|r| std::mem::replace(&mut *r.borrow_mut(), outer)).unwrap_or_default()
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Drop for RunReads {
+    fn drop(&mut self) {
+        if self.0.is_some() {
+            self.end();
+        }
+    }
+}
+
 /// Runs `work` (command `name`'s) so the raster layers read in place it reads are read from their
 /// file ([`Input::read`]), each file read once for the run, and adds to what is said once its
 /// raster is added each that was read from an overview, or with values rounded.
-fn reading_files(name: &str, work: impl FnOnce() -> Result<Made, String>) -> Result<Made, String> {
+pub(crate) fn reading_files(name: &str, work: impl FnOnce() -> Result<Made, String>) -> Result<Made, String> {
     #[cfg(target_arch = "wasm32")]
     {
         let _ = name;
@@ -213,9 +245,9 @@ fn reading_files(name: &str, work: impl FnOnce() -> Result<Made, String>) -> Res
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let outer = RUN_READS.with(|r| r.borrow_mut().replace(Vec::new()));
+        let mut run = RunReads::start();
         let made = work();
-        let read = RUN_READS.with(|r| std::mem::replace(&mut *r.borrow_mut(), outer)).unwrap_or_default();
+        let read = run.end();
         let made = made?;
         let read: Vec<(String, std::sync::Arc<Raster>)> = read.into_iter().map(|(_, name, r, _)| (name, r)).collect();
         let notes: Vec<String> = super::gp::tiled_read_notes(&read, "its").into_iter().map(|n| format!("{name}: {n}")).collect();
@@ -1604,17 +1636,23 @@ fn function_chain_work(s: &Session, p: &Value) -> Result<Work, String> {
     let named = Some(out_name(p, String::new())?).filter(|n| !n.is_empty());
     let defaults = s.raster_defaults.clone();
     Ok(Box::new(move || {
-        let mut cur: Raster = (*src.read()?).clone();
+        let src = src.read()?;
+        // Each step's output, the next step's input; the first step reads the raster itself, not
+        // a copy of it.
+        let mut cur: Option<Raster> = None;
         let mut names = Vec::new();
         let mut remaps = Remaps::default();
         for (i, (st, target)) in steps.iter().zip(&targets).enumerate() {
             let f = func(st);
             let target = read_target(target.as_ref()).map_err(|e| format!("step {} ({f}): {e}", i + 1))?;
-            let pixels = apply_function(&cur, st, target.as_deref(), &mut remaps).map_err(|e| format!("step {} ({f}): {e}", i + 1))?;
+            let input = cur.as_ref().unwrap_or(&src);
+            let pixels = apply_function(input, st, target.as_deref(), &mut remaps).map_err(|e| format!("step {} ({f}): {e}", i + 1))?;
             // Only a resample takes another raster's grid; otherwise the grid is the current one.
-            cur = derive_function(target.as_deref().unwrap_or(&cur), &cur.name, st, pixels)?;
+            let next = derive_function(target.as_deref().unwrap_or(input), &input.name, st, pixels)?;
+            cur = Some(next);
             names.push(f);
         }
+        let mut cur = cur.ok_or("give 1 to 20 steps")?;
         cur.name = named.unwrap_or_else(|| format!("{}_{}", cur.name, names.join("_")));
         // A chain that ends in a hillshade is drawn as one.
         let mut m = match steps.last() {

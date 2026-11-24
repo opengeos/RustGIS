@@ -316,14 +316,15 @@ fn a_command_that_makes_a_raster_reads_a_tiled_file_at_its_full_size() {
     let mark = s.notice_mark();
     s.run("raster.index", &json!({"layer": "checks", "index": "ndvi", "red": 1, "nir": 2, "name": "index"})).unwrap();
     assert_eq!(size(&s, "index"), Some((1024, 1024, None)), "where the caller waits");
-    // As the app runs it: started here, made on its own thread, added when run again.
+    // As the app runs it: started here, made by the run (on its own thread in the app; on this
+    // one here), added when run again.
     let p = json!({"layer": "checks", "operation": "resample", "factor": 2, "name": "halved"});
     let run = raster_start(&mut s, "raster.process", &p).unwrap();
     let id = run.id;
     let made = run.run(&rustgis_analysis::control::Control::new()).unwrap();
     assert!(raster_land(&mut s, id, made).unwrap());
     s.run("raster.process", &json!({"ran": id})).unwrap();
-    assert_eq!(size(&s, "halved"), Some((512, 512, None)), "on the run's thread");
+    assert_eq!(size(&s, "halved"), Some((512, 512, None)), "made by the run");
     let reads = || crate::cmd::gp::TILED_READS.with(std::cell::Cell::get);
     let before = reads();
     let criterion = json!({"layer": "checks", "ranges": [[0, 255, 1]]});
@@ -332,4 +333,26 @@ fn a_command_that_makes_a_raster_reads_a_tiled_file_at_its_full_size() {
     assert_eq!(size(&s, "suits"), Some((1024, 1024, None)));
     let notes = said(&s, mark);
     assert!(!notes.iter().any(|n| n.contains("finest level") || n.contains("rounded")), "{notes:?}");
+}
+
+/// A run whose work panics leaves nothing of its reads behind: on the same thread afterwards, a
+/// command's input outside a run is the overview the layer holds, not its file.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_run_that_panics_reads_no_file_after_it() {
+    use crate::cmd::workflows::{Input, reading_files};
+    let d = dir("panic");
+    let path = checkerboard(&d);
+    let _held = HeldWhole::at(1_000_000);
+    let mut s = Session::new(Project::default());
+    s.run("layer.addData", &json!({"path": path})).unwrap();
+    let input = Input::of(&s, "checks").unwrap();
+    let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        reading_files("Indices", || {
+            assert_eq!(input.read().unwrap().width, 1024, "the file, within the run");
+            panic!("the work failed");
+        })
+    }));
+    assert!(ran.is_err());
+    assert_eq!(input.read().unwrap().width, 512, "the overview the layer holds, after the run");
 }
