@@ -235,7 +235,8 @@ the keys); `false`, `null` and `"auto"` need nothing. A saved `layout.import` wh
 such a chart requires it as well.
 
 Projects with a layout chart that draws a line round its bars (`bar_outline` with a width above 0
-on a chart element) require `layout-chart-outline`, so an older reader refuses them instead of
+on a chart element; in a hand-edited file, a width past 5 is held to 5 and one below 0 let go on
+read, both said as values out of range, and a width of 0 let go) require `layout-chart-outline`, so an older reader refuses them instead of
 drawing the bars without and saving the chart again without (#2487 part 4b). Saved
 `layout.addElement` commands for a chart and `layout.update` commands that give a `barOutline`
 object without a width or with one above 0 require it too (only a chart takes the key); `null` and

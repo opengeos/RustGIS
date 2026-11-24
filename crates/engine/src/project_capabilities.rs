@@ -1530,11 +1530,15 @@ mod tests {
         let base = serde_json::to_value(&clean).unwrap();
         assert!(base.get("requires").is_none(), "a chart without an outline needs nothing");
         assert!(!base["layouts"].to_string().contains("\"bar_outline\""), "nor writes it");
-        // One of no width, read from a file, draws none and needs nothing.
-        let mut zero = base.clone();
-        zero["layouts"][0]["elements"][1]["kind"]["Chart"]["bar_outline"] = json!({"color": [0, 0, 0, 255], "width": 0.0});
-        let saved_zero = serde_json::to_value(Project::from_json(&zero.to_string()).unwrap()).unwrap();
-        assert!(saved_zero.get("requires").is_none());
+        // One of no width, or below 0 (a hand-edited file), is let go on read: it needs nothing
+        // and isn't written back.
+        for width in [0.0, -1.0] {
+            let mut zero = base.clone();
+            zero["layouts"][0]["elements"][1]["kind"]["Chart"]["bar_outline"] = json!({"color": [0, 0, 0, 255], "width": width});
+            let saved_zero = serde_json::to_value(Project::from_json(&zero.to_string()).unwrap()).unwrap();
+            assert!(saved_zero.get("requires").is_none(), "{width}");
+            assert!(!saved_zero["layouts"].to_string().contains("\"bar_outline\""), "{width}");
+        }
         let mut document = base.clone();
         document["tasks"] = json!([{"name": "Task", "steps": [{"title": "Chart", "command": "layout.import", "params": {"text": saved["layouts"][0].to_string()}}]}]);
         let imported = serde_json::to_value(Project::from_json(&document.to_string()).unwrap()).unwrap();

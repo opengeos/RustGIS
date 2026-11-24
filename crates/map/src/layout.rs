@@ -2605,6 +2605,13 @@ impl Layout {
                     *pitch = 0.0;
                 }
             }
+            // A bar outline of width 0 draws none, as the commands take it: letting it go is no
+            // change.
+            if let ElementKind::Chart { bar_outline, .. } = &mut before.kind
+                && bar_outline.is_some_and(|o| o.width == 0.0)
+            {
+                *bar_outline = None;
+            }
             // Ids stay well below u32::MAX so new elements never run out of numbers. A repeated id
             // (only a hand-edited file has one) is renumbered; references to it keep meaning the
             // first element with that id, as they did when the file was written.
@@ -2704,8 +2711,12 @@ impl Layout {
                 }
                 ElementKind::Table { rows, .. } => *rows = (*rows).clamp(1, 500),
                 // A maximum the chart can't draw to (only a hand-edited file has one) gives it its
-                // bars' own scale back, counted with the values out of range (#2487 part 4).
-                ElementKind::Chart { max, .. } => *max = chart_max(*max),
+                // bars' own scale back, counted with the values out of range (#2487 part 4); a bar
+                // outline's width past 5 points is held to them, and one below 0 let go (part 4b).
+                ElementKind::Chart { max, bar_outline, .. } => {
+                    *max = chart_max(*max);
+                    *bar_outline = chart_outline(*bar_outline);
+                }
                 ElementKind::ScaleBar { divisions, text_size, .. } => {
                     *divisions = (*divisions).clamp(1, MAX_SCALE_DIVISIONS);
                     *text_size = layout_text_in_range(*text_size, SCALE_BAR_TEXT_PT);
@@ -4123,6 +4134,31 @@ mod tests {
             let r = l.clamp();
             let ElementKind::Chart { max: m, .. } = &l.elements[1].kind else { panic!("a chart") };
             assert_eq!((*m, r.elements_adjusted), (kept, adjusted), "{max}");
+        }
+    }
+
+    /// A bar outline's width out of range, which only a hand-edited file holds, is repaired on
+    /// read and counted as a value out of range, so the project says so (#2487 part 4b): past 5
+    /// points it is held to 5, below 0 the outline is let go. A width of 0 draws none, as the
+    /// commands take it, so it is let go without a word; one in range is kept.
+    #[test]
+    fn a_charts_bar_outline_out_of_range_is_repaired_and_counted() {
+        let ink = Rgba::rgb(0x22, 0x22, 0x22);
+        for (width, kept, adjusted) in [(8.0, Some(5.0), 1), (-1.0, None, 1), (0.0, None, 0), (2.0, Some(2.0), 0)] {
+            let mut l: Layout = serde_json::from_value(serde_json::json!({
+                "name": "L", "width": 120, "height": 90, "elements": [
+                    {"id": 1, "name": "Frame", "x": 10, "y": 10, "w": 60, "h": 70,
+                     "kind": {"MapFrame": {"map": "Map", "center": {"x": 0, "y": 0}, "scale": 1000000}}},
+                    {"id": 2, "name": "Chart", "x": 75, "y": 10, "w": 35, "h": 40,
+                     "kind": {"Chart": {"frame": 1, "layer": "Places", "field": "people",
+                                        "bar_outline": {"color": [34, 34, 34, 255], "width": width}}}}
+                ]
+            }))
+            .unwrap();
+            let r = l.clamp();
+            let ElementKind::Chart { bar_outline, .. } = &l.elements[1].kind else { panic!("a chart") };
+            let expected = kept.map(|w| ChartOutline { color: ink, width: w });
+            assert_eq!((*bar_outline, r.elements_adjusted), (expected, adjusted), "{width}");
         }
     }
 
