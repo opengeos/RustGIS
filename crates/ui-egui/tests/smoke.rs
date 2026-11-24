@@ -1005,6 +1005,31 @@ fn a_tab_strip_wider_than_the_window_scrolls_with_arrow_buttons() {
     assert!(h.query_by_label("Scroll the tabs left").is_none());
 }
 
+#[test]
+fn tabs_tightened_to_fit_fill_the_tab_strip() {
+    // A plugin's tab, added or removed by a test running alongside, would change the tab strip.
+    let _turn = PLUGINS.lock().unwrap_or_else(|e| e.into_inner());
+    let mut h = harness();
+    // Too narrow for the tabs' usual padding, wide enough for them to fit with less: the padding is
+    // about 18 points here, well inside 8–22 for a system font somewhat wider or narrower.
+    h.set_size(egui::vec2(820.0, 600.0));
+    // Only the active tab is drawn in semibold: whichever it is, the tabs fill the strip.
+    for tab in ["Home", "Labeling"] {
+        h.state_mut().ui.tab = tab.into();
+        settle(&mut h);
+        let row = h.get_by_label("Home").rect();
+        let end = h
+            .query_all_by_role(egui::accesskit::Role::Button)
+            .map(|n| n.rect())
+            .filter(|r| (r.top() - row.top()).abs() < 0.5)
+            .fold(f32::MIN, |end, r| end.max(r.right()));
+        // With no tool active (no tool indicator), the strip ends 8 points before the collapse button.
+        let strip_end = h.get_by_label_contains("Collapse the ribbon").rect().left() - 8.0;
+        assert!((end - strip_end).abs() < 0.5, "{tab} active: the tabs end at {end}, the strip at {strip_end}");
+        assert!(h.query_by_label("Scroll the tabs right").is_none(), "{tab} active");
+    }
+}
+
 fn settle(h: &mut egui_kittest::Harness<'_, RustGisApp>) {
     for _ in 0..4 {
         h.step();
