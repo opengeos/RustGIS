@@ -1879,6 +1879,8 @@ pub(crate) fn project_in(text: &str, dir: &Path) -> Result<Project, String> {
     let mut project = Project::from_import_json(text, Some(dir))?;
     let photos = std::path::absolute(dir.join(PHOTOS)).map_err(|e| e.to_string())?;
     let mut relative = 0_usize;
+    // Photos from home that keep their names there, the unpack folder's name not being text.
+    let mut unshown = 0_usize;
     if photos.is_dir() {
         // A package from home names its photos where they are at home; its index says which entry
         // each is.
@@ -1906,9 +1908,10 @@ pub(crate) fn project_in(text: &str, dir: &Path) -> Result<Project, String> {
                 if listed.contains(path) {
                     return path.to_string();
                 }
-                // One named where it is at home is pointed at its unpacked file: by its full path,
-                // or, where the unpack folder's name can't be held as text, by its entry, relative
-                // to the package, as one a return carries.
+                // A return's photo is pointed at its unpacked file by its full path, or by its entry,
+                // relative to the package, where the unpack folder's name can't be held as text. One
+                // named where it is at home is pointed there by its full path only: otherwise it
+                // keeps its name at home, so the way back can't take its name here for an edit.
                 let (named, entry) = (path, at_home.get(path).map_or(path, String::as_str));
                 if let Some(name) = entry.strip_prefix("photos/").filter(|name| plain_file(name)) {
                     let file = photos.join(name);
@@ -1916,8 +1919,11 @@ pub(crate) fn project_in(text: &str, dir: &Path) -> Result<Project, String> {
                         if let Some(path) = file.to_str() {
                             return path.to_string();
                         }
+                        if named != entry {
+                            unshown += 1;
+                            return named.to_string();
+                        }
                         relative += 1;
-                        return entry.to_string();
                     }
                 }
                 named.to_string()
@@ -1927,6 +1933,15 @@ pub(crate) fn project_in(text: &str, dir: &Path) -> Result<Project, String> {
     // The rows as given, taken (sharing them) for `offline.keepRows` to keep, when this package
     // went out from home: a return opened here keeps none.
     project.given = super::field_changes::GivenRows::in_package(dir, &project).map(std::sync::Arc::new);
+    if unshown > 0 {
+        project.read_notices.push((
+            crate::project::ReadPart::Maps,
+            crate::notice_text::NoticeText::format(
+                "{count} photo(s) the field package brought from home keep the names they have there, because the unpack folder is not UTF-8: they don't show on this device.",
+                [("count", unshown.to_string().into())],
+            ),
+        ));
+    }
     if relative > 0 {
         project.read_notices.push((
             crate::project::ReadPart::Maps,
@@ -2919,6 +2934,32 @@ mod tests {
         package(&mut field, &Value::Null).unwrap();
         let said: Vec<String> = field.notices_since(mark).iter().map(|n| n.text.clone()).collect();
         assert!(said.iter().any(|t| t.starts_with("The photo index of the field package this map came from couldn't be read")), "{said:?}");
+    }
+
+    /// Unpacked into a folder whose name isn't UTF-8, a photo from home keeps its name at home
+    /// (no path the project holds can name the unpacked file), and that is said: the way back then
+    /// sees no edit in it. Apple's file system refuses such a name, so this runs on other Unix
+    /// systems.
+    #[cfg(all(unix, not(target_vendor = "apple")))]
+    #[test]
+    fn a_home_photo_unpacked_where_no_text_names_it_keeps_its_home_name() {
+        use std::os::unix::ffi::OsStrExt as _;
+        let temp = Temp::new("home-photo-non-utf8");
+        let mut home = sample();
+        home.path = Some(temp.path().join("home.rgis"));
+        let cities = layer(&home, "Cities");
+        home.run("edit.addField", &json!({"layer": cities, "name": "photos", "type": "text"})).unwrap();
+        let photo = temp.path().join("site.jpg");
+        std::fs::write(&photo, b"a picture").unwrap();
+        home.run("edit.setValue", &json!({"layer": cities, "row": 0, "field": "photos", "value": photo.display().to_string()})).unwrap();
+        let (_, out) = package(&mut home, &json!({"name": "Odd", "extent": [-180.0, -85.0, 180.0, 85.0]})).unwrap();
+        let unpacked = temp.path().join(std::ffi::OsStr::from_bytes(b"non-utf8-\xff"));
+        let text = unpack_into(&out, &unpacked).unwrap().0;
+        let mut project = project_in(&text, &unpacked).unwrap();
+        let said: Vec<String> =
+            project.take_read_notices(&[crate::project::ReadPart::Maps]).iter().map(crate::notice_text::NoticeText::english).collect();
+        assert!(said.iter().any(|t| t.starts_with("1 photo(s) the field package brought from home keep the names")), "{said:?}");
+        assert_eq!(value(&Session::new(project), "Cities", 0, "photos"), photo.display().to_string());
     }
 
     /// A return opened on another device and sent again carries the field's photos from there:
