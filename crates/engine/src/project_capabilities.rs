@@ -447,9 +447,10 @@ fn charts_outlined(e: &rustgis_map::layout::Element) -> bool {
 /// width of 0, draws none, so it needs nothing.
 fn command_uses_chart_outline(id: &str, params: &Value) -> bool {
     let outlined = || {
-        params.get("barOutline").and_then(Value::as_object).is_some_and(|o| match o.get("width") {
+        // The width read as the command reads it, a number or a number in text.
+        params.get("barOutline").filter(|o| o.is_object()).is_some_and(|o| match o.get("width") {
             None | Some(Value::Null) => true,
-            Some(w) => w.as_f64().is_some_and(|w| w > 0.0),
+            Some(_) => crate::cmd::f(o, "width").is_some_and(|w| w > 0.0),
         })
     };
     match id {
@@ -1551,6 +1552,8 @@ mod tests {
             ("layout.addElement", json!({"kind": "legend", "barOutline": {}}), false),
             ("layout.update", json!({"element": 2, "barOutline": {"color": "#C2185B"}}), true),
             ("layout.update", json!({"element": 2, "barOutline": {"width": 0}}), false),
+            ("layout.update", json!({"element": 2, "barOutline": {"width": "2"}}), true),
+            ("layout.update", json!({"element": 2, "barOutline": {"width": "0"}}), false),
             ("layout.update", json!({"element": 2, "barOutline": null}), false),
             ("layout.import", json!({"text": base["layouts"][0].to_string()}), false),
         ] {

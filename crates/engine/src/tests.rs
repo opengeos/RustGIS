@@ -43956,6 +43956,12 @@ fn layout_charts_draw_a_line_round_their_bars() {
     assert_eq!(outline(&s).map(|o| o.width), Some(5.0));
     let said = s.notices_since(mark).iter().map(|n| n.text.clone()).collect::<Vec<_>>();
     assert!(said.iter().any(|t| t.contains("barOutline width 9 held to 5")), "{said:?}");
+    // Given as text, as forms send numbers, the same.
+    let mark = s.notice_mark();
+    s.run("layout.update", &json!({"element": chart, "barOutline": {"width": "8"}})).unwrap();
+    assert_eq!(outline(&s).map(|o| o.width), Some(5.0));
+    let said = s.notices_since(mark).iter().map(|n| n.text.clone()).collect::<Vec<_>>();
+    assert!(said.iter().any(|t| t.contains("barOutline width 8 held to 5")), "{said:?}");
     // On a new layer the chart keeps it.
     s.run("layout.update", &json!({"element": chart, "layer": "Towns"})).unwrap();
     assert_eq!(outline(&s), Some(ChartOutline { color: pink, width: 5.0 }));

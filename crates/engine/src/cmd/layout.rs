@@ -3394,8 +3394,8 @@ impl Shape {
 }
 
 /// What a layout command holds to a limit instead of taking as given (#2639): a shape's outline
-/// `width` (0 to 50 points; a line's from 0.1), a rectangle's `radius` (up to 50 mm), and a
-/// background's width, radius and padding, each said with the value asked and the one kept. A
+/// `width` (0 to 50 points; a line's from 0.1), a rectangle's `radius` (up to 50 mm), a chart's
+/// `barOutline` width (0 to 5 points) and a background's width, radius and padding, each said with the value asked and the one kept. A
 /// value the command refuses (not a number, negative where that isn't taken) isn't said here.
 fn held_to_limits(p: &Value, shape: Option<Shape>) -> Vec<String> {
     use rustgis_map::layout::{MAX_BACKGROUND_PADDING, MAX_BACKGROUND_RADIUS, MAX_BACKGROUND_WIDTH};
@@ -3416,7 +3416,7 @@ fn held_to_limits(p: &Value, shape: Option<Shape>) -> Vec<String> {
             hold("radius", r, r.min(50.0), "up to 50 mm");
         }
     }
-    if let Some(w) = p.get("barOutline").and_then(|o| o.get("width")).and_then(Value::as_f64).filter(|w| w.is_finite()) {
+    if let Some(w) = p.get("barOutline").and_then(|o| f(o, "width")) {
         hold("barOutline width", w, w.clamp(0.0, MAX_CHART_OUTLINE_WIDTH), &format!("0 to {MAX_CHART_OUTLINE_WIDTH} points"));
     }
     if let Some(o) = p.get("background").and_then(Value::as_object) {

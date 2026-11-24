@@ -1337,11 +1337,22 @@ pub struct ChartLook {
     pub bar_outline: Option<ChartOutline>,
 }
 
-/// A chart's bar outline (#2487 part 4b): its colour and width in points.
+/// A chart's bar outline (#2487 part 4b): its colour and width in points. A key left out of a
+/// hand-edited file takes the one it is first given ([`CHART_OUTLINE`]).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ChartOutline {
+    #[serde(default = "chart_outline_color")]
     pub color: Rgba,
+    #[serde(default = "chart_outline_width")]
     pub width: f64,
+}
+
+fn chart_outline_color() -> Rgba {
+    CHART_OUTLINE.color
+}
+
+fn chart_outline_width() -> f64 {
+    CHART_OUTLINE.width
 }
 
 /// A bar outline's colour and width when first given, and the widest it is drawn.
@@ -4135,6 +4146,24 @@ mod tests {
             let ElementKind::Chart { max: m, .. } = &l.elements[1].kind else { panic!("a chart") };
             assert_eq!((*m, r.elements_adjusted), (kept, adjusted), "{max}");
         }
+    }
+
+    /// A bar outline's keys left out of a hand-edited file take those it is first given, as a
+    /// background's do, rather than leaving the layout unreadable (#2487 part 4b).
+    #[test]
+    fn a_charts_bar_outline_takes_its_defaults_for_keys_left_out() {
+        let read = |outline: serde_json::Value| {
+            let kind: ElementKind = serde_json::from_value(serde_json::json!(
+                {"Chart": {"frame": 1, "layer": "Places", "field": "people", "bar_outline": outline}}
+            ))
+            .unwrap();
+            let ElementKind::Chart { bar_outline, .. } = kind else { panic!("a chart") };
+            bar_outline
+        };
+        let red = Rgba::rgb(0xD0, 0x10, 0x10);
+        assert_eq!(read(serde_json::json!({"width": 2.0})), Some(ChartOutline { width: 2.0, ..CHART_OUTLINE }));
+        assert_eq!(read(serde_json::json!({"color": [208, 16, 16, 255]})), Some(ChartOutline { color: red, ..CHART_OUTLINE }));
+        assert_eq!(read(serde_json::json!({})), Some(CHART_OUTLINE));
     }
 
     /// A bar outline's width out of range, which only a hand-edited file holds, is repaired on

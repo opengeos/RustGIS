@@ -4427,11 +4427,16 @@ impl ChartBars<'_> {
             // Each stretch at least a pixel wide, running back from its start below zero; where the
             // bar ends at its left and at its right.
             let (mut left, mut right_end) = (zero, zero);
+            let mut drawn = Vec::new();
             for (start, share, colour) in self.stretches(i, *v) {
                 let w = (bar_area * share.abs()).max(1.0);
                 let x = zero + bar_area * start - if share < 0.0 { w } else { 0.0 };
-                self.bar(pm, colour, place(x, w), y + bh * 0.15, w, bh * 0.7);
+                drawn.push((place(x, w), w, colour));
                 (left, right_end) = (left.min(x), right_end.max(x + w));
+            }
+            let (lo, hi) = run_ends(&drawn);
+            for (x, w, colour) in drawn {
+                self.bar(pm, colour, x, y + bh * 0.15, w, bh * 0.7, Run::Across(x <= lo, x + w >= hi));
             }
             if labelled {
                 let t = fit_label(name, |t| text::measure(t, 7.5, false) * ppp > label_w - 4.0 * ppp);
@@ -4483,11 +4488,16 @@ impl ChartBars<'_> {
             // Each stretch at least a pixel high, standing up from its start above zero and hanging
             // down below it; where the column ends at its top and at its bottom.
             let (mut top_end, mut bottom) = (zero, zero);
+            let mut drawn = Vec::new();
             for (start, share, colour) in self.stretches(i, *v) {
                 let h = (plot_h * share.abs()).max(1.0);
                 let y = zero - plot_h * start - if share < 0.0 { 0.0 } else { h };
-                self.bar(pm, colour, cx - slot * 0.35, place(y, h), slot * 0.7, h);
+                drawn.push((place(y, h), h, colour));
                 (top_end, bottom) = (top_end.min(y), bottom.max(y + h));
+            }
+            let (lo, hi) = run_ends(&drawn);
+            for (y, h, colour) in drawn {
+                self.bar(pm, colour, cx - slot * 0.35, y, slot * 0.7, h, Run::Down(y <= lo, y + h >= hi));
             }
             if let Some(t) = self.values.get(i) {
                 let vy = if *v < 0.0 { bottom + value_h / 2.0 } else { top_end - value_h / 2.0 };
@@ -4518,8 +4528,11 @@ fn mirrored(align: text::Align) -> text::Align {
 impl ChartBars<'_> {
     /// A bar, or a stretch of one, filled with `colour` and with the look's outline round it
     /// (#2487 part 4b). The line runs just inside the bar's edge, so it takes no room the bars
-    /// leave to their values, labels and title; a bar no wider than the line is the line's colour.
-    fn bar(&self, pm: &mut Canvas, colour: Rgba, x: f32, y: f32, w: f32, h: f32) {
+    /// leave to their values, labels and title; where two stretches of a bar meet, each draws it
+    /// centred on that edge, so the two make one line of its width. A stretch no wider than the
+    /// line is the line's colour.
+    #[expect(clippy::too_many_arguments, reason = "a box and how it sits in its bar")]
+    fn bar(&self, pm: &mut Canvas, colour: Rgba, x: f32, y: f32, w: f32, h: f32, run: Run) {
         let Some(o) = self.look.bar_outline else {
             return fill(pm, colour, x, y, w, h);
         };
@@ -4528,11 +4541,30 @@ impl ChartBars<'_> {
             return fill(pm, o.color, x, y, w, h);
         }
         fill(pm, colour, x, y, w, h);
-        if let Some(b) = Rect::from_xywh(x + line / 2.0, y + line / 2.0, w - line, h - line) {
+        let inside = |outer: bool| if outer { line / 2.0 } else { 0.0 };
+        // Inset on the left, top, right and bottom.
+        let (l, t, r, b) = match run {
+            Run::Across(start, end) => (inside(start), line / 2.0, inside(end), line / 2.0),
+            Run::Down(start, end) => (line / 2.0, inside(start), line / 2.0, inside(end)),
+        };
+        if let Some(rect) = Rect::from_xywh(x + l, y + t, w - l - r, h - t - b) {
             let stroke = Stroke { width: line, ..Stroke::default() };
-            pm.stroke_path(&PathBuilder::from_rect(b), &paint(o.color, 1.0), &stroke, Transform::identity(), None);
+            pm.stroke_path(&PathBuilder::from_rect(rect), &paint(o.color, 1.0), &stroke, Transform::identity(), None);
         }
     }
+}
+
+/// Which way a bar runs, and whether a stretch of it reaches the bar's first and last edge on that
+/// axis (left and right across, top and bottom down), where its outline runs inside it.
+#[derive(Clone, Copy)]
+enum Run {
+    Across(bool, bool),
+    Down(bool, bool),
+}
+
+/// The first and last edge a bar's stretches reach along its run, as drawn.
+fn run_ends(drawn: &[(f32, f32, Rgba)]) -> (f32, f32) {
+    drawn.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), (at, len, _)| (lo.min(*at), hi.max(at + len)))
 }
 
 /// A box filled with `colour`; none where it has no size.
@@ -4995,8 +5027,11 @@ mod tests {
         };
         let mut c = Canvas::new(200, 120).unwrap();
         chart(&mut c, Rect::from_xywh(0.0, 0.0, 200.0, 120.0).unwrap(), &stacked, &look, INK, 1.0, false);
-        let between = (100..140).filter(|x| red(&c, *x, 23)).count();
-        assert!(between > 0 && between < 6, "a line between the stretches, {between} px");
+        // The divider's footprint: what isn't the bars' blue where the two stretches meet. One
+        // line of the outline's width, 2 px off the pixel grid touching 3, not one from each
+        // stretch (5).
+        let divider = (100..140).filter(|x| !bar_blue(&c, *x, 23)).count();
+        assert_eq!(divider, 3, "one line of the outline's width between the stretches");
     }
 
     /// Hidden labels leave their column, or their row under columns, to the bars.
