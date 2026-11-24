@@ -536,6 +536,9 @@ pub fn commands() -> Vec<C> {
             // Each group's move, worked out once: its planes and its turn's sine and cosine.
             let mut moves: HashMap<(i64, i64), (Aeqd, Aeqd, f64, f64)> = HashMap::new();
             let done = move_features(s, &own, |key, g| match (own.get(&key.0), planes.get(&key)) {
+                // A move of no distance (with other layers' features in Web Mercator) leaves
+                // these as they are, with no edit of them recorded.
+                (Some(_), _) if still => Ok(None),
                 (Some(grid), _) => {
                     let d = grid.step(dx, dy);
                     OwnGrid::map(g, |c| Coord::new(c.x + d.x, c.y + d.y)).map(Some)
@@ -715,7 +718,8 @@ impl OwnGrid {
     /// The grid layer `l` is edited in, if any.
     fn of(l: &rustgis_map::Layer) -> Option<Self> {
         let crs = l.dataset.coord_crs();
-        if l.is_raster() || !rustgis_analysis::works_in(crs) {
+        // Graphics are edited as before: their shapes share no places with features.
+        if l.is_raster() || l.graphics || !rustgis_analysis::works_in(crs) {
             return None;
         }
         let (unit_m, axes) = crs.unit_and_axes();
@@ -794,7 +798,7 @@ fn one_grid(s: &mut Session, still: bool) -> HashMap<u32, OwnGrid> {
     let selected: Vec<&rustgis_map::Layer> =
         s.map().layers.iter().filter(|l| !l.is_raster() && !l.graphics && !l.selection.is_empty()).collect();
     let first = own.values().next().map(|g| g.crs);
-    let one = own.len() >= selected.len() && own.values().all(|g| Some(g.crs) == first);
+    let one = selected.iter().all(|l| own.get(&l.id).is_some_and(|g| Some(g.crs) == first));
     if own.is_empty() || one {
         return own;
     }
@@ -1911,13 +1915,16 @@ fn traverse(s: &mut Session, p: &Json) -> CmdResult {
     // A layer held in a projected system is drawn on its own grid (#2032 C2f-6): the start in its
     // coordinates, each leg flat in its unit from its grid north.
     let grid = OwnGrid::of(l);
+    // The start converted, or a stored place that reads exactly as it (a traverse begun at a
+    // corner), as an added feature keeps it.
     let start_own = match grid {
-        Some(_) => Some(
-            rustgis_data::raster::Crs::LonLat
+        Some(_) => Some(match held_places(s, id, &[], &[&Geometry::Point(start)]).get(start) {
+            Some(stored) => stored,
+            None => rustgis_data::raster::Crs::LonLat
                 .to(l.dataset.coord_crs())?
                 .point(start)
                 .ok_or_else(|| format!("the start can't be given in the system '{}' is held in", l.name))?,
-        ),
+        }),
         None => None,
     };
     let mut pts = vec![start_own.unwrap_or(start)];

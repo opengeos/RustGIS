@@ -253,3 +253,25 @@ fn a_selection_across_systems_moves_together_as_before() {
     let road = stored(&s, "Roads")[0];
     assert!((parcel.x - road.x).abs() < 1e-8 && (parcel.y - road.y).abs() < 1e-8, "{parcel:?} vs {road:?}");
 }
+
+/// A traverse begun at a stored corner, given as that corner reads in longitude/latitude, starts
+/// on the corner as stored, to the bit, as an added feature does.
+#[test]
+fn a_traverse_from_a_corner_starts_on_it_as_stored() {
+    let mut s = session(vec![held("Lots", GeometryType::Polygon, vec![square()], UTM)]);
+    let corner = stored(&s, "Lots")[1];
+    let lonlat = s.map().layer_by_name("Lots").unwrap().dataset.lonlat_conversion().unwrap().point(corner).unwrap();
+    let r = s
+        .run(
+            "edit.traverse",
+            &json!({"layer": "Lots", "start": [lonlat.x, lonlat.y], "legs": [{"distance": 100, "bearing": 90}, {"distance": 50, "bearing": 0}]}),
+        )
+        .unwrap();
+    let Some(Geometry::Polygon(p)) =
+        s.map().layer_by_name("Lots").unwrap().dataset.features[r["row"].as_u64().unwrap() as usize].geometry.clone()
+    else {
+        panic!("a polygon")
+    };
+    assert_eq!(p[0][0][0], corner);
+    assert_eq!(p[0][0][1], Coord::new(corner.x + 100.0, corner.y));
+}
