@@ -38,9 +38,9 @@ longitude/latitude are saved as before and don't need it.
 command line. A package opens as a new, unsaved project; Save writes a plain `.rgis` file.
 Opening or creating a project clears undo history; saving does not.
 
-A project, package, template, map or layer file received from the internet reaches only the
-internet: one opened by its web address (`?project=`), or given as text by the AI Assistant, MCP
-or a plugin. An address it names on this computer or the local network isn't read. A file you
+A project, package, template, map, layer or style file, or a field package brought back, received
+from the internet reaches only the internet: one opened by its web address (`?project=`), or given
+as text by the AI Assistant, MCP or a plugin. An address it names on this computer or the local network isn't read. A file you
 open from your own disk reaches your own servers as before. Either way, opening a file that names
 such addresses says how many, and names the first three. One that something received from the
 internet named earlier in the session stays held, and the notice says so.

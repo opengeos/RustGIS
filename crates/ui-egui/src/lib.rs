@@ -314,6 +314,8 @@ pub struct Download {
     pub slot: Slot<Result<Vec<u8>, String>>,
     /// How far it has come (the status bar's).
     pub progress: std::sync::Arc<rustgis_engine::render::rustgis_tiles::cache::Progress>,
+    /// Where it connected, for a GeoLibre project ([`rustgis_engine::Session::download_read_at`]).
+    pub reach: Slot<Reach>,
 }
 
 /// A download or a window's read under way, for the status bar ([`RustGisApp::downloads_under_way`]).
@@ -6231,9 +6233,31 @@ impl RustGisApp {
             let watch = std::sync::Arc::downgrade(&slot);
             let wanted: rustgis_engine::render::rustgis_tiles::cache::Still = std::sync::Arc::new(move || watch.strong_count() > 1);
             let progress = std::sync::Arc::<rustgis_engine::render::rustgis_tiles::cache::Progress>::default();
+            let reach: Slot<Reach> = Slot::default();
+            let read_at = reach.clone();
+            let project = q.get("geolibreProject").and_then(Value::as_bool) == Some(true);
             // A Shapefile address brings its companion parts under the same download owner.
             rustgis_engine::render::rustgis_tiles::cache::with_still(wanted, || {
                 rustgis_engine::render::rustgis_tiles::cache::with_progress(Some(progress.clone()), || {
+                    // A GeoLibre project, with where it was read: what it names reaches no wider.
+                    if project && !public {
+                        return rustgis_engine::render::rustgis_tiles::cache::download_detailed_with_origin(
+                            &url,
+                            rustgis_engine::map::geolibre::MAX_TEXT,
+                            Box::new(move |r| {
+                                let r = r
+                                    .map(|fetched| {
+                                        *read_at.lock().unwrap_or_else(|e| e.into_inner()) = Some(fetched.origin.reach());
+                                        fetched.bytes
+                                    })
+                                    .map_err(|failure| failure.message);
+                                *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(r);
+                            }),
+                        );
+                    }
+                    if project {
+                        *read_at.lock().unwrap_or_else(|e| e.into_inner()) = Some(Reach::Public);
+                    }
                     rustgis_engine::cmd::layer::download_data_from(
                         &url,
                         public,
@@ -6249,7 +6273,7 @@ impl RustGisApp {
                     )
                 })
             });
-            self.ui.downloads.push(Download { id, url, params: q, slot, progress });
+            self.ui.downloads.push(Download { id, url, params: q, slot, progress, reach });
 
             Ok(Value::Null)
         })
@@ -6332,13 +6356,20 @@ impl RustGisApp {
             }
         }
         let mut landed = Vec::new();
+        let mut read_at = Vec::new();
         self.ui.downloads.retain(|d| match d.slot.lock().unwrap_or_else(|e| e.into_inner()).take() {
             Some(r) => {
                 landed.push((d.id, d.url.clone(), d.params.clone(), r));
+                if let Some(reach) = d.reach.lock().unwrap_or_else(|e| e.into_inner()).take() {
+                    read_at.push((d.id, reach));
+                }
                 false
             }
             None => true,
         });
+        for (id, reach) in read_at {
+            self.session.download_read_at(id, reach);
+        }
         for (id, url, mut p, r) in landed {
             let origin = connectiontree::take_origin_key(&mut p);
             // A range's answer shorter than the range is refused, never read as the record.

@@ -1917,6 +1917,8 @@ impl Project {
     }
 
     /// Reads imported JSON (including package contents) without restoring a saved file's secrets.
+    /// A command reads through [`Project::from_import_json_within`], which holds what it names.
+    #[cfg(test)]
     pub(crate) fn from_import_json(text: &str, dir: Option<&Path>) -> Result<Project, String> {
         Self::read_json(text, false, dir, true, None, None).map(|(p, _)| p)
     }

@@ -1457,7 +1457,10 @@ pub(crate) fn bring_back(s: &mut Session, p: &Value) -> Result<Value, String> {
     if outbound {
         return Err("this field package was made here to go to the field, not sent back from it: Bring Back reads the package the phone sends with Send Field Package. Nothing was changed".into());
     }
-    let project = Project::from_import_json(&text, None)?;
+    // Held within where the package came from ([`Session::file_reach`]) before its read reads
+    // anything it names.
+    let (project, named) = Project::from_import_json_within(&text, None, s.file_reach(p))?;
+    named.say(s, "the field package");
     let ai = if let Some(area) = legacy_area {
         let raw: Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
         // Only entirely absent identities qualify. Null/empty/malformed metadata is not a

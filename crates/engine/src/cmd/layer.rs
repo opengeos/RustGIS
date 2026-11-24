@@ -6880,18 +6880,17 @@ fn add_download(s: &mut Session, p: &Value) -> CmdResult {
     let bounds = if service { super::service::bounds_of(p.get("bounds"))? } else { None };
     let i = s.downloaded.iter().position(|(d, _)| *d == id).ok_or("no such download (it was dropped when another project opened)")?;
     let (_, bytes) = s.downloaded.remove(i);
+    let read_at = s.downloaded_reach.iter().position(|(d, _)| *d == id).map(|i| s.downloaded_reach.remove(i).1);
     if p.get("geolibreProject").and_then(Value::as_bool) == Some(true) {
         if bytes.len() > rustgis_map::geolibre::MAX_TEXT {
             return Err("GeoLibre project exceeds 64 MiB".into());
         }
         let text = String::from_utf8(bytes).map_err(|_| "GeoLibre project must be UTF-8 JSON")?;
-        // Received from its address: what it names reaches no wider than that address does
-        // ([`Session::file_reach`]). Judged by its name, as neither this download nor the browser's
-        // fetch says where it connected: a name of the local network that doesn't look like one
-        // (`http://nas/…`) counts as the internet, which only narrows; opened from disk, the
-        // project reaches as before.
-        use crate::render::rustgis_tiles::{address, cache, logins};
-        let reach = address::reach(logins::inner(&url)).min(cache::ceiling_for(&url));
+        // Received from where it was read: what it names reaches no wider ([`Session::file_reach`]).
+        // The app says where its download connected ([`Session::download_read_at`]; the browser's
+        // fetch, by its address's name); one that doesn't say reaches only the internet.
+        use crate::render::rustgis_tiles::{address::Reach, cache};
+        let reach = read_at.unwrap_or(Reach::Public).min(cache::ceiling_for(&url));
         let was = s.receiving(Some(reach));
         let r = s.run_part("project.importGeolibre", &json!({"text":text}));
         s.receiving(was);

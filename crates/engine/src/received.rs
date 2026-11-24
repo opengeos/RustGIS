@@ -82,20 +82,31 @@ impl Few {
     }
 }
 
-/// The web address an address a file names is fetched from, whatever wraps it: a tile template
-/// (`pmtiles:`, `cog:`), an anonymous read, a saved S3 connection or a login. `None` for one not
-/// fetched from the web (a file, a database).
-fn fetched_from(a: &str) -> Option<String> {
+/// What an address a file names is fetched from.
+enum Fetched {
+    /// This web address, whatever wraps it: a tile template (`pmtiles:`, `cog:`), an anonymous
+    /// read, a saved S3 connection or a login.
+    Web(String),
+    /// An S3 address whose destination can't be told: held all the same, though not counted.
+    Unknown,
+    /// Not the web (a file, a database).
+    Not,
+}
+
+fn fetched_from(a: &str) -> Fetched {
     use crate::render::rustgis_tiles::s3;
     let archive = crate::sources::template_archive(a).map_or(a, |(_, archive)| archive);
     let (plain, _) = s3::split_anonymous(archive);
     let web = match s3::bound_destination(plain) {
         Ok(Some(destination)) => destination,
-        Ok(None) if s3::is_s3(plain) => s3::https_url(plain).ok()?,
+        Ok(None) if s3::is_s3(plain) => match s3::https_url(plain) {
+            Ok(web) => web,
+            Err(_) => return Fetched::Unknown,
+        },
         Ok(None) => logins::inner(plain).to_string(),
-        Err(_) => return None,
+        Err(_) => return Fetched::Unknown,
     };
-    rustgis_map::tiles::is_web(&web).then_some(web)
+    if rustgis_map::tiles::is_web(&web) { Fetched::Web(web) } else { Fetched::Not }
 }
 
 /// Holds every web address a file names (`addresses`, its whole list as login bindings are cleared
@@ -112,13 +123,17 @@ pub(crate) fn hold(addresses: impl IntoIterator<Item = impl AsRef<str>>, reach: 
     let mut held = Vec::new();
     for a in addresses {
         let a = a.as_ref();
-        let Some(web) = fetched_from(a) else { continue };
+        let web = match fetched_from(a) {
+            Fetched::Web(web) => Some(web),
+            Fetched::Unknown => None,
+            Fetched::Not => continue,
+        };
         if received {
             held.push(a.to_string());
             held.extend(rustgis_data::io::shapefile_part_urls(a).unwrap_or_default().into_iter().map(|(_, part)| part));
         }
         // Only what can be read there: a forbidden address (link-local, a cloud's metadata) never is.
-        if address::reach(&web) == Reach::Local && named.seen.insert(a.to_string()) {
+        if web.is_some_and(|web| address::reach(&web) == Reach::Local) && named.seen.insert(a.to_string()) {
             if received || cache::ceiling_for(a) == Reach::Public {
                 named.held.add(a);
             } else {
@@ -475,5 +490,56 @@ mod tests {
             std::io::ErrorKind::WouldBlock,
             "the raster was read before the hold"
         );
+    }
+
+    /// A style file and a field package an attached agent gives hold what they name to the
+    /// internet too, before reading them reads anything they name.
+    #[test]
+    fn style_files_and_field_packages_an_agent_gives_are_held_too() {
+        use base64::Engine;
+        let (mut s, addresses) = project("style-reach");
+        let (text, _) = s.project.saved_text(None).unwrap();
+        let mut styled = Session::new(Project::default());
+        let reach = reach_after(&addresses, || drop(as_agent(&mut styled, "style.import", &json!({"text": text}))));
+        assert_eq!(reach, [Reach::Public; 3], "style.import");
+        let notices = said(&styled);
+        assert!(notices.first().is_some_and(|n| n.starts_with("the style file came from the internet")), "{notices:?}");
+        let package = rustgis_data::zip::write(&[("back.rgis".into(), text.into_bytes())]).unwrap();
+        let data = base64::engine::general_purpose::STANDARD.encode(package);
+        let mut home = Session::new(Project::default());
+        let reach = reach_after(&addresses, || drop(as_agent(&mut home, "offline.bringBack", &json!({"data": data}))));
+        assert_eq!(reach, [Reach::Public; 3], "offline.bringBack");
+    }
+
+    /// A GeoLibre project the app downloads is read within where its download connected: from a
+    /// server on the local network, as the user's own, though its name doesn't look local; and
+    /// when the app doesn't say where, within the internet.
+    #[test]
+    fn a_downloaded_geolibre_project_reaches_as_far_as_where_it_was_read() {
+        let tiles = "http://localhost:18084/download-reach/{z}/{x}/{y}.png";
+        let text = json!({
+            "version": "0.2.0",
+            "name": "Downloaded",
+            "mapView": {},
+            "basemapStyleUrl": "",
+            "layers": [{"id": "a", "name": "Mine", "type": "xyz", "source": {"tiles": [tiles]}}],
+        })
+        .to_string();
+        for (read_at, reach) in [(Some(Reach::Local), Reach::Local), (None, Reach::Public)] {
+            cache::allow_named(tiles);
+            let mut s = Session::new(Project::default());
+            // As the browser's `project.importGeolibre {"url"}` asks the app for it.
+            s.request_import_url(&json!({"url": "http://nas/download-reach.json", "geolibreProject": true})).unwrap();
+            let request = s.take_url_requests().pop().unwrap();
+            let id = s.download_started_for(&request).unwrap();
+            if let Some(read_at) = read_at {
+                s.download_read_at(id, read_at);
+            }
+            assert!(s.download_landed(id, text.clone().into_bytes()));
+            let mut params = request.params().clone();
+            params["id"] = json!(id);
+            s.complete_download(id, &params).unwrap();
+            assert_eq!(cache::ceiling_for(tiles), reach, "read at {read_at:?}");
+        }
     }
 }

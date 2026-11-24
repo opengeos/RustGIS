@@ -749,6 +749,7 @@ struct PutAside {
     plugin_runs: Vec<cmd::gp::StartedRun>,
     downloading: Vec<u64>,
     downloaded: Vec<(u64, Vec<u8>)>,
+    downloaded_reach: Vec<(u64, render::rustgis_tiles::address::Reach)>,
     url_requests: Vec<UrlRequest>,
     policy_work: policy::downloads::Work,
     landed_reads: Vec<(u64, LandedRead)>,
@@ -1081,6 +1082,8 @@ pub struct Session {
     downloading: Vec<u64>,
     /// Downloads that landed, waiting for `layer.addDownload`.
     pub(crate) downloaded: Vec<(u64, Vec<u8>)>,
+    /// Where downloads connected, as the front end saw it ([`Session::download_read_at`]).
+    pub(crate) downloaded_reach: Vec<(u64, render::rustgis_tiles::address::Reach)>,
     /// Downloads that landed already read (an ArcGIS layer's protocol buffer pages, joined),
     /// waiting for `layer.addDownload` too.
     pub(crate) landed_reads: Vec<(u64, LandedRead)>,
@@ -1557,6 +1560,7 @@ impl Session {
             plugin_watch: Default::default(),
             downloading: Vec::new(),
             downloaded: Vec::new(),
+            downloaded_reach: Vec::new(),
             landed_reads: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             landed_windows: Vec::new(),
@@ -1656,6 +1660,20 @@ impl Session {
             self.downloaded.push((id, bytes));
         }
         landed
+    }
+
+    /// Says where a download under way connected (`cache::Fetched::origin`), before its bytes are
+    /// handed over: a GeoLibre project downloaded so is read within that reach
+    /// (`layer.addDownload`), and one handed over without it reaches only the internet.
+    pub fn download_read_at(&mut self, id: u64, reach: render::rustgis_tiles::address::Reach) {
+        if !self.downloading.contains(&id) {
+            return;
+        }
+        // As many as downloads under way can be: past that, the oldest are forgotten.
+        if self.downloaded_reach.len() >= 64 {
+            self.downloaded_reach.remove(0);
+        }
+        self.downloaded_reach.push((id, reach));
     }
 
     /// Hands over a download read already (an ArcGIS layer's protocol buffer pages, joined, see
@@ -2619,6 +2637,7 @@ impl Session {
             plugin_runs: take(&mut self.plugin_runs),
             downloading: take(&mut self.downloading),
             downloaded: take(&mut self.downloaded),
+            downloaded_reach: take(&mut self.downloaded_reach),
             landed_reads: take(&mut self.landed_reads),
             #[cfg(not(target_arch = "wasm32"))]
             landed_windows: take(&mut self.landed_windows),
@@ -2677,6 +2696,7 @@ impl Session {
             plugin_runs,
             downloading,
             downloaded,
+            downloaded_reach,
             landed_reads,
             #[cfg(not(target_arch = "wasm32"))]
             landed_windows,
@@ -2709,6 +2729,7 @@ impl Session {
         (self.pending, self.plugin_runs, self.plugin_retries, self.url_waits) = (pending, plugin_runs, plugin_retries, url_waits);
         self.file_outputs = file_outputs;
         (self.downloading, self.downloaded, self.url_requests) = (downloading, downloaded, url_requests);
+        self.downloaded_reach = downloaded_reach;
         self.restore_policy_work(policy_work);
         self.landed_reads = landed_reads;
         #[cfg(not(target_arch = "wasm32"))]

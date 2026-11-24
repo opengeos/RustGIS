@@ -715,11 +715,13 @@ fn import_styles(s: &mut Session, p: &Value) -> CmdResult {
         }
         m.layers
     } else {
-        // A project parse opens sources even though this import only takes their styles.
+        // A project parse opens sources even though this import only takes their styles: held
+        // within where the file came from first ([`Session::file_reach`]).
         super::connections::clear_active();
-        let project = Project::from_import_json(&text, None);
+        let project = Project::from_import_json_within(&text, None, s.file_reach(p));
         super::connections::restore_active(s);
-        let mut project = project.map_err(|e| not_a(e, "layer file, map file or project"))?;
+        let (mut project, named) = project.map_err(|e| not_a(e, "layer file, map file or project"))?;
+        named.say(s, "the style file");
         // Styles take the layers' renderers and labels, not their diagrams or the layouts.
         for notice in project.take_read_notices(&[crate::project::ReadPart::Labels]) {
             s.notify_text(notice, false);
