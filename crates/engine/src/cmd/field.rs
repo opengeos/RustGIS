@@ -888,13 +888,8 @@ fn manifest_bytes(errors: &[String], losses: &rustgis_data::loss::Notes) -> Resu
     }
 }
 
-/// A layer's photos field, by its place: its first text field named `photos` or `photo`, whatever
-/// the case (as the touch interface names it).
-fn photos_field(layer: &rustgis_map::Layer) -> Option<usize> {
-    photos_fields(layer).next()
-}
-
-/// Each of a layer's photos fields, by place: a layer can have both a `photos` and a `photo`.
+/// Each of a layer's photos fields, by place: its text fields named `photos` or `photo`, whatever
+/// the case (as the touch interface names them); a layer can have both.
 fn photos_fields(layer: &rustgis_map::Layer) -> impl Iterator<Item = usize> + '_ {
     layer.dataset.fields.iter().enumerate().filter_map(|(i, f)| {
         (f.ty == rustgis_data::FieldType::Text && (f.name.eq_ignore_ascii_case("photos") || f.name.eq_ignore_ascii_case("photo")))
@@ -1598,12 +1593,18 @@ pub(crate) fn bring_back(s: &mut Session, p: &Value) -> Result<Value, String> {
     let unchanged_photos = match &changes {
         Some(changes) if !photos.is_empty() => {
             let home = s.project.offline_areas.get(ai).and_then(|a| s.project.maps.iter().find(|m| m.name.eq_ignore_ascii_case(&a.map)));
-            let named = super::field_changes::photos_named(&edited, home, changes, photos_field, |text| {
-                photo_paths(text)
-                    .into_iter()
-                    .filter_map(|r| text.get(r).and_then(|p| p.strip_prefix(&format!("{PHOTOS}/"))).map(str::to_string))
-                    .collect()
-            });
+            let named = super::field_changes::photos_named(
+                &edited,
+                home,
+                changes,
+                |l| photos_fields(l).collect(),
+                |text| {
+                    photo_paths(text)
+                        .into_iter()
+                        .filter_map(|r| text.get(r).and_then(|p| p.strip_prefix(&format!("{PHOTOS}/"))).map(str::to_string))
+                        .collect()
+                },
+            );
             let before = photos.len();
             photos.retain(|(name, _)| named.contains(name));
             before - photos.len()
@@ -3058,6 +3059,37 @@ mod tests {
         let back = take_photos(&mut map, &mut budget, "", usize::MAX).unwrap();
         let names: Vec<&str> = back.entries.iter().map(|(n, _)| n.as_str()).filter(|n| *n != INDEX).collect();
         assert!(names.contains(&"photos/2-x.jpg") && !names.contains(&"photos/x.jpg"), "{names:?}");
+    }
+
+    /// A photo taken into a layer's second photos field comes home with its edit.
+    #[test]
+    fn a_photo_in_a_second_photos_field_comes_home() {
+        let temp = Temp::new("second-field-home");
+        let mut home = sample();
+        home.path = Some(temp.path().join("home.rgis"));
+        let cities = layer(&home, "Cities");
+        for field in ["photos", "photo"] {
+            home.run("edit.addField", &json!({"layer": cities, "name": field, "type": "text"})).unwrap();
+        }
+        let id = home.map().layer(cities).unwrap().dataset.features[0].id;
+        let (_, out) = package(&mut home, &json!({"name": "Second", "extent": [-180.0, -85.0, 180.0, 85.0]})).unwrap();
+        let unpacked = temp.path().join("field");
+        let text = unpack_into(&out, &unpacked).unwrap().0;
+        let mut field = opened(project_in(&text, &unpacked).unwrap());
+        field.opened_package = Some(temp.path().join("sent.rgisfield"));
+        let taken = temp.path().join("photo-7.jpg");
+        std::fs::write(&taken, b"in the second field").unwrap();
+        let row = field.map().layer(cities).unwrap().dataset.features.iter().position(|f| f.id == id).unwrap();
+        field.run("edit.setValue", &json!({"layer": cities, "row": row, "field": "photo", "value": taken.display().to_string()})).unwrap();
+        let (_, back) = package(&mut field, &Value::Null).unwrap();
+        std::fs::remove_file(&taken).unwrap();
+        let sent = temp.path().join("back.rgisfield");
+        std::fs::write(&sent, &back).unwrap();
+        home.run("offline.bringBack", &json!({"path": sent.display().to_string()})).unwrap();
+        let copied = temp.path().join("Second photos").join("photo-7.jpg");
+        assert_eq!(std::fs::read(&copied).unwrap(), b"in the second field");
+        let row = home.map().layer(cities).unwrap().dataset.features.iter().position(|f| f.id == id).unwrap();
+        assert_eq!(value(&home, "Cities", row, "photo"), copied.display().to_string());
     }
 
     /// A return opened on another device and sent again carries the field's photos from there:

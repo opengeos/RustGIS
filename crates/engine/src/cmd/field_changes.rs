@@ -938,19 +938,27 @@ pub(crate) fn photos_named(
     edited: &rustgis_map::Map,
     home: Option<&rustgis_map::Map>,
     changes: &Changes,
-    field: impl Fn(&rustgis_map::Layer) -> Option<usize>,
+    fields: impl Fn(&rustgis_map::Layer) -> Vec<usize>,
     entries: impl Fn(&str) -> Vec<String>,
 ) -> HashSet<String> {
     let mut named = HashSet::new();
     for lc in &changes.layers {
         let Some(l) = edited.layers.iter().find(|l| l.id == lc.layer && !l.is_raster()) else { continue };
-        let Some(fi) = field(l) else { continue };
-        let Some(name) = l.dataset.fields.get(fi).map(|f| f.name.as_str()) else { continue };
+        // Every photos field of the layer (a layer can have both a `photos` and a `photo`).
+        let fis = fields(l);
+        let names: Vec<&str> = fis.iter().filter_map(|fi| l.dataset.fields.get(*fi).map(|f| f.name.as_str())).collect();
+        if names.is_empty() {
+            continue;
+        }
         // A layer home no longer has takes none of the changes, nor their photos.
         let Some(home_layer) = home.and_then(|m| m.layers.iter().find(|h| h.id == lc.layer && !h.is_raster())) else { continue };
         // An edit to a feature home no longer has is dropped, its photo with it.
-        let mut photo_edits: HashSet<u64> =
-            lc.edited.iter().filter(|g| g.values.iter().any(|(n, _)| n.eq_ignore_ascii_case(name))).map(|g| g.id).collect();
+        let mut photo_edits: HashSet<u64> = lc
+            .edited
+            .iter()
+            .filter(|g| g.values.iter().any(|(n, _)| names.iter().any(|name| n.eq_ignore_ascii_case(name))))
+            .map(|g| g.id)
+            .collect();
         let at_home: HashSet<u64> = if photo_edits.is_empty() {
             HashSet::new()
         } else {
@@ -959,8 +967,10 @@ pub(crate) fn photos_named(
         photo_edits.retain(|id| at_home.contains(id));
         let ids: HashSet<u64> = lc.added.iter().copied().chain(photo_edits).collect();
         for row in l.dataset.features.rows().filter(|r| ids.contains(&r.id())) {
-            if let Value::Text(text) = row.value(fi) {
-                named.extend(entries(text));
+            for fi in &fis {
+                if let Value::Text(text) = row.value(*fi) {
+                    named.extend(entries(text));
+                }
             }
         }
     }
