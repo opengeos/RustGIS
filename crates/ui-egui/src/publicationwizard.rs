@@ -192,20 +192,20 @@ fn style_step(ui: &mut egui::Ui, d: &mut Draft) {
 /// The texts step: the title, subtitle, note, sources and credit line.
 fn texts_step(ui: &mut egui::Ui, d: &mut Draft) {
     egui::Grid::new("publication_wizard_texts").num_columns(2).spacing(egui::vec2(8.0, 8.0)).show(ui, |ui| {
-        let line = |ui: &mut egui::Ui, label: &str, text: &mut String, hint: &str| {
+        let line = |ui: &mut egui::Ui, label: &str, text: &mut String| {
             let caption = ui.label(label);
-            ui.add(egui::TextEdit::singleline(text).hint_text(hint).desired_width(260.0)).labelled_by(caption.id);
+            ui.add(egui::TextEdit::singleline(text).desired_width(260.0)).labelled_by(caption.id);
             ui.end_row();
         };
         let label = ui.label(tl!("Title"));
         let title = ui.add(egui::TextEdit::singleline(&mut d.title).hint_text(tl!("No title")).desired_width(260.0)).labelled_by(label.id);
         d.title_typed |= title.changed();
         ui.end_row();
-        line(ui, tl!("Subtitle"), &mut d.subtitle, "");
+        line(ui, tl!("Subtitle"), &mut d.subtitle);
         let label = ui.label(tl!("Note"));
         ui.add(egui::TextEdit::multiline(&mut d.note).desired_rows(3).desired_width(260.0)).labelled_by(label.id);
         ui.end_row();
-        line(ui, tl!("Sources"), &mut d.sources, "");
+        line(ui, tl!("Sources"), &mut d.sources);
         let label = ui.label(tl!("Credit line"));
         ui.add_enabled(!d.no_author, egui::TextEdit::singleline(&mut d.author).hint_text(default_credit()).desired_width(260.0))
             .labelled_by(label.id);
@@ -217,7 +217,7 @@ fn texts_step(ui: &mut egui::Ui, d: &mut Draft) {
 }
 
 /// The accent step: the style's own colour, or one picked.
-fn accent_step(ui: &mut egui::Ui, d: &mut Draft, own: egui::Color32) {
+fn accent_step(ui: &mut egui::Ui, d: &mut Draft, app_accent: egui::Color32) {
     let mut ticked = d.accent.is_some();
     if ui
         .checkbox(&mut ticked, tl!("Pick a colour of your own"))
@@ -228,7 +228,7 @@ fn accent_step(ui: &mut egui::Ui, d: &mut Draft, own: egui::Color32) {
         if !ticked {
             d.picked = d.accent;
         }
-        d.accent = ticked.then(|| d.picked.unwrap_or(own));
+        d.accent = ticked.then(|| d.picked.unwrap_or(app_accent));
     }
     if let Some(c) = &mut d.accent {
         egui::color_picker::color_edit_button_srgba(ui, c, egui::color_picker::Alpha::Opaque);
@@ -621,7 +621,7 @@ mod tests {
         assert_eq!(h.state().dialogs.publication.as_ref().unwrap().title, "Rivers basins", "typed, so kept");
     }
 
-    /// The review says what will be drawn: the default credit line as the sheet writes it, and for
+    /// The review says what will be drawn: the default credit line, dated when the layout is made, and for
     /// a figure, that its texts and accent are left to the caption.
     #[test]
     fn the_review_says_what_will_be_drawn() {
