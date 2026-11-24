@@ -338,7 +338,7 @@ fn build_package(s: &mut Session, p: &Value, notes: &mut rustgis_data::loss::Not
         if !package.is_empty() {
             match super::field_changes::list(s.map(), &package) {
                 Ok(Some(mut changes)) => {
-                    photos_named_at_home(&mut changes);
+                    photos_named_at_home(&mut changes)?;
                     if !changes.gone.is_empty() {
                         losses.push(format!(
                             "{} layer(s) the field package gave were removed from its map, so none of their features change at home: {}",
@@ -942,12 +942,14 @@ fn rewrite_paths(held: &str, rewrite: &mut impl FnMut(&str) -> String) -> Option
 /// Names each photo a package brought from home by its path at home again in the old values of
 /// `changes`: the field held it at the path it was unpacked to, and Bring Back checks each old
 /// value against home's.
-fn photos_named_at_home(changes: &mut super::field_changes::Changes) {
+fn photos_named_at_home(changes: &mut super::field_changes::Changes) -> Result<(), String> {
     let mut unpacked = Unpacked::new();
     let package = changes.package.clone();
     let mut at_home = |path: &str| home_path(&mut unpacked, &package, path);
     for layer in &mut changes.layers {
         for given in layer.edited.iter_mut().chain(layer.deleted.iter_mut()) {
+            // Reading a value's paths can look at the disk: Cancel is looked at for each row.
+            rustgis_data::progress::check().map_err(|e| e.to_string())?;
             for (field, value) in &mut given.values {
                 if !(field.eq_ignore_ascii_case("photos") || field.eq_ignore_ascii_case("photo")) {
                     continue;
@@ -959,6 +961,7 @@ fn photos_named_at_home(changes: &mut super::field_changes::Changes) {
             }
         }
     }
+    Ok(())
 }
 
 /// The most pieces of a photos field (split at `;`) tried as one path with `;` in it.
@@ -1239,6 +1242,11 @@ type Unpacked = std::collections::HashMap<PathBuf, Result<std::collections::Hash
 /// [`INDEX`] unpacked beside it names it); otherwise `path` itself.
 fn home_path(unpacked: &mut Unpacked, package: &str, path: &str) -> String {
     let file = Path::new(path);
+    // Only a full path names an unpacked file: a relative one would be looked for wherever the
+    // app runs.
+    if !file.is_absolute() {
+        return path.to_string();
+    }
     file.parent()
         .zip(file.file_name())
         .and_then(|(folder, own)| {
