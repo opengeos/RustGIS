@@ -108,16 +108,17 @@ pub(crate) fn hold(addresses: impl IntoIterator<Item = impl AsRef<str>>, reach: 
     let received = reach == Reach::Public;
     let full = cache::public_restrictions_full();
     let mut named = Named { received, ..Named::default() };
+    // Recorded together: the cache forgets their earlier reads in one pass, not one per address.
+    let mut held = Vec::new();
     for a in addresses {
         let a = a.as_ref();
         let Some(web) = fetched_from(a) else { continue };
         if received {
-            cache::restrict_to_public(a);
-            for (_, part) in rustgis_data::io::shapefile_part_urls(a).unwrap_or_default() {
-                cache::restrict_to_public(&part);
-            }
+            held.push(a.to_string());
+            held.extend(rustgis_data::io::shapefile_part_urls(a).unwrap_or_default().into_iter().map(|(_, part)| part));
         }
-        if address::reach(&web) != Reach::Public && named.seen.insert(a.to_string()) {
+        // Only what can be read there: a forbidden address (link-local, a cloud's metadata) never is.
+        if address::reach(&web) == Reach::Local && named.seen.insert(a.to_string()) {
             if received || cache::ceiling_for(a) == Reach::Public {
                 named.held.add(a);
             } else {
@@ -125,6 +126,7 @@ pub(crate) fn hold(addresses: impl IntoIterator<Item = impl AsRef<str>>, reach: 
             }
         }
     }
+    cache::restrict_all_to_public(held.iter().map(String::as_str));
     named.filled = received && !full && cache::public_restrictions_full();
     named
 }
@@ -404,6 +406,8 @@ mod tests {
         s.project.name = "wrapped".into();
         s.map_mut().tiles.push(TileLayer::new("A", TileKind::PmTiles, pmtiles::template(&plain)));
         s.map_mut().tiles.push(TileLayer::new("B", TileKind::PmTiles, pmtiles::template(&s3::anonymous(&anonymous))));
+        // Never read from anywhere, so not counted.
+        s.map_mut().tiles.push(TileLayer::new("C", TileKind::Raster, "http://169.254.169.254/wrapped-reach/{z}/{x}/{y}.png"));
         let (text, _) = s.project.saved_text(None).unwrap();
         let mut downloaded = Session::new(Project::default());
         cache::allow_named(&plain);

@@ -6886,7 +6886,10 @@ fn add_download(s: &mut Session, p: &Value) -> CmdResult {
         }
         let text = String::from_utf8(bytes).map_err(|_| "GeoLibre project must be UTF-8 JSON")?;
         // Received from its address: what it names reaches no wider than that address does
-        // ([`Session::file_reach`]; the browser's fetch doesn't say where it connected).
+        // ([`Session::file_reach`]). Judged by its name, as neither this download nor the browser's
+        // fetch says where it connected: a name of the local network that doesn't look like one
+        // (`http://nas/…`) counts as the internet, which only narrows; opened from disk, the
+        // project reaches as before.
         use crate::render::rustgis_tiles::{address, cache, logins};
         let reach = address::reach(logins::inner(&url)).min(cache::ceiling_for(&url));
         let was = s.receiving(Some(reach));

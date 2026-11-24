@@ -1871,8 +1871,9 @@ pub(crate) fn unpack_into(bytes: &[u8], dir: &Path) -> Result<(String, Vec<Strin
         }
     }
     let text = project.ok_or("the field package holds no project")?;
-    // Read before anything is written: a project that can't be read leaves no folder behind.
-    Project::from_import_json(&text, Some(dir))?;
+    // Checked before anything is written: a project that can't be read leaves no folder behind.
+    // Nothing it names is read here; that waits for its hold ([`project_in_within`]).
+    Project::check_import_json(&text, Some(dir))?;
     if dir.exists() {
         return Err(format!("{}: the folder is already there", dir.display()));
     }

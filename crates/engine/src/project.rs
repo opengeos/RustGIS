@@ -1921,6 +1921,12 @@ impl Project {
         Self::read_json(text, false, dir, true, None, None).map(|(p, _)| p)
     }
 
+    /// Whether imported JSON reads as a project, refused as [`Project::from_import_json`] refuses
+    /// it, without its repair: nothing it names is read.
+    pub(crate) fn check_import_json(text: &str, dir: Option<&Path>) -> Result<(), String> {
+        Self::read_json(text, false, dir, false, None, None).map(|_| ())
+    }
+
     /// [`Project::from_import_json`] within `reach`, as [`Project::from_json_within`].
     pub(crate) fn from_import_json_within(text: &str, dir: Option<&Path>, reach: Reach) -> Result<(Project, Named), String> {
         Self::read_json(text, false, dir, true, None, Some(reach))
