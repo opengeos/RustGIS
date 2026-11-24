@@ -1993,7 +1993,7 @@ fn read_image(
             r.apply_pam(p, super::pam::GDAL_METADATA);
         }
         let (grid, bounds) = ((r.transform, w, h), r.extent());
-        return Ok(Some(super::PartRead { raster: r, at: (0, 0), grid, bounds }));
+        return Ok(Some(super::PartRead { raster: r, at: (0, 0), grid, bounds, full: (full_w, full_h) }));
     }
     let mut transform = geo.transform;
     // How many full-image pixels one pixel read spans, across and down.
@@ -2086,7 +2086,7 @@ fn read_image(
     }
     let at = span.map_or((0, 0), |s| (s.cols.0, s.rows.0));
     let bounds = if span.is_some() { super::extent_of(&grid.0, r.transformer(), grid.1, grid.2) } else { r.extent() };
-    Ok(Some(super::PartRead { raster: r, at, grid, bounds }))
+    Ok(Some(super::PartRead { raster: r, at, grid, bounds, full: (full_w, full_h) }))
 }
 
 /// What turning a rotated or skewed image north up says ([`super::north_up`]): its pixels are

@@ -1646,6 +1646,8 @@ pub(crate) fn read_tiled_part(
     let _turn = tiled_turn().map_err(|e| format!("{name}: {e}"))?;
     // Planned in its turn, with what the reads before it hold counted.
     let max = rustgis_data::raster::max_samples() / share.max(1);
+    #[cfg(test)]
+    let max = PART_SAMPLES.with(std::cell::Cell::get).unwrap_or(max);
     let read =
         rustgis_data::raster::read_path_part(std::path::Path::new(path), part, max, Some(held)).map_err(|e| format!("{name}: {e}"))?;
     let Some(read) = read else { return Ok(None) };
@@ -1655,19 +1657,29 @@ pub(crate) fn read_tiled_part(
 
 /// What a run says of a raster file read in place it read again from its file ([`read_tiled`]):
 /// its layer's name, how many of its values were rounded as it was read, and, read coarser than
-/// the file, its size and the file's (or the part's) in the file's pixels.
+/// the file, the level's size and the file's, and for a part of the file
+/// ([`read_tiled_part`]) the part's size at that level.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone)]
 pub(crate) struct ReadNote {
     name: String,
     rounded: u64,
     overview: Option<((u32, u32), (u32, u32))>,
+    part: Option<(u32, u32)>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 impl ReadNote {
     pub(crate) fn of(name: &str, r: &rustgis_data::raster::Raster) -> ReadNote {
-        ReadNote { name: name.to_string(), rounded: r.rounded.iter().sum(), overview: r.overview.map(|full| ((r.width, r.height), full)) }
+        let overview = r.overview.map(|full| ((r.width, r.height), full));
+        ReadNote { name: name.to_string(), rounded: r.rounded.iter().sum(), overview, part: None }
+    }
+
+    /// Of a part of a file ([`read_tiled_part`]): read from a level `level` pixels in size of the
+    /// file's `full` image.
+    pub(crate) fn of_part(name: &str, r: &rustgis_data::raster::Raster, level: (u32, u32), full: (u32, u32)) -> ReadNote {
+        let overview = r.overview.map(|_| (level, full));
+        ReadNote { name: name.to_string(), rounded: r.rounded.iter().sum(), overview, part: Some((r.width, r.height)) }
     }
 }
 
@@ -1677,12 +1689,13 @@ impl ReadNote {
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn tiled_read_notes(read: &[ReadNote], whose: &str) -> Vec<String> {
     let (mut rounded, mut overviews) = (Vec::new(), Vec::new());
-    for ReadNote { name, rounded: n, overview } in read {
+    for ReadNote { name, rounded: n, overview, part } in read {
         if *n > 0 {
             rounded.push(format!("{name} {n}"));
         }
         if let Some(((w, h), (fw, fh))) = overview {
-            overviews.push(format!("{name} at its {w} × {h} overview of the {fw} × {fh} raster"));
+            let part = part.map_or_else(String::new, |(pw, ph)| format!(", a {pw} × {ph} part of it"));
+            overviews.push(format!("{name} at its {w} × {h} overview of the {fw} × {fh} raster{part}"));
         }
     }
     let mut notes = Vec::new();
@@ -1801,6 +1814,9 @@ thread_local! {
     /// How many raster files read in place [`tiled_inputs`] has read from their file on this
     /// thread, under test.
     pub(crate) static TILED_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// The most samples [`read_tiled_part`] reads of a part on this thread, under test: no small
+    /// fixture reaches the real limit.
+    pub(crate) static PART_SAMPLES: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
 }
 
 /// Whether a batch's reads are kept on this thread now ([`BATCH_READS`]), under test.

@@ -416,6 +416,17 @@ fn a_clip_by_extent_reads_only_its_part_of_a_tiled_file() {
         let notes = said(&s, mark);
         assert!(!notes.iter().any(|n| n.contains("finest level")), "{notes:?}");
     }
+    // A part too large for what the run holds is read from an overview, and said, with its size.
+    crate::cmd::gp::PART_SAMPLES.with(|c| c.set(Some(40_000)));
+    let mark = s.notice_mark();
+    s.run("layer.remove", &json!({"layer": "clip"})).ok();
+    s.run("raster.process", &clip([10.3, 45.55, 10.42, 45.9])).unwrap();
+    crate::cmd::gp::PART_SAMPLES.with(|c| c.set(None));
+    let got = raster(&s, "clip").data.clone().unwrap();
+    assert_eq!((got.width, got.height), (60, 176), "the part at the 500 overview");
+    let notes = said(&s, mark);
+    let note = "Process: read at the finest level each can hold: checks at its 500 × 500 overview of the 1000 × 1000 raster, a 62 × 177 part of it";
+    assert!(notes.iter().any(|n| n == note), "{notes:?}");
     // The file replaced by one a twentieth of a degree east: read whole, and clipped where it is.
     const N: u32 = 1000;
     let shifted = Raster::new(

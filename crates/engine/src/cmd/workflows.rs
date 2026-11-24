@@ -199,8 +199,8 @@ impl Input {
             && RUN_READS.with(|r| r.borrow().is_some())
             && let Some((read, count)) = super::gp::read_tiled_part(name, path, part, share, &self.held)?
         {
-            let rustgis_data::raster::PartRead { raster, at, grid, bounds } = read;
-            let note = super::gp::ReadNote::of(name, &raster);
+            let rustgis_data::raster::PartRead { raster, at, grid, bounds, full } = read;
+            let note = super::gp::ReadNote::of_part(name, &raster, (grid.1, grid.2), full);
             return Ok(Read { raster: std::sync::Arc::new(raster), _count: Some(count), place: Some(Place { at, grid, bounds, note }) });
         }
         #[cfg(target_arch = "wasm32")]

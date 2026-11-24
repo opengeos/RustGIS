@@ -1110,7 +1110,8 @@ impl Raster {
 
     /// How many of the file's pixels one pixel read spans, across and down: exactly `step` for
     /// every `step`-th pixel, an overview's size over the file's, else 1. (`overview` stays the
-    /// file's own size, which `step` needn't divide, so a reader at a step goes by `step`.)
+    /// size of what was read in the file's pixels, the file's or a part's, which `step` needn't
+    /// divide, so a reader at a step goes by `step`.)
     pub fn file_pixels(&self) -> (f64, f64) {
         if self.step > 1 {
             return (f64::from(self.step), f64::from(self.step));
@@ -1476,6 +1477,8 @@ pub struct PartRead {
     /// That grid's longitude/latitude bounds, as [`Raster::extent`] finds a raster's: every k-th
     /// pixel's grid can pass the image's edge.
     pub bounds: Extent,
+    /// The file's full image, its columns and rows (the raster's `overview` is the part's).
+    pub full: (u32, u32),
 }
 
 /// `part` of the GeoTIFF at `path`, as [`read_path`] reads the file but holding only that part,
