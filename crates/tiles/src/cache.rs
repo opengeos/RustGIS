@@ -497,8 +497,8 @@ pub fn restrict_to_public(url: &str) {
 }
 
 /// [`restrict_to_public`] for every address of `urls` (a received file's): each is recorded,
-/// then the cache forgets their earlier reads going through its answers once for all of them,
-/// not once for each.
+/// then their earlier reads are forgotten ([`forget_resources`]), the cached answers gone through
+/// once for all of them rather than once for each.
 pub fn restrict_all_to_public<'a>(urls: impl IntoIterator<Item = &'a str>) {
     let mut bases = std::collections::HashSet::new();
     let mut spellings = std::collections::HashSet::new();
@@ -1180,8 +1180,10 @@ fn forgotten_as(url: &str) -> &str {
 }
 
 /// Forgets every resource of `resources` ([`forgotten_as`]) as [`forget`] does, and every cached
-/// answer whose canonical resource is one of `bases`, going through the cache once. Reads under
-/// way are kept, and [`request`] and [`peek_from`] refuse what they complete under a wider reach.
+/// answer whose canonical resource is one of `bases`. The cached answers are gone through once for
+/// all of them; the archives, COG tiles and remote files of each resource are forgotten one
+/// resource at a time, each going through its own cache. Reads under way are kept, and [`request`]
+/// and [`peek_from`] refuse what they complete under a wider reach.
 fn forget_resources(resources: &std::collections::HashSet<String>, bases: &std::collections::HashSet<String>) {
     // First: a tile answered from here on is dropped, and one answered before goes with the rest.
     for url in resources {

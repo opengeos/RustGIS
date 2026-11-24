@@ -20673,10 +20673,6 @@ fn local_data_server() -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>
     serve_files(vec![("/points.geojson".into(), points.to_vec()), ("/stac/collections".into(), collections.to_vec())])
 }
 
-/// Plugins reach only the internet, and so does every command a plugin runs that connects: an
-/// address it gives on this computer or the local network is refused before anything is read,
-/// naming it and why (the STAC, open data portal, web file, tile and OpenStreetMap commands
-/// among them), and nothing is added.
 /// Project text a plugin gives is held by both holds: what it names is held to the internet as a
 /// received file's is, said, and nothing it names is read from this computer, a raster read in
 /// place among them.
@@ -20699,6 +20695,10 @@ fn project_text_a_plugin_gives_reads_nothing_from_this_computer() {
     assert!(s.notices.iter().any(|n| n.text.starts_with("the map file came from the internet, so the 1 address(es)")));
 }
 
+/// Plugins reach only the internet, and so does every command a plugin runs that connects: an
+/// address it gives on this computer or the local network is refused before anything is read,
+/// naming it and why (the STAC, open data portal, web file, tile and OpenStreetMap commands
+/// among them), and nothing is added.
 #[test]
 fn a_plugin_cannot_name_a_local_address_to_a_command() {
     let mut s = world();
