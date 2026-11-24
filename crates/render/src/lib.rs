@@ -6638,6 +6638,8 @@ fn render_frame(
             });
             // Records the read left out: one it couldn't read this time may read on another.
             let mut skipped = 0usize;
+            // The view's own read isn't needed when a wider one is read to keep: its ids let go.
+            let near_read = near_read.filter(|_| keep.is_none());
             let mut draw_rows = |chunk: &mut rustgis_map::Layer| -> rustgis_data::Result<()> {
                 chunk.selection = chunk
                     .dataset

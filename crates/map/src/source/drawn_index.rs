@@ -41,7 +41,9 @@ fn around<'a>(boxes: impl Iterator<Item = &'a [f32; 4]>) -> [f32; 4] {
 impl DrawnBoxes {
     /// The index of these features' drawn boxes (feature id, box), sorted where they lie: the
     /// only memory it adds is the nodes above them. `None` when those can't be held, or `stop`
-    /// says to give up (it is asked between the steps).
+    /// says to give up (it is asked between the steps). Each of its two sorts is one step that
+    /// doesn't look at `stop`: about a second for millions of features, on the worker that packs
+    /// it, never the frame.
     pub fn new(mut boxes: Vec<(u32, [f32; 4])>, stop: impl Fn() -> bool) -> Option<DrawnBoxes> {
         let centre = |b: &[f32; 4], axis: usize| f64::from(b[axis]) + f64::from(b[axis + 2]);
         // Sort-Tile-Recursive: in vertical slices of whole leaves by x, each slice by y.
