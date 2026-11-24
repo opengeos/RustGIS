@@ -98,7 +98,10 @@ pub(crate) fn start_project_save(app: &mut RustGisApp, in_place: bool) -> Result
     };
     let save = app.services.save_project.as_ref().ok_or(tl!("This build cannot save through the native picker."))?;
     let name = app.session.project.name.replace(['/', '\\'], "-");
-    let file = format!("{name}.rgis");
+    // Written back to the file it was opened from, it is named by that file; otherwise by the
+    // project, as the picker offers it.
+    let opened_file = app.session.path.as_deref().filter(|_| opened_from).and_then(std::path::Path::file_name);
+    let file = opened_file.map_or_else(|| format!("{name}.rgis"), |f| f.to_string_lossy().into_owned());
     let notes = app.session.construction_output_notes()?;
     // Written back to the document it was opened from, its paths are written relative to the folder
     // of the copy it was opened from: a file linked beside the original (`./terrain.tif`) stays so,
@@ -619,6 +622,27 @@ mod tests {
         h.state_mut().run("ui.save", Value::Null).unwrap();
         h.state_mut().complete_project_save(Ok("kept.rgis".into()));
         assert_eq!(last(&asked).as_deref(), Some("content://kept"));
+    }
+
+    /// A write-back to the file the project was opened from is named by that file; Save As is
+    /// named by the project, as the picker offers it.
+    #[test]
+    fn a_write_back_is_named_by_its_file() {
+        use std::{cell::RefCell, rc::Rc};
+        let mut h = launch();
+        let names: Rc<RefCell<Vec<String>>> = Rc::default();
+        let seen = names.clone();
+        h.state_mut().services.save_project = Some(Box::new(move |name, _, _| {
+            seen.borrow_mut().push(name.to_string());
+            Ok(())
+        }));
+        let copy = std::path::PathBuf::from("/picked/5/0/site.rgis");
+        h.state_mut().picked_document(copy.clone(), "content://site".into());
+        h.state_mut().session.path = Some(copy);
+        h.state_mut().run("ui.save", Value::Null).unwrap();
+        h.state_mut().complete_project_save(Ok("site.rgis".into()));
+        h.state_mut().run("ui.saveAs", Value::Null).unwrap();
+        assert_eq!(*names.borrow(), ["site.rgis", "World Atlas.rgis"]);
     }
 
     /// A write-back the phone turns down while busy with another file leaves Save writing back

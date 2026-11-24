@@ -465,7 +465,12 @@ public class MainActivity extends NativeActivity {
     public void save(final String name, final byte[] bytes, final boolean project) {
         runOnUiThread(() -> {
             if (saveBytes != null || picking || writing) {
-                saveFailed(project, name, writing ? "another file is being saved." : "another file is being chosen.");
+                // A project's refusal is a code the Rust side words; an export's is as it was.
+                if (project) {
+                    add(writeBackFailed(name, new java.io.IOException(DocumentWrite.BUSY), null));
+                } else {
+                    saveFailed(false, name, "another file is being chosen.");
+                }
                 return;
             }
             saveName = name;
