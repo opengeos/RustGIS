@@ -8286,8 +8286,6 @@ fn place_labels_with_previews(
             // Its own place, else the first alternative where all of it shows (the text moves there;
             // an icon stays).
             let mut at = None;
-            // What its curve layouts and callout search spend, given back if it goes as a duplicate.
-            let budgets = (layouts_left, searches, spots);
             let count = curves.as_ref().map_or(1 + alternatives.len(), |curves| curves.positions.len());
             let original = LabelPlace::take(&mut l);
             // A failed curve at the middle still appears there once in View Unplaced.
@@ -8349,6 +8347,13 @@ fn place_labels_with_previews(
             l.collide.callout = None;
             let relative = |l: &PlacedLabel, line: [f32; 4]| [line[0] - l.x, line[1] - l.y, line[2] - l.x, line[3] - l.y];
             let mut moved_by = None;
+            // Its class removes duplicates (#2847): near a label of another feature of its layer and
+            // class with the same text, placed before it, it is left out. One moved by hand always shows.
+            let duplicate = |l: &PlacedLabel| {
+                remove_duplicates
+                    .filter(|_| has_text && !collide.pinned)
+                    .is_some_and(|within| placed_texts.near(key, &l.text, [l.center_x(), l.y], within))
+            };
             if let (true, Some([dx, dy])) = (locked && !collide.pinned, collide.callout_offset) {
                 // Locked after a callout moved it: there again, with its line.
                 moved_by = Some([dx, dy]);
@@ -8372,6 +8377,8 @@ fn place_labels_with_previews(
                 && has_text
                 && text.iter().any(|b| grid.hits(b))
                 && searches > 0
+                // A duplicate where it is goes rather than moving away from its twin: no search spent.
+                && !duplicate(&l)
             {
                 // A callout: crowded where it is and at its alternatives, the label moves to the
                 // nearest free spot within its reach, a line drawn back to its feature. With no such
@@ -8390,20 +8397,13 @@ fn place_labels_with_previews(
                     l.collide.callout = Some(relative(&l, line));
                 }
             }
-            // Its class removes duplicates (#2847): near a label of another feature of its layer and
-            // class with the same text, placed before it, it is left out. It takes no room and isn't
-            // shown as unplaced, as it wasn't short of room. One moved by hand always shows.
-            let dedupe = remove_duplicates.filter(|_| has_text).map(|within| (within, [l.center_x(), l.y]));
-            if let Some((within, centre)) = dedupe
-                && !collide.pinned
-                && placed_texts.near(key, &l.text, centre, within)
-            {
+            // Checked where it ends up, after a callout moved it: a duplicate takes no room and isn't
+            // shown as unplaced, as it wasn't short of room.
+            if duplicate(&l) {
                 // A tilted view's other bands are places of the same label: none of them shows.
                 if grouped {
                     placed_groups.insert(key);
                 }
-                // It is drawn nowhere, so what it spent stays for the later labels.
-                (layouts_left, searches, spots) = budgets;
                 continue;
             }
             if !show_text && !show_icon {
@@ -8416,8 +8416,8 @@ fn place_labels_with_previews(
             if show_text && !collide.text_ignore_placement {
                 text.iter().for_each(|b| grid.insert(*b));
             }
-            if let Some((within, centre)) = dedupe.filter(|_| show_text) {
-                placed_texts.insert(key, &l.text, centre, within);
+            if let Some(within) = remove_duplicates.filter(|_| show_text && has_text) {
+                placed_texts.insert(key, &l.text, [l.center_x(), l.y], within);
             }
             if show_icon && !collide.icon_ignore_placement {
                 icon.iter().for_each(|b| grid.insert(*b));
@@ -10604,10 +10604,10 @@ mod tests {
         assert_eq!(shown(&place(vec![main(100.0, 1, 200.0), head])), [("Main".into(), 100)], "no other band brings it back");
     }
 
-    /// A label removed as a duplicate gives back the callout searches it spent (#2847): with more
-    /// crowded duplicates than a placement has searches, a later label still moves to a free spot.
+    /// A label that is a duplicate where it is spends no callout search (#2847): with more crowded
+    /// duplicates than a placement has searches, a later label still moves to a free spot.
     #[test]
-    fn a_removed_duplicate_gives_back_its_callout_searches() {
+    fn a_duplicate_spends_no_callout_search() {
         let crowded = |text: &str, fid: u64, priority: f64| {
             let mut l = label(text, 100.0, None, 0.0);
             l.collide.callout_reach = 40.0;
