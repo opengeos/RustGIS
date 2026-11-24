@@ -45,7 +45,7 @@ const CROWDED_ROWS: f32 = 7.0;
 /// The room above and below a sheet's rows.
 const SHEET_MARGIN: f32 = 4.0;
 /// The More sheet's rows with the position hidden.
-const MORE_ROWS: usize = 8;
+const MORE_ROWS: usize = 9;
 /// The More sheet's rows shown only with the position on: Go to My Position, and the track.
 const MORE_POSITION_ROWS: usize = 2;
 

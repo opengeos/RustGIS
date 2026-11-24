@@ -485,7 +485,12 @@ fn answer_ended(inbox: &Inbox, purpose: Option<String>) {
 fn write_back_failure(name: &str, reason: &str, kept: Option<&Path>, open: bool) -> String {
     // Turned down while busy: nothing was touched, and Save writes back there once it is done.
     if reason == "code:busy" {
-        return i18n::fmt("{name} wasn't saved: another file is being chosen or saved. Save again once it is done.", &[("name", name)]);
+        let text = if open {
+            "{name} wasn't saved: another file is being chosen or saved. Save again once it is done."
+        } else {
+            "{name} wasn't saved: another file is being chosen or saved."
+        };
+        return i18n::fmt(text, &[("name", name)]);
     }
     let reason = write_back_reason(reason);
     match (kept, open) {
@@ -921,6 +926,10 @@ mod tests {
         assert!(said(Some(kept), false).contains("may be damaged") && !said(Some(kept), false).contains("Save again"));
         let busy = write_back_failure("site.rgis", "code:busy", None, true);
         assert_eq!(busy, "site.rgis wasn't saved: another file is being chosen or saved. Save again once it is done.");
+        assert_eq!(
+            write_back_failure("site.rgis", "code:busy", None, false),
+            "site.rgis wasn't saved: another file is being chosen or saved."
+        );
         for (code, worded) in [
             ("code:busy", "another file is being chosen or saved"),
             ("code:storage", "the app's storage can't be written to"),

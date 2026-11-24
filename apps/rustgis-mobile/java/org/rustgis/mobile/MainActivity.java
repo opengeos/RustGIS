@@ -465,7 +465,7 @@ public class MainActivity extends NativeActivity {
     public void save(final String name, final byte[] bytes, final boolean project) {
         runOnUiThread(() -> {
             if (saveBytes != null || picking || writing) {
-                saveFailed(project, name, "another file is being chosen.");
+                saveFailed(project, name, writing ? "another file is being saved." : "another file is being chosen.");
                 return;
             }
             saveName = name;
