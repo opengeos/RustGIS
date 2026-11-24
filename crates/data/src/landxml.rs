@@ -195,13 +195,10 @@ pub fn read(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Vec<(Data
         let sname = s.attribute("name").unwrap_or("").to_string();
         let mut pnts: HashMap<&str, (Coord, Option<f64>)> = HashMap::new();
         for p in elements(&s, "P") {
-            match (p.attribute("id"), nez(&text_of(&p))) {
-                (Some(id), Some(v)) => {
-                    pnts.insert(id, v);
-                }
-                // The faces that name it are left out, and counted; a point no face names loses
-                // nothing.
-                _ => {}
+            // A point that can't be read isn't kept: the faces that name it are left out, and
+            // counted, and a point no face names loses nothing.
+            if let (Some(id), Some(v)) = (p.attribute("id"), nez(&text_of(&p))) {
+                pnts.insert(id, v);
             }
         }
         // Invisible faces (i="1") are holes in the surface, never read, so the cap counts the
