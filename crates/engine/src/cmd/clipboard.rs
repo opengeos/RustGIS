@@ -202,11 +202,22 @@ fn paste(s: &mut Session, p: &Value) -> CmdResult {
     } else {
         vec![from.to(own)?]
     };
+    // A feature with a place the layer's system can't hold is left out, counted and said, rather
+    // than the paste refused.
     let none = rustgis_data::HeldPlaces::default();
-    for ft in &mut taken {
-        for to in &steps {
-            ft.geometry = ft.geometry.take().map(|g| Dataset::edit_from_lonlat_by(to, g, &none)).transpose()?;
-        }
+    let before = taken.len();
+    taken.retain_mut(|ft| {
+        steps.iter().all(|to| match ft.geometry.take().map(|g| Dataset::edit_from_lonlat_by(to, g, &none)).transpose() {
+            Ok(g) => {
+                ft.geometry = g;
+                true
+            }
+            Err(_) => false,
+        })
+    });
+    let unplaced = before - taken.len();
+    if unplaced > 0 && taken.is_empty() {
+        return Err(format!("Paste: the copied feature(s) have a place {} ({}) can't hold", l.name, own.label()));
     }
     for ft in taken {
         next = next.saturating_add(1);
@@ -234,6 +245,10 @@ fn paste(s: &mut Session, p: &Value) -> CmdResult {
     let name = l.name.clone();
     let features = |n: usize| if n == 1 { "1 feature".to_string() } else { format!("{n} features") };
     let mut notices = Vec::new();
+    if unplaced > 0 {
+        let (have, they) = if unplaced == 1 { ("has", "it wasn't") } else { ("have", "they weren't") };
+        notices.push(format!("Paste: {} {have} a place {name} ({}) can't hold, so {they} pasted", features(unplaced), own.label()));
+    }
     for (f, (cuts, n)) in l.dataset.fields.iter().zip(unfit) {
         notices.extend(cuts.notices("Paste", &f.name));
         if n > 0 {
