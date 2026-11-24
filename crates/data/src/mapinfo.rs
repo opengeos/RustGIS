@@ -241,7 +241,8 @@ pub fn read(mif: &str, mid: Option<&str>, name: &str) -> Result<(Dataset, ReadRe
                     .unwrap_or(w.len());
                 match coordsys(w.get(i + 1..end).unwrap_or_default()) {
                     Ok(c) => crs = c,
-                    Err(e) => report.messages.push(e),
+                    // Its coordinates are kept as they are: a system assumed.
+                    Err(e) => report.messages.push(crate::loss::Note::loss(crate::loss::LossCode::AssumedCrs, e)),
                 }
                 i = end;
             }
@@ -683,7 +684,11 @@ mod tests {
         assert!(read("Version 300\nColumns 1\n x Integer\n", None, "x").is_err(), "no DATA");
         assert!(read("Version 300\nColumns 99999\nData\n", None, "x").is_err());
         let (_, rep) = read("CoordSys NonEarth Units \"m\" Bounds (0, 0) (10, 10)\nData\nPoint 1 1\n", None, "n").unwrap();
-        assert!(rep.messages.iter().any(|m| m.contains("non-earth")));
+        assert!(
+            rep.messages.iter().any(|m| m.contains("non-earth") && m.loss == Some(crate::loss::LossCode::AssumedCrs)),
+            "{:?}",
+            rep.messages
+        );
         for cut in (0..MIF.len()).step_by(7) {
             let _ = read(MIF.get(..cut).unwrap_or(""), Some(MID), "t");
         }

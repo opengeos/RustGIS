@@ -808,9 +808,9 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>>
         }
         if unread > 0 {
             let what = if unread == 1 { "property" } else { "properties" };
-            rep.messages.push(format!(
-                "{}: {unread} {what} not read: nested records, other GML values or further shapes ({unread_names})",
-                ds.name
+            rep.messages.push(crate::loss::Note::loss(
+                crate::loss::LossCode::DroppedValue,
+                format!("{}: {unread} {what} not read: nested records, other GML values or further shapes ({unread_names})", ds.name),
             ));
         }
         if kind.repeated > 0 {
@@ -999,7 +999,10 @@ mod tests {
         // Its height is dropped, and said; so is the nested `member` property, not an attribute.
         assert!(ds.zm_dropped && rep.messages.iter().any(|m| m.contains("Z or M values")), "{:?}", rep.messages);
         assert!(
-            rep.messages.iter().any(|m| m == "n: 1 property not read: nested records, other GML values or further shapes (member)"),
+            rep.messages
+                .iter()
+                .any(|m| m.as_str() == "n: 1 property not read: nested records, other GML values or further shapes (member)"
+                    && m.loss == Some(crate::loss::LossCode::DroppedValue)),
             "{:?}",
             rep.messages
         );
@@ -1132,9 +1135,8 @@ mod tests {
         // The first shape is the one kept; the second is said as not read.
         assert_eq!(ds.features[0].geometry, Some(Geometry::Point(Coord::new(10.0, 48.0))));
         assert!(
-            rep.messages
-                .iter()
-                .any(|m| m == "t parks: 3 properties not read: nested records, other GML values or further shapes (owner, built, entrance)"),
+            rep.messages.iter().any(|m| m.as_str()
+                == "t parks: 3 properties not read: nested records, other GML values or further shapes (owner, built, entrance)"),
             "{:?}",
             rep.messages
         );
@@ -1149,7 +1151,9 @@ mod tests {
         let (ds, rep) = &layers[0];
         assert_eq!((ds.features.len(), rep.skipped), (1, 0), "{:?}", rep.messages);
         assert!(
-            rep.messages.iter().any(|m| m == "d: 4 properties not read: nested records, other GML values or further shapes (a, b, c, …)"),
+            rep.messages
+                .iter()
+                .any(|m| m.as_str() == "d: 4 properties not read: nested records, other GML values or further shapes (a, b, c, …)"),
             "{:?}",
             rep.messages
         );

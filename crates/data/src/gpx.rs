@@ -112,17 +112,19 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>>
     };
     let mut routes = Dataset::new(format!("{name} routes"), GeometryType::Polyline, line_fields());
     for r in children(&gpx, "rte") {
-        let mut pts = Vec::new();
+        let (mut pts, mut unplaced) = (Vec::new(), 0usize);
         for p in children(&r, "rtept") {
             match coord(&p) {
                 Some(c) => pts.push(c),
-                None => route_points += 1,
+                None => unplaced += 1,
             }
         }
         let n = pts.len();
         if n >= 2 {
             routes.push_next(Some(Geometry::Line(vec![pts])), line_attrs(&r, n));
+            route_points += unplaced;
         } else {
+            // Left out whole, said with the routes; its points aren't also a kept route's loss.
             skipped += 1;
         }
     }
@@ -215,10 +217,12 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>>
         }
         report.skipped = skipped;
         if skipped > 0 {
-            report.messages.push(crate::loss::Note::loss(
-                crate::loss::LossCode::DroppedFeature,
-                format!("{name}: {skipped} points, routes or tracks without usable geometry were skipped"),
-            ));
+            let what = if skipped == 1 {
+                "point, route or track without usable geometry was skipped"
+            } else {
+                "points, routes or tracks without usable geometry were skipped"
+            };
+            report.messages.push(crate::loss::Note::loss(crate::loss::LossCode::DroppedFeature, format!("{name}: {skipped} {what}")));
         }
     }
     if out.is_empty() {
@@ -279,7 +283,7 @@ mod tests {
             said,
             [
                 ("a: 1 GPX route point without usable coordinates was left out of its route", Some(crate::loss::LossCode::DroppedGeometry)),
-                ("a: 1 points, routes or tracks without usable geometry were skipped", Some(crate::loss::LossCode::DroppedFeature)),
+                ("a: 1 point, route or track without usable geometry was skipped", Some(crate::loss::LossCode::DroppedFeature)),
             ]
         );
     }

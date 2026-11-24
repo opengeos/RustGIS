@@ -80,8 +80,8 @@ pub fn read(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Vec<(Data
     }
     let mut skipped = 0usize;
     let mut missing_parcels = 0usize;
-    // Vertices left out of a shape (a point a CoordGeom names that isn't there, a surface point
-    // that can't be read): geometry lost, not features, which `skipped` counts.
+    // Vertices left out of a shape that is kept (a point a CoordGeom names that isn't there):
+    // geometry lost, not features, which `skipped` counts.
     let mut vertices = 0usize;
 
     // Coordinate geometry points, by name too (parcels and alignments may refer to them).
@@ -143,7 +143,8 @@ pub fn read(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Vec<(Data
             missing_parcels += 1;
             continue;
         };
-        let mut ring = path(&cg, &mut vertices);
+        let mut unread = 0usize;
+        let mut ring = path(&cg, &mut unread);
         if ring.first() != ring.last()
             && let Some(f) = ring.first().copied()
         {
@@ -153,6 +154,7 @@ pub fn read(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Vec<(Data
             skipped += 1;
             continue;
         }
+        vertices += unread;
         let area = p.attribute("area").and_then(|a| a.parse::<f64>().ok()).map(Value::Float).unwrap_or_default();
         let attr = |k: &str| p.attribute(k).map(|v| Value::Text(v.to_string())).unwrap_or_default();
         parcels.push_next(Some(Geometry::Polygon(vec![vec![ring]])), vec![attr("name"), area, attr("desc")]);
@@ -164,12 +166,18 @@ pub fn read(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Vec<(Data
         vec![Field::new("name", FieldType::Text), Field::new("length", FieldType::Double), Field::new("staStart", FieldType::Double)],
     );
     for a in elements(&root, "Alignment") {
-        let Some(cg) = a.children().find(|c| c.is_element() && local(c) == "CoordGeom") else { continue };
-        let line = path(&cg, &mut vertices);
+        // An alignment without its CoordGeom has no shape to draw: left out, and counted.
+        let Some(cg) = a.children().find(|c| c.is_element() && local(c) == "CoordGeom") else {
+            skipped += 1;
+            continue;
+        };
+        let mut unread = 0usize;
+        let line = path(&cg, &mut unread);
         if line.len() < 2 {
             skipped += 1;
             continue;
         }
+        vertices += unread;
         let num = |k: &str| a.attribute(k).and_then(|v| v.parse::<f64>().ok()).map(Value::Float).unwrap_or_default();
         alignments.push_next(
             Some(Geometry::Line(vec![line])),
@@ -191,8 +199,9 @@ pub fn read(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Vec<(Data
                 (Some(id), Some(v)) => {
                     pnts.insert(id, v);
                 }
-                // A vertex of the faces that name it, which are counted on their own.
-                _ => vertices += 1,
+                // The faces that name it are left out, and counted; a point no face names loses
+                // nothing.
+                _ => {}
             }
         }
         // Invisible faces (i="1") are holes in the surface, never read, so the cap counts the
@@ -231,7 +240,11 @@ pub fn read(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Vec<(Data
     if skipped > 0 {
         report.messages.push(crate::loss::Note::loss(
             crate::loss::LossCode::DroppedFeature,
-            format!("{skipped} points, faces or figures couldn't be read and were left out"),
+            if skipped == 1 {
+                "1 point, face or figure couldn't be read and was left out".to_string()
+            } else {
+                format!("{skipped} points, faces or figures couldn't be read and were left out")
+            },
         ));
     }
     if vertices > 0 {
@@ -316,6 +329,17 @@ mod tests {
   <P id="1">4649776 500000 100</P><P id="2">4649776 500100 102</P><P id="3">4649876 500100 104</P><P id="4">4649876 500000 106</P>
 </Pnts><Faces><F>1 2 3</F><F>1 3 4</F><F i="1">1 2 4</F><F>1 2 9</F></Faces></Definition></Surface></Surfaces>
 </LandXML>"#;
+
+    /// An alignment without its CoordGeom has no shape: it is left out, and said with the
+    /// features left out.
+    #[test]
+    fn an_alignment_without_coordgeom_is_said_left_out() {
+        let xml = r#"<LandXML><Alignments><Alignment name="no shape"/></Alignments><CgPoints><CgPoint name="1">0 0</CgPoint></CgPoints></LandXML>"#;
+        let layers = read("a.xml", xml.as_bytes(), None).unwrap();
+        assert_eq!(layers[0].1.skipped, 1);
+        let said: Vec<_> = layers[0].1.messages.iter().filter(|m| m.contains("left out")).map(|m| (m.as_str(), m.loss)).collect();
+        assert_eq!(said, [("1 point, face or figure couldn't be read and was left out", Some(crate::loss::LossCode::DroppedFeature))]);
+    }
 
     /// A point a parcel's CoordGeom names that isn't there is a vertex left out of a parcel that
     /// is still kept: its geometry's loss, said apart from the features left out.

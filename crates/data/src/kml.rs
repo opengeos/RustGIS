@@ -737,9 +737,12 @@ impl Reader {
                     ));
                 }
                 if self.duplicate_entries > 0 {
-                    report.messages.push(format!(
-                        "{name}: {} repeated ExtendedData entries in {} placemarks were left out",
-                        self.duplicate_entries, self.duplicate_placemarks
+                    report.messages.push(crate::loss::Note::loss(
+                        crate::loss::LossCode::DroppedValue,
+                        format!(
+                            "{name}: {} repeated ExtendedData entries in {} placemarks were left out",
+                            self.duplicate_entries, self.duplicate_placemarks
+                        ),
                     ));
                 }
                 if self.dropped_keys > 0 {
@@ -959,7 +962,11 @@ mod tests {
         let layers = read("duplicates.kml", xml.as_bytes()).unwrap();
         assert_eq!(layers.len(), 2);
         let messages: Vec<_> = layers.iter().flat_map(|l| &l.report.messages).collect();
-        assert_eq!(messages, ["duplicates: 4 repeated ExtendedData entries in 2 placemarks were left out"]);
+        assert_eq!(
+            messages.iter().map(|m| m.as_str()).collect::<Vec<_>>(),
+            ["duplicates: 4 repeated ExtendedData entries in 2 placemarks were left out"]
+        );
+        assert_eq!(messages[0].loss, Some(crate::loss::LossCode::DroppedValue));
         for layer in &layers {
             let ds = &layer.dataset;
             assert_eq!(ds.value(0, ds.field_index("n").unwrap()), &Value::Int(0));
