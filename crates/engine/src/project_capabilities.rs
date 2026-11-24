@@ -176,6 +176,7 @@ const COMMAND_CAPABILITIES: &[(&str, CommandCheck)] = &[
     ("label-duplicates", command_removes_duplicate_labels),
     ("tile-resampling", command_resamples_tiles),
     ("layout-page-color", command_colours_the_page),
+    ("layout-text-statistics", command_uses_text_statistics),
 ];
 
 /// A saved `labels.placement` that has a class remove duplicates, read as the command reads it
@@ -198,6 +199,23 @@ fn command_resamples_tiles(id: &str, params: &Value) -> bool {
             crate::cmd::tiles::resampling(params).ok().flatten() == Some(rustgis_map::raster::Resampling::Nearest)
         }
         "script.run" => params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, command_resamples_tiles)),
+        _ => false,
+    }
+}
+
+/// A layout text holding a layer statistic (#2853): an older reader prints the token as written.
+fn text_statistics(e: &rustgis_map::layout::Element) -> bool {
+    matches!(&e.kind, rustgis_map::layout::ElementKind::Text { text, .. } if !rustgis_map::layout::stat_tokens(text).is_empty())
+}
+
+/// A layout command that gives a text a layer statistic (#2853), read as a text reads its tokens
+/// ([`rustgis_map::layout::stat_tokens`]): only a text takes `"text"`.
+fn command_uses_text_statistics(id: &str, params: &Value) -> bool {
+    let holds = |p: &Value| p.get("text").and_then(Value::as_str).is_some_and(|t| !rustgis_map::layout::stat_tokens(t).is_empty());
+    match id {
+        "layout.addElement" | "layout.update" => holds(params),
+        "layout.import" => imported_layout_uses(params, &["{count:", "{sum:", "{mean:", "{min:", "{max:"], text_statistics),
+        "script.run" => params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, command_uses_text_statistics)),
         _ => false,
     }
 }
@@ -964,6 +982,7 @@ fn layout_capabilities(layouts: &[rustgis_map::layout::Layout]) -> Vec<&'static 
         (elements().any(|e| e.kind.has_custom_text_size()), "layout-text-size"),
         (elements().any(bar_details), "layout-scale-bar-details"),
         (layouts.iter().any(|l| l.paper.is_some()), "layout-page-color"),
+        (elements().any(text_statistics), "layout-text-statistics"),
     ]
     .into_iter()
     .filter_map(|(used, name)| used.then_some(name))
@@ -2534,6 +2553,48 @@ mod tests {
             document["tasks"] = json!([{"name": "Task", "steps": [{"title": "Import", "command": "layout.import", "params": {"text": layout.to_string()}}]}]);
             let saved = serde_json::to_value(Project::from_json(&document.to_string()).unwrap()).unwrap();
             assert_eq!(saved.get("requires").is_some(), required, "{layout}");
+        }
+    }
+
+    /// A layout text holding a layer statistic (#2853) is required where it is saved, so an older
+    /// reader refuses the project by name instead of printing the token; a text with other tokens,
+    /// or braces that aren't one, needs nothing.
+    #[test]
+    fn text_statistics_capability_follows_saved_layouts_and_commands() {
+        use rustgis_map::layout::{ElementKind, Layout};
+        let with_text = |text: &str| {
+            let mut p = Project::default();
+            let mut l = Layout::new("L", 100.0, 100.0);
+            l.add("T", (10.0, 10.0, 50.0, 10.0), ElementKind::text(text, 12.0, rustgis_map::Rgba::rgb(0, 0, 0), false));
+            p.layouts.push(l);
+            serde_json::to_value(&p).unwrap()
+        };
+        let saved = with_text("{count:Sites} sites");
+        assert_eq!(saved["requires"], json!(["layout-text-statistics"]));
+        assert_eq!(Project::from_json(&saved.to_string()).unwrap().layouts[0].elements.len(), 1);
+        let base = with_text("{scale} {count:} {foo}");
+        assert_eq!(base.get("requires"), None);
+        let layout = saved["layouts"][0].to_string();
+        for (id, params, required) in [
+            ("layout.addElement", json!({"kind": "text", "text": "{sum:Sites:visits}"}), true),
+            ("layout.addElement", json!({"kind": "text", "text": "{scale}"}), false),
+            ("layout.addElement", json!({"kind": "legend", "title": "{count:Sites}"}), false),
+            ("layout.update", json!({"element": 1, "text": "Mean {mean:Sites:visits}"}), true),
+            ("layout.update", json!({"element": 1, "text": "{sum:Sites}"}), false),
+            ("layout.update", json!({"element": 1, "x": 3}), false),
+            ("layout.import", json!({"text": layout}), true),
+        ] {
+            let script = format!("{id} {params}");
+            for value in [
+                json!([{"name": "Task", "steps": [{"title": "Figure", "command": id, "params": params}]}]),
+                json!([{"name": "Script", "steps": [{"title": "Figure", "command": "script.run", "params": {"script": script}}]}]),
+            ] {
+                let mut document = base.clone();
+                document["tasks"] = value;
+                let saved = serde_json::to_value(Project::from_json(&document.to_string()).unwrap()).unwrap();
+                let expected = if required { json!(["layout-text-statistics"]) } else { Value::Null };
+                assert_eq!(saved["requires"], expected, "{id} {params}");
+            }
         }
     }
 

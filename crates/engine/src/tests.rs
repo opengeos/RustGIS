@@ -39952,6 +39952,31 @@ fn layout_element_inks_from_commands() {
     }
 }
 
+/// A layout text's layer statistics (#2853) are said when the text is added or its text changed
+/// with a token that has no figure, each with what it misses; one with a figure, or another
+/// change to the text's element, says nothing.
+#[test]
+fn layout_text_statistics_without_a_figure_are_said() {
+    let mut s = world();
+    s.run("layout.new", &json!({"name": "L"})).unwrap();
+    let run = |s: &mut Session, id: &str, p: Value| {
+        let mark = s.notice_mark();
+        let out = s.run(id, &p).unwrap();
+        let said: Vec<String> =
+            s.notices_since(mark).iter().map(|n| n.text.as_str().to_string()).filter(|t| t.contains("shows as written")).collect();
+        (out, said)
+    };
+    let (out, said) = run(&mut s, "layout.addElement", json!({"kind": "text", "text": "{count:Countries} countries", "x": 10, "y": 10}));
+    assert_eq!(said, Vec::<String>::new());
+    let text = out["element"].clone();
+    let (_, said) = run(&mut s, "layout.update", json!({"element": text, "text": "{count:Countries} of {sum:Nowhere:pop}"}));
+    assert_eq!(said, ["{sum:Nowhere:pop} shows as written: the map of the layout's first frame has no layer named 'Nowhere'"]);
+    let (_, said) = run(&mut s, "layout.update", json!({"element": text, "x": 20}));
+    assert_eq!(said, Vec::<String>::new(), "a move doesn't say it again");
+    let (_, said) = run(&mut s, "layout.addElement", json!({"kind": "text", "text": "{max:Countries:nosuch}", "x": 10, "y": 40}));
+    assert_eq!(said, ["{max:Countries:nosuch} shows as written: 'Countries' has no field named 'nosuch'"]);
+}
+
 #[test]
 fn locked_layout_elements_take_no_change_until_unlocked() {
     use rustgis_map::layout::ElementKind;

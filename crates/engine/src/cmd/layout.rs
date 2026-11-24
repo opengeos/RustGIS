@@ -3635,6 +3635,18 @@ fn say_text_fit(s: &mut Session, li: usize, id: u32, lines: bool) {
     }
 }
 
+/// Says which layer statistics (#2853) of the text `id` of the layout `li` are drawn as written,
+/// and what each misses ([`rustgis_render::layout::statistic_notices`]).
+fn say_text_statistics(s: &mut Session, li: usize, id: u32) {
+    let said = match s.project.layouts.get(li).map(|l| (l, l.element(id).map(|e| &e.kind))) {
+        Some((l, Some(ElementKind::Text { text, .. }))) => rustgis_render::layout::statistic_notices(l, &s.project.maps, text),
+        _ => return,
+    };
+    for w in said {
+        s.warn(w);
+    }
+}
+
 /// What the element `id` of the layout `li` loses of its text on the page its series shows, as
 /// an export at 300 dpi measures it ([`rustgis_render::layout::text_loss`]).
 fn text_fit_loss(s: &Session, li: usize, id: u32) -> Option<rustgis_render::layout::TextLoss> {
@@ -4072,6 +4084,7 @@ fn add_element(s: &mut Session, p: &Value) -> CmdResult {
         say_chart_losses(s, i, id);
     }
     say_text_fit(s, i, id, true);
+    say_text_statistics(s, i, id);
     if let Some(said) = empty_colorbar {
         s.warn(said);
     }
@@ -5838,6 +5851,9 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
         // A move or a turn changes no line a text breaks into, but can take its ink past the page's
         // edge (#2703); a scale bar's labels move with it (#2581).
         say_text_fit(s, li, id, false);
+    }
+    if p.get("text").is_some_and(Value::is_string) {
+        say_text_statistics(s, li, id);
     }
     // A centre the frame's map can't place (a pole on Web Mercator) is said (#2684).
     if new_center.is_some() || given(&["map"]) {

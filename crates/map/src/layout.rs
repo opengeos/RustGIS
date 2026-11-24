@@ -2414,6 +2414,88 @@ impl GroupKey {
     }
 }
 
+/// A layer's figure in a layout text (#2853): `{count:<layer>}`, or `{sum:<layer>:<field>}` and
+/// the same with `mean`, `min` and `max`. The layer is everything between the first colon and the
+/// field's (the last), so a layer named with a colon still reads; a count's, everything after it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StatToken<'a> {
+    /// The token as written, braces included.
+    pub token: &'a str,
+    pub stat: StatKind,
+    pub layer: &'a str,
+    /// None for a count.
+    pub field: Option<&'a str>,
+}
+
+/// The [`StatToken`]s in `text`, in the order they come; other braces (`{scale}`, `{foo}`,
+/// `{sum:}`) are not among them.
+pub fn stat_tokens(text: &str) -> Vec<StatToken<'_>> {
+    let mut out = Vec::new();
+    for (open, _) in text.match_indices('{') {
+        let Some(after) = text.get(open + 1..) else { continue };
+        // The first brace after it ends the token; another opening one means this isn't one.
+        let Some(len) = after.find(['{', '}']).filter(|&i| after.get(i..).is_some_and(|r| r.starts_with('}'))) else { continue };
+        let (Some(inner), Some(token)) = (after.get(..len), text.get(open..open + len + 2)) else { continue };
+        let Some((code, rest)) = inner.split_once(':') else { continue };
+        let stat = match code {
+            "count" => StatKind::Count,
+            "sum" => StatKind::Sum,
+            "mean" => StatKind::Mean,
+            "min" => StatKind::Min,
+            "max" => StatKind::Max,
+            _ => continue,
+        };
+        let (layer, field) = match stat {
+            StatKind::Count => (rest, None),
+            _ => match rest.rsplit_once(':') {
+                Some((layer, field)) if !field.is_empty() => (layer, Some(field)),
+                _ => continue,
+            },
+        };
+        if !layer.is_empty() {
+            out.push(StatToken { token, stat, layer, field });
+        }
+    }
+    out
+}
+
+/// Why a [`StatToken`] has no figure: drawn as written instead, and said when the text is set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StatMissing {
+    /// The layer has no such field (or a sum, mean, least or greatest names none).
+    Field,
+    /// The field holds no numbers to add up.
+    NotNumeric,
+    /// None of the features the layer's definition query keeps has a number in the field, or the
+    /// statistic is past a number's range.
+    NoValue,
+}
+
+/// `stat` of `layer`'s `field` (none for a count) over the features its definition query keeps
+/// ([`crate::Layer::visible_rows`]), its numbers read as a chart's are (finite, nulls skipped).
+pub fn layer_statistic(layer: &crate::Layer, stat: StatKind, field: Option<&str>) -> Result<f64, StatMissing> {
+    let ds = &layer.dataset;
+    let fi = match (stat, field) {
+        (StatKind::Count, _) => None,
+        (_, Some(f)) => Some(ds.field_index(f).ok_or(StatMissing::Field)?),
+        (_, None) => return Err(StatMissing::Field),
+    };
+    if fi.is_some_and(|fi| !ds.fields.get(fi).is_some_and(|f| f.ty.is_numeric())) {
+        return Err(StatMissing::NotNumeric);
+    }
+    let mut t = Tally::default();
+    for (row, kept) in layer.visible_rows().into_iter().enumerate() {
+        if !kept {
+            continue;
+        }
+        t.records += 1;
+        if let Some(n) = fi.and_then(|fi| ds.value(row, fi).as_f64()).filter(|v| v.is_finite()) {
+            t.add(n, stat == StatKind::Mean);
+        }
+    }
+    t.value(stat).ok_or(StatMissing::NoValue)
+}
+
 /// A chart bar's features as its statistic reads them: how many, and their numbers' sum, mean,
 /// least and greatest.
 #[derive(Clone, Copy, Debug)]
@@ -3299,6 +3381,70 @@ pub fn color_scale(rl: &RasterLayer) -> Option<ColorScale> {
 mod tests {
     use super::*;
     use crate::symbology::MAX_DASH_STEP;
+
+    /// A text's statistic tokens (#2853): each kind, a layer named with a colon, and braces that
+    /// aren't one left alone.
+    #[test]
+    fn statistic_tokens_are_read_from_a_text() {
+        fn read(t: &str) -> Vec<(&str, StatKind, &str, Option<&str>)> {
+            stat_tokens(t).into_iter().map(|s| (s.token, s.stat, s.layer, s.field)).collect()
+        }
+        assert_eq!(
+            read("{count:Houses} houses, {sum:Plants:mw} MW at {scale}"),
+            vec![("{count:Houses}", StatKind::Count, "Houses", None), ("{sum:Plants:mw}", StatKind::Sum, "Plants", Some("mw")),]
+        );
+        assert_eq!(
+            read("{mean:Zone: north:pop}{min:A:b}{max:A:b}{count:Zone: north}"),
+            vec![
+                ("{mean:Zone: north:pop}", StatKind::Mean, "Zone: north", Some("pop")),
+                ("{min:A:b}", StatKind::Min, "A", Some("b")),
+                ("{max:A:b}", StatKind::Max, "A", Some("b")),
+                ("{count:Zone: north}", StatKind::Count, "Zone: north", None),
+            ]
+        );
+        // Not tokens: other names, an empty layer or field, a sum without its field, an alias the
+        // chart's codes take, a brace left open, a brace inside.
+        for t in ["{foo}", "{sum:}", "{count:}", "{sum:A}", "{sum::b}", "{sum:A:}", "{average:A:b}", "{Count:A}", "{count:A", "{count:{A}}"]
+        {
+            assert_eq!(read(t), vec![], "{t}");
+        }
+    }
+
+    /// A layer's statistic (#2853) over the features its definition query keeps, its numbers read
+    /// as a chart's: nulls and non-finite values skipped; a field it lacks, one with no numbers, or
+    /// no number among the kept features, none.
+    #[test]
+    fn layer_statistics_read_the_features_the_definition_query_keeps() {
+        use rustgis_data::{Dataset, Field, FieldType, GeometryType, Value};
+        let fields = vec![Field::new("n", FieldType::Double), Field::new("name", FieldType::Text), Field::new("keep", FieldType::Integer)];
+        let mut ds = Dataset::new("sites", GeometryType::None, fields);
+        for (n, keep) in
+            [(Value::Float(2.5), 1), (Value::Float(-1.0), 1), (Value::Null, 1), (Value::Float(f64::NAN), 1), (Value::Float(100.0), 0)]
+        {
+            ds.push(None, vec![n, Value::Text("x".into()), Value::Int(keep)]);
+        }
+        let mut layer = crate::Layer::new(1, ds);
+        let stat = |l: &crate::Layer, s: StatKind, f: Option<&str>| layer_statistic(l, s, f);
+        // Every feature: five, and the 100 counted.
+        assert_eq!(stat(&layer, StatKind::Count, None), Ok(5.0));
+        assert_eq!(stat(&layer, StatKind::Max, Some("n")), Ok(100.0));
+        layer.definition_query = Some("keep = 1".into());
+        assert_eq!(stat(&layer, StatKind::Count, None), Ok(4.0));
+        assert_eq!(stat(&layer, StatKind::Sum, Some("n")), Ok(1.5));
+        assert_eq!(stat(&layer, StatKind::Mean, Some("n")), Ok(0.75));
+        assert_eq!(stat(&layer, StatKind::Min, Some("n")), Ok(-1.0));
+        assert_eq!(stat(&layer, StatKind::Max, Some("n")), Ok(2.5));
+        assert_eq!(stat(&layer, StatKind::Sum, Some("nosuch")), Err(StatMissing::Field));
+        assert_eq!(stat(&layer, StatKind::Sum, None), Err(StatMissing::Field));
+        assert_eq!(stat(&layer, StatKind::Sum, Some("name")), Err(StatMissing::NotNumeric));
+        // A query keeping none: a count of 0, no sum.
+        layer.definition_query = Some("keep = 7".into());
+        assert_eq!(stat(&layer, StatKind::Count, None), Ok(0.0));
+        assert_eq!(stat(&layer, StatKind::Sum, Some("n")), Err(StatMissing::NoValue));
+        // A query that doesn't read keeps every feature, as the map draws them all.
+        layer.definition_query = Some("keep = = 1".into());
+        assert_eq!(stat(&layer, StatKind::Count, None), Ok(5.0));
+    }
 
     /// A chart of layer "t" with `extra` keys (its field among them).
     fn chart(extra: serde_json::Value) -> ElementKind {

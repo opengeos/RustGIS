@@ -1135,11 +1135,14 @@ pub fn scale_ratio_text(scale: f64, comma: bool) -> String {
 pub fn expand(t: &str, layout: &Layout, info: &PageInfo, frame: Option<(&Map, rustgis_map::Camera)>) -> String {
     // The frame's scale, worked out once for both its forms below.
     let scale = frame.map(|(m, cam)| m.ground_res_at(&cam) / rustgis_map::layout::PAPER_M_PER_PT);
+    // The layer statistics first, read from the text as written: a page or layout name put in
+    // below isn't read as one.
+    let t = statistics(t, layout.decimal_comma, frame.map(|(m, _)| m));
     // A layout with a decimal comma prints its scale with points between thousands: put in first,
     // so a page or layout name holding "{scale}" isn't read as the token.
     let t = match scale {
         Some(scale) if layout.decimal_comma => t.replace("{scale}", &scale_ratio_text(scale, true)),
-        _ => t.to_string(),
+        _ => t,
     };
     let t = t
         .replace("{page}", &info.page.max(1).to_string())
@@ -1166,6 +1169,55 @@ pub fn expand(t: &str, layout: &Layout, info: &PageInfo, frame: Option<(&Map, ru
         },
     };
     rustgis_map::graphics::expand(&t, &v)
+}
+
+/// What the layer statistics in `text` (#2853) that [`expand`] draws as written are missing, one
+/// line per token, each once: no map frame, no such layer in the first frame's map, or what
+/// [`rustgis_map::layout::layer_statistic`] finds missing.
+pub fn statistic_notices(layout: &Layout, maps: &[Map], text: &str) -> Vec<String> {
+    use rustgis_map::layout::StatMissing;
+    let map = layout.first_frame().and_then(|f| match &layout.element(f)?.kind {
+        ElementKind::MapFrame { map, .. } => maps.get(map_index(maps, map)?),
+        _ => None,
+    });
+    let mut said: Vec<String> = Vec::new();
+    let mut seen: Vec<&str> = Vec::new();
+    for t in rustgis_map::layout::stat_tokens(text) {
+        if seen.contains(&t.token) {
+            continue;
+        }
+        seen.push(t.token);
+        let (layer, field) = (t.layer, t.field.unwrap_or_default());
+        let why = match map.map(|m| m.layer_by_name(layer).map(|l| rustgis_map::layout::layer_statistic(l, t.stat, t.field))) {
+            None => "the layout has no map frame whose map it would read".to_string(),
+            Some(None) => format!("the map of the layout's first frame has no layer named '{layer}'"),
+            Some(Some(Ok(_))) => continue,
+            Some(Some(Err(StatMissing::Field))) => format!("'{layer}' has no field named '{field}'"),
+            Some(Some(Err(StatMissing::NotNumeric))) => format!("'{field}' of '{layer}' holds no numbers"),
+            Some(Some(Err(StatMissing::NoValue))) => {
+                format!(
+                    "no feature of '{layer}' its definition query keeps has a number in '{field}', or the figure is past a number's range"
+                )
+            }
+        };
+        said.push(format!("{} shows as written: {why}", t.token));
+    }
+    said
+}
+
+/// `t` with its layer statistics (#2853) from `map`, the first frame's, written as a chart writes
+/// its values ([`rustgis_map::layout::chart_value_text`]) with `comma` the decimal mark; a token
+/// with no figure stays as written ([`statistic_notices`] says why).
+fn statistics(t: &str, comma: bool, map: Option<&Map>) -> String {
+    let Some(m) = map else { return t.to_string() };
+    let mut out = t.to_string();
+    for s in rustgis_map::layout::stat_tokens(t) {
+        let Some(v) = m.layer_by_name(s.layer).and_then(|l| rustgis_map::layout::layer_statistic(l, s.stat, s.field).ok()) else {
+            continue;
+        };
+        out = out.replace(s.token, &decimal(rustgis_map::layout::chart_value_text(v, None), comma));
+    }
+    out
 }
 
 /// `stroke` dashed along `path` by an element's pattern (points, at `ppp` pixels a point), as a
@@ -10549,6 +10601,55 @@ Elaboração: RustGIS",
         let side = vec![label(Edge::Right, 200.0, "6°S", false), label(Edge::Left, 250.0, "8°S", false)];
         assert_eq!(kept_labels(side.clone(), (600.0, 500.0), (along, across), 10.0, 1.0).len(), 2, "a wide frame keeps them");
         assert!(kept_labels(side, (15.0, 500.0), (along, across), 10.0, 1.0).is_empty(), "a narrow one leaves them out");
+    }
+
+    /// A text's layer statistics (#2853) fill in from the frame's map, written as a chart's values
+    /// with the layout's decimal mark, beside `{scale}`; a token with no figure, or with no frame,
+    /// is drawn as written. What each such token is missing is said, once.
+    #[test]
+    fn a_text_shows_its_layers_statistics() {
+        use rustgis_data::{Dataset, Field, FieldType, GeometryType, Value};
+        let mut ds =
+            Dataset::new("Plants", GeometryType::None, vec![Field::new("mw", FieldType::Double), Field::new("name", FieldType::Text)]);
+        for mw in [12_000.5, 11_553.25] {
+            ds.push(None, vec![Value::Float(mw), Value::Text("x".into())]);
+        }
+        let mut map = Map::new("m");
+        map.add_dataset(ds);
+        let cam = frame_camera(&map, Coord::new(0.0, 0.0), 6_300_000.0, 0.0, 0.0);
+        let info = PageInfo { page: 1, pages: 1, page_name: String::new() };
+        let mut layout = Layout::new("L", 100.0, 100.0);
+        let text = "{count:Plants} plants, {sum:Plants:mw} MW, mean {mean:Plants:mw}; {sum:Plants:name} {count:Nowhere}";
+        assert_eq!(
+            expand(text, &layout, &info, Some((&map, cam))),
+            "2 plants, 23,553.75 MW, mean 11,776.88; {sum:Plants:name} {count:Nowhere}"
+        );
+        layout.decimal_comma = true;
+        assert_eq!(
+            expand(text, &layout, &info, Some((&map, cam))),
+            "2 plants, 23.553,75 MW, mean 11.776,88; {sum:Plants:name} {count:Nowhere}"
+        );
+        // Without a frame, every token as written, and said so; a text without tokens says nothing.
+        assert_eq!(expand("{count:Plants} plants", &layout, &info, None), "{count:Plants} plants");
+        let maps = [map];
+        assert_eq!(
+            statistic_notices(&layout, &maps, "{count:Plants} and {count:Plants}"),
+            vec!["{count:Plants} shows as written: the layout has no map frame whose map it would read".to_string()]
+        );
+        assert_eq!(statistic_notices(&layout, &maps, "Plants at {scale}"), Vec::<String>::new());
+        let kind =
+            serde_json::from_value(serde_json::json!({"MapFrame": {"map": "m", "center": {"x": 0, "y": 0}, "scale": 6300000}})).unwrap();
+        layout.add("Frame", (0.0, 0.0, 50.0, 50.0), kind);
+        let said =
+            statistic_notices(&layout, &maps, "{sum:Plants:name} {sum:Plants:name} {count:Nowhere} {min:Plants:nosuch} {count:Plants}");
+        assert_eq!(
+            said,
+            vec![
+                "{sum:Plants:name} shows as written: 'name' of 'Plants' holds no numbers".to_string(),
+                "{count:Nowhere} shows as written: the map of the layout's first frame has no layer named 'Nowhere'".to_string(),
+                "{min:Plants:nosuch} shows as written: 'Plants' has no field named 'nosuch'".to_string(),
+            ]
+        );
     }
 
     /// A layout with a decimal comma swaps the marks of the numbers it prints, `{scale}` included,
