@@ -1459,7 +1459,8 @@ mod tests {
         let read_in_it =
             read("t.gml", member(r#"<gml:Point srsName="urn:x-unknown:99"><gml:pos>10 48</gml:pos></gml:Point>"#).as_bytes()).unwrap();
         assert_eq!(unknown(&read_in_it), [Some(crate::loss::LossCode::AssumedCrs)]);
-        let failed = read("t.gml", member(r#"<gml:Solid srsName="urn:x-unknown:99"/>"#).as_bytes()).unwrap();
+        let failed =
+            read("t.gml", member(r#"<gml:Point srsName="urn:x-unknown:99"><gml:pos>bad</gml:pos></gml:Point>"#).as_bytes()).unwrap();
         assert!(unknown(&failed).is_empty(), "{:?}", failed[0].1.messages);
     }
 
