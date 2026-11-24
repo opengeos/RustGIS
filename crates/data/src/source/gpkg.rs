@@ -163,14 +163,14 @@ fn has_table(conn: &Connection, name: &str) -> Result<bool> {
 /// `recursive_triggers` is off by default), so such writes leave it high. A read doesn't start
 /// its sample's step from it (`GpkgSource::count_kept`), so a preview still gets the rows there
 /// are. GDAL may drop the triggers while it writes and create them again when it saves the file,
-/// so a file without them may hold an out-of-date count. `None` then, when there is no such table
-/// or row (a file GDAL didn't write), or when the count isn't a whole number from zero up (NULL,
-/// text, a negative): the table is counted instead.
+/// so a file without them may hold an out-of-date count. `None` then, and when there is no such
+/// table or row (a file GDAL didn't write), or when the count isn't a whole number from zero up
+/// (NULL, text, a negative): the table is counted instead.
 fn kept_count(conn: &Connection, table: &str) -> Option<i64> {
     conn.query_row(
         "SELECT feature_count FROM gpkg_ogr_contents
          WHERE lower(table_name) = lower(?1) AND typeof(feature_count) = 'integer' AND feature_count >= 0
-           AND (SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND lower(name) IN
+           AND (SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND lower(tbl_name) = lower(?1) AND lower(name) IN
                 (lower('trigger_insert_feature_count_' || ?1), lower('trigger_delete_feature_count_' || ?1))) = 2",
         [table],
         |r| r.get(0),
@@ -191,6 +191,12 @@ fn feature_tables(conn: &Connection) -> Result<Vec<String>> {
 }
 
 impl GpkgSource {
+    /// The total a scan of the table counts its progress against: none (unknown) for a kept count
+    /// (`count_kept`), which may be past the rows.
+    fn progress_total(&self) -> usize {
+        self.info.count.filter(|_| !self.count_kept).and_then(|n| usize::try_from(n).ok()).unwrap_or(0)
+    }
+
     pub fn open(path: &Path, layer: Option<&str>) -> Result<Self> {
         // The identity is taken before the database is opened: a file put in its place after
         // this leaves it describing the file opened, which a traversal then refuses to swap.
@@ -559,7 +565,7 @@ impl FeatureSource for GpkgSource {
                 } else {
                     Sampler::new(limit)
                 };
-                crate::progress::begin(self.info.count.and_then(|n| usize::try_from(n).ok()).unwrap_or(0));
+                crate::progress::begin(self.progress_total());
                 while let Some(r) = rows.next().map_err(err)? {
                     crate::progress::step(1)?;
                     // With an extent, the envelope in the geometry's header says whether the row
@@ -626,7 +632,7 @@ impl FeatureSource for GpkgSource {
         let mut st = conn.prepare(&sql).map_err(err)?;
         let mut rows = st.query([]).map_err(err)?;
         let mut out = Batch { complete: true, ..Batch::default() };
-        crate::progress::begin(self.info.count.and_then(|n| usize::try_from(n).ok()).unwrap_or(0));
+        crate::progress::begin(self.progress_total());
         while let Some(r) = rows.next().map_err(err)? {
             crate::progress::step(1)?;
             match self.feature(r, native.as_ref(), &req, &mut out.unread_dates, &mut out.rounded_dates).map_err(err)? {

@@ -3821,6 +3821,16 @@ fn geopackage_count_is_the_one_gdal_keeps_when_it_keeps_one() {
             format!("{kept} INSERT INTO gpkg_ogr_contents VALUES ('parcels', 250000); DROP TRIGGER trigger_delete_feature_count_parcels;"),
             3,
         ),
+        (
+            "triggers on another table",
+            format!(
+                "{kept} INSERT INTO gpkg_ogr_contents VALUES ('parcels', 250000);
+                 DROP TRIGGER trigger_insert_feature_count_parcels; DROP TRIGGER trigger_delete_feature_count_parcels;
+                 CREATE TABLE other (v); CREATE TRIGGER trigger_insert_feature_count_parcels AFTER INSERT ON other BEGIN SELECT 1; END;
+                 CREATE TRIGGER trigger_delete_feature_count_parcels AFTER DELETE ON other BEGIN SELECT 1; END;"
+            ),
+            3,
+        ),
         ("null", format!("{kept} INSERT INTO gpkg_ogr_contents VALUES ('parcels', NULL);"), 3),
         ("no table", "DROP TABLE IF EXISTS gpkg_ogr_contents;".to_string(), 3),
         ("no row", format!("{kept} INSERT INTO gpkg_ogr_contents VALUES ('roads', 9);"), 3),
@@ -3841,8 +3851,22 @@ fn geopackage_count_is_the_one_gdal_keeps_when_it_keeps_one() {
         assert_eq!(src.info().count, Some(count), "{case}");
         // A preview gets the rows there are, whatever the count says: a count past them (an
         // `INSERT OR REPLACE` leaves it high, a file may say any number) doesn't thin it.
-        let preview = src.read(&Request { extent: None, limit: 100, own: None }).unwrap();
-        assert_eq!((preview.features.len(), preview.complete), (3, true), "{case}");
+        // Its progress, and a whole read's (Load All), has the rows counted as its total, or none
+        // (unknown) for a kept count.
+        // The cases that count the rows get the file's 3; no case keeps a count of 3.
+        let total = if count == 3 { 3 } else { 0 };
+        let watched = |read: &dyn Fn() -> usize| {
+            let probe = std::sync::Arc::new(crate::progress::tests::Counted::default());
+            let _watched = crate::progress::install(Some(probe.clone()));
+            (read(), probe.total.load(std::sync::atomic::Ordering::Relaxed))
+        };
+        let preview = || {
+            let batch = src.read(&Request { extent: None, limit: 100, own: None }).unwrap();
+            if batch.complete { batch.features.len() } else { 0 }
+        };
+        assert_eq!(watched(&preview), (3, total), "{case}: preview");
+        let whole = || materialize(src.as_ref()).unwrap().0.features.len();
+        assert_eq!(watched(&whole), (3, total), "{case}: whole read");
     }
 }
 
