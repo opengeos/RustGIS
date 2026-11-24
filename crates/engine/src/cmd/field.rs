@@ -1280,20 +1280,20 @@ fn unpacked_index(folder: &Path, package: &str) -> Result<std::collections::Hash
     // that carried no photo has none; one whose photos are there without it is damaged.
     let file = folder.join(INDEX_FILE);
     if matches!(std::fs::symlink_metadata(&file), Err(e) if e.kind() == std::io::ErrorKind::NotFound) {
-        let photos = std::fs::read_dir(folder).map(|mut entries| entries.next().is_some()).unwrap_or(false);
+        let photos = std::fs::read_dir(folder).map_err(|e| format!("{}: {e}", folder.display()))?.next().is_some();
         return if photos { Err(format!("{}: missing beside the photos", file.display())) } else { Ok(std::collections::HashMap::new()) };
     }
     let bytes = crate::project::read_file(&file, MAX_INDEX)?;
     let text = String::from_utf8_lossy(&bytes);
     let mut index = std::collections::HashMap::new();
-    let mut twice = std::collections::HashSet::new();
-    for (entry, named) in text.lines().filter_map(|l| l.split_once('\t')) {
-        // An entry listed twice names no path for certain: neither is used.
+    // One the package didn't write that way (a line without its two fields, an entry listed twice)
+    // is damaged: none of it is trusted, and the caller says so.
+    for line in text.lines() {
+        let (entry, named) = line.split_once('\t').ok_or_else(|| format!("{}: a line isn't an entry and a path", file.display()))?;
         if index.insert(entry.to_string(), named.to_string()).is_some() {
-            twice.insert(entry.to_string());
+            return Err(format!("{}: {entry} is listed twice", file.display()));
         }
     }
-    index.retain(|entry, _| !twice.contains(entry));
     Ok(index)
 }
 
@@ -1881,6 +1881,8 @@ pub(crate) fn project_in(text: &str, dir: &Path) -> Result<Project, String> {
     let mut relative = 0_usize;
     // Photos from home that keep their names there, the unpack folder's name not being text.
     let mut unshown = 0_usize;
+    // Photos from home the index lists that the package doesn't hold.
+    let mut absent = 0_usize;
     if photos.is_dir() {
         // A package from home names its photos where they are at home; its index says which entry
         // each is.
@@ -1915,6 +1917,10 @@ pub(crate) fn project_in(text: &str, dir: &Path) -> Result<Project, String> {
                 let (named, entry) = (path, at_home.get(path).map_or(path, String::as_str));
                 if let Some(name) = entry.strip_prefix("photos/").filter(|name| plain_file(name)) {
                     let file = photos.join(name);
+                    // A photo the index lists that isn't there: the feature keeps its name at home.
+                    if named != entry && !file.is_file() {
+                        absent += 1;
+                    }
                     if file.is_file() {
                         if let Some(path) = file.to_str() {
                             return path.to_string();
@@ -1933,6 +1939,15 @@ pub(crate) fn project_in(text: &str, dir: &Path) -> Result<Project, String> {
     // The rows as given, taken (sharing them) for `offline.keepRows` to keep, when this package
     // went out from home: a return opened here keeps none.
     project.given = super::field_changes::GivenRows::in_package(dir, &project).map(std::sync::Arc::new);
+    if absent > 0 {
+        project.read_notices.push((
+            crate::project::ReadPart::Maps,
+            crate::notice_text::NoticeText::format(
+                "{count} photo(s) the field package lists aren't in it: their features keep the names they have at home, which may not be on this device.",
+                [("count", absent.to_string().into())],
+            ),
+        ));
+    }
     if unshown > 0 {
         project.read_notices.push((
             crate::project::ReadPart::Maps,
@@ -2912,8 +2927,23 @@ mod tests {
         let (_, out) = package(&mut home, &json!({"name": "Bad", "extent": [-180.0, -85.0, 180.0, 85.0]})).unwrap();
         let unpacked = temp.path().join("field");
         let text = unpack_into(&out, &unpacked).unwrap().0;
-        // The index gone from beside the photos: damaged too.
         let index = unpacked.join("photos").join("index.tsv");
+        let notes = |project: &mut Project| -> Vec<String> {
+            project.take_read_notices(&[crate::project::ReadPart::Maps]).iter().map(crate::notice_text::NoticeText::english).collect()
+        };
+        // A photo the index lists that the package doesn't hold: counted.
+        let listed = std::fs::read_to_string(&index).unwrap();
+        let held = unpacked.join("photos").join("home-00001.jpg");
+        let bytes = std::fs::read(&held).unwrap();
+        std::fs::remove_file(&held).unwrap();
+        let said = notes(&mut project_in(&text, &unpacked).unwrap());
+        assert!(said.iter().any(|t| t.starts_with("1 photo(s) the field package lists aren't in it")), "{said:?}");
+        std::fs::write(&held, bytes).unwrap();
+        // An entry listed twice: the index is damaged.
+        std::fs::write(&index, format!("{listed}{listed}")).unwrap();
+        let said = notes(&mut project_in(&text, &unpacked).unwrap());
+        assert!(said.iter().any(|t| t.contains("is listed twice")), "{said:?}");
+        // The index gone from beside the photos: damaged too.
         std::fs::remove_file(&index).unwrap();
         let mut missing = project_in(&text, &unpacked).unwrap();
         let said: Vec<String> =
