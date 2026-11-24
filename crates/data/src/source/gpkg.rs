@@ -827,7 +827,6 @@ fn fill(
         match redo {
             // Stops the traversal; the export starts again.
             Some(_) => Err(DataError::Format("GeoPackage: starting again".into())),
-            None if boxes.len() >= INDEX_BATCH => fill_index(conn, l, &mut boxes),
             None => Ok(()),
         }
     });
@@ -1098,7 +1097,8 @@ enum Redo {
 }
 
 /// Inserts features into the table [`create`] made, and puts the box of each one with a place in
-/// `boxes` for [`fill_index`] to load. With `keep_ids` each keeps its id;
+/// `boxes` for [`fill_index`] to load, loading them whenever [`INDEX_BATCH`] are waiting; the
+/// caller loads the rest at the end. With `keep_ids` each keeps its id;
 /// otherwise SQLite numbers it. Stops at the first feature the table as made can't hold as the
 /// whole layer would have it (a multipoint in a POINT table, geometry of another kind, an id
 /// that doesn't fit or is taken), saying what to [`Redo`].
@@ -1153,12 +1153,18 @@ fn insert(
         let e = f.geometry.as_ref().map(|x| x.extent()).unwrap_or(Extent::EMPTY);
         if has_geom && !e.is_empty() {
             boxes.push(IndexBox { key: 0, id: conn.last_insert_rowid(), bounds: [e.min_x, e.max_x, e.min_y, e.max_y] });
+            // Loaded the moment a batch fills, so `boxes` never grows past one batch and a
+            // streamed export batches exactly as a whole-layer one does.
+            if boxes.len() == INDEX_BATCH {
+                fill_index(conn, layout, boxes)?;
+            }
         }
     }
     Ok(None)
 }
 
-/// A feature's box waiting to go into the spatial index, with its place along the Hilbert curve.
+/// A feature's box waiting to go into the spatial index, with its place along the Hilbert curve
+/// (`key`, 0 until [`fill_index`] works it out from the whole batch's extent).
 /// It holds 48 bytes per feature that has a place, until [`fill_index`] loads it.
 struct IndexBox {
     key: u64,
@@ -1170,8 +1176,8 @@ struct IndexBox {
 /// How many boxes [`fill_index`] loads between looks at Cancel.
 const INDEX_CHECK_EVERY: usize = 8192;
 
-/// How many boxes a streamed export keeps before it loads them (96 MB at 48 bytes each), so a
-/// layer of any size needs no more; a layer of fewer features is loaded in one go at the end.
+/// How many boxes an export keeps before it loads them (96 MB at 48 bytes each), so a layer of
+/// any size needs no more; a layer of fewer features is loaded in one go at the end.
 /// Each load is in Hilbert order within itself.
 /// (1,000 in this crate's tests, so they reach a second load.)
 const INDEX_BATCH: usize = if cfg!(test) { 1000 } else { 1 << 21 };
@@ -1200,7 +1206,8 @@ fn hilbert(mut x: u32, mut y: u32) -> u64 {
 /// centres. SQLite's R-tree picks a leaf for each entry by walking down from the root, which costs
 /// far more when consecutive entries lie all over the map than when neighbours arrive together.
 /// Ties fall back to the row id, so the same layer gives the same file each time. Empties `boxes`.
-/// Looks at Cancel as it goes, but not within one SQLite insert.
+/// Looks at Cancel as it goes, but not within one SQLite insert, nor while it works out the
+/// Hilbert places and sorts them (one pass and one sort over at most [`INDEX_BATCH`] boxes).
 fn fill_index(conn: &Connection, layout: &Layout, boxes: &mut Vec<IndexBox>) -> Result<()> {
     if !layout.has_geom || boxes.is_empty() {
         return Ok(());
