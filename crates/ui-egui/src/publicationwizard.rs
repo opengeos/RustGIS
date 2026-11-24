@@ -121,21 +121,18 @@ fn size_label(id: &str) -> String {
     if let Some((_, label, w, h)) = PAGES.iter().find(|p| p.0 == id) {
         return crate::ribbon::page_label(label, *w, *h);
     }
-    let profile = PUBLICATION_PROFILES.iter().find(|p| p.id == id);
-    crate::ribbon::publication_label(id)
-        .map(str::to_string)
-        .or_else(|| profile.map(|p| tl!(p.label).to_string()))
-        .unwrap_or_else(|| id.to_string())
+    PUBLICATION_PROFILES.iter().find(|p| p.id == id).map_or_else(|| id.to_string(), |p| crate::ribbon::profile_label(p).to_string())
 }
 
-/// A step's name, as its heading and the review give it.
+/// A step's name, as its heading gives it: in logical order (`tl_raw!`), as `i18n::fmt` takes
+/// its arguments, converting the whole heading for display once.
 fn step_name(step: Step) -> &'static str {
     match step {
-        Step::Size => tl!("Size"),
-        Step::Style => tl!("Style"),
-        Step::Texts => tl!("Texts"),
-        Step::Accent => tl!("Accent"),
-        Step::Review => tl!("Review"),
+        Step::Size => tl_raw!("Size"),
+        Step::Style => tl_raw!("Style"),
+        Step::Texts => tl_raw!("Texts"),
+        Step::Accent => tl_raw!("Accent"),
+        Step::Review => tl_raw!("Review"),
     }
 }
 
@@ -208,7 +205,7 @@ fn texts_step(ui: &mut egui::Ui, d: &mut Draft) {
         let label = ui.label(tl!("Credit line"));
         ui.add_enabled(
             !d.no_author,
-            egui::TextEdit::singleline(&mut d.author).hint_text(tl!("Made with RustGIS · the date")).desired_width(260.0),
+            egui::TextEdit::singleline(&mut d.author).hint_text(tl!("Made with RustGIS · today's date")).desired_width(260.0),
         )
         .labelled_by(label.id);
         ui.end_row();
@@ -221,7 +218,11 @@ fn texts_step(ui: &mut egui::Ui, d: &mut Draft) {
 /// The accent step: the style's own colour, or one picked.
 fn accent_step(ui: &mut egui::Ui, d: &mut Draft, own: egui::Color32) {
     let mut picked = d.accent.is_some();
-    if ui.checkbox(&mut picked, tl!("Pick a colour of your own")).changed() {
+    if ui
+        .checkbox(&mut picked, tl!("Pick a colour of your own"))
+        .on_hover_text(tl!("Starts from the app's accent colour; the swatch shows the colour the layout takes."))
+        .changed()
+    {
         d.accent = picked.then_some(own);
     }
     if let Some(c) = &mut d.accent {
@@ -260,7 +261,7 @@ fn review_step(ui: &mut egui::Ui, d: &Draft) {
         let credit = if d.no_author {
             none.to_string()
         } else if d.author.trim().is_empty() {
-            tl!("Made with RustGIS · the date").to_string()
+            tl!("Made with RustGIS · today's date").to_string()
         } else {
             d.author.trim().to_string()
         };
@@ -520,6 +521,28 @@ mod tests {
         assert_eq!(h.state().session.project.layouts.len(), before);
     }
 
+    /// A figure is made from its size alone, through the same command, and Undo takes it away.
+    #[test]
+    fn a_figure_is_made_from_its_size_alone() {
+        let mut app = app();
+        open(&mut app);
+        {
+            let d = app.dialogs.publication.as_mut().unwrap();
+            d.size = "figure-1col".into();
+            d.subtitle = "Not drawn".into();
+            d.step = Step::Review;
+        }
+        let before = app.session.project.layouts.len();
+        let mut h = harness(app);
+        click(&mut h, "Create");
+        let l = h.state().session.project.layouts.last().unwrap();
+        assert_eq!(h.state().session.project.layouts.len(), before + 1);
+        assert!((l.width - 90.0).abs() < 0.01, "a 1-column figure: {} mm wide", l.width);
+        assert_eq!(h.state().dialogs.open, None);
+        h.state_mut().run("edit.undo", Value::Null).unwrap();
+        assert_eq!(h.state().session.project.layouts.len(), before);
+    }
+
     /// A layout the command refuses (here a style it doesn't know) is said, and the wizard stays
     /// open on its review with nothing made.
     #[test]
@@ -586,7 +609,7 @@ mod tests {
         open(&mut app);
         app.dialogs.publication.as_mut().unwrap().step = Step::Review;
         let mut h = harness(app);
-        assert!(h.query_by_label("Made with RustGIS · the date").is_some());
+        assert!(h.query_by_label("Made with RustGIS · today's date").is_some());
         assert!(h.query_by_label("Auto: the way the map comes out larger").is_some(), "the turn, decided at Create");
         h.state_mut().dialogs.publication.as_mut().unwrap().size = "figure-1col".into();
         h.run_steps(2);
@@ -597,6 +620,7 @@ mod tests {
     /// the others scrolls inside its height rather than growing the window.
     #[test]
     fn next_stays_in_place_in_a_longer_language() {
+        let previous = crate::i18n::current();
         for code in ["de", "el"] {
             let mut app = app();
             // As the app applies its language each frame (`chosen_lang`), which the harness skips.
@@ -613,6 +637,7 @@ mod tests {
                 assert_eq!(at(&h), first, "{code}: {:?}", step(&h));
             }
         }
+        crate::i18n::set_current(previous);
     }
 
     /// Cancel closes the wizard with nothing made, and the next opening starts over.

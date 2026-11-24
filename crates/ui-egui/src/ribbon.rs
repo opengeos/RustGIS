@@ -1250,6 +1250,12 @@ fn publication_sheet(size: &str, orientation: &str) -> Option<&'static rustgis_e
     rustgis_engine::cmd::layout::PUBLICATION_PROFILES.iter().find(|p| p.sheet && p.id == id)
 }
 
+/// A publication profile's name in the menu: its `tl!` literal, or the engine's label for a figure
+/// added without one. The wizard names its sizes with it too.
+pub(crate) fn profile_label(profile: &rustgis_engine::cmd::layout::PublicationProfile) -> &'static str {
+    publication_label(profile.id).unwrap_or_else(|| tl!(profile.label))
+}
+
 /// A page size as the menus name it: `A4 (210 × 297 mm)`, its name translated.
 pub(crate) fn page_label(label: &str, w: f64, h: f64) -> String {
     format!("{} ({w:.0} × {h:.0} mm)", tl!(label))
@@ -1296,8 +1302,7 @@ fn project_group(app: &mut RustGisApp, ui: &mut Ui) {
                 }
                 ui.separator();
                 for profile in rustgis_engine::cmd::layout::PUBLICATION_PROFILES.iter().filter(|p| !p.sheet) {
-                    let label = publication_label(profile.id).unwrap_or_else(|| tl!(profile.label));
-                    if ui.button(label).clicked() {
+                    if ui.button(profile_label(profile)).clicked() {
                         publication_layout(app, profile, None);
                         ui.close();
                     }
