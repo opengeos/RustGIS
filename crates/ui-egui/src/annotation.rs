@@ -45,7 +45,7 @@ pub(crate) fn sync(app: &mut RustGisApp) {
         cancel(app);
         let pixels = app.annotation.pixels;
         let error = pixels.then(|| {
-            tl!("The project or map changed. Choose an image again or select Web Mercator grid metres before drawing.").to_string()
+            tl!("The project or map changed. Choose an image again, or the grid without an image (Web Mercator grid metres, or the layer's own grid), before drawing.").to_string()
         });
         app.annotation =
             State { context: Some(context), next: app.annotation.next, pixels, image_chosen: pixels, error, ..State::default() };
@@ -188,15 +188,21 @@ pub(crate) fn layer_grid_name(app: &RustGisApp) -> String {
     }
 }
 
-/// What a system grid's units are ([`Frame::is_system_grid`] or Web Mercator's), for a label;
-/// `None` for an image's pixels.
+/// What a system's grid units are (Web Mercator's, a layer's own grid [`Frame::is_system_grid`],
+/// or a command's frame in another system), for a label; `None` for an image's pixels.
 pub(crate) fn grid_units(frame: &Frame) -> Option<String> {
     if *frame == Frame::default() {
         return Some(tl!("Web Mercator grid metres, not ground metres.").into());
     }
-    let crs = frame.crs().filter(|_| frame.is_system_grid())?;
+    let crs = frame.crs()?;
+    let d = Frame::default();
+    // An image's grid has its own size and affine; a system's grid has the default ones.
+    if (frame.width, frame.height, frame.affine) != (d.width, d.height, d.affine) {
+        return None;
+    }
+    // Axis-neutral: a system's x and y may point west, south, or north first.
     Some(crate::i18n::fmt(
-        "Grid units of {system}, as the layer holds them (y down: minus the northing); angle clockwise from grid east.",
+        "Grid units of {system}: grid x is its x, grid y minus its y; angle clockwise from grid x.",
         &[("system", &crs.label())],
     ))
 }
@@ -210,7 +216,10 @@ pub(crate) fn drawing_frame(app: &RustGisApp) -> Result<Frame, String> {
         return Err(tl!("The image context changed. Select the image again before drawing.").into());
     }
     if app.annotation.image.is_none() {
-        return Err(tl!("Choose an image or Web Mercator grid metres before drawing.").into());
+        return Err(tl!(
+            "Choose an image, or the grid without an image (Web Mercator grid metres, or the layer's own grid), before drawing."
+        )
+        .into());
     }
     if !app.annotation.source.as_ref().is_some_and(|s| s.current(&app.session)) {
         return Err(tl!("The image changed. Reload its grid before drawing.").into());
@@ -420,6 +429,20 @@ pub(crate) fn panel(app: &mut RustGisApp, ui: &mut egui::Ui) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Every system grid names its system and says its axes neutrally; an image's pixels don't.
+    #[test]
+    fn grid_units_name_each_systems_grid() {
+        use rustgis_engine::data::raster::Crs;
+        assert!(grid_units(&Frame::default()).unwrap().contains("Web Mercator"));
+        for code in [32632, 2053, 4326] {
+            let f = Frame { epsg: code, ..Frame::default() };
+            let said = grid_units(&f).unwrap();
+            assert!(said.contains("grid x is its x") && !said.contains("east") && !said.contains("northing"), "{code}: {said}");
+        }
+        assert_eq!(Frame::for_crs(Crs::Epsg(2053)).epsg, 2053);
+        let image = Frame { epsg: 32632, width: 400, height: 300, affine: [500_000., 0.8, 0.2, 1000., 0.1, -0.8] };
+        assert_eq!(grid_units(&image), None);
+    }
     use rustgis_engine::data::raster::{ColorHint, Crs, GeoTransform, Raster};
     use rustgis_engine::{
         Project, Session,

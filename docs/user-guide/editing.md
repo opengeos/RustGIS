@@ -244,7 +244,8 @@ Choose **Web Mercator grid metres** explicitly to draw in map coordinates instea
 ground-distance metres. Choosing **No image** restores that grid. When the target layer is held
 in a projected system with an EPSG code (UTM, a national grid; not Web Mercator, another world
 projection or a geographic system), that choice is the **Layer's own grid** instead: one grid
-unit per unit of the layer's system, y down (a grid y is minus the northing), and a shape built
+unit per unit of the layer's system, y down (a grid x is the system's x and a grid y minus its y,
+whichever way its axes point), and a shape built
 in it is written in the layer's own coordinates as built, with no conversion. Web Mercator grid
 metres are then not offered for new shapes; a command takes them with `"frame": {"epsg": 3857}`. Under Edit, the same choices
 are in Editing → New shape grid when a circle or rotated box tool is active. Grid changes affect
@@ -252,7 +253,7 @@ new shapes; existing shapes retain their own construction grid when moved, resiz
 Undo/Redo retain those constructions within the session.
 
 On desktop, header reads run in the background with progress and Cancel. Changing images,
-switching to Web Mercator or using **Cancel Grid Read** stops only that lookup and preserves
+switching to Web Mercator (or the layer's own grid) or using **Cancel Grid Read** stops only that lookup and preserves
 unrelated queued work. The status-bar Cancel retains its queue-wide behaviour. Pixel-based
 drawing waits for a valid grid; a failed or cancelled read never silently substitutes map metres.
 After changing a source file externally, reload the image layer first, then use **Reload Grid**.
@@ -262,13 +263,13 @@ download remote originals first. In the browser, upload the original GeoTIFF. Ot
 (including PNG, JPEG, ASCII grids and GDAL-converted images) are refused with guidance to export
 the image as a GeoTIFF and add that file; reloading the unsupported source cannot supply its grid.
 Construction grids require a supported EPSG coordinate system. Unsupported or custom systems
-are refused during the grid read; choose a supported image or **Web Mercator grid metres**.
+are refused during the grid read; choose a supported image or **Web Mercator grid metres** (the **Layer's own grid** on a layer that has one).
 Changing projects or maps clears the old image binding, keeps pixel mode selected and reports a
 warning. Drawing stays blocked until you choose an image again or explicitly choose Web Mercator
-grid metres; opening the pane does not clear the warning.
+grid metres (or the layer's own grid); opening the pane does not clear the warning.
 An image removed from the map keeps its last name as **Unavailable image**. Pixel drawing stays
 blocked and **Reload Grid** is disabled until the image is restored or another image is chosen.
-Choose **No image** to return explicitly to Web Mercator grid metres.
+Choose **No image** to return explicitly to Web Mercator grid metres (or the layer's own grid).
 **Original Image Grid** in Command Search reports the active image's original dimensions and
 EPSG coordinate system in a notice, while keeping the Annotate pane open.
 
