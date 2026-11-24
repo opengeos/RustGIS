@@ -1276,7 +1276,8 @@
           "label-guide",
           "label-weight",
           "project-crs",
-          "dggs-system"
+          "dggs-system",
+          "label-clearance"
         ],
         "type": "string"
       },
@@ -1381,7 +1382,8 @@
     "label-guide",
     "label-weight",
     "project-crs",
-    "dggs-system"
+    "dggs-system",
+    "label-clearance"
   ],
   "x-rustgis-reads-format": 2,
   "x-rustgis-writes-format": 2

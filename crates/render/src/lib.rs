@@ -6423,6 +6423,8 @@ fn render_frame(
                                     line_align: class.line_align,
                                     angle,
                                     collide: rustgis_tiles::Collide {
+                                        // Its class's room kept free of other labels (#2828).
+                                        text_padding: class.clearance,
                                         // Shown all: over the other labels where they crowd.
                                         text_allow_overlap: class.show_all,
                                         // Callouts: a label set by its feature (not along a line,
@@ -8302,6 +8304,9 @@ fn label_boxes(l: &PlacedLabel) -> (Vec<[f32; 4]>, Vec<[f32; 4]>) {
         // padding across, and up and down.
         let halo = text::drawn_halo_reach(l);
         let [across, up_down] = text::background_reach(l).map(|r| l.collide.text_padding.clamp(0.0, 100.0) + halo.max(r));
+        // A class's clearance (#2828) reaches here as the padding, held to 100 points as a tile
+        // style's `text-padding` always was: at 100 a curved label's square is some 200 points
+        // across, about 7 × 7 grid cells, the bound placement already had for tile labels.
         let p = across.max(up_down);
         let cx = l.center_x();
         if !l.glyphs.is_empty() {
@@ -10203,6 +10208,66 @@ mod tests {
         // Shown all, the lighter one is drawn too.
         m.layer_mut(below).unwrap().labels.default.show_all = true;
         assert_eq!(shown(&mut m).len(), 2, "Show All draws every label whatever its weight");
+    }
+
+    /// A class's clearance is the room its labels keep free of other labels (#2828): two labels
+    /// keep both their clearances apart, as the fixed padding did, a fraction honoured; 0 lets
+    /// them come as close as their halos allow. A label moved by hand keeps its class's.
+    #[test]
+    fn a_label_class_keeps_its_clearance_free_of_other_labels() {
+        let center = Coord::new(2.35, 48.85);
+        let camera = Camera { center: lonlat_to_merc(center), res: 5000.0, bearing: 0.0, pitch: 0.0 };
+        let view = View { width: 800.0, height: 600.0, pixels_per_point: 1.0, camera, sky: false };
+        // Two point layers, "Aaaa" above, "Bbbb" `apart` points to its right, with these
+        // clearances.
+        let map = |apart: f32, [ca, cb]: [f32; 2]| {
+            let mut m = Map::new("Map");
+            for (name, dx, clearance) in [("Bbbb", apart, cb), ("Aaaa", 0.0, ca)] {
+                let mut d = Dataset::new(name, GeometryType::Point, vec![Field::new("name", FieldType::Text)]);
+                let at = rustgis_geom::merc_to_lonlat(Coord::new(camera.center.x + f64::from(dx) * camera.res, camera.center.y));
+                d.push(Some(Geometry::Point(at)), vec![Value::Text(name.into())]);
+                let id = m.add_dataset(d);
+                let l = m.layer_mut(id).unwrap();
+                l.labels.enabled = true;
+                l.labels.default.field = "name".into();
+                l.labels.default.placement = rustgis_map::LabelPlacement::Center;
+                l.labels.default.clearance = clearance;
+            }
+            m
+        };
+        let drawn = |m: &mut Map| render(m, &view).unwrap().labels;
+        let shown = |m: &mut Map| {
+            let mut v: Vec<String> = drawn(m).into_iter().map(|l| l.text).collect();
+            v.sort();
+            v
+        };
+        // Far apart, how wide the texts are and how far their halos reach.
+        let far = drawn(&mut map(300.0, [2.0, 2.0]));
+        assert_eq!(far.len(), 2);
+        assert!(far.iter().all(|l| l.collide.text_padding == 2.0), "2 to start with, as before");
+        let reach = |l: &PlacedLabel| text::label_width(l) / 2.0 + text::drawn_halo_reach(l);
+        let (a, b) = (far.iter().find(|l| l.text == "Aaaa").unwrap(), far.iter().find(|l| l.text == "Bbbb").unwrap());
+        // Centres so far apart that `room` points lie between the halos.
+        let apart = |room: f32| reach(a) + reach(b) + room;
+        // Six points between them: 2 + 2 leave both in, as before.
+        assert_eq!(shown(&mut map(apart(6.0), [2.0, 2.0])), ["Aaaa", "Bbbb"]);
+        // Either one's clearance grown to 5 (5 + 2 > 6): the layer above keeps its place.
+        assert_eq!(shown(&mut map(apart(6.0), [5.0, 2.0])), ["Aaaa"], "the upper label's clearance");
+        assert_eq!(shown(&mut map(apart(6.0), [2.0, 5.0])), ["Aaaa"], "the lower label's clearance");
+        // A fraction is honoured: 3.9 + 2 < 6.
+        assert_eq!(shown(&mut map(apart(6.0), [3.9, 2.0])), ["Aaaa", "Bbbb"]);
+        // A point between them: 2 + 2 keep one out, 0 + 0 let both in.
+        assert_eq!(shown(&mut map(apart(1.0), [2.0, 2.0])), ["Aaaa"]);
+        let close = drawn(&mut map(apart(1.0), [0.0, 0.0]));
+        assert_eq!(close.len(), 2, "no clearance: only the halos keep them apart");
+        assert!(close.iter().all(|l| l.collide.text_padding == 0.0));
+        // Moved by hand, a label keeps its class's clearance.
+        let mut m = map(300.0, [9.0, 2.0]);
+        let id = m.layers.iter().find(|l| l.name == "Aaaa").unwrap().id;
+        let fid = m.layer(id).unwrap().dataset.features[0].id;
+        m.layer_mut(id).unwrap().labels.default.moved = vec![rustgis_map::symbology::MovedLabel { id: fid, at: [center.x, center.y] }];
+        let moved = drawn(&mut m).into_iter().find(|l| l.text == "Aaaa").unwrap();
+        assert_eq!(moved.collide.text_padding, 9.0);
     }
 
     /// A tile style's label still comes after every layer's own, the lightest included (#2803).
