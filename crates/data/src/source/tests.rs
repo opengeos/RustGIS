@@ -2576,6 +2576,9 @@ fn shapefile_in_place_reprojects_from_its_prj() {
     let said: Vec<_> = src.info().notes.iter().filter(|n| n.contains("not longitude/latitude")).collect();
     assert_eq!(said.len(), 1, "{:?}", src.info().notes);
     assert_eq!(said[0].loss, Some(crate::loss::LossCode::AssumedCrs), "assumed without a .prj");
+    let (_, whole) = crate::io::read_path(&p).unwrap();
+    let said: Vec<_> = whole.messages.iter().filter(|n| n.contains("not longitude/latitude")).collect();
+    assert_eq!((said.len(), said.first().and_then(|n| n.loss)), (1, Some(crate::loss::LossCode::AssumedCrs)), "{:?}", whole.messages);
     // A .prj that says WGS 84 gives the system, so nothing is assumed: the same note, uncoded,
     // as a whole read says it.
     let wgs84 = r#"GEOGCS["GCS_WGS_1984",DATUM["D_WGS_1984",SPHEROID["WGS_1984",6378137.0,298.257223563]],PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]]"#;

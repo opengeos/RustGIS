@@ -402,8 +402,7 @@ impl ShpSource {
             null_text,
             notes: boxed_off_note(boxed_off, false, late)
                 .into_iter()
-                .chain(deleted_note(deleted, false))
-                .map(crate::loss::Note::from)
+                .chain(deleted_note(deleted, false).map(crate::loss::Note::from))
                 .chain(nonfinite_note(&self.info.fields, &nonfinite, false))
                 .collect(),
             not_utf8,
@@ -549,9 +548,10 @@ impl FeatureSource for ShpSource {
             // visits the whole layer, so its count is of the layer.
             notes: boxed_off_note(boxed_off, !late && !complete, late)
                 .into_iter()
-                .chain(deleted_note(deleted, !late && !complete))
-                .map(crate::loss::Note::from)
-                .chain(nonfinite_note(&self.info.fields, &nonfinite, !late && !complete))
+                .chain(deleted_note(deleted, !late && !complete).map(crate::loss::Note::from))
+                // The values a late read decodes are of the records its sample keeps (geometry checks
+                // aside), so its count is of a sample whenever the sample isn't the whole layer.
+                .chain(nonfinite_note(&self.info.fields, &nonfinite, !complete))
                 .collect(),
             not_utf8,
         })
@@ -602,7 +602,7 @@ impl FeatureSource for ShpSource {
 /// the shapes it read, not of the layer. A `late` read (an area the layer's system couldn't bound,
 /// #1925) visited every record and can't place a NaN shape's stored box in the area, so its count
 /// is of the whole layer, and says so.
-fn boxed_off_note(n: u64, sampled: bool, late: bool) -> Vec<String> {
+fn boxed_off_note(n: u64, sampled: bool, late: bool) -> Vec<crate::loss::Note> {
     if n == 0 {
         return Vec::new();
     }
@@ -613,13 +613,14 @@ fn boxed_off_note(n: u64, sampled: bool, late: bool) -> Vec<String> {
     } else {
         format!("{n} shape(s)")
     };
-    vec![format!(
-        "{what} have a coordinate that isn't a number under a bounding box that is one: they're left out of the read, but the layer's extent and its index still take in their stored boxes"
+    vec![crate::loss::Note::loss(
+        crate::loss::LossCode::DroppedFeature,
+        format!(
+            "{what} have a coordinate that isn't a number under a bounding box that is one: they're left out of the read, but the layer's extent and its index still take in their stored boxes"
+        ),
     )]
 }
 
-/// The note for `n` records marked deleted in the `.dbf`, left out with their shapes; of those
-/// read when the read is `sampled`.
 /// The numbers in the `.dbf` that aren't finite, read as empty ([`crate::io::nonfinite_note`]); a
 /// `sampled` read counts only the records it read, and says so, as [`deleted_note`] does.
 fn nonfinite_note(fields: &[crate::Field], counts: &[usize], sampled: bool) -> Option<crate::loss::Note> {
@@ -627,6 +628,8 @@ fn nonfinite_note(fields: &[crate::Field], counts: &[usize], sampled: bool) -> O
     Some(if sampled { note.map_text(|t| format!("in the records read (a sample of the layer, which may hold more), {t}")) } else { note })
 }
 
+/// The note for `n` records marked deleted in the `.dbf`, left out with their shapes; of those
+/// read when the read is `sampled`.
 fn deleted_note(n: usize, sampled: bool) -> Option<String> {
     if sampled && n > 0 {
         return Some(format!(
