@@ -154,10 +154,13 @@ fn has_table(conn: &Connection, name: &str) -> Result<bool> {
 /// The feature count GDAL keeps for `table` in `gpkg_ogr_contents`, used as the table's count
 /// when the file also has the two triggers that keep it up to date
 /// (`trigger_insert_feature_count_<table>` and `trigger_delete_feature_count_<table>`, which add or
-/// take one per insert and delete); GDAL answers a table's count with it too. GDAL may drop the triggers while it writes and create them again when it saves the file,
-/// so a file without them may hold an out-of-date count. `None` then, when there is no such table
-/// or row (a file GDAL didn't write), or when the count isn't a whole number from zero up (NULL,
-/// text, a negative): the table is counted instead.
+/// take one per insert and delete); GDAL answers a table's count with it too, and it is as right
+/// as GDAL's: a row an `INSERT OR REPLACE` puts out fires no delete trigger (SQLite's
+/// `recursive_triggers` is off by default), so such writes leave it high. GDAL may drop the
+/// triggers while it writes and create them again when it saves the file, so a file without them
+/// may hold an out-of-date count. `None` then, when there is no such table or row (a file GDAL
+/// didn't write), or when the count isn't a whole number from zero up (NULL, text, a negative):
+/// the table is counted instead.
 fn kept_count(conn: &Connection, table: &str) -> Option<i64> {
     conn.query_row(
         "SELECT feature_count FROM gpkg_ogr_contents
