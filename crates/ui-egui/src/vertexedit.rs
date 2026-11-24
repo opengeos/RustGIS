@@ -189,19 +189,20 @@ fn unplaced_targets(app: &RustGisApp) -> Vec<(u32, usize)> {
     if app.session.tool != rustgis_engine::Tool::EditVertices || !m.editing.settings.enabled {
         return Vec::new();
     }
-    // The features `targets` looks at, in its order and up to its cap, so a feature past it (which
-    // gets no handles either way) isn't counted; each layer's conversion made once.
-    let (mut out, mut seen) = (Vec::new(), 0usize);
+    // The features `targets` looks at, in its order, until it has its cap of placed ones: a
+    // feature past that gets no handles either way, so isn't counted. Each layer's conversion is
+    // made once.
+    let (mut out, mut placed) = (Vec::new(), 0usize);
     for l in m.layers.iter().filter(|l| m.shows(l) && !l.selection.is_empty() && !l.is_raster() && !l.graphics && !l.is_streamed()) {
         let to = l.dataset.shown_conversion();
         for r in &l.selection {
-            if seen >= MAX_FEATURES {
+            if placed >= MAX_FEATURES {
                 return out;
             }
-            if let Some(g) = l.dataset.features.get(*r).and_then(|f| f.geometry.as_ref()) {
-                seen += 1;
-                if to.as_ref().map_or(true, |to| Dataset::converted_to_lonlat(to, g).is_none()) {
-                    out.push((l.id, *r));
+            if let Some(g) = l.dataset.features.geometry(*r) {
+                match to.as_ref().ok().and_then(|to| Dataset::converted_to_lonlat(to, g)) {
+                    Some(_) => placed += 1,
+                    None => out.push((l.id, *r)),
                 }
             }
         }
@@ -212,16 +213,18 @@ fn unplaced_targets(app: &RustGisApp) -> Vec<(u32, usize)> {
 /// Says once per selection which selected features Edit Vertices gives no handles to, by layer:
 /// one is named, several counted ([`unplaced_targets`]).
 pub(crate) fn say_unplaced(app: &mut RustGisApp) {
-    let left = unplaced_targets(app);
+    // The map's index goes with the features: another map's layers may have the same ids.
+    let map = app.session.project.active_map;
+    let left: Vec<(usize, u32, usize)> = unplaced_targets(app).into_iter().map(|(l, r)| (map, l, r)).collect();
     if left == app.map.vertex_unplaced_said {
         return;
     }
     let mut said = Vec::new();
-    for layer in left.iter().map(|(l, _)| *l).collect::<std::collections::BTreeSet<_>>() {
+    for layer in left.iter().map(|(_, l, _)| *l).collect::<std::collections::BTreeSet<_>>() {
         let Some(l) = app.session.map().layer(layer) else { continue };
-        let rows: Vec<usize> = left.iter().filter(|(id, _)| *id == layer).map(|(_, r)| *r).collect();
+        let rows: Vec<usize> = left.iter().filter(|(_, id, _)| *id == layer).map(|(_, _, r)| *r).collect();
         let text = match rows.as_slice() {
-            [r] => l.dataset.features.get(*r).and_then(|f| l.dataset.feature_to_lonlat(f.id, f.geometry.as_ref()?).err()),
+            [r] => l.dataset.features.row(*r).and_then(|f| l.dataset.feature_to_lonlat(f.id(), f.geometry()?).err()),
             rows => Some(crate::i18n::fmt(
                 "{layer}: {count} of the selected features have a place in {system} that can't be given in longitude/latitude, so their vertices can't be edited there",
                 &[("layer", &l.name), ("count", &rows.len().to_string()), ("system", &l.dataset.coord_crs().label())],
@@ -632,6 +635,41 @@ mod tests {
         assert_eq!(said.len(), 1, "{said:?}");
         assert!(said[0].contains("2 of the selected features"), "{said:?}");
         assert_eq!(targets(&app).len(), 1);
+    }
+
+    /// The count stops where the handles do: at their cap of placed features. With 49 placed
+    /// ones selected first, the two unplaced after them are both counted; past 50 placed, one
+    /// isn't, as it gets no handles either way.
+    #[test]
+    fn the_unplaced_count_follows_the_handles_cap() {
+        let squares = (0..53).map(|i| square(f64::from(i) * 0.05));
+        let mut app = app(squares);
+        let id = app.session.active_layer.unwrap();
+        let utm = rustgis_engine::data::raster::Crs::from_epsg(32631).unwrap();
+        app.session.map_mut().editing.settings.enabled = true;
+        let layer = app.session.map_mut().layer_mut(id).unwrap();
+        layer.dataset.hold_in(utm).unwrap();
+        let far = Geometry::Polygon(vec![vec![vec![
+            Coord::new(500_000., 0.),
+            Coord::new(1e9, 0.),
+            Coord::new(500_000., 1.),
+            Coord::new(500_000., 0.),
+        ]]]);
+        for r in [49, 50, 52] {
+            layer.dataset.features.set_geometry(r, Some(far.clone()));
+        }
+        layer.selection = (0..53).collect();
+        // 49 placed, two unplaced (49, 50), the 50th placed (51): the cap; 52 is past it.
+        assert_eq!(unplaced_targets(&app), [(id, 49), (id, 50)]);
+        assert_eq!(targets(&app).len(), MAX_FEATURES);
+        let mark = app.session.notice_mark();
+        say_unplaced(&mut app);
+        let said: Vec<String> = app.session.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+        assert!(said.len() == 1 && said[0].contains("2 of the selected features"), "{said:?}");
+        // What was said is kept with its map, so another map's layer of the same id and rows is
+        // said for itself.
+        let map = app.session.project.active_map;
+        assert_eq!(app.map.vertex_unplaced_said, [(map, id, 49), (map, id, 50)]);
     }
 
     /// A held gesture scans once, retains no rows, reprojects after camera changes, and drops

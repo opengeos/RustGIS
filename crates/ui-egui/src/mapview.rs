@@ -314,8 +314,9 @@ pub struct MapView {
     /// Non-owning source identity for the held vertex gesture; never persisted with the project.
     pub(crate) vertex_drag_owner: Option<crate::vertexedit::DragOwner>,
     /// The selected features Edit Vertices last said it can't give handles to (their place can't
-    /// be given in longitude/latitude), so it says so once per selection.
-    pub(crate) vertex_unplaced_said: Vec<(u32, usize)>,
+    /// be given in longitude/latitude), by map index, layer and row, so it says so once per
+    /// selection.
+    pub(crate) vertex_unplaced_said: Vec<(usize, u32, usize)>,
     /// Session-only opt-in for coincident polygon moves; never saved with a project or preference.
     pub move_shared_vertices: bool,
     /// A sketch vertex clicked on an edge follows that edge from the previous vertex (Trace);

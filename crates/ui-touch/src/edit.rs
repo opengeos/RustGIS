@@ -81,8 +81,8 @@ pub(crate) fn shape_ref(app: &RustGisApp, id: u32, row: usize) -> Option<std::bo
 /// feature. `None` when it can be, or the row is gone.
 pub(crate) fn unplaced(app: &RustGisApp, id: u32, row: usize) -> Option<String> {
     let l = app.session.map().layer(id)?;
-    let f = l.dataset.features.get(row)?;
-    l.dataset.feature_to_lonlat(f.id, f.geometry.as_ref()?).err()
+    let f = l.dataset.features.row(row)?;
+    l.dataset.feature_to_lonlat(f.id(), f.geometry()?).err()
 }
 
 /// Whether putting vertex `v` of `shape` at `at` (`move`), or a new one there after it
