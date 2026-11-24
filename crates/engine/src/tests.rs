@@ -2745,7 +2745,8 @@ fn an_svg_picture_marker_fixture_opens_drawn_or_said() {
 /// An SVG image marker requires `svg-markers` as well as `picture-markers` wherever it is saved:
 /// a symbol's, a stroke's markers, a dot fill, what No Fill hid and a saved style, in a project, a
 /// map file and a layer file. A reader of PNG and JPEG markers only would draw it as a circle. A
-/// PNG, or an image that is neither, requires `picture-markers` alone (#2266 part E1b).
+/// PNG, or text that doesn't start as XML, requires `picture-markers` alone; text that starts as
+/// XML counts as an SVG, as the renderer tells one, without reading it (#2266 part E1b).
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn an_svg_image_marker_requires_svg_markers_wherever_it_is_saved() {
@@ -2776,7 +2777,8 @@ fn an_svg_image_marker_requires_svg_markers_wherever_it_is_saved() {
         s.run(command, &params).unwrap();
         serde_json::from_slice::<Value>(&std::fs::read(&path).unwrap()).unwrap()["requires"].clone()
     };
-    for (image, expected) in [(png.as_str(), &pictures), (svg.as_str(), &both), ("bm90IGFuIGltYWdl", &pictures)] {
+    // `<html>`: XML that isn't an SVG, which the renderer refuses when it reads it.
+    for (image, expected) in [(png.as_str(), &pictures), (svg.as_str(), &both), ("bm90IGFuIGltYWdl", &pictures), ("PGh0bWw+", &both)] {
         // A symbol's (set directly: the command refuses an image that is neither), in the
         // project, a map file and a layer file.
         let mut s = world();
