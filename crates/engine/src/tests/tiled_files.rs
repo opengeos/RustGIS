@@ -347,12 +347,14 @@ fn a_run_that_panics_reads_no_file_after_it() {
     let mut s = Session::new(Project::default());
     s.run("layer.addData", &json!({"path": path})).unwrap();
     let input = Input::of(&s, "checks").unwrap();
+    let mut within = 0;
     let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         reading_files("Indices", || {
-            assert_eq!(input.read().unwrap().width, 1024, "the file, within the run");
+            within = input.read().unwrap().width;
             panic!("the work failed");
         })
     }));
     assert!(ran.is_err());
+    assert_eq!(within, 1024, "the file, within the run");
     assert_eq!(input.read().unwrap().width, 512, "the overview the layer holds, after the run");
 }

@@ -1652,7 +1652,7 @@ fn function_chain_work(s: &Session, p: &Value) -> Result<Work, String> {
             cur = Some(next);
             names.push(f);
         }
-        let mut cur = cur.ok_or("give 1 to 20 steps")?;
+        let mut cur = cur.ok_or("the chain made no raster")?;
         cur.name = named.unwrap_or_else(|| format!("{}_{}", cur.name, names.join("_")));
         // A chain that ends in a hillshade is drawn as one.
         let mut m = match steps.last() {
