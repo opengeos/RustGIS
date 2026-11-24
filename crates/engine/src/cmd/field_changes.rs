@@ -317,15 +317,23 @@ const ALREADY_SENT: &str =
 /// Whether `dir`, a package unpacked, went out from home as package `package`: its [`GIVEN`] names
 /// it.
 pub(crate) fn marks(dir: &Path, package: &str) -> bool {
+    marked(dir, package).unwrap_or(false)
+}
+
+/// [`marks`], telling a marker that isn't there (`Ok(false)`, a return or another kind of folder)
+/// from one that is there but can't be read (`Err`, a damaged package).
+pub(crate) fn marked(dir: &Path, package: &str) -> Result<bool, String> {
     #[derive(Deserialize)]
     struct Marker {
         package: String,
     }
-    !package.is_empty()
-        && crate::project::read_file(&dir.join(GIVEN), 4096)
-            .ok()
-            .and_then(|b| serde_json::from_slice::<Marker>(&b).ok())
-            .is_some_and(|m| m.package == package)
+    let file = dir.join(GIVEN);
+    if package.is_empty() || matches!(std::fs::symlink_metadata(&file), Err(e) if e.kind() == std::io::ErrorKind::NotFound) {
+        return Ok(false);
+    }
+    let bytes = crate::project::read_file(&file, 4096)?;
+    let marker: Marker = serde_json::from_slice(&bytes).map_err(|e| format!("{}: {e}", file.display()))?;
+    Ok(marker.package == package)
 }
 
 /// What a package going out from home holds under [`GIVEN`].

@@ -1296,7 +1296,15 @@ fn unpacked_index(folder: &Path, package: &str) -> Result<std::collections::Hash
     // Only this field project's package from home: one that went out names itself beside its
     // photos (`given.v1.json`). A return opened elsewhere has none, and another package's photos
     // aren't this one's, so their photos go back as they are.
-    if folder.file_name().is_none_or(|n| n != PHOTOS) || !folder.parent().is_some_and(|dir| super::field_changes::marks(dir, package)) {
+    if folder.file_name().is_none_or(|n| n != PHOTOS) {
+        return Ok(std::collections::HashMap::new());
+    }
+    // A marker that is there but can't be read is a damaged package, said by the caller.
+    let marked = match folder.parent() {
+        Some(dir) => super::field_changes::marked(dir, package)?,
+        None => false,
+    };
+    if !marked {
         return Ok(std::collections::HashMap::new());
     }
     // A package's own index, read within a bound: one line for each photo it carried. A package
@@ -2969,6 +2977,13 @@ mod tests {
         std::fs::write(&index, format!("{listed}{listed}")).unwrap();
         let said = notes(&mut project_in(&text, &unpacked).unwrap());
         assert!(said.iter().any(|t| t.contains("is listed twice")), "{said:?}");
+        // The package's marker damaged: its photos can't be told as home's, and that is said.
+        let marker = unpacked.join(crate::cmd::field_changes::GIVEN);
+        let held_marker = std::fs::read(&marker).unwrap();
+        std::fs::write(&marker, b"not json").unwrap();
+        let said = notes(&mut project_in(&text, &unpacked).unwrap());
+        assert!(said.iter().any(|t| t.starts_with("The field package's photo index couldn't be read")), "{said:?}");
+        std::fs::write(&marker, held_marker).unwrap();
         // The index gone from beside the photos: damaged too.
         std::fs::remove_file(&index).unwrap();
         let mut missing = project_in(&text, &unpacked).unwrap();
