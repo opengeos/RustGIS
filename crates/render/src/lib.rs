@@ -6737,6 +6737,11 @@ fn render_frame(
                     && source.same_as_opened().is_ok_and(|same| same)
                 {
                     owner.index_drawn_boxes(&path_key, boxes, share);
+                } else if wanted && !cancel::requested() && source.same_as_opened().is_ok_and(|same| same) {
+                    // Gathered for nothing (a record left out, a row of another kind, more rows
+                    // than the source said): the next whole read would be the same, so none is
+                    // gathered again for this key, until the source is opened again.
+                    owner.refuse_drawn_index(&path_key, usize::MAX);
                 }
             }
             // Declined (`pictureless`): no frame, whatever the source made of the stop.
