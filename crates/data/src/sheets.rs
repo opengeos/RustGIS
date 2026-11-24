@@ -805,9 +805,6 @@ mod tests {
             "{:?}",
             report.messages
         );
-        // The row is kept without its geometry, which is what was lost.
-        let said = report.messages.iter().find(|m| m.contains("isn't a date")).unwrap();
-        assert_eq!(said.loss, Some(crate::loss::LossCode::DroppedGeometry));
         let (_, report) = book("POINT (3 4)");
         assert!(!report.messages.iter().any(|m| m.contains("isn't a date")), "{:?}", report.messages);
     }

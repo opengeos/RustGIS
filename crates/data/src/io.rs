@@ -2875,14 +2875,10 @@ pub(crate) fn read_rows(
         let column = headers.get(w).map_or("", |h| h.trim());
         match workbook.and_then(|(_, empty)| empty.get(w)).copied().unwrap_or(0) {
             0 => {}
-            1 => report.messages.push(crate::loss::Note::loss(
-                crate::loss::LossCode::DroppedGeometry,
-                format!("1 value in '{column}' isn't a date and was read as empty, so its row has no geometry"),
-            )),
-            n => report.messages.push(crate::loss::Note::loss(
-                crate::loss::LossCode::DroppedGeometry,
-                format!("{n} values in '{column}' aren't dates and were read as empty, so their rows have no geometry"),
-            )),
+            1 => report.messages.push(format!("1 value in '{column}' isn't a date and was read as empty, so its row has no geometry")),
+            n => report
+                .messages
+                .push(format!("{n} values in '{column}' aren't dates and were read as empty, so their rows have no geometry")),
         }
     }
     let (mut bad_wkt, mut zm_rows, mut collection_rows) = (0usize, 0usize, 0usize);
