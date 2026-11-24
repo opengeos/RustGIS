@@ -1496,7 +1496,7 @@ pub(crate) fn tiled_inputs(
     // reads no pixels through the run's inputs.
     let Some(spec) = spec.filter(|t| t.id != "rasterToPmtiles") else { return Ok(read) };
     let mut seen = std::collections::HashSet::new();
-    let mut overviews = Vec::new();
+    let (mut overviews, mut held_overviews) = (Vec::new(), Vec::new());
     for parameter in spec.params {
         let value = params.get(parameter.name).unwrap_or(&Value::Null);
         let names: Vec<&str> = match parameter.kind {
@@ -1523,10 +1523,8 @@ pub(crate) fn tiled_inputs(
                 if let Some(held) = l.raster.as_ref().and_then(|rl| rl.data.as_ref())
                     && let Some((fw, fh)) = held.overview
                 {
-                    messages.push(format!(
-                        "{}: read at the {} × {} overview of the {fw} × {fh} raster the layer holds, as plugin tools don't read a raster read in place from its file",
-                        l.name, held.width, held.height
-                    ));
+                    held_overviews
+                        .push(format!("{} at the {} × {} overview of the {fw} × {fh} raster it holds", l.name, held.width, held.height));
                 }
                 continue;
             }
@@ -1568,6 +1566,12 @@ pub(crate) fn tiled_inputs(
         }
     }
     // Said once for the run, every raster named.
+    if !held_overviews.is_empty() {
+        messages.push(format!(
+            "read as the layer holds it, as plugin tools don't read a raster read in place from its file: {}",
+            held_overviews.join("; ")
+        ));
+    }
     if !overviews.is_empty() {
         messages.push(format!("read at the finest level each can hold: {}", overviews.join("; ")));
     }

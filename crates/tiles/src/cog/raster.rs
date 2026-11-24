@@ -180,7 +180,7 @@ fn read_overview(info: Arc<Info>, url: String, done: Box<dyn FnOnce(Result<Raste
 /// A file's name, from its address (without its query).
 fn file_name(url: &str) -> String {
     let path = url.split(['?', '#']).next().unwrap_or(url).trim_end_matches('/');
-    path.rsplit('/').next().filter(|n| !n.is_empty()).unwrap_or("raster").to_string()
+    path.rsplit(['/', '\\']).next().filter(|n| !n.is_empty()).unwrap_or("raster").to_string()
 }
 
 /// The chunks a window of a level needs, of the bands given (each band of a tile its own chunk

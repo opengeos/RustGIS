@@ -223,7 +223,7 @@ fn each_kind_of_run_reads_a_tiled_file_as_it_says() {
     assert_eq!(
         said,
         [
-            "checks: read at the 512 × 512 overview of the 1024 × 1024 raster the layer holds, as plugin tools don't read a raster read in place from its file"
+            "read as the layer holds it, as plugin tools don't read a raster read in place from its file: checks at the 512 × 512 overview of the 1024 × 1024 raster it holds"
         ]
     );
     assert_eq!(read(&s, Tiled::ByPath), (None, Vec::new()));
