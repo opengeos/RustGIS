@@ -637,6 +637,13 @@ pub fn take_public_only_full() -> bool {
     new
 }
 
+/// Whether the record of addresses held to the internet is full, so every address not named by the
+/// user is held there ([`ceiling_for`]) until the process ends: for the caller that filled it to
+/// say.
+pub fn public_restrictions_full() -> bool {
+    public_only().lock().unwrap_or_else(|e| e.into_inner()).saturated
+}
+
 /// Resets document-origin public restrictions recorded by [`restrict_to_public`] and [`allow_named`].
 pub fn clear_public_restrictions() {
     let mut p = public_only().lock().unwrap_or_else(|e| e.into_inner());

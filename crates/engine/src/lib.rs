@@ -31,6 +31,7 @@ pub use peer::Peer;
 pub(crate) use roles::{Document, ParamRole, Role};
 mod parameters;
 pub mod project_log;
+mod received;
 pub use parameters::{params_envelope, script_line, split_script_id};
 pub use project_log::{LogCopy, log_identifier, log_params};
 pub mod s3_connections;
@@ -1106,6 +1107,10 @@ pub struct Session {
     /// Set by [`Session::run_leaving_downloads`]: `layer.addUrl` leaves what it would wait for
     /// to the front end ([`Session::request_url`]), as in the browser.
     leave_downloads: bool,
+    /// Set by [`Session::receiving`]: the files the commands run now open were downloaded from an
+    /// address reached at this reach, which what they name is held within
+    /// ([`Session::file_reach`]).
+    received: Option<crate::render::rustgis_tiles::address::Reach>,
     /// Set by [`prefs::opt_in`]: the command line and Python read the remembered Earthdata token
     /// for a command that names a data host, before it binds its accounts.
     saved_secrets_opted_in: bool,
@@ -1565,6 +1570,7 @@ impl Session {
             request_only: false,
             shared_steps: StepTally::default(),
             leave_downloads: false,
+            received: None,
             saved_secrets_opted_in: false,
             plugin_retries: Vec::new(),
             url_waits: cmd::plugins::fetch::UrlWaits::default(),

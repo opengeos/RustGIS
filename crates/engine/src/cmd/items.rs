@@ -75,7 +75,8 @@ pub fn commands() -> Vec<C> {
         .params(r#"{"layer"?, "path": "*.rgislyr"}"#),
         C::new("layer.addLayerFile", "Add Layer File", "Home › Add", |s, p| {
             let text = read_text(p)?;
-            super::layer::add_layer_text(s, &text)
+            let reach = s.file_reach(p);
+            super::layer::add_layer_text_within(s, &text, reach)
         }).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files))
         .params(r#"{"path"?: "*.rgislyr", "text"?: layer file JSON, "data"?: base64 file}"#),
         // Styles.
@@ -233,7 +234,10 @@ pub fn commands() -> Vec<C> {
                 }
             };
             proj.name = name;
+            // Before anything it names is read (as it is installed).
+            let named = crate::received::hold(proj.addresses_mut(), s.file_reach(p));
             super::project::reset_to(s, proj);
+            named.say(s, "the template");
             s.path = None;
             super::connections::resolve_project(s);
             super::connections::note_waiting(s);
@@ -565,6 +569,10 @@ fn import_maps(s: &mut Session, p: &Value) -> CmdResult {
             }
         },
     };
+    // Before anything they name is read (as they are added).
+    let mut maps = maps;
+    let named = crate::received::hold(maps.iter_mut().take(MAX_IMPORTED_MAPS).flat_map(Map::addresses_mut), s.file_reach(p));
+    named.say(s, "the map file");
     let mut names = Vec::new();
     let first_map = s.project.maps.len();
     let mut detached_offline = 0;

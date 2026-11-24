@@ -676,13 +676,15 @@ fn open(s: &mut Session, p: &Value) -> CmdResult {
             Ok((Project::load(&path)?, Vec::new()))
         }
     })();
-    let (proj, notes) = match proj {
+    let (mut proj, notes) = match proj {
         Ok(proj) => proj,
         Err(error) => {
             super::connections::restore_active(s);
             return Err(error);
         }
     };
+    // Before anything it names is read (as it is installed).
+    let named = crate::received::hold(proj.addresses_mut(), s.file_reach(p));
     reset(s, proj);
     // The rows a package from home gave are kept on this device. The app keeps them on a thread of
     // its own (it runs `offline.keepRows` next); a script or the command line keeps them here.
@@ -709,6 +711,7 @@ fn open(s: &mut Session, p: &Value) -> CmdResult {
         s.path = Some(origin);
     }
     s.notify(format!("Opened {}", s.project.name), false);
+    named.say(s, &format!("the project '{}'", s.project.name));
     for note in notes {
         s.warn(note);
     }
@@ -748,13 +751,15 @@ fn open_text(s: &mut Session, p: &Value) -> CmdResult {
     let package = super::b(p, "package").unwrap_or(false);
     super::connections::clear_active();
     let proj = if package { Project::from_import_json(text, None) } else { Project::from_json(text) };
-    let proj = match proj {
+    let mut proj = match proj {
         Ok(proj) => proj,
         Err(error) => {
             super::connections::restore_active(s);
             return Err(error);
         }
     };
+    // Before anything it names is read (as it is installed).
+    let named = crate::received::hold(proj.addresses_mut(), s.file_reach(p));
     reset(s, proj);
     let legacy_field = package && legacy_field_package(&s.project);
     unlink_partial_copies(s, legacy_field);
@@ -764,6 +769,7 @@ fn open_text(s: &mut Session, p: &Value) -> CmdResult {
     }
     s.path = None;
     s.notify(format!("Opened {}", s.project.name), false);
+    named.say(s, &format!("the project '{}'", s.project.name));
     super::connections::resolve_project(s);
     super::connections::note_waiting(s);
     Ok(Value::Null)

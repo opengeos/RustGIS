@@ -1048,9 +1048,9 @@ pub struct UiState {
     /// Data downloading from web addresses (Home › Add › Add Data › From URL).
     pub downloads: Vec<Download>,
     /// A project downloading from its web address (`ui.openUrl`, a `?project=` link): the
-    /// session's download id, the address and where the download lands. A later one replaces it;
-    /// opening another project meanwhile drops it.
-    pub project_download: Option<(u64, String, Slot<Result<Vec<u8>, String>>)>,
+    /// session's download id, the address and where the download lands, with the reach it was
+    /// read at. A later one replaces it; opening another project meanwhile drops it.
+    pub project_download: Option<(u64, String, Slot<Result<(Vec<u8>, Reach), String>>)>,
     /// The SQL pane's editor, results and history.
     pub sql: sqlpane::State,
     /// GeoTIFFs, FlatGeobufs and GeoParquets by address whose headers are being read: those
@@ -4609,16 +4609,20 @@ impl RustGisApp {
                 let url = p.get("url").and_then(Value::as_str).map(str::trim).filter(|u| !u.is_empty()).ok_or("url is required")?;
                 let url = rustgis_engine::map::geolibre::download_url(url);
                 let url = url.as_str();
-                let slot: Slot<Result<Vec<u8>, String>> = Slot::default();
+                let slot: Slot<Result<(Vec<u8>, Reach), String>> = Slot::default();
                 let land = slot.clone();
-                rustgis_engine::render::rustgis_tiles::cache::download_limited(
+                // With where it was read: what the project names reaches no wider.
+                rustgis_engine::render::rustgis_tiles::cache::download_detailed_with_origin(
                     url,
                     if rustgis_engine::map::geolibre::is_project_file(url) {
                         rustgis_engine::map::geolibre::MAX_TEXT
                     } else {
                         rustgis_engine::render::rustgis_tiles::cache::MAX_DOWNLOAD
                     },
-                    Box::new(move |r| *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(r)),
+                    Box::new(move |r| {
+                        let r = r.map(|fetched| (fetched.bytes, fetched.origin.reach())).map_err(|failure| failure.message);
+                        *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(r);
+                    }),
                 );
                 self.session.notify(i18n::fmt("Opening {url}…", &[("url", &rustgis_engine::sources::address_in_message(url))]), false);
                 let id = self.session.download_started();
@@ -5951,7 +5955,13 @@ impl RustGisApp {
                 }
                 return self.poll_data_downloads();
             }
-            if let Err(e) = r.and_then(|bytes| self.open_project_bytes(project_file_name(&url), &bytes)) {
+            // Opened as received from where it was read: what it names reaches no wider.
+            if let Err(e) = r.and_then(|(bytes, reach)| {
+                let was = self.session.receiving(Some(reach));
+                let r = self.open_project_bytes(project_file_name(&url), &bytes);
+                self.session.receiving(was);
+                r
+            }) {
                 self.session.notify(rustgis_engine::sources::message_with_address(&url, &e), true);
             }
         }

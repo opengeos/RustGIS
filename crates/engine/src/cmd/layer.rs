@@ -4669,8 +4669,15 @@ fn add_layer_file(s: &mut Session, path: &str) -> CmdResult {
     add_layer_text(s, &text)
 }
 
-/// Adds a layer from a layer file's JSON.
+/// Adds a layer from a layer file's JSON, read from the user's own disk or given by the user.
 pub(crate) fn add_layer_text(s: &mut Session, text: &str) -> CmdResult {
+    let reach = s.file_reach(&Value::Null);
+    add_layer_text_within(s, text, reach)
+}
+
+/// [`add_layer_text`] for a layer file whose addresses reach no wider than `reach`
+/// ([`Session::file_reach`]).
+pub(crate) fn add_layer_text_within(s: &mut Session, text: &str, reach: crate::render::rustgis_tiles::address::Reach) -> CmdResult {
     crate::project::check_format(text, "layer file")?;
     let mut layer: rustgis_map::Layer = serde_json::from_str(text).map_err(|e| format!("not a RustGIS layer file: {e}"))?;
     if layer.dataset.source.as_deref().is_some_and(|source| source.starts_with("geolibre-pending:")) {
@@ -4685,6 +4692,9 @@ pub(crate) fn add_layer_text(s: &mut Session, text: &str) -> CmdResult {
     // A binding in a file is no authority to use a login here.
     crate::s3_connections::clear_bindings(layer.addresses_mut());
     crate::project::clear_login_bindings(layer.addresses_mut());
+    // Before anything it names is read (the repair below reads it).
+    let named = crate::received::hold(layer.addresses_mut(), reach);
+    named.say(s, &format!("the layer file '{}'", layer.name));
     // A fresh id and a unique name in this map; the rest goes through project repair.
     let base = layer.name.clone();
     let mut i = 1;
@@ -6875,7 +6885,14 @@ fn add_download(s: &mut Session, p: &Value) -> CmdResult {
             return Err("GeoLibre project exceeds 64 MiB".into());
         }
         let text = String::from_utf8(bytes).map_err(|_| "GeoLibre project must be UTF-8 JSON")?;
-        return s.run_part("project.importGeolibre", &json!({"text":text}));
+        // Received from its address: what it names reaches no wider than that address does
+        // ([`Session::file_reach`]; the browser's fetch doesn't say where it connected).
+        use crate::render::rustgis_tiles::{address, cache, logins};
+        let reach = address::reach(logins::inner(&url)).min(cache::ceiling_for(&url));
+        let was = s.receiving(Some(reach));
+        let r = s.run_part("project.importGeolibre", &json!({"text":text}));
+        s.receiving(was);
+        return r;
     }
     if p.get("geolibreLayer").is_some() {
         let name = if b(p, "geolibreZarr") == Some(true) { "zarr.tif".into() } else { url_file_name(&url, &bytes)? };
