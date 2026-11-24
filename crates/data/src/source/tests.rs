@@ -3808,6 +3808,8 @@ fn geopackage_count_is_the_one_gdal_keeps_when_it_keeps_one() {
         ("kept", format!("{kept} INSERT INTO gpkg_ogr_contents VALUES ('parcels', 250000);"), 250_000, true),
         ("kept zero", format!("{kept} INSERT INTO gpkg_ogr_contents VALUES ('parcels', 0);"), 0, true),
         ("upper-case name", format!("{kept} INSERT INTO gpkg_ogr_contents VALUES ('PARCELS', 7);"), 7, true),
+        // Names differing in case are two rows (the key is case-sensitive): the table's own is taken.
+        ("a row for each case", format!("{kept} INSERT INTO gpkg_ogr_contents VALUES ('PARCELS', 7), ('parcels', 250000);"), 250_000, true),
         // The column's INTEGER affinity stores text digits as a number.
         ("digits as text", format!("{kept} INSERT INTO gpkg_ogr_contents VALUES ('parcels', '250000');"), 250_000, true),
         // Without either trigger nothing kept it up to date (GDAL drops them while it writes).

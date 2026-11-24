@@ -216,3 +216,26 @@ fn a_geopackage_whose_kept_counts_add_past_the_largest_total_says_the_largest() 
     let r = s.run("layer.addData", &json!({"path": path})).unwrap();
     assert_eq!((r["layers"].as_array().map(Vec::len), r["features"].as_u64()), (Some(4), Some(u64::MAX)), "{r}");
 }
+
+#[test]
+fn a_listing_stopped_while_its_last_table_opens_asks_nothing() {
+    // Cancel pressed after the last table's open began: that open finishes, and no question is
+    // made of it, as for a table before it (#2849).
+    struct AfterFirstLook(std::sync::atomic::AtomicU64);
+    impl rustgis_engine::data::progress::Probe for AfterFirstLook {
+        fn cancelled(&self) -> bool {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed) > 0
+        }
+        fn begin(&self, _: u64) {}
+        fn advance(&self, _: u64) {}
+    }
+    let f = Fixture::new("link-stop-last");
+    let path = f.file("survey.gpkg");
+    gpkg_file(&path, &["roads"]);
+    let mut s = session();
+    let probe = std::sync::Arc::new(AfterFirstLook(std::sync::atomic::AtomicU64::new(0)));
+    let _stopped = rustgis_engine::data::progress::install(Some(probe.clone()));
+    let v = listed(&mut s, &path);
+    assert!(v.get("link").is_none(), "{v}");
+    assert_eq!(probe.0.load(std::sync::atomic::Ordering::Relaxed), 2, "looked at before the open and after it");
+}

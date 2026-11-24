@@ -171,7 +171,8 @@ fn kept_count(conn: &Connection, table: &str) -> Option<i64> {
         "SELECT feature_count FROM gpkg_ogr_contents
          WHERE lower(table_name) = lower(?1) AND typeof(feature_count) = 'integer' AND feature_count >= 0
            AND (SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND lower(tbl_name) = lower(?1) AND lower(name) IN
-                (lower('trigger_insert_feature_count_' || ?1), lower('trigger_delete_feature_count_' || ?1))) = 2",
+                (lower('trigger_insert_feature_count_' || ?1), lower('trigger_delete_feature_count_' || ?1))) = 2
+         ORDER BY table_name = ?1 DESC LIMIT 1",
         [table],
         |r| r.get(0),
     )

@@ -2528,10 +2528,10 @@ fn streams_by_count(count: Option<u64>) -> bool {
 /// linked when any table would be: the tables are opened in turn up to the first that would),
 /// except a `.geojson` file: by its size alone, as reading its count means parsing it, so Add
 /// Data always sends the answer (`layer.addData` unasked, once it reads such a file in place,
-/// also copies one of few features). A Cancel is looked at before each table is opened: the table
-/// being opened when it comes finishes, and no question is made. `copy` is whether it can be read
-/// whole: a GeoJSON file or a Shapefile (and its `.dbf`) within [`rustgis_data::io::max_bytes`];
-/// a source's whole read is bounded where it is read.
+/// also copies one of few features). A Cancel is looked at before each table is opened and after
+/// the last: the table being opened when it comes finishes, and no question is made. `copy` is
+/// whether it can be read whole: a GeoJSON file or a Shapefile (and its `.dbf`) within
+/// [`rustgis_data::io::max_bytes`]; a source's whole read is bounded where it is read.
 #[cfg(not(target_arch = "wasm32"))]
 fn link_choice(path: &str, tables: &[String]) -> Option<Value> {
     let lower = path.to_ascii_lowercase();
@@ -2556,6 +2556,8 @@ fn link_choice(path: &str, tables: &[String]) -> Option<Value> {
                 break;
             }
         }
+        // And after the last one opened: a Cancel that came while it opened gives no question.
+        rustgis_data::progress::check().ok()?;
         (linked, true)
     } else {
         return None;
