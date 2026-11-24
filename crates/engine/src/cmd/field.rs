@@ -535,6 +535,8 @@ fn build_package(s: &mut Session, p: &Value, notes: &mut rustgis_data::loss::Not
         entries.retain(|(n, _)| !n.starts_with(&format!("{PHOTOS}/")));
         companions = companion_bytes(&entries) + MARKER_ROOM;
         // Before the note the fallback below takes back, if it runs.
+        // The note of the layers copied for reference is the last one when there are any (pushed
+        // just before the manifest); the fallback below takes it back first.
         let at = losses.len() - usize::from(!copied.is_empty());
         losses.insert(at, format!("{carried} photo(s) stayed home: the map needed the field package's room for them"));
         manifest = manifest_bytes(&archive_errors, &losses)?;
@@ -1275,10 +1277,11 @@ fn unpacked_index(folder: &Path, package: &str) -> Result<std::collections::Hash
         return Ok(std::collections::HashMap::new());
     }
     // A package's own index, read within a bound: one line for each photo it carried. A package
-    // that carried no photo has none.
-    let file = folder.join(INDEX.trim_start_matches(&format!("{PHOTOS}/")));
+    // that carried no photo has none; one whose photos are there without it is damaged.
+    let file = folder.join(INDEX_FILE);
     if matches!(std::fs::symlink_metadata(&file), Err(e) if e.kind() == std::io::ErrorKind::NotFound) {
-        return Ok(std::collections::HashMap::new());
+        let photos = std::fs::read_dir(folder).map(|mut entries| entries.next().is_some()).unwrap_or(false);
+        return if photos { Err(format!("{}: missing beside the photos", file.display())) } else { Ok(std::collections::HashMap::new()) };
     }
     let bytes = crate::project::read_file(&file, MAX_INDEX)?;
     let text = String::from_utf8_lossy(&bytes);
@@ -1319,6 +1322,9 @@ struct Photos {
 /// (`photos/a.jpg<TAB>/storage/…/a.jpg`), so a photo brought back to where it already is keeps
 /// that path.
 const INDEX: &str = "photos/index.tsv";
+
+/// [`INDEX`]'s file name, in the folder a package's photos are unpacked into.
+const INDEX_FILE: &str = "index.tsv";
 
 /// The extensions of the picture files a returning field package carries.
 const PICTURES: &[&str] = &["jpg", "jpeg", "png", "heic", "heif", "webp"];
@@ -1890,7 +1896,9 @@ pub(crate) fn project_in(text: &str, dir: &Path) -> Result<Project, String> {
             }
         };
         // An entry the index lists belongs to the home path it names, and to nothing else: a
-        // feature naming the entry itself (a reference copy's, say) isn't pointed at that photo.
+        // feature naming the entry itself isn't pointed at that photo. A streamed layer's copy for
+        // reference can: its rows are read after the photo names are given (`collect_photos` skips
+        // streamed layers), so a home row naming `photos/home-00001.jpg` isn't kept clear of them.
         let listed: std::collections::HashSet<String> = index.keys().cloned().collect();
         let at_home: std::collections::HashMap<String, String> = index.into_iter().map(|(entry, named)| (named, entry)).collect();
         for map in &mut project.maps {
@@ -2889,9 +2897,14 @@ mod tests {
         let (_, out) = package(&mut home, &json!({"name": "Bad", "extent": [-180.0, -85.0, 180.0, 85.0]})).unwrap();
         let unpacked = temp.path().join("field");
         let text = unpack_into(&out, &unpacked).unwrap().0;
-        // The index damaged: a folder where the file was.
+        // The index gone from beside the photos: damaged too.
         let index = unpacked.join("photos").join("index.tsv");
         std::fs::remove_file(&index).unwrap();
+        let mut missing = project_in(&text, &unpacked).unwrap();
+        let said: Vec<String> =
+            missing.take_read_notices(&[crate::project::ReadPart::Maps]).iter().map(crate::notice_text::NoticeText::english).collect();
+        assert!(said.iter().any(|t| t.contains("missing beside the photos")), "{said:?}");
+        // The index damaged: a folder where the file was.
         std::fs::create_dir(&index).unwrap();
         let mut project = project_in(&text, &unpacked).unwrap();
         let opened_notes: Vec<String> =
