@@ -1250,7 +1250,13 @@ fn get_tile_at(
             Some(b) => b,
             None => {
                 let b: Bands = Arc::new(vec![vec![f32::NAN; per_band]; nb].into());
-                t.keep(key, b.clone(), samples, started_reach);
+                // Kept only under the file's current header, as a decoded tile is (a local file
+                // written again since is read again).
+                let current = !is_local_file(&url)
+                    || matches!(infos().lock().unwrap_or_else(|e| e.into_inner()).get(&url), Some(State::Ready(i, _)) if Arc::ptr_eq(i, &info));
+                if current {
+                    t.keep(key, b.clone(), samples, started_reach);
+                }
                 b
             }
         };
