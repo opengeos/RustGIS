@@ -210,30 +210,60 @@ fn unplaced_targets(app: &RustGisApp) -> Vec<(u32, usize)> {
     out
 }
 
-/// Says once per selection which selected features Edit Vertices gives no handles to, by layer:
-/// one is named, several counted ([`unplaced_targets`]).
+/// What [`unplaced_targets`] depends on: the map, the tool, editing, and each layer it looks at
+/// (its id, geometry revision and rows' allocation, which any mutable row access renews, system,
+/// the map system it is shown through, and selection). While it is
+/// unchanged, the selection isn't converted again each frame.
+fn unplaced_signature(app: &RustGisApp) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let m = app.session.map();
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (app.session.project.active_map, app.session.tool == rustgis_engine::Tool::EditVertices, m.editing.settings.enabled).hash(&mut h);
+    for l in m.layers.iter().filter(|l| m.shows(l) && !l.selection.is_empty() && !l.is_raster() && !l.graphics && !l.is_streamed()) {
+        let rows = l.dataset.features.allocation_key().as_ptr() as usize;
+        (l.id, l.geometry_rev, rows, l.dataset.coord_crs(), l.dataset.shown_in, &l.selection).hash(&mut h);
+    }
+    h.finish()
+}
+
+/// Says once per selection which selected features Edit Vertices gives no handles to, in one
+/// notice: one is named, several counted ([`unplaced_targets`]).
 pub(crate) fn say_unplaced(app: &mut RustGisApp) {
+    let signature = unplaced_signature(app);
+    if app.map.vertex_unplaced_seen == Some(signature) {
+        return;
+    }
+    app.map.vertex_unplaced_seen = Some(signature);
     // The map's index goes with the features: another map's layers may have the same ids.
     let map = app.session.project.active_map;
     let left: Vec<(usize, u32, usize)> = unplaced_targets(app).into_iter().map(|(l, r)| (map, l, r)).collect();
     if left == app.map.vertex_unplaced_said {
         return;
     }
-    let mut said = Vec::new();
-    for layer in left.iter().map(|(_, l, _)| *l).collect::<std::collections::BTreeSet<_>>() {
-        let Some(l) = app.session.map().layer(layer) else { continue };
-        let rows: Vec<usize> = left.iter().filter(|(_, id, _)| *id == layer).map(|(_, _, r)| *r).collect();
-        let text = match rows.as_slice() {
-            [r] => l.dataset.features.row(*r).and_then(|f| l.dataset.feature_to_lonlat(f.id(), f.geometry()?).err()),
-            rows => Some(crate::i18n::fmt(
-                "{layer}: {count} of the selected features have a place in {system} that can't be given in longitude/latitude, so their vertices can't be edited there",
-                &[("layer", &l.name), ("count", &rows.len().to_string()), ("system", &l.dataset.coord_crs().label())],
-            )),
-        };
-        said.extend(text);
-    }
+    let m = app.session.map();
+    let text = match left.as_slice() {
+        [] => None,
+        [(_, layer, r)] => m.layer(*layer).and_then(|l| {
+            Some(crate::i18n::fmt(
+                "{layer}: feature {id} has a place in {system} that can't be given in longitude/latitude, so its vertices can't be edited there",
+                &[("layer", &l.name), ("id", &l.dataset.features.row(*r)?.id().to_string()), ("system", &l.dataset.coord_crs().label())],
+            ))
+        }),
+        several => {
+            let mut layers: Vec<&str> = Vec::new();
+            for (_, id, _) in several {
+                if let Some(l) = m.layer(*id).filter(|l| !layers.contains(&l.name.as_str())) {
+                    layers.push(&l.name);
+                }
+            }
+            Some(crate::i18n::fmt(
+                "{layers}: {count} of the selected features have a place that can't be given in longitude/latitude, so their vertices can't be edited there",
+                &[("layers", &layers.join(", ")), ("count", &several.len().to_string())],
+            ))
+        }
+    };
     app.map.vertex_unplaced_said = left;
-    for text in said {
+    if let Some(text) = text {
         app.session.notify(text, true);
     }
 }
@@ -617,6 +647,7 @@ mod tests {
         let far =
             |x: f64| Geometry::Polygon(vec![vec![vec![Coord::new(x, 0.), Coord::new(1e9, 0.), Coord::new(x, 1.), Coord::new(x, 0.)]]]);
         layer.dataset.features[0].geometry = Some(far(500_000.));
+        layer.touch_geometry();
         let mark = app.session.notice_mark();
         say_unplaced(&mut app);
         say_unplaced(&mut app);
@@ -627,6 +658,7 @@ mod tests {
         // Two of them, selected: counted, once.
         let layer = app.session.map_mut().layer_mut(id).unwrap();
         layer.dataset.features[1].geometry = Some(far(500_100.));
+        layer.touch_geometry();
         layer.selection = vec![0, 1, 2];
         let mark = app.session.notice_mark();
         say_unplaced(&mut app);
