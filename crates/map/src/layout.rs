@@ -1408,21 +1408,31 @@ fn is_chart_bars(n: &usize) -> bool {
 /// counts it.
 const SCALE_DECIMALS_INVALID: u8 = u8::MAX;
 
-/// A scale bar's decimals as a file holds them: a whole number from 0 to 253 as it is, a whole
-/// number past that as 254 (more than any count, so `Layout::clamp` cuts it to the most), and
-/// anything else that is a number as [`SCALE_DECIMALS_INVALID`]. So `Layout::clamp` brings every
-/// invalid value into range and says so, rather than the whole layout failing to load or a bad
-/// value passing as a good one.
+/// A scale bar's decimals as a file holds them, of whatever JSON kind: null or the word "auto"
+/// (any case, trimmed) as automatic, a whole number from 0 to 253 as it is, a whole number past
+/// that as 254 (more than any count, so `Layout::clamp` cuts it to the most), and anything else
+/// (negative, fractional, another word, a flag, a list, an object) as
+/// [`SCALE_DECIMALS_INVALID`]. So `Layout::clamp` brings every invalid value into range and says
+/// so, rather than the whole layout failing to load or a bad value passing as a good one.
 fn de_scale_decimals<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<u8>, D::Error> {
-    let n: Option<f64> = serde::Deserialize::deserialize(d)?;
-    Ok(n.map(|v| {
-        if v == f64::INFINITY || (v.fract() == 0.0 && v >= 0.0) {
-            // Whole and not negative (or infinite): 254 is the cap.
-            v.min(254.0) as u8
-        } else {
-            SCALE_DECIMALS_INVALID
+    let v: Option<serde_json::Value> = serde::Deserialize::deserialize(d)?;
+    Ok(match v {
+        None | Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::String(s)) if s.trim().eq_ignore_ascii_case("auto") => None,
+        Some(serde_json::Value::Number(n)) => {
+            if let Some(whole) = n.as_u64() {
+                // 254 is the cap.
+                Some(whole.min(254) as u8)
+            } else {
+                match n.as_f64() {
+                    // Whole and not negative (a float such as 2.0 or 1e30): 254 is the cap.
+                    Some(f) if f.fract() == 0.0 && f >= 0.0 => Some(f.min(254.0) as u8),
+                    _ => Some(SCALE_DECIMALS_INVALID),
+                }
+            }
         }
-    }))
+        Some(_) => Some(SCALE_DECIMALS_INVALID),
+    })
 }
 
 fn is_default<T: Default + PartialEq>(v: &T) -> bool {
@@ -2903,7 +2913,8 @@ impl Layout {
 /// What [`Layout::clamp`] changed in a layout.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct LayoutRepairs {
-    /// Elements kept with a value brought into range, a new id, or a reference cleared.
+    /// Elements kept with a value brought into range, a new id, a reference cleared, or a unit
+    /// label's line breaks replaced.
     pub elements_adjusted: usize,
     /// Elements with a name, text, polygon points, legend exclusions, scale bar unit labels or
     /// legend labels cut to their limits (the same element may count as adjusted too).
@@ -4590,7 +4601,10 @@ mod tests {
             {{"id":4,"name":"d","x":0,"y":0,"w":10,"h":10,"kind":{{"ScaleBar":{{"frame":1,"subdivisions":1}}}}}},
             {{"id":5,"name":"e","x":0,"y":0,"w":10,"h":10,"kind":{{"ScaleBar":{{"frame":1,"decimals":300}}}}}},
             {{"id":6,"name":"f","x":0,"y":0,"w":10,"h":10,"kind":{{"ScaleBar":{{"frame":1,"decimals":-1}}}}}},
-            {{"id":7,"name":"g","x":0,"y":0,"w":10,"h":10,"kind":{{"ScaleBar":{{"frame":1,"decimals":2.5}}}}}}]}}"#,
+            {{"id":7,"name":"g","x":0,"y":0,"w":10,"h":10,"kind":{{"ScaleBar":{{"frame":1,"decimals":2.5}}}}}},
+            {{"id":8,"name":"h","x":0,"y":0,"w":10,"h":10,"kind":{{"ScaleBar":{{"frame":1,"decimals":" Auto "}}}}}},
+            {{"id":9,"name":"i","x":0,"y":0,"w":10,"h":10,"kind":{{"ScaleBar":{{"frame":1,"decimals":"two"}}}}}},
+            {{"id":10,"name":"j","x":0,"y":0,"w":10,"h":10,"kind":{{"ScaleBar":{{"frame":1,"decimals":[2]}}}}}}]}}"#,
             "x".repeat(150)
         );
         let mut l: Layout = serde_json::from_str(&text).unwrap();
@@ -4620,7 +4634,12 @@ mod tests {
         // A negative or fractional count is no count: it goes back to automatic, and is said too.
         assert_eq!(got(6), (0, 0, None, SCALE_BAR_TEXT_PT, String::new()));
         assert_eq!(got(7), (0, 0, None, SCALE_BAR_TEXT_PT, String::new()));
-        assert_eq!((repairs.elements_adjusted, repairs.elements_cut), (5, 1));
+        // Any JSON kind loads: the word "auto" is automatic and no repair; other words and lists
+        // are no count, so they go back to automatic and are said too.
+        for id in [8, 9, 10] {
+            assert_eq!(got(id), (0, 0, None, SCALE_BAR_TEXT_PT, String::new()), "{id}");
+        }
+        assert_eq!((repairs.elements_adjusted, repairs.elements_cut), (7, 1));
         for v in ScaleLabelPosition::ALL {
             assert_eq!(ScaleLabelPosition::from_name(&format!(" {} ", v.code().to_uppercase())), Some(v));
         }
