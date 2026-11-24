@@ -21,7 +21,43 @@ final class DocumentWrite {
     static final String SHORT = "code:short";
     static final String UNFINISHED = "code:unfinished";
 
+    /** Beside a staged copy once its document is opened for writing (and emptied): from then on it may be damaged. */
+    static final String OPENED = ".opened";
+    /** Beside a kept copy whose failure has been said. */
+    static final String REPORTED = ".reported";
+    /** A staged copy being written, before it is given its name. */
+    static final String PART = ".part";
+
     private DocumentWrite() {}
+
+    /**
+     * What an earlier process left in {@code dir}, one write-back's staging folder: the copy to say
+     * (its document was opened for writing, so it may be damaged, and nothing has said so yet), or
+     * null. A folder whose document was never opened is removed: the document is as it was. Half a
+     * copy ({@link #PART}) is removed with it.
+     */
+    static java.io.File unfinished(java.io.File dir) {
+        java.io.File[] files = dir.listFiles();
+        if (files == null || new java.io.File(dir, REPORTED).exists()) {
+            return null;
+        }
+        boolean opened = new java.io.File(dir, OPENED).exists();
+        java.io.File copy = null;
+        for (java.io.File file : files) {
+            String name = file.getName();
+            if (name.endsWith(PART) || (!opened && !name.equals(OPENED))) {
+                file.delete();
+            } else if (file.isFile() && !name.equals(OPENED)) {
+                copy = file;
+            }
+        }
+        if (!opened || copy == null) {
+            new java.io.File(dir, OPENED).delete();
+            dir.delete();
+            return null;
+        }
+        return copy;
+    }
 
     /**
      * Writes {@code bytes} over everything {@code channel} held, then forces it to storage: a

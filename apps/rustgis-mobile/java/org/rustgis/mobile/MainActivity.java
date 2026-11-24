@@ -540,16 +540,27 @@ public class MainActivity extends NativeActivity {
         } catch (Throwable e) {
             return writeBackFailed(name, e, null);
         }
-        try (FileOutputStream out = new FileOutputStream(copy)) {
-            out.write(bytes);
-            out.getFD().sync();
+        // Written under a name of its own and given its name once whole: a later start never takes a
+        // half-written copy for the project as saved.
+        File part = new File(copy.getParentFile(), copy.getName() + DocumentWrite.PART);
+        try {
+            try (FileOutputStream out = new FileOutputStream(part)) {
+                out.write(bytes);
+                out.getFD().sync();
+            }
+            if (!part.renameTo(copy)) {
+                throw new java.io.IOException(DocumentWrite.STORAGE);
+            }
         } catch (Throwable e) {
             // Half a copy would only take room: nothing has touched the document yet.
+            part.delete();
             removeWithFolder(copy);
             return writeBackFailed(name, e, null);
         }
         android.os.ParcelFileDescriptor descriptor;
         try {
+            // From here the document may be emptied: a later start says so if this doesn't finish.
+            new File(copy.getParentFile(), DocumentWrite.OPENED).createNewFile();
             // "rwt": the mode Android documents as cut to nothing on opening, as some providers
             // can't cut a file they have handed out; DocumentWrite cuts and checks it again.
             descriptor = getContentResolver().openFileDescriptor(uri, "rwt");
@@ -581,8 +592,8 @@ public class MainActivity extends NativeActivity {
                     // Said below: the write failed.
                 }
             }
-            // Said now: the copy is marked so the next start doesn't say it again.
-            markReported(copy);
+            // Marked once the Rust side has taken the notice, so the next start doesn't say it again.
+            markOnceTaken(copy);
             return writeBackFailed(name, e, copy);
         }
     }
@@ -621,27 +632,29 @@ public class MainActivity extends NativeActivity {
             return;
         }
         for (File dir : dirs) {
-            File[] files = dir.listFiles();
-            if (files == null || new File(dir, REPORTED).exists()) {
-                continue;
-            }
-            for (File copy : files) {
-                if (copy.isFile() && !copy.getName().equals(REPORTED)) {
-                    markReported(copy);
-                    add(writeBackFailed(copy.getName(), new java.io.IOException(DocumentWrite.UNFINISHED), copy));
-                }
+            File copy = DocumentWrite.unfinished(dir);
+            if (copy != null) {
+                markOnceTaken(copy);
+                add(writeBackFailed(copy.getName(), new java.io.IOException(DocumentWrite.UNFINISHED), copy));
             }
         }
     }
 
-    /** The mark beside a kept copy whose failure has been said. */
-    private static final String REPORTED = ".reported";
+    /** Kept copies whose notice waits to be taken by the Rust side (guarded by events). */
+    private final ArrayList<File> toMark = new ArrayList<>();
+
+    /** Marks {@code copy} as said once its notice has been taken (takeEvents). */
+    private void markOnceTaken(File copy) {
+        synchronized (events) {
+            toMark.add(copy);
+        }
+    }
 
     private static void markReported(File copy) {
         File folder = copy.getParentFile();
         if (folder != null) {
             try {
-                new File(folder, REPORTED).createNewFile();
+                new File(folder, DocumentWrite.REPORTED).createNewFile();
             } catch (java.io.IOException e) {
                 // Said again on a later start at worst.
             }
@@ -653,6 +666,8 @@ public class MainActivity extends NativeActivity {
         file.delete();
         File folder = file.getParentFile();
         if (folder != null) {
+            // A staging folder's mark goes with it.
+            new File(folder, DocumentWrite.OPENED).delete();
             folder.delete();
         }
     }
@@ -700,7 +715,15 @@ public class MainActivity extends NativeActivity {
             add("failed\t" + why);
         }
         synchronized (events) {
-            return events.take();
+            String taken = events.take();
+            // Every notice waiting has been handed over: the copies they name are said.
+            if (events.isEmpty()) {
+                for (File copy : toMark) {
+                    markReported(copy);
+                }
+                toMark.clear();
+            }
+            return taken;
         }
     }
 
