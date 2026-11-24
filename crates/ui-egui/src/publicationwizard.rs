@@ -7,7 +7,7 @@ use rustgis_engine::map::layout::PAGES;
 use serde_json::{Value, json};
 
 /// The wizard's steps, in order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Step {
     Size,
     Style,
@@ -42,11 +42,14 @@ pub struct Draft {
     pub no_author: bool,
     /// The style's colour, or `None` for the style's own.
     pub accent: Option<egui::Color32>,
+    /// The colour last picked, which the swatch comes back with when the box is ticked again.
+    picked: Option<egui::Color32>,
 }
 
 impl Draft {
-    /// What the menu makes: an A4 sheet turned as the map comes out larger, the classic style and
-    /// the map's name as the title.
+    /// Where the wizard starts: an A4 sheet turned Auto (as `layout.publication` turns a size
+    /// given alone, the way the map comes out larger; the menu lists Portrait and Landscape
+    /// instead), the classic style and the map's name as the title, as the menu titles a sheet.
     pub fn new(s: &Session) -> Self {
         Self {
             step: Step::Size,
@@ -61,6 +64,7 @@ impl Draft {
             author: String::new(),
             no_author: false,
             accent: None,
+            picked: None,
         }
     }
 
@@ -178,8 +182,8 @@ fn figure_note(ui: &mut egui::Ui) {
 
 /// The style step: each sheet style, by the name and description the menu gives it.
 fn style_step(ui: &mut egui::Ui, d: &mut Draft) {
-    for (id, name) in PUBLICATION_STYLES {
-        let (name, about) = crate::ribbon::publication_style(id).unwrap_or_else(|| (tl!(*name), ""));
+    for (id, english) in PUBLICATION_STYLES {
+        let (name, about) = crate::ribbon::publication_style(id).unwrap_or_else(|| (tl!(*english), ""));
         ui.radio_value(&mut d.style, (*id).to_string(), name);
         ui.indent(*id, |ui| ui.label(egui::RichText::new(about).small().weak()));
     }
@@ -223,7 +227,11 @@ fn accent_step(ui: &mut egui::Ui, d: &mut Draft, own: egui::Color32) {
         .on_hover_text(tl!("Starts from the app's accent colour; the swatch shows the colour the layout takes."))
         .changed()
     {
-        d.accent = picked.then_some(own);
+        // Unticked, the colour picked is kept for the next tick.
+        if !picked {
+            d.picked = d.accent;
+        }
+        d.accent = picked.then(|| d.picked.unwrap_or(own));
     }
     if let Some(c) = &mut d.accent {
         egui::color_picker::color_edit_button_srgba(ui, c, egui::color_picker::Alpha::Opaque);
@@ -316,17 +324,19 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
             // Every step in a box of one size, so the window keeps its size and Next stays under
             // the pointer from step to step: as tall as the tallest step (the styles and their
             // descriptions) in English, a step that runs longer in another language scrolling
-            // inside it, its text wrapped to its width rather than widening the window.
-            egui::ScrollArea::vertical().id_salt("publication_wizard_step").max_height(STEP_HEIGHT).auto_shrink([false, false]).show(
-                ui,
-                |ui| match d.step {
+            // inside it, its text wrapped to its width rather than widening the window. Each step
+            // scrolls on its own, so one scrolled down doesn't open the next partway down.
+            egui::ScrollArea::vertical()
+                .id_salt(("publication_wizard_step", d.step))
+                .max_height(STEP_HEIGHT)
+                .auto_shrink([false, false])
+                .show(ui, |ui| match d.step {
                     Step::Size => size_step(ui, &mut d),
                     Step::Style => style_step(ui, &mut d),
                     Step::Texts => texts_step(ui, &mut d),
                     Step::Accent => accent_step(ui, &mut d, t.accent),
                     Step::Review => review_step(ui, &d),
-                },
-            );
+                });
             ui.separator();
             let size = egui::vec2(84.0, 28.0);
             ui.horizontal(|ui| {
@@ -341,7 +351,9 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                     }
                     let back = d.moved(-1);
                     if ui.add_enabled_ui(back.is_some(), |ui| crate::widgets::dialog_button(ui, tl!("Back"), None, size).clicked()).inner {
-                        d.step = back.unwrap_or(d.step);
+                        if let Some(back) = back {
+                            d.step = back;
+                        }
                     }
                     close = crate::widgets::dialog_button(ui, tl!("Cancel"), None, size).clicked();
                 });
@@ -400,11 +412,10 @@ mod tests {
         h.state().dialogs.publication.as_ref().expect("the wizard is open").step
     }
 
-    /// It opens on its first step with the menu's defaults: an A4 sheet turned as the map comes
-    /// out larger, the classic style, the map's name as the title and nothing else set; opened
-    /// again while open, it keeps what was entered.
+    /// It opens on its first step: an A4 sheet turned Auto, the classic style, the map's name as
+    /// the title and nothing else set; opened again while open, it keeps what was entered.
     #[test]
-    fn opens_on_the_menus_defaults_and_keeps_its_draft() {
+    fn opens_on_its_defaults_and_keeps_its_draft() {
         let mut app = app();
         open(&mut app);
         let name = app.session.map().name.clone();
@@ -638,6 +649,27 @@ mod tests {
             }
         }
         crate::i18n::set_current(previous);
+    }
+
+    /// A colour picked stays picked: unticked, the style's own colour is sent; ticked again, the
+    /// swatch comes back with the colour picked before.
+    #[test]
+    fn a_colour_picked_comes_back_when_ticked_again() {
+        let mut app = app();
+        open(&mut app);
+        let red = egui::Color32::from_rgb(0xC0, 0x30, 0x30);
+        {
+            let d = app.dialogs.publication.as_mut().unwrap();
+            d.step = Step::Accent;
+            d.accent = Some(red);
+        }
+        let mut h = harness(app);
+        h.get_by_label("Pick a colour of your own").click();
+        h.run_steps(2);
+        assert_eq!(h.state().dialogs.publication.as_ref().unwrap().accent, None, "the style's own");
+        h.get_by_label("Pick a colour of your own").click();
+        h.run_steps(2);
+        assert_eq!(h.state().dialogs.publication.as_ref().unwrap().accent, Some(red), "the colour picked before");
     }
 
     /// Cancel closes the wizard with nothing made, and the next opening starts over.
