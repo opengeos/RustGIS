@@ -43976,10 +43976,15 @@ fn layout_charts_draw_a_line_round_their_bars() {
     s.run("layout.update", &json!({"element": chart, "locked": false})).unwrap();
     // A bad one is refused, naming it, and nothing changes.
     let before = outline(&s);
-    for bad in [json!(true), json!("#000000"), json!({"color": "dark"}), json!({"width": "thick"})] {
+    for (bad, said) in [
+        (json!(true), "barOutline is an object"),
+        (json!("#000000"), "barOutline is an object"),
+        (json!({"color": "dark"}), "color must be #RRGGBB"),
+        (json!({"width": "thick"}), "width must be a number"),
+    ] {
         let p = json!({"element": chart, "x": 99, "barOutline": bad});
         let err = s.run("layout.update", &p).unwrap_err();
-        assert!(err.contains("barOutline") || err.contains("color") || err.contains("width"), "{bad}: {err}");
+        assert!(err.contains(said), "{bad}: {err}");
         let add = json!({"kind": "chart", "layer": "Places", "barOutline": bad});
         assert!(s.run("layout.addElement", &add).is_err(), "{bad}");
     }

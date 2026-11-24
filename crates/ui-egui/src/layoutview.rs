@@ -2324,10 +2324,15 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                                 let max = rustgis_engine::map::layout::MAX_CHART_OUTLINE_WIDTH;
                                 let r = ui
                                     .add(
-                                        egui::DragValue::new(&mut w).update_while_editing(false).range(0.1..=max).speed(0.05).suffix(" pt"),
+                                        egui::DragValue::new(&mut w)
+                                            .update_while_editing(false)
+                                            .range(0.1..=max)
+                                            .speed(0.05)
+                                            .max_decimals(2)
+                                            .suffix(" pt"),
                                     )
                                     .labelled_by(input_label.id);
-                                if drag.settled(ui, &r, &mut w) && w != o.width {
+                                if drag.settled(ui, &r, &mut w) && (w - o.width).abs() > 1e-6 {
                                     update(app, json!({"barOutline": {"width": w}}));
                                 }
                             }
