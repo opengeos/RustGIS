@@ -577,6 +577,16 @@ pub fn source_layers(kind: Kind, url: &str) -> Option<Vec<String>> {
     }
 }
 
+/// Whether a tile archive holds vector tiles (`Some(true)`) or pictures (`Some(false)`); `None`
+/// while its header is on its way or can't be read. Other kinds aren't archives: `None`.
+pub fn archive_holds_vectors(kind: Kind, url: &str) -> Option<bool> {
+    match kind {
+        Kind::PmTiles => pmtiles::info(url).ok().flatten().map(|i| i.tile_type.is_vector()),
+        Kind::MbTiles => mbtiles::info_ready(url, web_time::Duration::ZERO).ok().flatten().map(|i| i.format.is_vector()),
+        _ => None,
+    }
+}
+
 /// The document at `url`: `Ok(None)` while it is on its way.
 fn fetch_json(url: &str, from: Option<&address::Origin>) -> Result<Option<(Value, address::Origin)>, String> {
     match cache::document(url, from) {

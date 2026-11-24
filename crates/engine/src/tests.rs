@@ -23227,7 +23227,7 @@ fn identify_reports_vector_tile_features() {
 }
 
 /// A vector tile archive draws shapes, not pictures: once it's read, `map.setTiles` refuses a
-/// resampling it would ignore (#2804).
+/// resampling it would ignore, and before then it's refused as not known yet (#2804).
 #[test]
 fn a_vector_archive_refuses_resampling() {
     use crate::render::rustgis_tiles::{mvt, pmtiles};
@@ -23255,6 +23255,10 @@ fn a_vector_archive_refuses_resampling() {
     }
     let err = s.run("map.setTiles", &json!({"index": 0, "resampling": "nearest"})).unwrap_err();
     assert!(err.contains("picture tiles"), "{err}");
+    // One not read (here never: it isn't there) might hold vector tiles: refused too.
+    let missing = dir.join("missing.pmtiles").display().to_string();
+    let err = s.run("map.addTiles", &json!({"url": missing, "kind": "pmtiles", "resampling": "nearest"})).unwrap_err();
+    assert!(err.contains("still being read"), "{err}");
     assert_eq!(s.map().tiles[0].resampling, rustgis_map::raster::Resampling::Bilinear);
     let _ = std::fs::remove_dir_all(&dir);
 }

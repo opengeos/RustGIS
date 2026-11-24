@@ -2713,8 +2713,10 @@ mod tests {
         let first = upload(&scene(&quad)).expect("fits");
         assert!(first.has_tiles && !first.has_images, "tiles move with the camera");
         let _second = upload(&scene(&quad)).expect("fits");
+        // Drawn nearest by another layer (#2804): the same texture, sampled another way.
+        let _nearest = upload(&scene(&TileQuad { nearest: true, ..quad.clone() })).expect("fits");
         let textures = r.tile_textures.lock().expect("textures");
-        assert_eq!(textures.by_picture.len(), 1, "one texture for the picture");
+        assert_eq!(textures.by_picture.len(), 1, "one texture for the picture, however it's sampled");
         drop(textures);
         // Once the tile cache lets the picture go, so does the GPU.
         drop((quad, picture, first, _second));

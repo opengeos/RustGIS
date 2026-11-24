@@ -228,9 +228,7 @@ pub(crate) fn add_with_metadata_wait(s: &mut Session, p: &Value, metadata_wait: 
         t.blend = m;
     }
     if let Some(r) = resampling(p)? {
-        if draws_shapes(&t) {
-            return Err(NOT_PICTURES.into());
-        }
+        takes_resampling(&t)?;
         t.resampling = r;
     }
     // Vector tiles' layer names (an OGC API collection's), each drawn in a colour of its own.
@@ -891,14 +889,21 @@ fn sampling_code(r: rustgis_map::raster::Resampling) -> &'static str {
 /// Refused for a layer that draws vector shapes: there are no pictures to resample.
 const NOT_PICTURES: &str = "resampling is for a layer of picture tiles, not vector tiles or a style";
 
-/// Whether `t` draws vector shapes rather than pictures: vector tiles, a style, or an archive
-/// read as holding vector tiles (one still on its way isn't known yet).
-fn draws_shapes(t: &TileLayer) -> bool {
-    matches!(t.kind, TileKind::Vector | TileKind::Style) || rustgis_render::tile_source_layers(t).is_some()
+/// Refused for an archive whose header isn't read yet: it may hold vector tiles.
+const NOT_KNOWN_YET: &str = "this archive is still being read: set its resampling once it shows on the map";
+
+/// Refused unless `t` is known to draw pictures: a vector layer, style or archive draws shapes,
+/// and an archive not read yet might (a setting it would ignore isn't kept).
+fn takes_resampling(t: &TileLayer) -> Result<(), String> {
+    match rustgis_render::tile_draws_pictures(t) {
+        Some(true) => Ok(()),
+        Some(false) => Err(NOT_PICTURES.into()),
+        None => Err(NOT_KNOWN_YET.into()),
+    }
 }
 
 /// The `resampling` parameter: how the layer's pictures are drawn at a size other than their own.
-fn resampling(p: &Value) -> Result<Option<rustgis_map::raster::Resampling>, String> {
+pub(crate) fn resampling(p: &Value) -> Result<Option<rustgis_map::raster::Resampling>, String> {
     match p.get("resampling") {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(name)) => Some(name.trim())
@@ -944,8 +949,8 @@ fn set(s: &mut Session, p: &Value) -> CmdResult {
     if hidden.as_ref().is_some_and(|h| !h.is_empty()) && matches!(t.kind, TileKind::Raster | TileKind::Cog) {
         return Err("hiddenLayers is for vector tiles' source layers".into());
     }
-    if sampling.is_some() && draws_shapes(t) {
-        return Err(NOT_PICTURES.into());
+    if sampling.is_some() {
+        takes_resampling(t)?;
     }
     let single = b(p, "singleImage");
     if single == Some(true) && !t.on_request() {
