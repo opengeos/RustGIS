@@ -1997,7 +1997,7 @@ fn add_geodatabase(s: &mut Session, p: &Value, path: &str) -> CmdResult {
     // One result, as adding a single file gives it: every layer, the first, and the features.
     let layers: Vec<Value> = results.iter().filter_map(|r| r.get("layers").and_then(Value::as_array)).flatten().cloned().collect();
     let tables: Vec<Value> = results.iter().filter_map(|r| r.get("tables").and_then(Value::as_array)).flatten().cloned().collect();
-    let features: u64 = results.iter().filter_map(|r| r.get("features").and_then(Value::as_u64)).sum();
+    let features = results.iter().filter_map(|r| r.get("features").and_then(Value::as_u64)).fold(0, u64::saturating_add);
     let mut out = json!({"layers": layers, "tables": tables, "features": features});
     if let (Some(o), Some(first)) = (out.as_object_mut(), layers.first()) {
         o.insert("layer".into(), first.clone());
@@ -2958,7 +2958,7 @@ fn add_reads(
     }
     let layers: Vec<Value> = added.iter().filter_map(|r| r.get("layer").cloned()).collect();
     let tables: Vec<Value> = added.iter().filter_map(|r| r.get("table").cloned()).collect();
-    let features: u64 = added.iter().filter_map(|r| r.get("features").and_then(Value::as_u64)).sum();
+    let features = added.iter().filter_map(|r| r.get("features").and_then(Value::as_u64)).fold(0, u64::saturating_add);
     let mut out = json!({"layers": layers, "tables": tables, "features": features});
     // The first layer, as the result of adding a single file says it.
     if let Some(first) = layers.first() {
@@ -3509,7 +3509,7 @@ fn add_source_read(
             let (mut ds, report) = whole.take().unwrap_or_else(|| source::materialize(src.as_ref())).map_err(err)?;
             ds.name = name;
             ds.source = Some(label.clone());
-            features += ds.features.len() as u64;
+            features = features.saturating_add(ds.features.len() as u64);
             let id = add_dataset(s, ds);
             if let (Some(r), Some(l)) = (style.clone(), s.map_mut().layer_mut(id)) {
                 l.renderer = r;
@@ -4358,7 +4358,7 @@ fn add_live(s: &mut Session, p: &Value, db: &rustgis_data::source::duckdb::Datab
                 }
             };
             added = true;
-            features += r["features"].as_u64().unwrap_or(0);
+            features = features.saturating_add(r["features"].as_u64().unwrap_or(0));
             streamed |= r["streamed"].as_bool().unwrap_or(false);
             ids.extend(r["layers"].as_array().into_iter().flatten().filter_map(Value::as_u64).filter_map(|i| u32::try_from(i).ok()));
         }
@@ -4552,7 +4552,7 @@ pub(crate) fn add_converted(s: &mut Session, p: &Value, label: &str, original: &
             }
             Err(e) => return Err(e),
         };
-        features += r["features"].as_u64().unwrap_or(0);
+        features = features.saturating_add(r["features"].as_u64().unwrap_or(0));
         streamed |= r["streamed"].as_bool().unwrap_or(false);
         for id in r["layers"].as_array().into_iter().flatten().filter_map(Value::as_u64).filter_map(|i| u32::try_from(i).ok()) {
             if let Some(l) = s.map_mut().layer_mut(id) {

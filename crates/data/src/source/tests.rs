@@ -3803,23 +3803,25 @@ fn geopackage_count_is_the_one_gdal_keeps_when_it_keeps_one() {
                   SET feature_count = feature_count + 1 WHERE lower(table_name) = lower('parcels'); END;
                 CREATE TRIGGER \"trigger_delete_feature_count_parcels\" AFTER DELETE ON \"parcels\" BEGIN UPDATE gpkg_ogr_contents
                   SET feature_count = feature_count - 1 WHERE lower(table_name) = lower('parcels'); END;";
-    // The file's three rows, against what the table of counts says.
+    // The file's three rows, against what the table of counts says, and whether the count is kept.
     let cases = [
-        ("kept", format!("{kept} INSERT INTO gpkg_ogr_contents VALUES ('parcels', 250000);"), 250_000),
-        ("kept zero", format!("{kept} INSERT INTO gpkg_ogr_contents VALUES ('parcels', 0);"), 0),
-        ("upper-case name", format!("{kept} INSERT INTO gpkg_ogr_contents VALUES ('PARCELS', 7);"), 7),
+        ("kept", format!("{kept} INSERT INTO gpkg_ogr_contents VALUES ('parcels', 250000);"), 250_000, true),
+        ("kept zero", format!("{kept} INSERT INTO gpkg_ogr_contents VALUES ('parcels', 0);"), 0, true),
+        ("upper-case name", format!("{kept} INSERT INTO gpkg_ogr_contents VALUES ('PARCELS', 7);"), 7, true),
         // The column's INTEGER affinity stores text digits as a number.
-        ("digits as text", format!("{kept} INSERT INTO gpkg_ogr_contents VALUES ('parcels', '250000');"), 250_000),
+        ("digits as text", format!("{kept} INSERT INTO gpkg_ogr_contents VALUES ('parcels', '250000');"), 250_000, true),
         // Without either trigger nothing kept it up to date (GDAL drops them while it writes).
         (
             "no insert trigger",
             format!("{kept} INSERT INTO gpkg_ogr_contents VALUES ('parcels', 250000); DROP TRIGGER trigger_insert_feature_count_parcels;"),
             3,
+            false,
         ),
         (
             "no delete trigger",
             format!("{kept} INSERT INTO gpkg_ogr_contents VALUES ('parcels', 250000); DROP TRIGGER trigger_delete_feature_count_parcels;"),
             3,
+            false,
         ),
         (
             "triggers on another table",
@@ -3830,20 +3832,22 @@ fn geopackage_count_is_the_one_gdal_keeps_when_it_keeps_one() {
                  CREATE TRIGGER trigger_delete_feature_count_parcels AFTER DELETE ON other BEGIN SELECT 1; END;"
             ),
             3,
+            false,
         ),
-        ("null", format!("{kept} INSERT INTO gpkg_ogr_contents VALUES ('parcels', NULL);"), 3),
-        ("no table", "DROP TABLE IF EXISTS gpkg_ogr_contents;".to_string(), 3),
-        ("no row", format!("{kept} INSERT INTO gpkg_ogr_contents VALUES ('roads', 9);"), 3),
-        ("negative", format!("{kept} INSERT INTO gpkg_ogr_contents VALUES ('parcels', -5);"), 3),
-        ("text", format!("{kept} INSERT INTO gpkg_ogr_contents VALUES ('parcels', 'many');"), 3),
-        ("fraction", format!("{kept} INSERT INTO gpkg_ogr_contents VALUES ('parcels', 2.5);"), 3),
+        ("null", format!("{kept} INSERT INTO gpkg_ogr_contents VALUES ('parcels', NULL);"), 3, false),
+        ("no table", "DROP TABLE IF EXISTS gpkg_ogr_contents;".to_string(), 3, false),
+        ("no row", format!("{kept} INSERT INTO gpkg_ogr_contents VALUES ('roads', 9);"), 3, false),
+        ("negative", format!("{kept} INSERT INTO gpkg_ogr_contents VALUES ('parcels', -5);"), 3, false),
+        ("text", format!("{kept} INSERT INTO gpkg_ogr_contents VALUES ('parcels', 'many');"), 3, false),
+        ("fraction", format!("{kept} INSERT INTO gpkg_ogr_contents VALUES ('parcels', 2.5);"), 3, false),
         (
             "z on every geometry",
             format!("{kept} INSERT INTO gpkg_ogr_contents VALUES ('parcels', 250000); UPDATE gpkg_geometry_columns SET z = 1;"),
             3,
+            false,
         ),
     ];
-    for (case, sql, count) in cases {
+    for (case, sql, count, is_kept) in cases {
         let path = workspace.path().join(format!("{}.gpkg", case.replace(' ', "-")));
         crate::io::write_path(&parcels, &path).unwrap();
         rusqlite::Connection::open(&path).unwrap().execute_batch(&sql).unwrap();
@@ -3853,8 +3857,7 @@ fn geopackage_count_is_the_one_gdal_keeps_when_it_keeps_one() {
         // `INSERT OR REPLACE` leaves it high, a file may say any number) doesn't thin it.
         // Its progress, and a whole read's (Load All), has the rows counted as its total, or none
         // (unknown) for a kept count.
-        // The cases that count the rows get the file's 3; no case keeps a count of 3.
-        let total = if count == 3 { 3 } else { 0 };
+        let total = if is_kept { 0 } else { 3 };
         let watched = |read: &dyn Fn() -> usize| {
             let probe = std::sync::Arc::new(crate::progress::tests::Counted::default());
             let _watched = crate::progress::install(Some(probe.clone()));
