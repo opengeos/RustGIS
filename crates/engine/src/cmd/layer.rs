@@ -3496,7 +3496,8 @@ fn add_source_read(
             s.active_layer = Some(id);
             ids.push(id);
             streamed = true;
-            features += info.count.unwrap_or(0);
+            // A file may keep any count (a GeoPackage's `gpkg_ogr_contents`): past the largest total, that.
+            features = features.saturating_add(info.count.unwrap_or(0));
             s.notify(
                 format!(
                     "{unique}: {} features, read in place a view at a time (Load All Features loads them into memory)",

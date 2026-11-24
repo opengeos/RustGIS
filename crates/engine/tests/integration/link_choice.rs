@@ -200,3 +200,18 @@ fn a_listing_stopped_between_tables_asks_nothing() {
     let v = listed(&mut s, &path);
     assert!(v.get("link").is_none(), "{v}");
 }
+
+#[test]
+fn a_geopackage_whose_kept_counts_add_past_the_largest_total_says_the_largest() {
+    // A file may keep any count: three tables at the largest one add past what a total holds,
+    // so `layer.addData` says the largest total rather than failing or wrapping (#2849).
+    let f = Fixture::new("link-gpkg-huge");
+    let path = f.file("survey.gpkg");
+    gpkg_file(&path, &["a", "b", "c"]);
+    for table in ["a", "b", "c"] {
+        keep_count(&path, table, i64::MAX as u64);
+    }
+    let mut s = session();
+    let r = s.run("layer.addData", &json!({"path": path})).unwrap();
+    assert_eq!((r["layers"].as_array().map(Vec::len), r["features"].as_u64()), (Some(3), Some(u64::MAX)), "{r}");
+}
