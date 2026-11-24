@@ -242,11 +242,6 @@ pub(crate) fn apply_with<B: Borrow<Feature>>(s: &mut Session, id: u32, changes: 
         }
     }
     let rows: Vec<usize> = changes.iter().filter_map(|c| c.row).collect();
-    // What each calculation rule's whole-number field cut: the rule and the field's name. Each
-    // rule's cuts are said, even when a later rule writes the same field: it may read them.
-    // With them, per rule, the results its field couldn't hold and those an error made null
-    // (`WriteLosses`), and its type.
-    let mut cuts: RuleCuts = Vec::new();
     // Parsing against the fields separates a measurement failure from a stale rule. The latter
     // may still be skipped below, but an ambiguous area must never disable a valid rule.
     let metadata = rustgis_data::Dataset::new(l.dataset.name.clone(), l.dataset.geometry_type, l.dataset.fields.clone());
@@ -269,8 +264,11 @@ pub(crate) fn apply_with<B: Borrow<Feature>>(s: &mut Session, id: u32, changes: 
     }
     // Calculation rules, in order. Those that no longer read, by name, said once the edit is kept.
     let layer = l.dataset.name.clone();
-    let (rule_cuts, unread) = calculation_rules(&l.design, &mut l.dataset, &metadata, &rows, 0);
-    cuts.extend(rule_cuts);
+    // What each calculation rule's whole-number field cut: the rule and the field's name. Each
+    // rule's cuts are said, even when a later rule writes the same field: it may read them.
+    // With them, per rule, the results its field couldn't hold and those an error made null
+    // (`WriteLosses`), and its type.
+    let (cuts, unread) = calculation_rules(&l.design, &mut l.dataset, &metadata, &rows, 0);
     // Validation (`refusal`), against each row's state before the first edit.
     let constraints = constraint_rules(&l.design, &metadata);
     let mut original = HashMap::new();

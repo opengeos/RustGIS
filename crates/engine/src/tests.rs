@@ -51720,6 +51720,34 @@ fn calculate_field_preview_refuses_what_calculate_refuses() {
     s.run("select.rows", &json!({"layer": "calc", "rows": [1]})).unwrap();
     let ran = s.run("edit.calculateField", &json!({"layer": "calc", "field": "n", "expression": "n + 1"})).unwrap_err();
     assert_eq!(previewed[1].refused.as_deref(), Some(ran.as_str()), "3 makes 30");
+    // A calculation rule reading `@row_number` reads the layer's row in the preview's copy too.
+    let ruled = || {
+        let mut s = layer();
+        s.run("data.domain", &json!({"layer": "calc", "field": "m", "min": 0, "max": 15})).unwrap();
+        s.run(
+            "data.attributeRule",
+            &json!({"layer": "calc", "name": "Place", "kind": "calculation", "field": "m", "expression": "@row_number * 10"}),
+        )
+        .unwrap();
+        s
+    };
+    let s = ruled();
+    let l = s.map().layer_by_name("calc").unwrap();
+    let n = l.dataset.field_index("n").unwrap();
+    let refused: Vec<Option<String>> = crate::cmd::edit::preview_calculation("n", &l.dataset, n, &[0, 1], Some(&l.design))
+        .unwrap()
+        .into_iter()
+        .map(|p| p.refused)
+        .collect();
+    let ran: Vec<Option<String>> = (0..2)
+        .map(|row| {
+            let mut s = ruled();
+            s.run("select.rows", &json!({"layer": "calc", "rows": [row]})).unwrap();
+            s.run("edit.calculateField", &json!({"layer": "calc", "field": "n", "expression": "n"})).err()
+        })
+        .collect();
+    assert_eq!(refused, ran, "the rule reads the row's place");
+    assert_eq!(ran.iter().map(Option::is_some).collect::<Vec<_>>(), [false, true], "row 1 makes 10, row 2 makes 20");
 }
 
 /// Calculate Field keeps a decimal result as it is in a decimal field, rather than rounding it to
