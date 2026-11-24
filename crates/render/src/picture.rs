@@ -329,12 +329,12 @@ fn svg_in(store: &mut Store, id: u128, bytes: &[u8]) -> Marker {
     // Refused for the run by its matching, past the run's pixels, which are never given back, it
     // stays refused until RustGIS restarts, and is kept: reading it again would only match it again.
     let keep_refusal = matching_charge.is_err() || matches!(tree, Err(PastRunPixels));
-    // An SVG refused for itself keeps its cause, even when its matching's charge finds the run at
-    // its end: only one that would be drawn is then refused for the run. Matching that reaches what
-    // the run has left inside `svg::read` refuses it for the run first, before its later checks
-    // (nested markers) run: finding its own cause would take that matching.
+    // An SVG refused for itself keeps its cause, even when its matching's charge finds the run
+    // at its end: only one that would be drawn is then refused for the run (the charge is met
+    // after its own checks). Matching that reaches what the run has left inside `svg::read`
+    // refuses it for the run first, before its later checks (nested markers) run: finding its
+    // own cause would take that matching.
     let found = tree.and_then(|tree| {
-        matching_charge?;
         let size = tree.size();
         let (w, h) = (size.width(), size.height());
         let long = w.max(h);
@@ -348,6 +348,8 @@ fn svg_in(store: &mut Store, id: u128, bytes: &[u8]) -> Marker {
         }
         let at = Transform::from_scale(sx, sy);
         let work = svg::work(&tree, (pw, ph), at, MARKER_PIXELS)?;
+        // Charged once its own checks pass: one too small or with too much to draw says so.
+        matching_charge?;
         let held = u64::from(pw) * u64::from(ph) * 4;
         store.budget.take(work, held, limits)?;
         let Some(image) = svg::draw(&tree, (pw, ph), at) else {
@@ -871,6 +873,11 @@ mod tests {
         near.budget.pixels = RUN_MARKER_PIXELS - MARKER_CHARGE - 100;
         assert_eq!(marker_in(&mut near, &b64(nested)).err(), Some(MarkerRefusal::TooMuchToDraw));
         assert_eq!(near.images.len(), 1);
+        // So does one too small to draw, refused after it is read (#2864).
+        let small = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1e-40 1e-40"><style>rect { fill: red }</style><rect width="1" height="1"/></svg>"#;
+        let mut low = Store::default();
+        low.budget.pixels = RUN_MARKER_PIXELS - MARKER_CHARGE - 100;
+        assert_eq!(marker_in(&mut low, &b64(small)).err(), Some(MarkerRefusal::SvgTooSmall));
         // An SVG with no style sheet matches nothing, so the run's room left doesn't refuse it.
         let plain = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="9" height="9"/></svg>"#;
         let mut room = Store::default();

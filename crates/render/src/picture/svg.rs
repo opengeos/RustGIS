@@ -236,7 +236,8 @@ fn is_marker(name: &str) -> bool {
 /// it (each rule tried with simplecss's own matcher, each step counted), on top of the `spent`
 /// that matching other elements took, and whether a rule that sets a marker (`marking`, by rule)
 /// matches it (one a later rule may take back counts too: more, never less); `None` past
-/// [`CSS_STEPS`] in all, where it is stopped.
+/// [`CSS_STEPS`] in all, where it is stopped (`spent` starts short of it by the cap given,
+/// [`elements`]).
 fn css_steps(n: roxmltree::Node, sheet: &simplecss::StyleSheet, marking: &[bool], spent: u64) -> Option<(u64, bool)> {
     let steps = std::cell::Cell::new(spent);
     let mut marks = false;
