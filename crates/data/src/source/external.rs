@@ -36,7 +36,7 @@ pub(crate) fn test_runs(require: &str, what: &str, here: bool) -> std::result::R
     if here {
         Ok(true)
     } else if std::env::var_os(require).is_some_and(|v| !v.is_empty()) {
-        Err(format!("{require} is set, but {what} isn't installed"))
+        Err(format!("{require} is set, but {what} wasn't found"))
     } else {
         Ok(false)
     }

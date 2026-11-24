@@ -990,9 +990,7 @@ mod tests {
             .arg(&img)
             .status()
             .is_ok_and(|s| s.success());
-        if !ok {
-            return;
-        }
+        assert!(ok, "gdal_translate couldn't make the ERDAS Imagine fixture");
         let cache = dir.join("cache");
         let captured = crate::provenance::Capture::start();
         let c = convert_in(&cache, &img, None, None, None).unwrap();
