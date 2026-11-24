@@ -193,8 +193,8 @@ fn style_step(ui: &mut egui::Ui, d: &mut Draft) {
 fn texts_step(ui: &mut egui::Ui, d: &mut Draft) {
     egui::Grid::new("publication_wizard_texts").num_columns(2).spacing(egui::vec2(8.0, 8.0)).show(ui, |ui| {
         let line = |ui: &mut egui::Ui, label: &str, text: &mut String, hint: &str| {
-            let label = ui.label(label);
-            ui.add(egui::TextEdit::singleline(text).hint_text(hint).desired_width(260.0)).labelled_by(label.id);
+            let caption = ui.label(label);
+            ui.add(egui::TextEdit::singleline(text).hint_text(hint).desired_width(260.0)).labelled_by(caption.id);
             ui.end_row();
         };
         let label = ui.label(tl!("Title"));
