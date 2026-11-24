@@ -1636,9 +1636,10 @@ pub fn read(file_name: &str, bytes: &[u8], opts: &Options) -> Result<Vec<(Datase
         report.messages.push(why);
     }
     if opts.crs.is_none() {
-        report
-            .messages
-            .push("a DXF drawing doesn't say its coordinate system (give \"crs\", such as EPSG:2263): coordinates are kept as they are");
+        report.messages.push(crate::loss::Note::loss(
+            crate::loss::LossCode::AssumedCrs,
+            "a DXF drawing doesn't say its coordinate system (give \"crs\", such as EPSG:2263): coordinates are kept as they are",
+        ));
     }
     if out.capped {
         report.messages.push(crate::loss::Note::loss(
@@ -3320,7 +3321,7 @@ mod tests {
             );
             assert_eq!(report.skipped, 0);
             assert_eq!(
-                report.messages[0],
+                report.messages[0].as_str(),
                 "a DXF drawing doesn't say its coordinate system (give \"crs\", such as EPSG:2263): coordinates are kept as they are"
             );
             assert_eq!(report.messages.len(), if end == "9" { 2 } else { 1 });

@@ -738,7 +738,10 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>>
             )));
         }
         if file_srs.is_none() && outside {
-            rep.messages.push("the GML doesn't say its coordinate system (srsName) and its coordinates aren't longitude/latitude");
+            rep.messages.push(crate::loss::Note::loss(
+                crate::loss::LossCode::AssumedCrs,
+                "the GML doesn't say its coordinate system (srsName) and its coordinates aren't longitude/latitude",
+            ));
         }
         // Said with the layer it happened in, which may be the only one added.
         if kind.lost > 0 {

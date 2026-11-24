@@ -2960,12 +2960,15 @@ pub(crate) fn read_rows(
     }
     if report.skipped > malformed {
         report.messages.push(crate::loss::Note::loss(
-            crate::loss::LossCode::DroppedFeature,
+            crate::loss::LossCode::DroppedGeometry,
             format!("{} rows had no usable coordinates", report.skipped - malformed),
         ));
     }
     if bad_wkt > 0 {
-        report.messages.push(format!("{bad_wkt} rows had geometry that isn't readable WKT"));
+        report.messages.push(crate::loss::Note::loss(
+            crate::loss::LossCode::DroppedGeometry,
+            format!("{bad_wkt} rows had geometry that isn't readable WKT"),
+        ));
     }
     if wkt.is_some() {
         // The most common kind, as GeoJSON's reader takes it; rows of other kinds are kept (they
@@ -3011,7 +3014,7 @@ pub(crate) fn read_rows(
         if lost > 0 {
             report.skipped += lost;
             report.messages.push(crate::loss::Note::loss(
-                crate::loss::LossCode::DroppedFeature,
+                crate::loss::LossCode::DroppedGeometry,
                 format!("{lost} rows couldn't be converted from {} to longitude/latitude", c.label()),
             ));
         }
@@ -4213,7 +4216,10 @@ pub(crate) fn read_shapefile_parts(parts: ShapefileParts, name: &str, crs: Optio
     }
     ds.crs_incomplete = unconverted > 0;
     if unconverted > 0 && converted == 0 {
-        report.messages.push("no shape could be converted to longitude/latitude: the .prj doesn't seem to match the coordinates");
+        report.messages.push(crate::loss::Note::loss(
+            crate::loss::LossCode::DroppedGeometry,
+            "no shape could be converted to longitude/latitude: the .prj doesn't seem to match the coordinates",
+        ));
     } else if unconverted > 0 {
         report.messages.push(crate::loss::Note::loss(
             crate::loss::LossCode::DroppedGeometry,
@@ -6674,7 +6680,7 @@ mod tests {
             rep.messages,
             [
                 crate::loss::Note::loss(crate::loss::LossCode::DroppedZm, crate::zm_note(Some(1))),
-                "1 rows had geometry that isn't readable WKT".into(),
+                crate::loss::Note::loss(crate::loss::LossCode::DroppedGeometry, "1 rows had geometry that isn't readable WKT"),
                 "1 rows have another kind of geometry than the layer's polyline".into()
             ]
         );

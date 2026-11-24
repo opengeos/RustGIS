@@ -789,7 +789,7 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>>
     if osm.capped {
         report
             .messages
-            .push("the extract is larger than RustGIS reads at once: the rest is left out (use a smaller extract; on the desktop, files over 256 MB open through GDAL when it is installed)");
+            .push(crate::loss::Note::loss(crate::loss::LossCode::DroppedOverLimit, "the extract is larger than RustGIS reads at once: the rest is left out (use a smaller extract; on the desktop, files over 256 MB open through GDAL when it is installed)"));
     }
     if missing > 0 {
         report.messages.push(format!("{missing} ways or relations refer to nodes or ways the file doesn't hold"));

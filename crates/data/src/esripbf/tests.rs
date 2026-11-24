@@ -244,7 +244,10 @@ fn an_answer_without_a_coordinate_system_is_said_to_be_read_as_longitude_latitud
     let bytes = answer(&[transform(false, 1.0, 0.0, 0.0), feature(&[geometry(&[], &[1, 2])])]);
     let (ds, report) = read(&bytes, "t").unwrap();
     assert_eq!(ds.features[0].geometry, Some(Geometry::Point(c(1.0, 2.0))));
-    assert_eq!(report.messages, ["the answer names no coordinate system; coordinates are read as longitude/latitude"]);
+    assert_eq!(
+        report.messages.texts().collect::<Vec<_>>(),
+        ["the answer names no coordinate system; coordinates are read as longitude/latitude"]
+    );
 }
 
 #[test]

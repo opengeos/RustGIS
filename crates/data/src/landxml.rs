@@ -76,7 +76,7 @@ pub fn read(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Vec<(Data
         ))),
         (None, None) => report
             .messages
-            .push("the file doesn't say its coordinate system (give \"crs\", such as EPSG:2263): coordinates are kept as they are"),
+            .push(crate::loss::Note::loss(crate::loss::LossCode::AssumedCrs, "the file doesn't say its coordinate system (give \"crs\", such as EPSG:2263): coordinates are kept as they are")),
     }
     let mut skipped = 0usize;
     let mut missing_parcels = 0usize;
@@ -227,10 +227,7 @@ pub fn read(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Vec<(Data
     }
     report.skipped = skipped + missing_parcels;
     if skipped > 0 {
-        report.messages.push(crate::loss::Note::loss(
-            crate::loss::LossCode::DroppedFeature,
-            format!("{skipped} points, faces or figures couldn't be read and were left out"),
-        ));
+        report.messages.push(format!("{skipped} points, faces or figures couldn't be read and were left out"));
     }
     let mut out: Vec<(Dataset, ReadReport)> = Vec::new();
     let transformer = match crs.filter(|c| *c != Crs::LonLat) {
@@ -259,7 +256,7 @@ pub fn read(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Vec<(Data
             }
             if lost > 0 {
                 rep.messages.push(crate::loss::Note::loss(
-                    crate::loss::LossCode::DroppedFeature,
+                    crate::loss::LossCode::DroppedGeometry,
                     format!("{lost} features couldn't be converted from {}", c.label()),
                 ));
             }

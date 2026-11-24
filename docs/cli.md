@@ -164,7 +164,7 @@ An `--allow` that names no kind or code is refused with status 2, as is `--allow
 | `dropped.calculation-result` | Correct the expression or check the input rows named in the notice. |
 | `dropped.zm` | Keep the source file where heights or measures matter: RustGIS keeps x and y only. |
 | `dropped.crs-name` | Keep the source file's coordinate system definition with the export. |
-| `dropped.feature` | Correct the features the notice names in the source, or read it another way the notice suggests. |
+| `dropped.feature` | Correct those features in the source, or read the source in the way the notice suggests. |
 | `dropped.geometry` | Correct the geometry in the source, or give the coordinate system its coordinates are in. |
 | `dropped.over-limit` | Read less at once, such as by filtering or clipping the source first. |
 | `changed.truncated` | Use a decimal field to keep the fractional part. |

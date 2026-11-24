@@ -504,10 +504,7 @@ fn read_with(file_name: &str, text: &str, budget: usize) -> Result<Vec<(Dataset,
             ));
         }
         if no_list {
-            rep.messages.push(crate::loss::Note::loss(
-                crate::loss::LossCode::DroppedFeature,
-                format!("object {name} is a geometry collection without a list of geometries: nothing in it was read"),
-            ));
+            rep.messages.push(format!("object {name} is a geometry collection without a list of geometries: nothing in it was read"));
         }
         out.push((ds, rep));
     }

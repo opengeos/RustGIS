@@ -740,10 +740,10 @@ fn projection(geometry: &str, columns: impl IntoIterator<Item = (String, String)
 const FINE_TIMES_SAMPLE: u64 = 100_000;
 
 /// What a layer says of `datetime2` and `datetimeoffset` columns that hold 100-nanosecond digits
-/// (`fine`), which are read to the microsecond: the columns where a row looked at (up to 100,000,
+/// (`fine`), which are read to the microsecond: the columns where a row looked at among those the layer reads (`rows`, up to 100,000,
 /// whichever the server returns) has one, and those that may when the rows looked at have none but
 /// weren't all of them (or the look failed).
-fn fine_times_note(conn: &Conn, from: &str, fine: &[String]) -> crate::loss::Notes {
+fn fine_times_note(conn: &Conn, from: &str, rows: &str, fine: &[String]) -> crate::loss::Notes {
     if fine.is_empty() {
         return crate::loss::Notes::new();
     }
@@ -751,7 +751,7 @@ fn fine_times_note(conn: &Conn, from: &str, fine: &[String]) -> crate::loss::Not
         fine.iter().map(|c| format!("MAX(CASE WHEN DATEPART(NANOSECOND, {}) % 1000 <> 0 THEN 1 ELSE 0 END)", ident(c))).collect();
     let cols: Vec<String> = fine.iter().map(|c| ident(c)).collect();
     let sql = format!(
-        "SELECT COUNT_BIG(*), {} FROM (SELECT TOP ({}) {} FROM {from}) s",
+        "SELECT COUNT_BIG(*), {} FROM (SELECT TOP ({}) {} FROM {from} t WHERE {rows}) s",
         checks.join(", "),
         FINE_TIMES_SAMPLE + 1,
         cols.join(", ")
@@ -822,10 +822,7 @@ impl SqlServerSource {
         let raw_srid =
             rows.first().and_then(|r| int_of(at(r, 0))).and_then(|n| u32::try_from(n).ok()).unwrap_or(if geography { 4326 } else { 0 });
         if raw_srid != 0 {
-            notes.push(crate::loss::Note::loss(
-                crate::loss::LossCode::DroppedFeature,
-                format!("the column doesn't fix a coordinate system: rows in one other than EPSG:{raw_srid} are left out"),
-            ));
+            notes.push(format!("the column doesn't fix a coordinate system: rows in one other than EPSG:{raw_srid} are left out"));
         }
         let mut srid = raw_srid;
         if srid == 0
@@ -841,7 +838,10 @@ impl SqlServerSource {
                     srid = u32::from(code);
                     notes.extend(note);
                 }
-                None => notes.push(crate::loss::Note::loss(crate::loss::LossCode::AssumedCrs, "the geometry doesn't say its coordinate system; read as longitude/latitude (add it again with \"crs\", such as EPSG:2263)")),
+                None => notes.push(crate::loss::Note::loss(
+                    crate::loss::LossCode::AssumedCrs,
+                    "the geometry doesn't say its coordinate system; read as longitude/latitude (add it again with \"crs\", such as EPSG:2263)",
+                )),
             }
         }
         if conn.config.encrypt == Encrypt::Off {
@@ -860,7 +860,7 @@ impl SqlServerSource {
             })
             .filter_map(|r| text_of(at(r, 0)))
             .collect();
-        notes.extend(fine_times_note(&conn, &from, &fine));
+        notes.extend(fine_times_note(&conn, &from, &format!("{g} IS NOT NULL AND {g}.STSrid = {raw_srid}"), &fine));
         let keys = conn.query("SELECT k.COLUMN_NAME FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS c JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE k ON k.CONSTRAINT_SCHEMA = c.CONSTRAINT_SCHEMA AND k.CONSTRAINT_NAME = c.CONSTRAINT_NAME WHERE c.CONSTRAINT_TYPE = 'PRIMARY KEY' AND c.TABLE_SCHEMA = @P1 AND c.TABLE_NAME = @P2", &[&table.schema, &table.name])?;
         let mut key = if keys.len() == 1 { keys.first().and_then(|r| text_of(at(r, 0))) } else { None };
         // The registered ObjectID column is the feature id when the table has it.

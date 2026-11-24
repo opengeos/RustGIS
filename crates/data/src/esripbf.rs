@@ -154,7 +154,10 @@ impl Losses {
     pub fn messages(&self) -> crate::loss::Notes {
         let mut out = crate::loss::Notes::new();
         if self.no_crs {
-            out.push("the answer names no coordinate system; coordinates are read as longitude/latitude");
+            out.push(crate::loss::Note::loss(
+                crate::loss::LossCode::AssumedCrs,
+                "the answer names no coordinate system; coordinates are read as longitude/latitude",
+            ));
         }
         if self.unreadable > 0 {
             out.push(format!("{} values don't fit their field's type and are left empty", self.unreadable));

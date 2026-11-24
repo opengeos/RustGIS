@@ -86,7 +86,7 @@ loss_codes! {
     DroppedFeature => (
         "dropped.feature",
         Dropped,
-        "Correct the features the notice names in the source, or read it another way the notice suggests."
+        "Correct those features in the source, or read the source in the way the notice suggests."
     ),
     DroppedGeometry => (
         "dropped.geometry",

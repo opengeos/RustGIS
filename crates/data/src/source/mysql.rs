@@ -745,10 +745,7 @@ impl MysqlSource {
         };
         let constrained = declared.is_some();
         if !constrained && raw_srid != 0 {
-            notes.push(crate::loss::Note::loss(
-                crate::loss::LossCode::DroppedFeature,
-                format!("the column doesn't fix a coordinate system: rows in one other than EPSG:{raw_srid} are left out"),
-            ));
+            notes.push(format!("the column doesn't fix a coordinate system: rows in one other than EPSG:{raw_srid} are left out"));
         }
         let mut srid = raw_srid;
         if srid == 0 {
@@ -758,7 +755,10 @@ impl MysqlSource {
                     srid = u32::from(code);
                     notes.extend(note);
                 }
-                None => notes.push(crate::loss::Note::loss(crate::loss::LossCode::AssumedCrs, "the geometry doesn't say its coordinate system; read as longitude/latitude (add it again with \"crs\", such as EPSG:2263)",)),
+                None => notes.push(crate::loss::Note::loss(
+                    crate::loss::LossCode::AssumedCrs,
+                    "the geometry doesn't say its coordinate system; read as longitude/latitude (add it again with \"crs\", such as EPSG:2263)",
+                )),
             }
         }
         if let Some(note) = tls_note(&conn.config.tls, conn.is_plain()) {

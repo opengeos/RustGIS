@@ -497,10 +497,7 @@ pub(crate) fn coordinate_system(
         return Err(DataError::Format(format!("{file_name}: {} is a geocentric coordinate system, which isn't a map's", crs.label())));
     }
     if crs == Crs::LonLat && !reach.within(180.5, 90.5) {
-        notes.push(crate::loss::Note::loss(
-            crate::loss::LossCode::AssumedCrs,
-            "coordinates are not longitude/latitude; RustGIS reads them as WGS 84 and they may draw out of place",
-        ));
+        notes.push("coordinates are not longitude/latitude; RustGIS reads them as WGS 84 and they may draw out of place");
     }
     if let Some(unit) = crs.height_unit_not_metre().filter(|_| !vertical_named) {
         notes.push(format!(

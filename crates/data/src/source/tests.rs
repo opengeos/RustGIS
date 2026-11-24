@@ -2534,6 +2534,12 @@ fn shapefile_in_place_says_numbers_that_arent_finite() {
         assert!(notes[0].as_str().ends_with(said), "{messages:?}");
         assert_eq!(notes[0].loss, Some(crate::loss::LossCode::DroppedValue));
     }
+    // Finite numbers and a blank one say nothing, in place or whole.
+    let p = d.join("clean.shp");
+    write_shapefile(&ds, &p);
+    let (_, whole_report) = crate::io::read_path(&p).unwrap();
+    let (_, report) = materialize(open_path(&p, None).unwrap().as_ref()).unwrap();
+    assert!(whole_report.messages.iter().chain(&report.messages).all(|m| !m.contains("finite")), "{:?}", report.messages);
 }
 
 #[test]

@@ -892,10 +892,7 @@ impl PostgisSource {
         }
         let raw_srid = srid;
         if table.srid == 0 && !table.geography && raw_srid != 0 {
-            notes.push(crate::loss::Note::loss(
-                crate::loss::LossCode::DroppedFeature,
-                format!("the column doesn't fix a coordinate system: rows in one other than EPSG:{raw_srid} are left out"),
-            ));
+            notes.push(format!("the column doesn't fix a coordinate system: rows in one other than EPSG:{raw_srid} are left out"));
         }
         let given = crs.map(str::trim).filter(|c| !c.is_empty());
         let mut native = g.clone();
@@ -907,7 +904,10 @@ impl PostgisSource {
                     native = format!("ST_SetSRID({g}, {srid})");
                     notes.extend(note);
                 }
-                None => notes.push(crate::loss::Note::loss(crate::loss::LossCode::AssumedCrs, "the geometry doesn't say its coordinate system; read as longitude/latitude (add it again with \"crs\", such as EPSG:2263)",)),
+                None => notes.push(crate::loss::Note::loss(
+                    crate::loss::LossCode::AssumedCrs,
+                    "the geometry doesn't say its coordinate system; read as longitude/latitude (add it again with \"crs\", such as EPSG:2263)",
+                )),
             }
         }
         if let Some(note) = tls_note(&conn.tls, conn.is_plain()) {
