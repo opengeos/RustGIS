@@ -294,7 +294,7 @@ fn field_width(ui: &egui::Ui) -> f32 {
     ui.available_width().min(260.0)
 }
 
-/// The wizard's width.
+/// The wizard's width, where the screen has room for it.
 const WIDTH: f32 = 380.0;
 
 /// The height every step takes: the style step's six styles and their descriptions, with room
@@ -314,18 +314,22 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
     }
     let t = Tokens::get(ctx);
     let (mut open, mut close, mut create) = (true, false, false);
+    // Narrower on a screen too narrow for it, as the other dialogs are.
+    let frame = egui::Frame::window(&ctx.global_style());
+    let width = crate::widgets::dialog_width(ctx, WIDTH, frame);
     egui::Window::new(tl!("Publication Layout Wizard"))
         .id(egui::Id::unique("publication_wizard"))
+        .frame(frame)
         .open(&mut open)
         .collapsible(false)
         .resizable(false)
         .auto_sized()
         // One width on every step and in every language: a long row wraps instead of widening it.
-        .max_width(WIDTH)
+        .max_width(width)
         .pivot(egui::Align2::CENTER_CENTER)
         .default_pos(ctx.content_rect().center())
         .show(ctx, |ui| {
-            ui.set_width(WIDTH);
+            ui.set_width(width);
             let steps = d.steps();
             let at = steps.iter().position(|s| *s == d.step).unwrap_or(0);
             let heading = i18n::fmt(
@@ -399,24 +403,27 @@ mod tests {
     }
 
     fn harness(app: RustGisApp) -> egui_kittest::Harness<'static, RustGisApp> {
+        harness_sized(app, vec2(1400.0, 1000.0))
+    }
+
+    fn harness_sized(app: RustGisApp, size: egui::Vec2) -> egui_kittest::Harness<'static, RustGisApp> {
         // The dialogs alone: the ribbon has a Next of its own (the next extent).
         let mut fonts = false;
-        let mut h =
-            egui_kittest::Harness::builder().with_size(vec2(1400.0, 1000.0)).with_pixels_per_point(2.0).with_max_steps(64).build_ui_state(
-                move |ui, app: &mut RustGisApp| {
-                    if !fonts {
-                        // The app's fonts and theme at a high-density screen's scale, so sizes, spacing
-                        // and the rounding of each line are the ones the app draws there.
-                        crate::theme::install_fonts(ui.ctx(), &[], None);
-                        let theme = app.current_theme();
-                        crate::theme::apply(ui.ctx(), &theme.tokens, &theme.metrics);
-                        fonts = true;
-                        return;
-                    }
-                    crate::dialogs::show(app, &ui.ctx().clone());
-                },
-                app,
-            );
+        let mut h = egui_kittest::Harness::builder().with_size(size).with_pixels_per_point(2.0).with_max_steps(64).build_ui_state(
+            move |ui, app: &mut RustGisApp| {
+                if !fonts {
+                    // The app's fonts and theme at a high-density screen's scale, so sizes, spacing
+                    // and the rounding of each line are the ones the app draws there.
+                    crate::theme::install_fonts(ui.ctx(), &[], None);
+                    let theme = app.current_theme();
+                    crate::theme::apply(ui.ctx(), &theme.tokens, &theme.metrics);
+                    fonts = true;
+                    return;
+                }
+                crate::dialogs::show(app, &ui.ctx().clone());
+            },
+            app,
+        );
         h.run_steps(4);
         h
     }
@@ -709,6 +716,21 @@ mod tests {
         });
         h.run_steps(10);
         assert_eq!(h.get_by_label("Classic").rect(), before, "the styles scroll: they don't fit the box");
+    }
+
+    /// On a screen narrower than the wizard, it narrows to fit, as the other dialogs do: Next and
+    /// the step's text stay on the screen.
+    #[test]
+    fn a_narrow_screen_keeps_the_wizard_on_it() {
+        let mut app = app();
+        open(&mut app);
+        app.dialogs.publication.as_mut().unwrap().step = Step::Style;
+        let h = harness_sized(app, vec2(320.0, 900.0));
+        let next = h.get_by_role_and_label(Role::Button, "Next").rect();
+        assert!(next.left() >= 0.0 && next.right() <= 320.0, "Next at {next:?} on a screen 320 wide");
+        let (_, about) = crate::ribbon::publication_style("panel").unwrap();
+        let text = h.get_by_label(about).rect();
+        assert!(text.right() <= 320.0, "{text:?} runs off a screen 320 wide");
     }
 
     /// Cancel closes the wizard with nothing made, and the next opening starts over.
