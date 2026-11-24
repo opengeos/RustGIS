@@ -162,9 +162,7 @@ const COMMAND_CAPABILITIES: &[(&str, CommandCheck)] = &[
 /// False or null is what an older reader keeps.
 fn command_removes_duplicate_labels(id: &str, params: &Value) -> bool {
     match id {
-        "labels.placement" => {
-            params.get("removeDuplicates").and_then(crate::cmd::labels::number).and_then(rustgis_map::symbology::label_duplicates).is_some()
-        }
+        "labels.placement" => params.get("removeDuplicates").and_then(crate::cmd::labels::number).is_some(),
         "script.run" => params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, command_removes_duplicate_labels)),
         _ => false,
     }

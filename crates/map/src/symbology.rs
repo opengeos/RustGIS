@@ -3060,14 +3060,16 @@ pub const LABEL_DUPLICATES: std::ops::RangeInclusive<f64> = 1.0..=2000.0;
 /// The distance a class removes duplicates within when it is turned on in the Labeling pane.
 pub const DEFAULT_LABEL_DUPLICATES: f32 = 200.0;
 
-/// A distance to remove duplicates within: held to [`LABEL_DUPLICATES`]; one that isn't a number
-/// turns it off.
-pub fn label_duplicates(v: f64) -> Option<f32> {
-    v.is_finite().then(|| v.clamp(*LABEL_DUPLICATES.start(), *LABEL_DUPLICATES.end()) as f32)
+/// A distance to remove duplicates within: held to [`LABEL_DUPLICATES`]; NaN or infinity (which no
+/// JSON number holds) is [`DEFAULT_LABEL_DUPLICATES`]. A file's value that isn't a number at all
+/// turns it off before it gets here ([`de_label_duplicates`]).
+pub fn label_duplicates(v: f64) -> f32 {
+    if v.is_finite() { v.clamp(*LABEL_DUPLICATES.start(), *LABEL_DUPLICATES.end()) as f32 } else { DEFAULT_LABEL_DUPLICATES }
 }
 
+/// Off when it isn't a number (or is null).
 fn de_label_duplicates<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<f32>, D::Error> {
-    Ok(lenient::<D, f64>(d)?.and_then(label_duplicates))
+    Ok(lenient::<D, f64>(d)?.map(label_duplicates))
 }
 
 fn is_no_offset(o: &[f32; 2]) -> bool {

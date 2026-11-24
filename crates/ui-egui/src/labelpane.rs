@@ -1053,7 +1053,7 @@ fn crowding(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
                     )
                     .labelled_by(input_label.id)
                     .on_hover_text(tl!("How close two labels of one text may be before the one placed later is left out."));
-                if drag.settled(ui, &r, &mut v) && label_duplicates(v) != Some(within) {
+                if drag.settled(ui, &r, &mut v) && label_duplicates(v) != within {
                     run(app, "labels.placement", c.params(json!({"removeDuplicates": label_duplicates(v)})));
                 }
             });

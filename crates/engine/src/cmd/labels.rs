@@ -230,7 +230,7 @@ pub fn commands() -> Vec<C> {
                 Some(v) => Some(Some(number(v).ok_or("removeDuplicates must be a number of points from 1 to 2000 (false or null: off)")?)),
             };
             let duplicates_asked = remove_duplicates.flatten().filter(|d| !rustgis_map::symbology::LABEL_DUPLICATES.contains(d));
-            let remove_duplicates = remove_duplicates.map(|d| d.and_then(rustgis_map::symbology::label_duplicates));
+            let remove_duplicates = remove_duplicates.map(|d| d.map(rustgis_map::symbology::label_duplicates));
             // Every label shown, over the others where they crowd.
             let show_all = match p.get("showAll") {
                 None => None,
@@ -414,7 +414,7 @@ pub fn commands() -> Vec<C> {
             }
             if let Some(asked) = duplicates_asked {
                 let name = s.map().layer(id).map(|l| l.name.clone()).unwrap_or_default();
-                let kept = rustgis_map::symbology::label_duplicates(asked).unwrap_or_default();
+                let kept = rustgis_map::symbology::label_duplicates(asked);
                 let asked = if asked.abs() < 1e6 { asked.to_string() } else { format!("{asked:e}") };
                 s.notify_text(
                     NoticeText::format(

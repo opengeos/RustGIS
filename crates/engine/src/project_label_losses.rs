@@ -177,9 +177,12 @@ fn adjusted_clearance(value: Option<&serde_json::Value>) -> bool {
 }
 
 /// A distance to remove duplicate labels within (#2847) that isn't a number from 1 to 2000 (held to
-/// it, or off when it isn't a number); null is off.
+/// it, or off when it isn't a number); null and false are off, as the command has them.
 fn adjusted_duplicates(value: Option<&serde_json::Value>) -> bool {
-    value.is_some_and(|v| !v.is_null() && v.as_f64().is_none_or(|n| !rustgis_map::symbology::LABEL_DUPLICATES.contains(&n)))
+    value.is_some_and(|v| {
+        !matches!(v, serde_json::Value::Null | serde_json::Value::Bool(false))
+            && v.as_f64().is_none_or(|n| !rustgis_map::symbology::LABEL_DUPLICATES.contains(&n))
+    })
 }
 
 /// How much of its line a fitted label is spread over (#2265) that isn't a number (read as the

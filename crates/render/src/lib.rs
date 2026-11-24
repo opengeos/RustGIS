@@ -2682,6 +2682,9 @@ struct Candidate {
     /// Offered row hint (a streamed chunk's row), verified against the feature id before use;
     /// `usize::MAX` when no row is known.
     row: usize,
+    /// Its class removes duplicates (#2847): left out within this many points of a label placed
+    /// before it for another feature of its layer and class with the same text. None keeps it.
+    remove_duplicates: Option<f32>,
 }
 
 impl Candidate {
@@ -2776,7 +2779,17 @@ impl LabelPlace {
 impl From<(PlacedLabel, f64, rustgis_map::LabelKey)> for Candidate {
     fn from((label, priority, key): (PlacedLabel, f64, rustgis_map::LabelKey)) -> Candidate {
         let weight = rustgis_map::symbology::DEFAULT_LABEL_WEIGHT;
-        Candidate { label, weight, priority, key, alternatives: Vec::new(), curves: None, line: None, row: usize::MAX }
+        Candidate {
+            label,
+            weight,
+            priority,
+            key,
+            alternatives: Vec::new(),
+            curves: None,
+            line: None,
+            row: usize::MAX,
+            remove_duplicates: None,
+        }
     }
 }
 
@@ -6447,8 +6460,6 @@ fn render_frame(
                                     collide: rustgis_tiles::Collide {
                                         // Its class's room kept free of other labels (#2828).
                                         text_padding: class.clearance,
-                                        // Its class's duplicates removed within so far (#2847).
-                                        remove_duplicates: class.remove_duplicates.unwrap_or(0.0),
                                         // Shown all: over the other labels where they crowd.
                                         text_allow_overlap: class.show_all,
                                         // Callouts: a label set by its feature (not along a line,
@@ -6480,6 +6491,7 @@ fn render_frame(
                                 curves: curves.take(),
                                 line: line_places.take(),
                                 row,
+                                remove_duplicates: class.remove_duplicates,
                             });
                         }
                     }
@@ -8256,7 +8268,7 @@ fn place_labels_with_previews(
         let fallbacks = head.line.as_mut().map(|line| std::mem::take(&mut line.fallbacks)).unwrap_or_default();
         // Siblings are contiguous: hold just one temporary preview until the group finishes.
         let mut pending = None;
-        for Candidate { label: mut l, key, alternatives, curves, line, .. } in std::iter::once(head).chain(fallbacks) {
+        for Candidate { label: mut l, key, alternatives, curves, line, remove_duplicates, .. } in std::iter::once(head).chain(fallbacks) {
             let c = l.collide;
             let feature = c.callout_anchor.map(|[ax, ay]| [l.x + ax, l.y + ay]);
             let grouped = line.as_ref().is_some_and(|line| line.deduplicate);
@@ -8373,12 +8385,15 @@ fn place_labels_with_previews(
             // Its class removes duplicates (#2847): near a label of another feature of its layer and
             // class with the same text, placed before it, it is left out. It takes no room and isn't
             // shown as unplaced, as it wasn't short of room. One moved by hand always shows.
-            let dedupe = collide.source.filter(|_| has_text && collide.remove_duplicates > 0.0);
-            let centre = [l.center_x(), l.y];
-            if let Some(source) = dedupe
+            let dedupe = remove_duplicates.filter(|_| has_text).map(|within| (within, [l.center_x(), l.y]));
+            if let Some((within, centre)) = dedupe
                 && !collide.pinned
-                && placed_texts.near(source, &l.text, centre, collide.remove_duplicates)
+                && placed_texts.near(key, &l.text, centre, within)
             {
+                // A tilted view's other bands are places of the same label: none of them shows.
+                if grouped {
+                    placed_groups.insert(key);
+                }
                 continue;
             }
             if !show_text && !show_icon {
@@ -8391,8 +8406,8 @@ fn place_labels_with_previews(
             if show_text && !collide.text_ignore_placement {
                 text.iter().for_each(|b| grid.insert(*b));
             }
-            if let Some(source) = dedupe.filter(|_| show_text) {
-                placed_texts.insert(source, &l.text, centre, collide.remove_duplicates);
+            if let Some((within, centre)) = dedupe.filter(|_| show_text) {
+                placed_texts.insert(key, &l.text, centre, within);
             }
             if show_icon && !collide.icon_ignore_placement {
                 icon.iter().for_each(|b| grid.insert(*b));
@@ -8432,16 +8447,16 @@ fn place_labels_with_previews(
 /// against the nine cells round its own, not every label. [`LabelGrid`] holds boxes, with no text
 /// or class to tell a duplicate by.
 #[derive(Default)]
-struct PlacedTexts(std::collections::HashMap<String, std::collections::HashMap<(u32, u32, i64, i64), Vec<(u64, [f32; 2])>>>);
+struct PlacedTexts(std::collections::HashMap<String, std::collections::HashMap<(u32, usize, i64, i64), Vec<(u64, [f32; 2])>>>);
 
 impl PlacedTexts {
     fn cell([x, y]: [f32; 2], within: f32) -> (i64, i64) {
         ((x / within).floor() as i64, (y / within).floor() as i64)
     }
 
-    /// Whether a label of `text` at `at` of another feature of `source`'s layer and class is
-    /// closer than `within` points.
-    fn near(&self, (layer, feature, class): (u32, u64, u32), text: &str, at: [f32; 2], within: f32) -> bool {
+    /// Whether a label of `text` at `at` of another feature of `key`'s layer and class is closer
+    /// than `within` points.
+    fn near(&self, (layer, feature, class, _): rustgis_map::LabelKey, text: &str, at: [f32; 2], within: f32) -> bool {
         let Some(cells) = self.0.get(text) else { return false };
         let (cx, cy) = Self::cell(at, within);
         (-1..=1).flat_map(|dx| (-1..=1).map(move |dy| (cx + dx, cy + dy))).any(|(x, y)| {
@@ -8451,9 +8466,15 @@ impl PlacedTexts {
         })
     }
 
-    fn insert(&mut self, (layer, feature, class): (u32, u64, u32), text: &str, at: [f32; 2], within: f32) {
+    fn insert(&mut self, (layer, feature, class, _): rustgis_map::LabelKey, text: &str, at: [f32; 2], within: f32) {
         let (x, y) = Self::cell(at, within);
-        self.0.entry(text.to_owned()).or_default().entry((layer, class, x, y)).or_default().push((feature, at));
+        // The text copied only the first time it is placed.
+        if !self.0.contains_key(text) {
+            self.0.insert(text.to_owned(), Default::default());
+        }
+        if let Some(cells) = self.0.get_mut(text) {
+            cells.entry((layer, class, x, y)).or_default().push((feature, at));
+        }
     }
 }
 
@@ -9467,6 +9488,7 @@ mod tests {
             curves: None,
             line: None,
             row: 0,
+            remove_duplicates: None,
         };
         let at = |p: &Placement| p.labels.iter().map(|l| (l.text.clone(), l.x, l.y)).collect::<Vec<_>>();
         // None: left out, as before.
@@ -9509,6 +9531,7 @@ mod tests {
             curves: None,
             line: None,
             row: 0,
+            remove_duplicates: None,
             alternatives: vec![other.clone()],
         };
         let blocker = label("Blocker", 100.0, None, 0.0);
@@ -9547,6 +9570,7 @@ mod tests {
             curves: None,
             line: None,
             row: 0,
+            remove_duplicates: None,
             alternatives: vec![alternative.clone()],
         };
         let projected = tilt_candidate(c, &|x, y| (y > 50.0).then_some((2.0 * x + 10.0, 2.0 * y))).unwrap();
@@ -9574,6 +9598,7 @@ mod tests {
             curves: None,
             line: None,
             row: 0,
+            remove_duplicates: None,
         };
         let c = tilt_candidate(offer((10.0, 50.0), vec![(10.0, 60.0), (10.0, 150.0), (20.0, 160.0)]), &at).unwrap();
         assert_eq!((c.label.x, c.label.y), (1010.0, 150.0));
@@ -9630,6 +9655,7 @@ mod tests {
                         curves: None,
                         line: None,
                         row: usize::MAX,
+                        remove_duplicates: None,
                     }
                 })
                 .collect()
@@ -10512,11 +10538,9 @@ mod tests {
     #[test]
     fn a_class_removes_its_duplicates_within_a_distance() {
         // A label of `text` centred `x` points in, for feature `fid` of layer `lid`'s class `ci`.
-        let dup = |text: &str, x: f32, (lid, fid, ci): (u32, u64, u32), within: f32| -> Candidate {
-            let mut l = label(text, x, None, 0.0);
-            l.collide.source = Some((lid, fid, ci));
-            l.collide.remove_duplicates = within;
-            (l, 0.0, (lid, fid, ci as usize, 0)).into()
+        let dup = |text: &str, x: f32, (lid, fid, ci): (u32, u64, usize), within: f32| -> Candidate {
+            let c: Candidate = (label(text, x, None, 0.0), 0.0, (lid, fid, ci, 0)).into();
+            Candidate { remove_duplicates: (within > 0.0).then_some(within), ..c }
         };
         let place = |c: Vec<Candidate>| place_labels_with_previews(c, Vec::new(), 2000.0, 40.0, false, true);
         let shown = |p: &Placement| p.labels.iter().map(|l| (l.text.clone(), l.center_x().round() as i32)).collect::<Vec<_>>();
@@ -10557,6 +10581,17 @@ mod tests {
         assert_eq!(shown(&place(vec![main(100.0, 1, 0.0), main(250.0, 2, 0.0), elm()])).len(), 2, "kept, it hides Elm");
         let p = place(vec![main(100.0, 1, 200.0), main(250.0, 2, 200.0), elm()]);
         assert_eq!(shown(&p), [("Main".into(), 100), ("Elm".into(), 250)]);
+        // In a tilted view a line's label has a place in each band: removed as a duplicate, none
+        // of them shows, as a flat view has the label once.
+        let banded = |x: f32| {
+            let c = main(x, 2, 200.0);
+            Candidate { line: Some(LinePlaces { deduplicate: true, ..Default::default() }), ..c }
+        };
+        let mut head = banded(250.0);
+        if let Some(line) = head.line.as_mut() {
+            line.fallbacks = vec![banded(600.0)];
+        }
+        assert_eq!(shown(&place(vec![main(100.0, 1, 200.0), head])), [("Main".into(), 100)], "no other band brings it back");
     }
 
     /// A class's setting reaches its labels (#2847): two features of one layer with the same name
@@ -10581,9 +10616,7 @@ mod tests {
             m
         };
         assert_eq!(render(&mut map(None), &view).unwrap().labels.len(), 2, "off: both, as before");
-        let one = render(&mut map(Some(200.0)), &view).unwrap().labels;
-        assert_eq!(one.len(), 1);
-        assert_eq!(one[0].collide.remove_duplicates, 200.0);
+        assert_eq!(render(&mut map(Some(200.0)), &view).unwrap().labels.len(), 1);
     }
 
     /// A tile style's label still comes after every layer's own, the lightest included (#2803).

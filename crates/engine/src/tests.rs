@@ -9482,9 +9482,12 @@ fn a_label_class_removes_duplicates_within_a_distance() {
     let mut damaged = serde_json::to_value(&world().project).unwrap();
     damaged["maps"][0]["layers"][0]["labels"]["remove_duplicates"] = json!(9999);
     damaged["maps"][0]["layers"][1]["labels"]["remove_duplicates"] = json!("x");
+    // False is off, as the command has it: nothing to say.
+    damaged["maps"][0]["layers"][2]["labels"]["remove_duplicates"] = json!(false);
     let read = Session::new(Project::from_json(&damaged.to_string()).unwrap());
     assert_eq!(read.map().layers[0].labels.default.remove_duplicates, Some(2000.0));
     assert_eq!(read.map().layers[1].labels.default.remove_duplicates, None);
+    assert_eq!(read.map().layers[2].labels.default.remove_duplicates, None);
     let notes: Vec<_> = read.notices.iter().filter(|n| n.text.contains("duplicate")).map(|n| n.text.clone()).collect();
     assert!(notes.len() == 1 && notes[0].contains("2 label duplicate distance(s)"), "{notes:?}");
 }
