@@ -7440,8 +7440,16 @@ mod tests {
             assert_eq!(told(&l), None, "{at:?} moved back inside");
         }
         // A text that doesn't cross says nothing, whatever else is lost.
-        let inside =
-            TextLoss { id, name: "Note".into(), left_out: 1, at_least: false, below_box: true, past_limit: false, off_page: false };
+        let inside = TextLoss {
+            id,
+            name: "Note".into(),
+            left_out: 1,
+            at_least: false,
+            below_box: true,
+            past_limit: false,
+            off_page: false,
+            unit_label: None,
+        };
         assert_eq!(off_page_notice(&inside), None);
         // Turned within the page: nothing. Turned about its box's centre past the edge: told.
         put(&mut l, (30.0, 10.0));
