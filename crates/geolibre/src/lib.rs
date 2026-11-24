@@ -1070,12 +1070,20 @@ fn load(
                                 // A feature with a place that can't be given in longitude/latitude
                                 // is kept as read, and counted: it doesn't draw (#2032 C2f-4b). Each
                                 // place is converted to be checked; the layer keeps its own.
-                                let lost = ds
-                                    .features
-                                    .rows()
-                                    .filter_map(|r| r.geometry())
-                                    .filter(|g| Dataset::converted_to_lonlat(&to, g).is_none())
-                                    .count();
+                                let (mut lost, mut beyond) = (0usize, 0usize);
+                                for g in ds.features.rows().filter_map(|r| r.geometry()) {
+                                    match Dataset::converted_to_lonlat(&to, g) {
+                                        Some(l) => beyond += usize::from(l.extent().beyond_lonlat()),
+                                        None => lost += 1,
+                                    }
+                                }
+                                if beyond > 0 {
+                                    let have = if beyond == 1 { "feature has" } else { "features have" };
+                                    messages.push(format!(
+                                        "{layer_name}: {beyond} {have} coordinates that come out beyond longitude/latitude once converted from {}: it may not be their coordinate system, and they may draw out of place",
+                                        job.crs.label()
+                                    ));
+                                }
                                 if lost > 0 {
                                     let have = if lost == 1 { "feature has" } else { "features have" };
                                     messages.push(format!(

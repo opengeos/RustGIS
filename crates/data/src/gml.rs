@@ -651,7 +651,7 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>>
         let unread_names = kind.unread_names.said();
         let (mut outside, mut null_text) = (false, Vec::new());
         // Features with a place the file's system can't give in longitude/latitude, kept missing.
-        let mut unplaced = 0usize;
+        let (mut unplaced, mut beyond) = (0usize, 0usize);
         // Held as the file holds its coordinates, in its own system (in the axis order RustGIS
         // gives every system's), when RustGIS converts it.
         if let Some((Some(_), _)) = &transform
@@ -688,6 +688,8 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>>
                     });
                     unplaced += usize::from(missing.get());
                     e = lonlat.get();
+                    // Converted, but beyond longitude/latitude: it draws out of place.
+                    beyond += usize::from(!missing.get() && e.beyond_lonlat());
                     Some(kept)
                 }
                 (_, g) => {
@@ -731,6 +733,9 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>>
                 "{}: {unplaced} {what} places{system} that can't be given in longitude/latitude; they are kept as the file holds them, but don't draw",
                 ds.name
             ));
+        }
+        if let Some((c, _)) = file_srs {
+            rep.messages.extend(crate::io::beyond_lonlat_note("features", beyond, c).map(|n| format!("{}: {n}", ds.name)));
         }
         if file_srs.is_none() && outside {
             rep.messages.push("the GML doesn't say its coordinate system (srsName) and its coordinates aren't longitude/latitude");
@@ -905,6 +910,24 @@ mod tests {
         let said = &layers[0].1.messages;
         assert!(said.iter().any(|m| m.contains("1 feature has places") && m.contains("kept as the file holds them")), "{said:?}");
         assert_eq!(ds.in_lonlat_leaving_out().unwrap().1, 1);
+    }
+
+    /// A place a file's system converts to beyond longitude/latitude (Web Mercator a billion
+    /// metres east) is kept and said with a count; one in its place says nothing (#2032 C2f-4b).
+    #[test]
+    fn a_place_beyond_longitude_latitude_is_said() {
+        let gml = |x: &str| {
+            format!(
+                r#"<ogr:FeatureCollection xmlns:ogr="http://ogr.maptools.org/" xmlns:gml="http://www.opengis.net/gml">
+<gml:featureMember><ogr:pts fid="pts.0"><ogr:geometryProperty><gml:Point srsName="EPSG:3857"><gml:coordinates>{x},6000000</gml:coordinates></gml:Point></ogr:geometryProperty></ogr:pts></gml:featureMember>
+</ogr:FeatureCollection>"#
+            )
+        };
+        let said = |x: &str| {
+            read("p.gml", gml(x).as_bytes()).unwrap()[0].1.messages.texts().any(|m| m.contains("come out beyond longitude/latitude"))
+        };
+        assert!(said("1e9"));
+        assert!(!said("1000000"));
     }
 
     #[test]

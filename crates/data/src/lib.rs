@@ -559,7 +559,7 @@ impl Dataset {
         if to.is_identity() {
             return Ok(Vec::new());
         }
-        let (mut unplaced, mut placed, mut extent) = (0usize, 0usize, Extent::EMPTY);
+        let (mut unplaced, mut placed, mut beyond) = (0usize, 0usize, 0usize);
         for (i, g) in self.features.rows().filter_map(RowRef::geometry).enumerate() {
             stop_when_asked(i)?;
             let (mut ok, mut e) = (true, Extent::EMPTY);
@@ -570,13 +570,16 @@ impl Dataset {
             });
             if ok {
                 placed += 1;
-                extent = extent.union(&e);
+                beyond += usize::from(e.beyond_lonlat());
             } else {
                 unplaced += 1;
             }
         }
         let crs = self.coord_crs();
-        Ok(io::kept_unplaced_note("features", unplaced, placed == 0, crs).into_iter().chain(io::beyond_lonlat_note(&extent, crs)).collect())
+        Ok(io::kept_unplaced_note("features", unplaced, placed == 0, crs)
+            .into_iter()
+            .chain(io::beyond_lonlat_note("features", beyond, crs))
+            .collect())
     }
 
     /// [`Dataset::geometry_to_lonlat`] of `g`, feature `id`'s geometry, for an edit of that one

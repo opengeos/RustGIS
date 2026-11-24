@@ -2959,7 +2959,7 @@ fn geojson_features_that_cant_be_converted_are_skipped_and_counted() {
         let expected = if crs == "EPSG:32617" {
             format!("one of the features has a place in {crs} that can't be given in longitude/latitude: it is kept as the file holds it")
         } else {
-            format!("coordinates are not longitude/latitude once converted from {crs}")
+            format!("coordinates that come out beyond longitude/latitude once converted from {crs}")
         };
         assert!(messages.iter().any(|m| m.contains(&expected)), "{crs}: {messages:?}");
         assert_eq!(info_crs, crs);
@@ -2994,7 +2994,7 @@ fn geojson_kept_unplaced_features_set_the_geometry_type() {
     assert_eq!(ds.geometry_type, GeometryType::Point);
     assert!(ds.features.len() == 2 && !ds.crs_incomplete);
     assert_eq!(messages.len(), 1, "{messages:?}");
-    assert!(messages[0].contains("coordinates are not longitude/latitude once converted from EPSG:3857"), "{}", messages[0]);
+    assert!(messages[0].contains("coordinates that come out beyond longitude/latitude once converted from EPSG:3857"), "{}", messages[0]);
 }
 
 #[test]

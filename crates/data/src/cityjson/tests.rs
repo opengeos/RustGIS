@@ -665,7 +665,7 @@ fn objects_converted_beyond_longitude_latitude_are_said() {
     let bytes = doc(json!(far), json!({"a": triangle(0)}));
     let out = read("m.city.json", &bytes, Some(Crs::WebMercator)).unwrap();
     assert!(out[0].0.features.rows().all(|r| r.geometry().is_some()));
-    assert!(says(&out, "coordinates are not longitude/latitude once converted from EPSG:3857"), "{:?}", messages_of(&out));
+    assert!(says(&out, "coordinates that come out beyond longitude/latitude once converted from EPSG:3857"), "{:?}", messages_of(&out));
 }
 
 /// An object is counted once in a notice, however many of its geometry families it loses.

@@ -263,7 +263,7 @@ fn coordinates_past_longitude_latitude_are_kept_and_the_layer_says_so() {
     assert_eq!(
         report.messages,
         [
-            "coordinates are not longitude/latitude once converted from the answer's coordinate system; it may not match them, and they may draw out of place"
+            "one feature has coordinates that come out beyond longitude/latitude once converted from the answer's coordinate system: it may not be theirs, and it may draw out of place"
         ]
     );
 }

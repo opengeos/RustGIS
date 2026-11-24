@@ -572,13 +572,17 @@ pub(crate) fn finish(
     if crs != Crs::LonLat {
         let to_lonlat = crs.transformer().map_err(|e| DataError::Format(format!("{file_name}: {e}")))?;
         let mut objects = HashSet::new();
-        let mut placed_extent = rustgis_geom::Extent::EMPTY;
+        let mut beyond = HashSet::new();
         for row in &mut rows {
             // Kept as the file holds it, in its system; marked, as it doesn't draw, when it has no
             // place in longitude/latitude.
             if let Some(g) = &row.geometry {
                 match crate::io::places_lonlat_extent(g, &to_lonlat) {
-                    Some(e) => placed_extent = placed_extent.union(&e),
+                    Some(e) => {
+                        if e.beyond_lonlat() {
+                            beyond.insert(row.object);
+                        }
+                    }
                     None => {
                         (row.unconverted, row.draws) = (true, false);
                         objects.insert(row.object);
@@ -588,7 +592,7 @@ pub(crate) fn finish(
         }
         counts.unconverted += objects.len();
         // Those that convert, beyond longitude/latitude: they draw out of place, said.
-        counts.beyond = crate::io::beyond_lonlat_note(&placed_extent, crs);
+        counts.beyond = crate::io::beyond_lonlat_note("city objects", beyond.len(), crs);
     }
     counts.parent_rounds = raise_parents(&mut built, MAX_PARENT_VISITS).unwrap_or(0);
     counts.ground_rounds = set_grounds(&mut built, MAX_PARENT_VISITS).unwrap_or(0);

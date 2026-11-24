@@ -238,18 +238,18 @@ pub fn read(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Vec<(Data
             // Kept as the file holds them, in its system; counted where they have no place in
             // longitude/latitude.
             ds.held_in = *c;
-            let (mut lost, mut placed, mut placed_extent) = (0usize, 0usize, rustgis_geom::Extent::EMPTY);
+            let (mut lost, mut placed, mut beyond) = (0usize, 0usize, 0usize);
             for g in ds.features.iter().filter_map(|f| f.geometry.as_ref()) {
                 match crate::io::places_lonlat_extent(g, t) {
                     Some(e) => {
                         placed += 1;
-                        placed_extent = placed_extent.union(&e);
+                        beyond += usize::from(e.beyond_lonlat());
                     }
                     None => lost += 1,
                 }
             }
             rep.messages.extend(crate::io::kept_unplaced_note("features", lost, placed == 0, *c));
-            rep.messages.extend(crate::io::beyond_lonlat_note(&placed_extent, *c));
+            rep.messages.extend(crate::io::beyond_lonlat_note("features", beyond, *c));
         }
         out.push((ds, rep));
     }

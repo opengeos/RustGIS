@@ -1691,15 +1691,17 @@ pub(crate) fn kept_unplaced_note(what: &str, n: usize, all: bool, crs: Crs) -> O
     })
 }
 
-/// What a reader says when the places of its features that do convert from `crs` come out beyond
-/// longitude/latitude (`placed`, their box there): the system may not match the coordinates,
-/// and they may draw out of place.
-pub(crate) fn beyond_lonlat_note(placed: &rustgis_geom::Extent, crs: Crs) -> Option<String> {
-    placed.beyond_lonlat().then(|| {
-        format!(
-            "coordinates are not longitude/latitude once converted from {}; it may not match them, and they may draw out of place",
-            crs.label()
-        )
+/// What a reader says of the `n` of its `what` whose places convert from `crs` but come out beyond
+/// longitude/latitude (their box there is, [`rustgis_geom::Extent::beyond_lonlat`]): the system
+/// may not be theirs, and they may draw out of place. `None` for none.
+pub(crate) fn beyond_lonlat_note(what: &str, n: usize, crs: Crs) -> Option<String> {
+    let system = crs.label();
+    (n > 0).then(|| {
+        if n == 1 {
+            format!("one of the {what} has coordinates that come out beyond longitude/latitude once converted from {system}: it may not be their coordinate system, and it may draw out of place")
+        } else {
+            format!("{n} {what} have coordinates that come out beyond longitude/latitude once converted from {system}: it may not be their coordinate system, and they may draw out of place")
+        }
     })
 }
 
@@ -1945,7 +1947,7 @@ impl Collector {
         let declared = declared_crs(root, &mut said)?;
         report.messages.extend(said);
         let (mut unconverted, mut placed) = (0usize, 0usize);
-        let mut placed_extent = rustgis_geom::Extent::EMPTY;
+        let mut beyond = 0usize;
         // Only features kept count toward the heights dropped.
         let mut zm = 0usize;
         // Features kept, as longitude/latitude, with a latitude past the poles.
@@ -1957,7 +1959,7 @@ impl Collector {
                 match places_lonlat_extent(g, t) {
                     Some(e) => {
                         placed += 1;
-                        placed_extent = placed_extent.union(&e);
+                        beyond += usize::from(e.beyond_lonlat());
                     }
                     None => unconverted += 1,
                 }
@@ -1978,7 +1980,7 @@ impl Collector {
             ds.crs = Some(*crs);
             ds.held_in = *crs;
             report.messages.extend(kept_unplaced_note("features", unconverted, placed == 0, *crs));
-            report.messages.extend(beyond_lonlat_note(&placed_extent, *crs));
+            report.messages.extend(beyond_lonlat_note("features", beyond, *crs));
         }
         report.messages.extend(swapped_latitude_note(swapped));
         // Last, as a source read in place notes it.
@@ -2980,18 +2982,18 @@ pub(crate) fn read_rows(
         // Kept as the file holds them, in its system; counted where they have no place in
         // longitude/latitude.
         ds.held_in = c;
-        let (mut lost, mut placed, mut placed_extent) = (0usize, 0usize, rustgis_geom::Extent::EMPTY);
+        let (mut lost, mut placed, mut beyond) = (0usize, 0usize, 0usize);
         for g in ds.features.iter().filter_map(|f| f.geometry.as_ref()) {
             match places_lonlat_extent(g, &t) {
                 Some(e) => {
                     placed += 1;
-                    placed_extent = placed_extent.union(&e);
+                    beyond += usize::from(e.beyond_lonlat());
                 }
                 None => lost += 1,
             }
         }
         report.messages.extend(kept_unplaced_note("rows", lost, placed == 0, c));
-        report.messages.extend(beyond_lonlat_note(&placed_extent, c));
+        report.messages.extend(beyond_lonlat_note("rows", beyond, c));
     }
     // Read as longitude/latitude as they are: no system given, or longitude/latitude itself. A
     // row a given system can't place is said above, as kept.

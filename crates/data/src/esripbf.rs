@@ -138,7 +138,7 @@ pub struct Losses {
     /// Features with Z or M values, dropped.
     pub with_zm: usize,
     /// Places that convert to beyond longitude/latitude (the answer's system may not fit them).
-    pub beyond: bool,
+    pub beyond: usize,
 }
 
 impl Losses {
@@ -151,7 +151,7 @@ impl Losses {
         self.flat_rings = self.flat_rings.saturating_add(other.flat_rings);
         self.unprojected = self.unprojected.saturating_add(other.unprojected);
         self.with_zm = self.with_zm.saturating_add(other.with_zm);
-        self.beyond |= other.beyond;
+        self.beyond = self.beyond.saturating_add(other.beyond);
     }
 
     /// What they say, one message per kind (as [`read`] says them).
@@ -178,8 +178,15 @@ impl Losses {
                 self.unprojected
             ));
         }
-        if self.beyond {
-            out.push("coordinates are not longitude/latitude once converted from the answer's coordinate system; it may not match them, and they may draw out of place");
+        if self.beyond > 0 {
+            let (count, have, they) = if self.beyond == 1 {
+                ("one feature".to_string(), "has", "it")
+            } else {
+                (format!("{} features", self.beyond), "have", "they")
+            };
+            out.push(format!(
+                "{count} {have} coordinates that come out beyond longitude/latitude once converted from the answer's coordinate system: it may not be theirs, and {they} may draw out of place"
+            ));
         }
         if self.with_zm > 0 {
             out.push(crate::loss::Note::loss(crate::loss::LossCode::DroppedZm, crate::zm_note(Some(self.with_zm as u64))));
@@ -359,7 +366,7 @@ pub fn read_page_within(bytes: &[u8], name: &str, limit: usize) -> Result<Page> 
     let shape = Shape { kind: shape_kind, transform: &transform, has_z, has_m };
     let mut ds = Dataset::new(name, GeometryType::None, fields);
     let width = ds.fields.len();
-    let (mut any_geometry, mut with_zm, mut unprojected, mut beyond) = (false, 0usize, 0usize, false);
+    let (mut any_geometry, mut with_zm, mut unprojected, mut beyond) = (false, 0usize, 0usize, 0usize);
     for (n, bytes) in features.into_iter().enumerate() {
         let (values, geometry) = feature(bytes, &columns, width, &shape, &mut tally).map_err(|e| match e {
             DataError::Format(m) => invalid(format!("feature {}: {}", n + 1, m.strip_prefix(PREFIX).unwrap_or(&m))),
@@ -371,7 +378,7 @@ pub fn read_page_within(bytes: &[u8], name: &str, limit: usize) -> Result<Page> 
         // longitude/latitude.
         if let (Some(g), Some(t)) = (&geometry, &to_lonlat) {
             match crate::io::places_lonlat_extent(g, t) {
-                Some(e) => beyond |= e.beyond_lonlat(),
+                Some(e) => beyond += usize::from(e.beyond_lonlat()),
                 None => unprojected += 1,
             }
         }
