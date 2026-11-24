@@ -437,7 +437,7 @@ fn build_package(s: &mut Session, p: &Value, notes: &mut rustgis_data::loss::Not
         // Their photos stay home: a reference copy's edits and photos don't come back. Counted by
         // their separators, without looking at the disk: a count for the notice.
         let mut named = 0usize;
-        for (l, fi) in map.layers.iter().filter(|l| copied.contains(&l.id)).filter_map(|l| photos_field(l).map(|fi| (l, fi))) {
+        for (l, fi) in map.layers.iter().filter(|l| copied.contains(&l.id)).flat_map(|l| photos_fields(l).map(move |fi| (l, fi))) {
             for value in l.dataset.features.column(fi) {
                 progress::check().map_err(|e| e.to_string())?;
                 if let rustgis_data::Value::Text(t) = value {
@@ -888,11 +888,17 @@ fn manifest_bytes(errors: &[String], losses: &rustgis_data::loss::Notes) -> Resu
     }
 }
 
-/// A layer's photos field, by its place: its text field named `photos` or `photo`, whatever the
-/// case (as the touch interface names it).
+/// A layer's photos field, by its place: its first text field named `photos` or `photo`, whatever
+/// the case (as the touch interface names it).
 fn photos_field(layer: &rustgis_map::Layer) -> Option<usize> {
-    layer.dataset.fields.iter().position(|f| {
-        f.ty == rustgis_data::FieldType::Text && (f.name.eq_ignore_ascii_case("photos") || f.name.eq_ignore_ascii_case("photo"))
+    photos_fields(layer).next()
+}
+
+/// Each of a layer's photos fields, by place: a layer can have both a `photos` and a `photo`.
+fn photos_fields(layer: &rustgis_map::Layer) -> impl Iterator<Item = usize> + '_ {
+    layer.dataset.fields.iter().enumerate().filter_map(|(i, f)| {
+        (f.ty == rustgis_data::FieldType::Text && (f.name.eq_ignore_ascii_case("photos") || f.name.eq_ignore_ascii_case("photo")))
+            .then_some(i)
     })
 }
 
@@ -909,13 +915,15 @@ fn rewrite_photos_until(
     mut go_on: impl FnMut() -> Result<(), String>,
 ) -> Result<(), String> {
     for l in map.layers.iter_mut().filter(|l| !l.is_raster()) {
-        let Some(fi) = photos_field(l) else { continue };
+        let fields: Vec<usize> = photos_fields(l).collect();
         let features = &mut l.dataset.features;
-        for row in 0..features.len() {
-            go_on()?;
-            let rustgis_data::Value::Text(held) = features.value(row, fi) else { continue };
-            if let Some(out) = rewrite_paths(held, &mut rewrite) {
-                let _ = features.set_value(row, fi, rustgis_data::Value::Text(out));
+        for fi in fields {
+            for row in 0..features.len() {
+                go_on()?;
+                let rustgis_data::Value::Text(held) = features.value(row, fi) else { continue };
+                if let Some(out) = rewrite_paths(held, &mut rewrite) {
+                    let _ = features.set_value(row, fi, rustgis_data::Value::Text(out));
+                }
             }
         }
     }
@@ -1021,8 +1029,7 @@ fn collect_photos(map: &rustgis_map::Map, budget: &mut u64, most_entries: usize)
         (Vec::new(), std::collections::HashSet::new(), std::collections::HashSet::new());
     // A streamed layer's photos are left to its copy for reference, which counts them as staying
     // home (or leaves the layer out): the rows it holds now aren't what the package will hold.
-    for l in map.layers.iter().filter(|l| !l.is_raster() && !l.is_streamed()) {
-        let Some(fi) = photos_field(l) else { continue };
+    for (l, fi) in map.layers.iter().filter(|l| !l.is_raster() && !l.is_streamed()).flat_map(|l| photos_fields(l).map(move |fi| (l, fi))) {
         for value in l.dataset.features.column(fi) {
             // Reading a field's paths can look at the disk (a path with a `;` in it).
             rustgis_data::progress::check().map_err(|e| e.to_string())?;
@@ -1122,7 +1129,16 @@ fn take_photos(map: &mut rustgis_map::Map, budget: &mut u64, package: &str, most
     // Each photo's entry and the path it was named by, for the way back.
     let mut index = String::new();
     let mut placed: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    // The names features already give under `photos/` are kept: no photo carried takes one.
     let mut taken = std::collections::HashSet::new();
+    for (l, fi) in map.layers.iter().filter(|l| !l.is_raster()).flat_map(|l| photos_fields(l).map(move |fi| (l, fi))) {
+        for value in l.dataset.features.column(fi) {
+            let rustgis_data::Value::Text(held) = value else { continue };
+            for name in held.split(';').filter_map(|p| p.trim().strip_prefix(&format!("{PHOTOS}/"))) {
+                taken.insert(name.to_ascii_lowercase());
+            }
+        }
+    }
     // The next number to try for each name: photos sharing one don't each count up from 2.
     let mut next: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
     // The files already said (missing, not pictures, too large, or unread): each said once,
@@ -1132,7 +1148,7 @@ fn take_photos(map: &mut rustgis_map::Map, budget: &mut u64, package: &str, most
     let mut unpacked = Unpacked::new();
     // Each row is a counted step, and Cancel is looked at before it: reading a row's paths can
     // look at the disk.
-    let rows: usize = map.layers.iter().filter(|l| !l.is_raster() && photos_field(l).is_some()).map(|l| l.dataset.features.len()).sum();
+    let rows: usize = map.layers.iter().filter(|l| !l.is_raster()).map(|l| photos_fields(l).count() * l.dataset.features.len()).sum();
     rustgis_data::progress::begin(rows);
     let go_on = || rustgis_data::progress::step(1).map_err(|e| e.to_string());
     rewrite_photos_until(
@@ -1553,8 +1569,7 @@ pub(crate) fn bring_back(s: &mut Session, p: &Value) -> Result<Value, String> {
         // left without a reference among the layers passed to Sync.
         let mut unused: std::collections::HashSet<_> = photos.iter().map(|(name, _)| name.clone()).collect();
         let prefix = format!("{PHOTOS}/");
-        for layer in edited.layers.iter().filter(|l| !l.is_raster()) {
-            let Some(field) = photos_field(layer) else { continue };
+        for (layer, field) in edited.layers.iter().filter(|l| !l.is_raster()).flat_map(|l| photos_fields(l).map(move |fi| (l, fi))) {
             for value in layer.dataset.features.column(field) {
                 let rustgis_data::Value::Text(text) = value else { continue };
                 for span in photo_paths(text) {
@@ -1887,7 +1902,7 @@ pub(crate) fn project_in(text: &str, dir: &Path) -> Result<Project, String> {
     let photos = std::path::absolute(dir.join(PHOTOS)).map_err(|e| e.to_string())?;
     let mut relative = 0_usize;
     // Photos from home that keep their names there, the unpack folder's name not being text.
-    let mut unshown = 0_usize;
+    let mut unshown = std::collections::HashSet::new();
     // Photos from home the index lists that the package doesn't hold.
     let mut absent = std::collections::HashSet::new();
     if photos.is_dir() {
@@ -1933,7 +1948,7 @@ pub(crate) fn project_in(text: &str, dir: &Path) -> Result<Project, String> {
                             return path.to_string();
                         }
                         if named != entry {
-                            unshown += 1;
+                            unshown.insert(named.to_string());
                             return named.to_string();
                         }
                         relative += 1;
@@ -1955,12 +1970,12 @@ pub(crate) fn project_in(text: &str, dir: &Path) -> Result<Project, String> {
             ),
         ));
     }
-    if unshown > 0 {
+    if !unshown.is_empty() {
         project.read_notices.push((
             crate::project::ReadPart::Maps,
             crate::notice_text::NoticeText::format(
                 "{count} photo(s) the field package brought from home keep the names they have there, because the unpack folder is not UTF-8: they don't show on this device.",
-                [("count", unshown.to_string().into())],
+                [("count", unshown.len().to_string().into())],
             ),
         ));
     }
@@ -3001,6 +3016,33 @@ mod tests {
             project.take_read_notices(&[crate::project::ReadPart::Maps]).iter().map(crate::notice_text::NoticeText::english).collect();
         assert!(said.iter().any(|t| t.starts_with("1 photo(s) the field package brought from home keep the names")), "{said:?}");
         assert_eq!(value(&Session::new(project), "Cities", 0, "photos"), photo.display().to_string());
+    }
+
+    /// Every photos field of a layer is read going out, and coming back a name a feature already
+    /// gives under `photos/` isn't given to a photo carried.
+    #[test]
+    fn both_photos_fields_go_out_and_a_returns_names_keep_clear_of_those_given() {
+        let temp = Temp::new("two-photo-fields");
+        let (one, two) = (temp.path().join("one.jpg"), temp.path().join("x.jpg"));
+        std::fs::write(&one, b"one").unwrap();
+        std::fs::write(&two, b"two").unwrap();
+        let mut s = sample();
+        let cities = layer(&s, "Cities");
+        for field in ["photos", "photo"] {
+            s.run("edit.addField", &json!({"layer": cities, "name": field, "type": "text"})).unwrap();
+        }
+        s.run("edit.setValue", &json!({"layer": cities, "row": 0, "field": "photos", "value": one.display().to_string()})).unwrap();
+        s.run("edit.setValue", &json!({"layer": cities, "row": 0, "field": "photo", "value": two.display().to_string()})).unwrap();
+        let mut budget = u64::MAX;
+        let out = collect_photos(s.map(), &mut budget, usize::MAX).unwrap();
+        assert_eq!(out.entries.iter().filter(|(n, _)| n != INDEX).count(), 2);
+        // Coming back: a feature names `photos/x.jpg` (not on this device); the field's x.jpg takes
+        // another name.
+        s.run("edit.setValue", &json!({"layer": cities, "row": 1, "field": "photos", "value": "photos/x.jpg"})).unwrap();
+        let mut map = s.map().clone();
+        let back = take_photos(&mut map, &mut budget, "", usize::MAX).unwrap();
+        let names: Vec<&str> = back.entries.iter().map(|(n, _)| n.as_str()).filter(|n| *n != INDEX).collect();
+        assert!(names.contains(&"photos/2-x.jpg") && !names.contains(&"photos/x.jpg"), "{names:?}");
     }
 
     /// A return opened on another device and sent again carries the field's photos from there:
