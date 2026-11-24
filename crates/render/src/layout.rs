@@ -4546,31 +4546,31 @@ impl ChartBars<'_> {
         if line <= 0.0 {
             return;
         }
-        let ink = paint(o.color, 1.0);
-        // The edge's line as four boxes that don't overlap, filled rather than stroked: a stroke
-        // thinner than a pixel is drawn a pixel wide, past the bar's end.
-        for (along, run, across_at, thick) in [
-            (lo, hi - lo, cross.0, line),
-            (lo, hi - lo, cross.0 + cross.1 - line, line),
-            (lo, line, cross.0 + line, cross.1 - 2.0 * line),
-            (hi - line, line, cross.0 + line, cross.1 - 2.0 * line),
-        ] {
-            let (x, y, w, h) = rect(along, run, across_at, thick);
-            if let Some(side) = Rect::from_xywh(x, y, w, h) {
-                pm.fill_rect(side, &ink, Transform::identity(), None);
+        // The whole line, round the bar and between its stretches, is one shape filled once: boxes
+        // filled each on its own would cover a pixel they share in part twice over, leaving a
+        // lighter seam where they meet and a darker spot where they overlap. Boxes, not a stroke:
+        // a stroke thinner than a pixel is drawn a pixel wide, past the bar's end.
+        let mut shape = PathBuilder::new();
+        let mut boxed = |(x, y, w, h): (f32, f32, f32, f32)| {
+            if let Some(b) = Rect::from_xywh(x, y, w, h) {
+                shape.push_rect(b);
             }
-        }
-        // Between two stretches, inside the edge's line so the two don't overlap, and kept there
-        // along the bar too: a stretch drawn a pixel long though its share is shorter has the
-        // next start inside it, near the bar's end.
+        };
+        boxed(rect(lo, hi - lo, cross.0, line));
+        boxed(rect(lo, hi - lo, cross.0 + cross.1 - line, line));
+        boxed(rect(lo, line, cross.0 + line, cross.1 - 2.0 * line));
+        boxed(rect(hi - line, line, cross.0 + line, cross.1 - 2.0 * line));
+        // Between two stretches, inside the edge's line, and kept there along the bar too: a
+        // stretch drawn a pixel long though its share is shorter has the next start inside it,
+        // near the bar's end.
         for pair in order.windows(2) {
             let &[(_, a), (at, b)] = pair else { continue };
             let d = line.min(a / 3.0).min(b / 3.0);
             let (from, to) = ((at - d / 2.0).max(lo + line), (at + d / 2.0).min(hi - line));
-            let (x, y, w, h) = rect(from, to - from, cross.0 + line, cross.1 - 2.0 * line);
-            if let Some(divider) = Rect::from_xywh(x, y, w, h) {
-                pm.fill_rect(divider, &ink, Transform::identity(), None);
-            }
+            boxed(rect(from, to - from, cross.0 + line, cross.1 - 2.0 * line));
+        }
+        if let Some(shape) = shape.finish() {
+            pm.fill_path(&shape, &paint(o.color, 1.0), FillRule::Winding, Transform::identity(), None);
         }
     }
 }
@@ -5093,6 +5093,39 @@ mod tests {
                 .count();
             assert_eq!(spilt, 0, "{orientation:?}: the lines round and between the stretches stay inside the bar");
         }
+        // The edge is one shape: where its sides meet off the pixel grid, the shared pixel is
+        // covered once, not twice in part with the bar's blue showing through between them.
+        let one = rustgis_map::layout::ChartData {
+            bars: vec![(10.0, String::new())],
+            key: vec![("a".into(), Rgba::rgb(0x10, 0x10, 0xD0))],
+            stretches: vec![vec![10.0]],
+            ..Default::default()
+        };
+        let mut c = Canvas::new(200, 120).unwrap();
+        chart(&mut c, Rect::from_xywh(0.0, 0.0, 200.0, 120.0).unwrap(), &one, &look, INK, 1.0, false);
+        // The bar's rows, below the key's swatch: those its end's line reaches.
+        let red = |y: &u32| c.pixmap().pixel(2, *y).is_some_and(|p| p.red() > 100);
+        let (Some(top), Some(bottom)) = ((0..120).find(red), (0..120).rev().find(red)) else { panic!("no line") };
+        let seams = (top + 1..bottom).filter(|y| c.pixmap().pixel(2, *y).is_some_and(|p| p.blue() > 20)).count();
+        assert!(bottom - top > 5 && seams == 0, "inside the bar's end, all line: {seams} rows show the bar");
+        // Lines between twenty stretches too thin to part them overlap: a see-through colour
+        // covers the overlap once, never redder than along the edge.
+        let mut thin = vec![0.0005; 20];
+        thin.insert(0, 5.0);
+        thin.push(4.99);
+        let crowded = rustgis_map::layout::ChartData {
+            key: (0..thin.len()).map(|i| (i.to_string(), if i % 2 == 0 { Rgba::rgb(0x10, 0x10, 0xD0) } else { green })).collect(),
+            stretches: vec![thin],
+            ..one
+        };
+        let mut c = Canvas::new(200, 120).unwrap();
+        chart(&mut c, Rect::from_xywh(0.0, 0.0, 200.0, 120.0).unwrap(), &crowded, &half_red, INK, 1.0, false);
+        let reddest = |xs: std::ops::Range<u32>, y: u32| xs.filter_map(|x| c.pixmap().pixel(x, y)).map(|p| p.red()).max().unwrap_or(0);
+        // The middle of the bar, below the key.
+        let lined: Vec<u32> = (0..120).filter(|y| reddest(0..3, *y) > 60).collect();
+        let row = lined.get(lined.len() / 2).copied().unwrap_or(0);
+        let (edge, between) = (reddest(0..8, row), reddest(8..190, row));
+        assert!(edge > 60 && between <= edge + 3, "edge {edge}, between {between}");
     }
 
     /// Hidden labels leave their column, or their row under columns, to the bars.
