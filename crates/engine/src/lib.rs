@@ -428,7 +428,7 @@ pub(crate) fn in_place_overview(d: &rustgis_data::raster::Raster, tools_read_fil
     let (w, h) = (d.width, d.height);
     Some(if tools_read_file {
         format!(
-            "read in place: the map draws its {fw} × {fh} pixels as it needs them, and built-in geoprocessing tools read the file at the finest level they can hold, while statistics, histograms, plugin tools and other raster commands read a {w} × {h} overview"
+            "read in place: the map draws its {fw} × {fh} pixels as it needs them, and geoprocessing tools read the file (built-in ones at the finest level they can hold, GeoLibre ones whole), while statistics, histograms, plugin tools and other raster commands read a {w} × {h} overview"
         )
     } else {
         format!(

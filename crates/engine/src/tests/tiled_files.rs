@@ -7,12 +7,26 @@ use super::*;
 use crate::cmd::raster::HELD_WHOLE;
 use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster};
 
-/// A directory of its own for one test's files.
-fn dir(name: &str) -> std::path::PathBuf {
+/// A directory of its own for one test's files, removed when it goes, whether the test passed.
+struct Dir(std::path::PathBuf);
+
+impl std::ops::Deref for Dir {
+    type Target = std::path::Path;
+    fn deref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl Drop for Dir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn dir(name: &str) -> Dir {
     let d = std::env::temp_dir().join(format!("rustgis-2761-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
-    d
+    Dir(d)
 }
 
 /// Holds files whole up to `max` samples on this thread while it lives, then as before.
@@ -99,7 +113,7 @@ fn a_large_local_tiled_geotiff_draws_its_full_image_zoomed_in() {
     let notes = said(&s, mark);
     assert!(
         notes.iter().any(|n| n.starts_with("checks: read in place: the map draws its 1024 × 1024 pixels")
-            && n.contains("built-in geoprocessing tools read the file")
+            && n.contains("geoprocessing tools read the file")
             && n.contains("read a 512 × 512 overview")),
         "{notes:?}"
     );
@@ -112,7 +126,6 @@ fn a_large_local_tiled_geotiff_draws_its_full_image_zoomed_in() {
     let held = zoomed_in(&mut s);
     let far = red_difference(&held, &reference);
     assert!(far > 40.0, "the overview drawn instead differs: {far}");
-    let _ = std::fs::remove_dir_all(&d);
 }
 
 /// A project keeps the file as a file (nothing says it is read in place), and reads it in place
@@ -138,7 +151,6 @@ fn a_project_keeps_a_tiled_file_as_a_file_and_reads_it_in_place_again() {
     let rl = raster(&opened, "checks");
     assert!(rl.tiled, "reloaded in place");
     assert_eq!(rl.data.as_ref().map(|r| (r.width, r.overview)), Some((512, Some((1024, 1024)))));
-    let _ = std::fs::remove_dir_all(&d);
 }
 
 /// A geoprocessing tool reads the file, not the overview the layer holds: Zonal Statistics over
@@ -164,7 +176,6 @@ fn a_tool_reads_a_tiled_file_at_its_full_size() {
     let names: Vec<&str> = out.fields.iter().map(|f| f.name.as_str()).collect();
     let count = names.iter().position(|n| n.ends_with("_count")).unwrap_or_else(|| panic!("{names:?}"));
     assert_eq!(out.value(0, count), &rustgis_data::Value::Int(1024 * 1024), "every pixel of the file, not of its overview: {names:?}");
-    let _ = std::fs::remove_dir_all(&d);
 }
 
 /// Held whole as before: a file that fits, and one too large with an `.aux.xml` beside it, which
@@ -183,7 +194,6 @@ fn a_file_that_fits_or_has_a_sidecar_is_held_whole() {
     let mut s = Session::new(Project::default());
     s.run("layer.addData", &json!({"path": path})).unwrap();
     assert!(!raster(&s, "checks").tiled, "a sidecar keeps it whole");
-    let _ = std::fs::remove_dir_all(&d);
 }
 
 /// How each kind of run reads a raster layer read in place from its file: a built-in tool's run
@@ -227,7 +237,6 @@ fn each_kind_of_run_reads_a_tiled_file_as_it_says() {
     let mut whole = Session::new(Project::default());
     whole.run("layer.addData", &json!({"path": path})).unwrap();
     assert_eq!(read(&whole, Tiled::Overview), (None, Vec::new()));
-    let _ = std::fs::remove_dir_all(&d);
 }
 
 /// A batch reads a raster file read in place once for its items (kept only while it runs), and
@@ -266,7 +275,6 @@ fn a_batch_over_a_tiled_file_reads_the_file_for_each_item() {
         let count = out.fields.iter().position(|f| f.name.ends_with("_count")).unwrap();
         assert_eq!(out.value(0, count), &rustgis_data::Value::Int(1024 * 1024), "{name}");
     }
-    let _ = std::fs::remove_dir_all(&d);
 }
 
 /// Original image grids read a tiled file's own grid, as for a file held whole: its overview
@@ -288,5 +296,4 @@ fn an_original_image_grid_reads_a_tiled_files_grid() {
     std::fs::write(&path, bytes).unwrap();
     let e = crate::image_grid::read(raster(&s, "checks")).err().unwrap_or_default();
     assert!(e.contains("changed since its pixels were loaded"), "{e}");
-    let _ = std::fs::remove_dir_all(&d);
 }

@@ -1304,12 +1304,14 @@ fn get_tile_at(
             let r = crate::cache::check_still(&crate::cache::current_still()).and(r);
             let r = crate::logins::check(&key.0).map_err(str::to_string).and(r);
             let mut r = r;
-            // A local file's tile decoded with a header since forgotten (the file written again
-            // while it was read) is handed on, not kept: the next draw reads it with the new one.
-            let superseded = is_local_file(&key.0)
-                && !matches!(infos().lock().unwrap_or_else(|e| e.into_inner()).get(&key.0), Some(State::Ready(i, _)) if Arc::ptr_eq(i, &info));
             let waiting = {
                 let mut t = tiles().lock().unwrap_or_else(|e| e.into_inner());
+                // A local file's tile decoded with a header since forgotten (the file written
+                // again while it was read) is handed on, not kept: the next draw reads it with the
+                // new one. Looked at under the tiles' lock: a header is forgotten before its tiles
+                // are, under this lock, so a tile kept here goes with them.
+                let superseded = is_local_file(&key.0)
+                    && !matches!(infos().lock().unwrap_or_else(|e| e.into_inner()).get(&key.0), Some(State::Ready(i, _)) if Arc::ptr_eq(i, &info));
                 if started_reach > crate::cache::ceiling_for(&key.0) {
                     r = Err(REACH_CHANGED.into());
                 }
