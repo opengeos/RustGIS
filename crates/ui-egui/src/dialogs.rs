@@ -820,9 +820,14 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                     Some(_) => &[][..],
                     None => app.session.active_layer.and_then(|id| app.session.map().layer(id)).map_or(&[][..], |l| &l.selection[..]),
                 };
-                let rows: Vec<usize> = if selected.is_empty() { (0..3).collect() } else { selected.iter().take(3).copied().collect() };
                 let field = Some(&app.dialogs.a).filter(|a| fields.contains(a));
                 let reads = data(app).filter(|_| !text.is_empty() && !crate::exprcomplete::offering(ui, id)).map(|d| {
+                    // A selected row the layer no longer has gets nothing written: it takes no place.
+                    let rows: Vec<usize> = if selected.is_empty() {
+                        (0..PREVIEW_ROWS).collect()
+                    } else {
+                        selected.iter().copied().filter(|r| *r < d.features.len()).take(PREVIEW_ROWS).collect()
+                    };
                     match field.and_then(|f| d.field_index(f)) {
                         Some(fi) => rustgis_engine::cmd::edit::preview_calculation(text, d, fi, &rows).map(Some),
                         None => rustgis_engine::cmd::edit::check_calculation(text, d).map(|()| None),
@@ -3142,19 +3147,41 @@ fn calculation_fields(dataset: &rustgis_engine::data::Dataset) -> impl Iterator<
     dataset.fields.iter().enumerate().filter(|(i, field)| dataset.field_index(&field.name) == Some(*i)).map(|(_, field)| field)
 }
 
-/// Calculate Field's preview line: each row's value as the field would hold it, shortened to fit
-/// the line, with what writing it loses (`Preview: 2 (fraction dropped) · 4`).
+/// The rows a Calculate Field preview shows.
+const PREVIEW_ROWS: usize = 3;
+
+/// Calculate Field's preview line: each row's value as the field would hold it, its text cut at
+/// forty characters and with no line break of its own, with what writing it loses
+/// (`Preview: 2 (fraction dropped) · 4`). The line wraps in the dialog rather than cut a loss off.
 fn calculation_preview(rows: &[rustgis_engine::cmd::edit::CalculationPreview]) -> String {
+    use rustgis_engine::cmd::edit::PreviewLoss;
+    use std::fmt::Write as _;
     const LONGEST: usize = 40;
+    /// A value's text on one line, written no further than one character past `LONGEST`.
+    struct OneLine(String, usize);
+    impl std::fmt::Write for OneLine {
+        fn write_str(&mut self, s: &str) -> std::fmt::Result {
+            for c in s.chars() {
+                if self.1 > LONGEST {
+                    return Err(std::fmt::Error);
+                }
+                self.0.push(if c.is_control() { ' ' } else { c });
+                self.1 += 1;
+            }
+            Ok(())
+        }
+    }
     let values: Vec<String> = rows
         .iter()
         .map(|p| {
-            let mut value = p.value.to_string();
+            let mut line = OneLine(String::new(), 0);
+            // An error only stops the writing past the cut.
+            let _ = write!(line, "{}", p.value);
+            let mut value = line.0;
             if let Some((cut, _)) = value.char_indices().nth(LONGEST) {
                 value.truncate(cut);
                 value.push('…');
             }
-            use rustgis_engine::cmd::edit::PreviewLoss;
             // In logical order: the line as a whole is put in display form once, below.
             let loss = match p.lost {
                 None => return value,
@@ -4094,8 +4121,8 @@ mod tests {
     }
 
     /// On a layer, the preview reads the first three selected rows (a selection is kept in the
-    /// table's order), or the first three rows when none is selected (#2817); an empty layer has
-    /// no preview.
+    /// table's order) the layer has, or the first three rows when none is selected (#2817); an
+    /// empty layer has no preview.
     #[test]
     fn calculate_field_previews_the_selected_rows_of_a_layer() {
         use egui_kittest::kittest::Queryable;
@@ -4111,12 +4138,28 @@ mod tests {
         let mut h = app_harness(app);
         h.run_steps(3);
         assert!(h.query_by_label("Preview: 20 · 30 · 40").is_some(), "the first three selected");
+        // A selected row the layer doesn't have gets nothing written, so it takes no place.
+        h.state_mut().session.map_mut().layer_mut(id).unwrap().selection = vec![9, 2, 3, 4];
+        h.run_steps(2);
+        assert!(h.query_by_label("Preview: 30 · 40 · 50").is_some(), "three rows the layer has");
         h.state_mut().session.map_mut().layer_mut(id).unwrap().selection.clear();
         h.run_steps(2);
         assert!(h.query_by_label("Preview: 10 · 20 · 30").is_some(), "the first three rows");
         h.state_mut().session.map_mut().layer_mut(id).unwrap().dataset.features.clear();
         h.run_steps(2);
         assert!(h.query_by_label_contains("Preview:").is_none(), "no rows, no preview");
+    }
+
+    /// A text value in the preview breaks no line (#2817): a line break or tab in it reads as a
+    /// space, and a long one is cut at forty characters.
+    #[test]
+    fn a_calculation_preview_stays_on_one_line() {
+        use rustgis_engine::cmd::edit::CalculationPreview;
+        use rustgis_engine::data::Value;
+        let row = |value: Value| CalculationPreview { row: 0, value, lost: None };
+        assert_eq!(super::calculation_preview(&[row(Value::Text("a\nb\tc".into())), row(Value::Int(7))]), "Preview: a b c · 7");
+        let long = format!("{}\n{}", "x".repeat(39), "y".repeat(10_000));
+        assert_eq!(super::calculation_preview(&[row(Value::Text(long))]), format!("Preview: {} …", "x".repeat(39)));
     }
 
     /// The app in a harness, its fonts installed on the first pass (the dialog draws on the next).

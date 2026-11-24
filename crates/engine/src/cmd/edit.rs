@@ -501,17 +501,24 @@ pub enum PreviewLoss {
     Error(rustgis_data::query::Fault),
 }
 
-/// A result and the error that made it null, if one did, as a `ty` field holds it, with what
-/// that lost: a cut, then the error or, for a null nobody asked for, the value not read.
-fn written((v, fault): (Value, Option<rustgis_data::query::Fault>), ty: FieldType) -> (Value, [Option<Loss>; 2]) {
+/// A result as a field holds it, with what holding it lost.
+struct Held {
+    value: Value,
+    /// What the coercion to the field's type took.
+    cut: Option<Loss>,
+    /// The error that made it null or, for a null nobody asked for, the value not read.
+    other: Option<Loss>,
+}
+
+/// A result and the error that made it null, if one did, as a `ty` field holds it.
+fn held((v, fault): (Value, Option<rustgis_data::query::Fault>), ty: FieldType) -> Held {
     let asked_null = v.asks_null();
-    let (v, cut) = coerce_cut(v, ty);
-    let cut_loss = (cut != Cut::None).then_some(Loss::Cut(cut));
-    let other = match fault.filter(|_| v.is_null()) {
+    let (value, cut) = coerce_cut(v, ty);
+    let other = match fault.filter(|_| value.is_null()) {
         Some(fault) => Some(Loss::Error(fault)),
-        None => (!asked_null && v.is_null() && cut == Cut::None).then_some(Loss::Unread),
+        None => (!asked_null && value.is_null() && cut == Cut::None).then_some(Loss::Unread),
     };
-    (v, [cut_loss, other])
+    Held { value, cut: (cut != Cut::None).then_some(Loss::Cut(cut)), other }
 }
 
 impl WriteLosses {
@@ -529,8 +536,8 @@ impl WriteLosses {
     /// Row `row`'s result and the error that made it null, if one did, as a `ty` field holds it,
     /// counting what that lost.
     pub(crate) fn write(&mut self, row: usize, result: (Value, Option<rustgis_data::query::Fault>), ty: FieldType) -> Value {
-        let (v, losses) = written(result, ty);
-        for loss in losses.into_iter().flatten() {
+        let Held { value, cut, other } = held(result, ty);
+        for loss in [cut, other].into_iter().flatten() {
             if !self.first(row, loss) {
                 continue;
             }
@@ -548,7 +555,7 @@ impl WriteLosses {
                 },
             }
         }
-        v
+        value
     }
 
     /// The notices for what writing `field`, of type `ty`, lost, each starting with `by` (the
@@ -1661,7 +1668,7 @@ pub fn preview_calculation(
         .iter()
         .filter(|r| **r < ds.features.len())
         .map(|&row| {
-            let (value, [cut, other]) = written(calc.eval_or_fault(ds, row), ty);
+            let Held { value, cut, other } = held(calc.eval_or_fault(ds, row), ty);
             // The error is why the value is null; a cut alone says what it took.
             CalculationPreview { row, value, lost: other.or(cut).and_then(Loss::previewed) }
         })
