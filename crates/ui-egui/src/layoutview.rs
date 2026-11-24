@@ -2326,7 +2326,9 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                                     .add(
                                         egui::DragValue::new(&mut w)
                                             .update_while_editing(false)
-                                            .range(0.1..=max)
+                                            // From 0, as the commands take it: any saved width
+                                            // shows as it is, and 0 takes the outline off.
+                                            .range(0.0..=max)
                                             .speed(0.05)
                                             .max_decimals(2)
                                             .suffix(" pt"),
