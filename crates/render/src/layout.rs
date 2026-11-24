@@ -4434,10 +4434,7 @@ impl ChartBars<'_> {
                 drawn.push((place(x, w), w, colour));
                 (left, right_end) = (left.min(x), right_end.max(x + w));
             }
-            let (lo, hi) = run_ends(&drawn);
-            for (x, w, colour) in drawn {
-                self.bar(pm, colour, x, y + bh * 0.15, w, bh * 0.7, Run::Across(x <= lo, x + w >= hi));
-            }
+            self.bar(pm, &drawn, (y + bh * 0.15, bh * 0.7), true);
             if labelled {
                 let t = fit_label(name, |t| text::measure(t, 7.5, false) * ppp > label_w - 4.0 * ppp);
                 // At the column's right, the label ends where the bars' side begins.
@@ -4495,10 +4492,7 @@ impl ChartBars<'_> {
                 drawn.push((place(y, h), h, colour));
                 (top_end, bottom) = (top_end.min(y), bottom.max(y + h));
             }
-            let (lo, hi) = run_ends(&drawn);
-            for (y, h, colour) in drawn {
-                self.bar(pm, colour, cx - slot * 0.35, y, slot * 0.7, h, Run::Down(y <= lo, y + h >= hi));
-            }
+            self.bar(pm, &drawn, (cx - slot * 0.35, slot * 0.7), false);
             if let Some(t) = self.values.get(i) {
                 let vy = if *v < 0.0 { bottom + value_h / 2.0 } else { top_end - value_h / 2.0 };
                 text::text_at(pm, t, cx, write(vy), value_px, self.dark, false, text::Align::Center, false);
@@ -4526,45 +4520,43 @@ fn mirrored(align: text::Align) -> text::Align {
 }
 
 impl ChartBars<'_> {
-    /// A bar, or a stretch of one, filled with `colour` and with the look's outline round it
-    /// (#2487 part 4b). The line runs just inside the bar's edge, so it takes no room the bars
-    /// leave to their values, labels and title; where two stretches of a bar meet, each draws it
-    /// centred on that edge, so the two make one line of its width. A stretch no wider than the
-    /// line is the line's colour.
-    #[expect(clippy::too_many_arguments, reason = "a box and how it sits in its bar")]
-    fn bar(&self, pm: &mut Canvas, colour: Rgba, x: f32, y: f32, w: f32, h: f32, run: Run) {
-        let Some(o) = self.look.bar_outline else {
-            return fill(pm, colour, x, y, w, h);
-        };
-        let line = o.width as f32 * self.ppp;
-        if w <= line || h <= line {
-            return fill(pm, o.color, x, y, w, h);
+    /// A bar from its stretches, each its start and length along the bar's run and its colour,
+    /// across `cross` (start and size), `across` for bars running across, with the look's
+    /// outline (#2487 part 4b). The line runs just inside the bar's edge, so it takes no room the
+    /// bars leave to their values, labels and title, and once between two stretches, centred on
+    /// where they meet, so a see-through one is laid once everywhere. It narrows to a third of a
+    /// bar, or of a stretch, thinner than three times it, so every stretch keeps its colour.
+    fn bar(&self, pm: &mut Canvas, stretches: &[(f32, f32, Rgba)], cross: (f32, f32), across: bool) {
+        let rect = |at: f32, len: f32, from: f32, size: f32| if across { (at, from, len, size) } else { (from, at, size, len) };
+        for (at, len, colour) in stretches {
+            let (x, y, w, h) = rect(*at, *len, cross.0, cross.1);
+            fill(pm, *colour, x, y, w, h);
         }
-        fill(pm, colour, x, y, w, h);
-        let inside = |outer: bool| if outer { line / 2.0 } else { 0.0 };
-        // Inset on the left, top, right and bottom.
-        let (l, t, r, b) = match run {
-            Run::Across(start, end) => (inside(start), line / 2.0, inside(end), line / 2.0),
-            Run::Down(start, end) => (line / 2.0, inside(start), line / 2.0, inside(end)),
-        };
-        if let Some(rect) = Rect::from_xywh(x + l, y + t, w - l - r, h - t - b) {
+        let Some(o) = self.look.bar_outline else { return };
+        let mut order: Vec<_> = stretches.iter().map(|(at, len, _)| (*at, *len)).collect();
+        order.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let (Some(first), Some(last)) = (order.first(), order.last()) else { return };
+        let (lo, hi) = (first.0, last.0 + last.1);
+        let line = (o.width as f32 * self.ppp).min(cross.1 / 3.0).min(first.1 / 3.0).min(last.1 / 3.0);
+        if line <= 0.0 {
+            return;
+        }
+        let ink = paint(o.color, 1.0);
+        let (x, y, w, h) = rect(lo + line / 2.0, hi - lo - line, cross.0 + line / 2.0, cross.1 - line);
+        if let Some(edge) = Rect::from_xywh(x, y, w, h) {
             let stroke = Stroke { width: line, ..Stroke::default() };
-            pm.stroke_path(&PathBuilder::from_rect(rect), &paint(o.color, 1.0), &stroke, Transform::identity(), None);
+            pm.stroke_path(&PathBuilder::from_rect(edge), &ink, &stroke, Transform::identity(), None);
+        }
+        // Between two stretches, inside the edge's line so the two don't overlap.
+        for pair in order.windows(2) {
+            let ((_, a), (at, b)) = (pair[0], pair[1]);
+            let d = line.min(a / 3.0).min(b / 3.0);
+            let (x, y, w, h) = rect(at - d / 2.0, d, cross.0 + line, cross.1 - 2.0 * line);
+            if let Some(divider) = Rect::from_xywh(x, y, w, h) {
+                pm.fill_rect(divider, &ink, Transform::identity(), None);
+            }
         }
     }
-}
-
-/// Which way a bar runs, and whether a stretch of it reaches the bar's first and last edge on that
-/// axis (left and right across, top and bottom down), where its outline runs inside it.
-#[derive(Clone, Copy)]
-enum Run {
-    Across(bool, bool),
-    Down(bool, bool),
-}
-
-/// The first and last edge a bar's stretches reach along its run, as drawn.
-fn run_ends(drawn: &[(f32, f32, Rgba)]) -> (f32, f32) {
-    drawn.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), (at, len, _)| (lo.min(*at), hi.max(at + len)))
 }
 
 /// A box filled with `colour`; none where it has no size.
@@ -5032,6 +5024,40 @@ mod tests {
         // stretch (5).
         let divider = (100..140).filter(|x| !bar_blue(&c, *x, 23)).count();
         assert_eq!(divider, 3, "one line of the outline's width between the stretches");
+        // A see-through line is laid once everywhere: as red between the stretches as along the
+        // bar's edge, not twice over on one side of the divider.
+        let half_red = ChartLook {
+            bar_outline: Some(rustgis_map::layout::ChartOutline { color: Rgba([208, 16, 16, 128]), width: 3.0 }),
+            ..ChartLook::default()
+        };
+        let mut c = Canvas::new(200, 120).unwrap();
+        chart(&mut c, Rect::from_xywh(0.0, 0.0, 200.0, 120.0).unwrap(), &stacked, &half_red, INK, 1.0, false);
+        let reddest = |xs: std::ops::Range<u32>, y: u32| xs.filter_map(|x| c.pixmap().pixel(x, y)).map(|p| p.red()).max().unwrap_or(0);
+        let (edge, between) = (reddest(0..8, 25), reddest(100..140, 25));
+        assert!(edge > 60 && between.abs_diff(edge) <= 3, "edge {edge}, between {between}");
+        // Bars thinner than the line, and a stretch thinner than it, keep their colour: the line
+        // narrows to a third of them rather than covering them.
+        let thin = json!({"bar_outline": {"color": [208, 16, 16, 255], "width": 5.0}});
+        let c = chart_drawn(&[(50.0, "a"); 20], thin);
+        // Down the bars' middle, blue outweighs red at least once a bar (none when the line
+        // covered them).
+        let blue = (0..120).filter(|y| c.pixmap().pixel(100, *y).is_some_and(|p| p.alpha() > 0 && p.blue() > p.red())).count();
+        assert!(blue >= 20, "every bar keeps its blue, {blue} px");
+        let green = Rgba::rgb(0x10, 0xC0, 0x10);
+        let sliver = rustgis_map::layout::ChartData {
+            bars: vec![(10.0, String::new())],
+            key: vec![("a".into(), Rgba::rgb(0x10, 0x10, 0xD0)), ("b".into(), green)],
+            stretches: vec![vec![9.85, 0.15]],
+            ..Default::default()
+        };
+        let look = ChartLook {
+            bar_outline: Some(rustgis_map::layout::ChartOutline { color: Rgba::rgb(0xD0, 0x10, 0x10), width: 5.0 }),
+            ..ChartLook::default()
+        };
+        let mut c = Canvas::new(200, 120).unwrap();
+        chart(&mut c, Rect::from_xywh(0.0, 0.0, 200.0, 120.0).unwrap(), &sliver, &look, INK, 1.0, false);
+        let greens = (0..200).filter(|x| c.pixmap().pixel(*x, 25).is_some_and(|p| p.green() > 150 && p.red() < 100)).count();
+        assert!(greens > 0, "the thin stretch keeps its green");
     }
 
     /// Hidden labels leave their column, or their row under columns, to the bars.
