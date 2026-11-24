@@ -1882,8 +1882,8 @@ enum Place {
     Inside,
     /// None of it is inside the mask, and it is clear of its edges: nothing is clipped from it.
     Outside,
-    /// An edge of the mask is within reach of its box (or it is degenerate, or has a non-finite
-    /// coordinate): only the overlay can say what is left.
+    /// An edge of the mask is within reach of its box, or a point of it is on an edge (or the mask
+    /// has a non-finite coordinate): only the overlay can say what is left.
     Edge,
 }
 
@@ -1963,18 +1963,24 @@ fn rings_have_area(whole: &MultiPolygon<f64>, ext: &Extent) -> bool {
     })
 }
 
-/// Where `whole` (a feature's polygons, in the run's plane, dissolved) lies against `mask`, whose
-/// edges are `edges`; `ext` is the feature's extent, padded as [`clip_on`] pads it for the
-/// overlay's grid. With no mask edge in `ext`, the feature's outline can't meet the mask's or
-/// hold a piece of it, so it is wholly in or wholly out, as any one of its points is. The
-/// answer is exact, never a float comparison against an edge the feature might poke out of;
-/// anything unsure (a collapsed ring, a coordinate that isn't finite, a point on an edge) is
+/// Whether `whole` (a feature's polygons, in the run's plane, dissolved) can be kept as it is, or
+/// dropped, without the overlay's say: its box `ext` isn't empty, its coordinates are finite, each
+/// ring has an area, and it is valid (no ring crosses itself or another, a hole is inside its
+/// polygon), so the overlay would only have rounded and rewound what is already one clean shape.
+/// Made once for a feature, whatever number of masks it meets.
+fn fit_to_place(whole: &MultiPolygon<f64>, ext: &Extent) -> bool {
+    use geo::Validation;
+    !ext.is_empty() && whole.coords_iter().all(|c| c.x.is_finite() && c.y.is_finite()) && rings_have_area(whole, ext) && whole.is_valid()
+}
+
+/// Where `whole`, a feature [`fit_to_place`] accepts, lies against `mask`, whose edges are
+/// `edges`; `ext` is the feature's extent, padded as [`clip_on`] pads it for the overlay's grid.
+/// With no mask edge in `ext`, the feature's outline can't meet the mask's or hold a piece of it,
+/// so it is wholly in or wholly out, as any one of its points is. The answer is exact, never a
+/// float comparison against an edge the feature might poke out of; a point on an edge is
 /// [`Place::Edge`], for the overlay to decide.
 fn place_against(whole: &MultiPolygon<f64>, ext: &Extent, mask: &MultiPolygon<f64>, edges: &MaskEdges) -> Place {
     use geo::algorithm::coordinate_position::{CoordPos, CoordinatePosition};
-    if ext.is_empty() || !whole.coords_iter().all(|c| c.x.is_finite() && c.y.is_finite()) || !rings_have_area(whole, ext) {
-        return Place::Edge;
-    }
     if edges.near(mask, ext) {
         return Place::Edge;
     }
@@ -1988,7 +1994,7 @@ fn place_against(whole: &MultiPolygon<f64>, ext: &Extent, mask: &MultiPolygon<f6
 
 /// Clip each input feature to the union of only the selected clip polygons whose projected
 /// extents meet it. Union candidates together so overlapping masks never duplicate output.
-/// A polygon feature with no mask edge in its box is not sent to the overlay: one inside a mask
+/// A valid polygon feature with no mask edge in its box is not sent to the overlay: one inside a mask
 /// is kept as it is (wound as the overlay winds a polygon, its vertices not snapped to the
 /// overlay's grid), and the masks it is outside take nothing from it, so only those whose edges
 /// may cross it are unioned and overlaid (see [`place_against`]).
@@ -2296,7 +2302,7 @@ fn clip_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>, cache_bytes: Opti
                 // wholly outside take nothing from it: the overlay (and the union of the masks
                 // it meets) is only for those whose edges it may cross.
                 let mut crossing = Cow::Borrowed(near.as_slice());
-                if let Some(whole) = to_multipolygon(&shape) {
+                if let Some(whole) = to_multipolygon(&shape).filter(|whole| fit_to_place(whole, &ext)) {
                     let mut edge = Vec::with_capacity(near.len());
                     for &i in &near {
                         // A mask that isn't there (not so, as `near` is of the masks) is left to the overlay.
@@ -13577,6 +13583,13 @@ mod tests {
             Coord::new(2.0, 1.0),
             Coord::new(1.0, 1.0),
         ]]]);
+        let bowtie = Geometry::Polygon(vec![vec![vec![
+            Coord::new(1.0, 1.0),
+            Coord::new(4.0, 4.0),
+            Coord::new(1.0, 4.0),
+            Coord::new(3.0, 1.0),
+            Coord::new(1.0, 1.0),
+        ]]]);
         // (the feature, the area of what is kept)
         let cases = [
             ("inside one mask", sq(2.0, 2.0, 1.0), 1.0),
@@ -13592,12 +13605,16 @@ mod tests {
         for (i, (_, g, _)) in cases.iter().enumerate() {
             features.push(Some(g.clone()), vec![Value::Int(i as i64)]);
         }
+        // Inside one mask, but a ring that crosses itself: the overlay fills its two lobes.
+        let crossing_row = cases.len() as i64;
+        features.push(Some(bowtie.clone()), vec![Value::Int(crossing_row)]);
         let m = Map(HashMap::from([("masks".into(), masks), ("features".into(), features)]));
         let out = layer(crate::run("clip", &m, &serde_json::json!({"input":"features", "clip":"masks"})).unwrap());
         let kept: Vec<i64> = out.features.iter().map(|f| f.attrs[0].as_f64().unwrap() as i64).collect();
-        let want: Vec<i64> = cases.iter().enumerate().filter(|(_, (_, _, a))| *a > 0.0).map(|(i, _)| i as i64).collect();
+        let want: Vec<i64> =
+            cases.iter().enumerate().filter(|(_, (_, _, a))| *a > 0.0).map(|(i, _)| i as i64).chain([crossing_row]).collect();
         assert_eq!(kept, want);
-        for f in &out.features {
+        for f in out.features.iter().filter(|f| f.attrs[0].as_f64().unwrap() as i64 != crossing_row) {
             let (name, g, area) = &cases[f.attrs[0].as_f64().unwrap() as usize];
             let got = to_multipolygon(f.geometry.as_ref().unwrap()).unwrap().unsigned_area();
             let plane = to_multipolygon(g).unwrap().unsigned_area();
@@ -13617,14 +13634,19 @@ mod tests {
         assert!(same(by_row(0), sq(2.0, 2.0, 1.0)));
         assert!(same(by_row(1), sq(6.0, 6.0, 1.0)));
         assert!(same(by_row(2), sq(9.5, 9.5, 1.0)));
+        // The crossing ring is what the overlay makes of it: the two lobes, 3.9 square degrees.
+        let lobes = by_row(crossing_row).and_then(|g| to_multipolygon(&g)).unwrap().unsigned_area();
+        let whole = to_multipolygon(&bowtie).unwrap().unsigned_area();
+        assert!(lobes > 2.0 * whole, "{lobes} of {whole}");
         let Some(Geometry::Polygon(wound)) = by_row(7) else { panic!("not a polygon") };
         let ccw = to_multipolygon(&Geometry::Polygon(wound)).unwrap();
         assert!(ccw.0[0].exterior().0.windows(2).map(|w| w[0].x * w[1].y - w[1].x * w[0].y).sum::<f64>() > 0.0);
     }
 
     /// A feature is `Inside` or `Outside` a mask only when no edge of it is within reach of the
-    /// feature's padded box; any edge there, a ring with no area, or a coordinate that isn't
-    /// finite, leaves it to the overlay.
+    /// feature's padded box; any edge there leaves it to the overlay, and so does a feature that
+    /// isn't one clean shape (no area, a coordinate that isn't finite, a ring that crosses itself,
+    /// a hole outside its polygon), whatever the mask.
     #[test]
     fn a_feature_is_placed_without_an_overlay_only_clear_of_the_mask_edges() {
         let mask = union_all(to_multipolygon(&sq(0.0, 0.0, 1.0)).unwrap().0.iter());
@@ -13641,16 +13663,19 @@ mod tests {
         assert_eq!(place(&sq(0.9, 0.4, 0.1)), Place::Edge);
         assert_eq!(place(&sq(0.4, 0.4, 0.6 - 0.0005)), Place::Edge);
         assert_eq!(place(&sq(-1.0, -1.0, 3.0)), Place::Edge);
-        // No area to keep, or no place to look at.
-        let flat =
-            Geometry::Polygon(vec![vec![vec![Coord::new(0.4, 0.4), Coord::new(0.5, 0.4), Coord::new(0.6, 0.4), Coord::new(0.4, 0.4)]]]);
-        assert_eq!(place(&flat), Place::Edge);
-        let mut bad = sq(0.4, 0.4, 0.1);
-        if let Geometry::Polygon(p) = &mut bad {
-            p[0][0][2] = Coord::new(f64::NAN, 0.5);
-        }
-        let ext = Extent::new(0.4, 0.4, 0.5, 0.5);
-        assert_eq!(place_against(&to_multipolygon(&bad).unwrap(), &ext, &mask, &edges), Place::Edge);
+        // Nothing to keep as it is: no area, a coordinate that isn't finite, a ring that crosses
+        // itself, a hole outside its polygon.
+        let fit = |g: &Geometry| fit_to_place(&to_multipolygon(g).unwrap(), &projected_extent(g).padded(0.0, 100.0));
+        assert!(fit(&sq(0.4, 0.4, 0.1)));
+        let ring = |pts: &[(f64, f64)]| pts.iter().map(|&(x, y)| Coord::new(x, y)).collect::<Vec<_>>();
+        assert!(!fit(&Geometry::Polygon(vec![vec![ring(&[(0.4, 0.4), (0.5, 0.4), (0.6, 0.4), (0.4, 0.4)])]])));
+        assert!(!fit(&Geometry::Polygon(vec![vec![ring(&[(0.4, 0.4), (0.5, f64::NAN), (0.5, 0.5), (0.4, 0.5), (0.4, 0.4)])]])));
+        assert!(!fit(&Geometry::Polygon(vec![vec![ring(&[(0.1, 0.1), (0.4, 0.4), (0.1, 0.4), (0.3, 0.1), (0.1, 0.1)])]])));
+        let hole_out = vec![
+            ring(&[(0.1, 0.1), (0.2, 0.1), (0.2, 0.2), (0.1, 0.2), (0.1, 0.1)]),
+            ring(&[(0.5, 0.5), (0.6, 0.5), (0.6, 0.6), (0.5, 0.6), (0.5, 0.5)]),
+        ];
+        assert!(!fit(&Geometry::Polygon(vec![hole_out])));
     }
 
     /// The edges found near a box are the ones a scan of every edge's box finds, for a mask of
