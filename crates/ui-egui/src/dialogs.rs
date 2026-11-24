@@ -3345,7 +3345,7 @@ fn calculation_preview(rows: &[rustgis_engine::cmd::edit::CalculationPreview]) -
         text
     }
     /// `why` on one line, a long one cut in its middle: a refusal quotes the value first and names
-    /// the check that refuses it last, and both stay (#2873).
+    /// the check that refuses it last, and both stay (#2837).
     fn refusal_line(why: &str) -> String {
         let line = one_line(why, usize::MAX);
         let count = line.chars().count();
@@ -4411,7 +4411,7 @@ mod tests {
             "Preview: 2 (fraction dropped) (refused: the edit breaks the rule Even (v % 2 = 0)) · 4"
         );
         // A refusal quoting a value keeps to one line too, and a long one is cut in its middle, so
-        // the check that refuses it, at its end, stays (#2873).
+        // the check that refuses it, at its end, stays (#2837).
         let quoted = format!("a\nb{} isn't allowed in v (its domain)", "x".repeat(10_000));
         let row = CalculationPreview { row: 0, value: Value::Int(1), lost: None, refused: Some(quoted) };
         let line = super::calculation_preview(&[row]);
