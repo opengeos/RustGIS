@@ -1931,7 +1931,7 @@ fn traverse(s: &mut Session, p: &Json) -> CmdResult {
             None => rustgis_data::raster::Crs::LonLat
                 .to(l.dataset.coord_crs())?
                 .point(start)
-                .ok_or_else(|| format!("the start can't be given in the system '{}' is held in", l.name))?,
+                .ok_or_else(|| format!("the start can't be given in the system that '{}' is held in", l.name))?,
         }),
         None => None,
     };

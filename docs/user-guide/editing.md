@@ -95,7 +95,8 @@ you edit the value or choose units; click **Apply elevation** to apply the new i
   with grid north up, and Scale scales, about the middle of the feature's extent there. A Move
   whose selection spans layers in more than one system (or some in one and some in
   longitude/latitude; graphics don't count) moves them all as below, so places they share stay
-  together, and says so. The rest of this paragraph, about Web Mercator and the ground, is for
+  together, and says so. Rotate and Scale turn each feature about its own middle anyway, so
+  they take each layer's own grid even then. The rest of this paragraph, about Web Mercator and the ground, is for
   the other layers.
   A selected feature with a place that can't be given in longitude/latitude (one far past where
   its layer's own system reaches) is left as it is by Move, Rotate and Scale (except in a layer

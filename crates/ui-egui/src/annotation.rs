@@ -323,8 +323,8 @@ pub(crate) fn grid_controls(app: &mut RustGisApp, ui: &mut egui::Ui) {
             let _ = app.run("ui.annotationImage", json!({"image":image}));
         }
     } else {
-        let units = grid_units(&layer_frame(app)).unwrap_or_default();
-        ui.small(crate::i18n::fmt("{units} Image pixels are the default when an image is selected.", &[("units", &units)]));
+        ui.small(grid_units(&layer_frame(app)).unwrap_or_default());
+        ui.small(tl!("Image pixels are the default when an image is selected."));
     }
     if image.is_some() && !available {
         ui.colored_label(egui::Color32::RED, tl!("This image is unavailable. Choose another image or No image."));
