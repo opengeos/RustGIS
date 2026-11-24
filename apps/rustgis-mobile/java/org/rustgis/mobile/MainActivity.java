@@ -509,14 +509,16 @@ public class MainActivity extends NativeActivity {
             try {
                 new Thread(() -> {
                     String result;
+                    // The copy kept when the document may be damaged, said with the result.
+                    File[] kept = new File[1];
                     try {
-                        result = writeBackNow(Uri.parse(document), name, bytes);
+                        result = writeBackNow(Uri.parse(document), name, bytes, kept);
                     } catch (Throwable e) {
                         result = writeBackFailed(name, e, null);
                     }
                     // Free for the next save before it is told this one is done.
                     writing = false;
-                    add(result);
+                    addKept(result, kept[0]);
                     answered();
                 }).start();
             } catch (Throwable e) {
@@ -528,7 +530,7 @@ public class MainActivity extends NativeActivity {
     }
 
     /** Writes the project back; returns the event that says how it went. */
-    private String writeBackNow(Uri uri, String name, byte[] bytes) {
+    private String writeBackNow(Uri uri, String name, byte[] bytes, File[] kept) {
         // The complete copy, kept until the document holds the project.
         File copy;
         try {
@@ -593,7 +595,7 @@ public class MainActivity extends NativeActivity {
                 }
             }
             // Marked once the Rust side has taken the notice, so the next start doesn't say it again.
-            markOnceTaken(copy);
+            kept[0] = copy;
             return writeBackFailed(name, e, copy);
         }
     }
@@ -634,8 +636,7 @@ public class MainActivity extends NativeActivity {
         for (File dir : dirs) {
             File copy = DocumentWrite.unfinished(dir);
             if (copy != null) {
-                markOnceTaken(copy);
-                add(writeBackFailed(copy.getName(), new java.io.IOException(DocumentWrite.UNFINISHED), copy));
+                addKept(writeBackFailed(copy.getName(), new java.io.IOException(DocumentWrite.UNFINISHED), copy), copy);
             }
         }
     }
@@ -643,10 +644,16 @@ public class MainActivity extends NativeActivity {
     /** Kept copies whose notice waits to be taken by the Rust side (guarded by events). */
     private final ArrayList<File> toMark = new ArrayList<>();
 
-    /** Marks {@code copy} as said once its notice has been taken (takeEvents). */
-    private void markOnceTaken(File copy) {
+    /**
+     * Adds {@code event}, and with it, under the same lock, the kept copy it names (if any), to be
+     * marked as said once takeEvents has handed the event over: never before.
+     */
+    private void addKept(String event, File copy) {
         synchronized (events) {
-            toMark.add(copy);
+            add(event);
+            if (copy != null) {
+                toMark.add(copy);
+            }
         }
     }
 
