@@ -802,8 +802,6 @@ pub(crate) fn apply(s: &mut Session, ai: usize, edited: &rustgis_map::Map, chang
         ));
     }
     let mut done = Applied::default();
-    // Shapes that lost kept without a place that can't be given in longitude/latitude: said.
-    let placeless = std::cell::Cell::new(0usize);
     let tag = |layer: &str, id: u64| format!("{layer} #{id}");
     let src = s.project.maps.get_mut(si).ok_or("the source map is gone")?;
     for lc in &changes.layers {
@@ -851,21 +849,25 @@ pub(crate) fn apply(s: &mut Session, ai: usize, edited: &rustgis_map::Map, chang
             unplaced_touched(own, &lonlat, &changed).map_err(error)?;
             sl.dataset = lonlat.into_owned();
         }
-        // A shape that lost is kept in longitude/latitude ([`AreaConflict::geometry`]): from the
-        // layer's own system when it is changed there, a place that can't be given there as NaN,
-        // which the list of conflicts says.
+        // A shape that lost is kept in longitude/latitude ([`AreaConflict::geometry`], which a
+        // saved project holds finite): from the layer's own system when it is changed there. One
+        // with a place that can't be given there can't be kept, so it refuses the return, naming
+        // the feature, and nothing changes (the command puts the project back).
         let to_lonlat = if native { Some(listed.to(Crs::LonLat).map_err(error)?) } else { None };
-        let kept_shape = |g: Option<Option<Geometry>>| match &to_lonlat {
-            Some(to) => g.map(|g| {
+        let kept_shape = |id: u64, g: Option<Option<Geometry>>| -> Result<Option<Option<Geometry>>, String> {
+            let Some(to) = &to_lonlat else { return Ok(g) };
+            g.map(|g| {
                 g.map(|g| {
-                    let lonlat = to.geometry(&g);
-                    if g.is_finite() && !lonlat.is_finite() {
-                        placeless.set(placeless.get() + 1);
-                    }
-                    lonlat
+                    rustgis_data::Dataset::converted_to_lonlat(to, &g).map(std::borrow::Cow::into_owned).ok_or_else(|| {
+                        error(format!(
+                            "feature {id}: the version a conflict would keep has a place in {} that can't be given in longitude/latitude, where conflicts are kept, so nothing was changed",
+                            listed.label()
+                        ))
+                    })
                 })
-            }),
-            None => g,
+                .transpose()
+            })
+            .transpose()
         };
         // Every id the layer had, or kept new ones above, before this return.
         let home_top = sl.dataset.features.highest_id();
@@ -886,8 +888,9 @@ pub(crate) fn apply(s: &mut Session, ai: usize, edited: &rustgis_map::Map, chang
         let field_value =
             |row: usize, field: &str| theirs.field_index(field).map_or(&Value::Null, |i| theirs.features.value(row, i)).clone();
         let mut written = HashSet::new();
-        let lost =
-            |kind, id, values, shape| super::workspace::conflict(&changes.package, lc.layer, &name, id, kind, values, kept_shape(shape));
+        let lost = |kind, id, values, shape| -> Result<_, String> {
+            Ok(super::workspace::conflict(&changes.package, lc.layer, &name, id, kind, values, kept_shape(id, shape)?))
+        };
         for g in &lc.edited {
             // An edit naming a feature the package's map hasn't has no values to bring back or keep.
             let Some(&p) = at_field.get(&g.id) else {
@@ -900,7 +903,7 @@ pub(crate) fn apply(s: &mut Session, ai: usize, edited: &rustgis_map::Map, chang
                 // The field's edits lost: the values and shape it changed.
                 let values = g.values.iter().map(|(field, _)| (field.clone(), field_value(p, field))).collect();
                 let shape = g.geometry.as_ref().map(|_| theirs.features.geometry(p).cloned());
-                done.lost.push(lost(ConflictKind::Dropped, g.id, values, shape));
+                done.lost.push(lost(ConflictKind::Dropped, g.id, values, shape)?);
                 continue;
             };
             let (mut changed, mut values, mut shape) = (false, Vec::new(), None);
@@ -934,7 +937,7 @@ pub(crate) fn apply(s: &mut Session, ai: usize, edited: &rustgis_map::Map, chang
             }
             if !values.is_empty() || shape.is_some() {
                 done.conflicts.push(tag(&name, g.id));
-                done.lost.push(lost(ConflictKind::Replaced, g.id, values, shape));
+                done.lost.push(lost(ConflictKind::Replaced, g.id, values, shape)?);
             }
         }
         // A deletion goes in while the feature is as it was given; one changed at home stays.
@@ -958,7 +961,7 @@ pub(crate) fn apply(s: &mut Session, ai: usize, edited: &rustgis_map::Map, chang
                 gone.insert(g.id);
             } else {
                 done.kept.push(tag(&name, g.id));
-                done.lost.push(lost(ConflictKind::Kept, g.id, Vec::new(), None));
+                done.lost.push(lost(ConflictKind::Kept, g.id, Vec::new(), None)?);
             }
         }
         if !gone.is_empty() {
@@ -994,15 +997,6 @@ pub(crate) fn apply(s: &mut Session, ai: usize, edited: &rustgis_map::Map, chang
     }
     super::workspace::renew_area(s, ai, si, offline_map, next_generation)?;
     super::workspace::keep_conflicts(s, ai, std::mem::take(&mut done.lost));
-    if placeless.get() > 0 {
-        s.notify(
-            format!(
-                "Offline area '{area_name}': {} shape(s) that lost to the field's have a place that can't be given in longitude/latitude, so the versions kept in Data › Offline › Conflicts don't hold that place",
-                placeless.get()
-            ),
-            false,
-        );
-    }
     done.say(s, &area_name, &source);
     Ok(json!({
         "updated": done.updated,

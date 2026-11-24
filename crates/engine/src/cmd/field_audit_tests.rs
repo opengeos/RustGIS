@@ -878,11 +878,12 @@ fn a_home_feature_an_addition_renumbers_around_doesnt_refuse_a_converted_return(
     );
 }
 
-/// A shape the computer moved where it has no place in longitude/latitude, which the field's then
-/// replaces, is kept among the conflicts without that place (they are in longitude/latitude), and
-/// the return says so.
+/// A shape the computer moved where it has no place in longitude/latitude, which the field's would
+/// replace, can't be kept among the conflicts (they are in longitude/latitude, saved finite): the
+/// return is refused, naming the feature, and nothing changes. With the computer's shape placed,
+/// the same return comes back, the conflict kept, and the project saves and opens again.
 #[test]
-fn a_displaced_shape_with_no_place_in_longitude_latitude_is_said() {
+fn a_displaced_shape_with_no_place_in_longitude_latitude_refuses_the_return() {
     use rustgis_data::{Coord, Geometry, raster::Crs};
     let _own = crate::cmd::field_changes::test_bases::write_own_systems();
     let temp = Temp::new("native-list-placeless-conflict");
@@ -896,13 +897,29 @@ fn a_displaced_shape_with_no_place_in_longitude_latitude_is_said() {
     let ds = &mut a.map_mut().layer_mut(cities).unwrap().dataset;
     let Some(Geometry::Point(c)) = ds.features[0].geometry else { panic!() };
     ds.features[0].geometry = Some(Geometry::Point(Coord::new(c.x + 10.0, c.y)));
+    let set_home = |home: &mut Session, at: Coord| {
+        let ds = &mut home.map_mut().layer_mut(hc).unwrap().dataset;
+        let row = ds.features.iter().position(|f| f.id == moved).unwrap();
+        ds.features.set_geometry(row, Some(Geometry::Point(at)));
+    };
     // Home moves the same city where it has no place in longitude/latitude.
-    let ds = &mut home.map_mut().layer_mut(hc).unwrap().dataset;
-    let row = ds.features.iter().position(|f| f.id == moved).unwrap();
-    ds.features.set_geometry(row, Some(Geometry::Point(Coord::new(1e9, 0.0))));
-    let (done, said) = bring_back(&temp, &mut a, &mut home, "a");
-    assert_eq!((done["updated"].as_u64(), done["conflicts"].as_u64()), (Some(1), Some(1)), "{done} {said:?}");
-    assert!(said.iter().any(|t| t.contains("1 shape(s) that lost") && t.contains("don't hold that place")), "{said:?}");
+    set_home(&mut home, Coord::new(1e9, 0.0));
+    let (_, back) = package(&mut a, &Value::Null).unwrap();
+    let path = temp.0.join("a-back.rgisfield");
+    std::fs::write(&path, &back).unwrap();
+    let before = serde_json::to_value(&home.project).unwrap();
+    let err = home.run("offline.bringBack", &json!({"path": path.display().to_string()})).unwrap_err();
+    assert!(err.contains(&format!("feature {moved}: the version a conflict would keep")), "{err}");
+    assert_eq!(serde_json::to_value(&home.project).unwrap(), before, "a refused return changes nothing");
+    // Placed at home: it comes back, the conflict kept, with no such refusal, and saves.
+    set_home(&mut home, Coord::new(c.x - 10.0, c.y));
+    let done = home.run("offline.bringBack", &json!({"path": path.display().to_string()})).unwrap();
+    assert_eq!((done["updated"].as_u64(), done["conflicts"].as_u64()), (Some(1), Some(1)), "{done}");
+    let saved = temp.0.join("home-after.rgis");
+    home.run("project.saveAs", &json!({"path": saved})).unwrap();
+    let mut again = Session::new(Project::default());
+    again.run("project.open", &json!({"path": saved})).unwrap();
+    assert_eq!(again.project.offline_areas[0].conflicts.len(), 1);
 }
 
 /// A list of a version this RustGIS doesn't write is refused, as is one of version 1 that gives a
