@@ -1630,6 +1630,24 @@ pub(crate) fn tiled_inputs(
     Ok(read)
 }
 
+/// `part` of the raster file read in place at `path` (layer `name`'s), read from the file at the
+/// finest level whose part the run can hold, in its turn ([`tiled_turn`]), with its count in
+/// [`rustgis_data::memory::held`]; `None` when the file can't be read by part (read it whole with
+/// [`read_tiled`]). Never kept for a batch: another item's part is another part.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn read_tiled_part(
+    name: &str,
+    path: &str,
+    part: rustgis_data::raster::Part,
+) -> Result<Option<(std::sync::Arc<rustgis_data::raster::Raster>, std::sync::Arc<rustgis_data::memory::Holding>)>, String> {
+    let _turn = tiled_turn().map_err(|e| format!("{name}: {e}"))?;
+    let Some(r) = rustgis_data::raster::read_path_part(std::path::Path::new(path), part).map_err(|e| format!("{name}: {e}"))? else {
+        return Ok(None);
+    };
+    let bytes: usize = r.bands.iter().map(|b| b.data.len().saturating_mul(4)).sum();
+    Ok(Some((std::sync::Arc::new(r), std::sync::Arc::new(rustgis_data::memory::Holding::of(bytes as u64)))))
+}
+
 /// What a run says of the raster files read in place it read again from their file
 /// ([`read_tiled`]), each with its layer's name: one notice of each kind, naming each raster.
 /// `whose` says whose results are built on values rounded as they were read.

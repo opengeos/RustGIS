@@ -156,12 +156,12 @@ impl Input {
         if let Some((name, path)) = &self.file
             && RUN_READS.with(|r| r.borrow().is_some())
         {
-            let kept = RUN_READS.with(|r| r.borrow().as_ref().and_then(|read| read.iter().find(|k| k.0 == *path).cloned()));
+            let kept = RUN_READS.with(|r| r.borrow().as_ref().and_then(|read| read.iter().find(|k| k.0.as_ref() == Some(path)).cloned()));
             let (_, _, raster, count) = match kept {
                 Some(k) => k,
                 None => {
                     let (raster, count) = super::gp::read_tiled(name, path)?;
-                    let k = (path.clone(), name.clone(), raster, count);
+                    let k = (Some(path.clone()), name.clone(), raster, count);
                     RUN_READS.with(|r| {
                         if let Some(read) = r.borrow_mut().as_mut() {
                             read.push(k.clone());
@@ -176,6 +176,29 @@ impl Input {
         #[cfg(target_arch = "wasm32")]
         let _ = &self.file;
         Ok(Read { raster: self.held.clone(), _count: None })
+    }
+
+    /// The raster the work reads, for work that uses only `part` of it: within a run, a layer read
+    /// in place from a GeoTIFF on this computer reads only that part of its file, out to whole
+    /// pixels, at the finest level whose part the run can hold, decoding only the strips or tiles
+    /// that hold it (`rustgis_data::raster::read_path_part`). A part isn't kept for the run's other
+    /// inputs. A file that can't be read by part, and any other layer, give [`Input::read`].
+    pub(crate) fn read_part(&self, part: rustgis_data::raster::Part) -> Result<Read, String> {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some((name, path)) = &self.file
+            && RUN_READS.with(|r| r.borrow().is_some())
+            && let Some((raster, count)) = super::gp::read_tiled_part(name, path, part)?
+        {
+            RUN_READS.with(|r| {
+                if let Some(read) = r.borrow_mut().as_mut() {
+                    read.push((None, name.clone(), raster.clone(), count.clone()));
+                }
+            });
+            return Ok(Read { raster, _count: Some(count) });
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = part;
+        self.read()
     }
 }
 
@@ -193,10 +216,11 @@ impl std::ops::Deref for Read {
     }
 }
 
-/// A raster file read in place that a run read ([`RUN_READS`]): its path, its layer's name, the
-/// raster read and its count in [`rustgis_data::memory::held`].
+/// A raster file read in place that a run read ([`RUN_READS`]): its path (`None` for a part of it,
+/// [`Input::read_part`], which no other input takes), its layer's name, the raster read and its
+/// count in [`rustgis_data::memory::held`].
 #[cfg(not(target_arch = "wasm32"))]
-type RunRead = (String, String, std::sync::Arc<Raster>, std::sync::Arc<rustgis_data::memory::Holding>);
+type RunRead = (Option<String>, String, std::sync::Arc<Raster>, std::sync::Arc<rustgis_data::memory::Holding>);
 
 #[cfg(not(target_arch = "wasm32"))]
 thread_local! {

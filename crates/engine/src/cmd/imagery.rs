@@ -1753,11 +1753,16 @@ pub(crate) fn process_work(s: &Session, p: &Value) -> Result<super::workflows::W
                     e
                 }
             };
-            // Checked on the raster the layer holds, which covers the same ground as its file.
+            // Checked on the raster the layer holds, which covers the same ground as its file:
+            // only that part of the file is read (#2865).
             extent_window(r.held(), &e)?;
+            let part = extent_part(r.held(), &e);
             let out = name(p, format!("{}_clip", r.held().name))?;
             Ok(Box::new(move || {
-                let r = r.read()?;
+                let r = match part {
+                    Some(part) => r.read_part(part)?,
+                    None => r.read()?,
+                };
                 let (cols, rows) = extent_window(&r, &e)?;
                 super::workflows::made(clip_window(&r, cols, rows, None, out)?, None)
             }))
@@ -1838,6 +1843,18 @@ fn extent_window(r: &Raster, e: &Extent) -> Result<(std::ops::Range<u32>, std::o
         return Err("the extent doesn't overlap the raster".into());
     }
     Ok((c0..c1, r0..r1))
+}
+
+/// The part of a raster's ground under a longitude/latitude box ([`extent_window`]), as fractions
+/// of its width and height, a pixel of its file wider each way so a file read at a finer level
+/// than `r` still holds every pixel the box touches: the part a clip of it reads.
+fn extent_part(r: &Raster, e: &Extent) -> Option<rustgis_data::raster::Part> {
+    let px = edge_pixels(r, e)?;
+    let (w, h) = (f64::from(r.width.max(1)), f64::from(r.height.max(1)));
+    let (fw, fh) = r.overview.map_or((w, h), |(fw, fh)| (f64::from(fw.max(1)), f64::from(fh.max(1))));
+    let (x0, x1) = px.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), p| (a.min(p.0), b.max(p.0)));
+    let (y0, y1) = px.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), p| (a.min(p.1), b.max(p.1)));
+    rustgis_data::raster::Part::new(x0 / w - 1.0 / fw, y0 / h - 1.0 / fh, x1 / w + 1.0 / fw, y1 / h + 1.0 / fh)
 }
 
 /// Most inputs a mosaic takes.

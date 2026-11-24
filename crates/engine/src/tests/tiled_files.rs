@@ -358,3 +358,35 @@ fn a_run_that_panics_reads_no_file_after_it() {
     assert_eq!(within, 1024, "the file, within the run");
     assert_eq!(input.read().unwrap().width, 512, "the overview the layer holds, after the run");
 }
+
+/// Clip by extent of a layer read in place reads only the part of its file under the extent
+/// (#2865): the clip is the one made of the file held whole, and the file isn't read whole for it.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_clip_by_extent_reads_only_its_part_of_a_tiled_file() {
+    let d = dir("clip");
+    let path = checkerboard(&d);
+    let clip = json!({"layer": "checks", "operation": "clip", "extent": [10.3, 45.55, 10.42, 45.9], "name": "clip"});
+    // Held whole, as a file this size is.
+    let mut whole = Session::new(Project::default());
+    whole.run("layer.addData", &json!({"path": path})).unwrap();
+    assert!(!raster(&whole, "checks").tiled);
+    whole.run("raster.process", &clip).unwrap();
+    let _held = HeldWhole::at(1_000_000);
+    let mut s = Session::new(Project::default());
+    s.run("layer.addData", &json!({"path": path})).unwrap();
+    assert!(raster(&s, "checks").tiled);
+    let reads = || crate::cmd::gp::TILED_READS.with(std::cell::Cell::get);
+    let (before, mark) = (reads(), s.notice_mark());
+    s.run("raster.process", &clip).unwrap();
+    assert_eq!(reads(), before, "the file isn't read whole");
+    let (got, want) = (raster(&s, "clip").data.clone().unwrap(), raster(&whole, "clip").data.clone().unwrap());
+    // 0.12° by 0.35° of a 1024-pixel degree, at the file's full size.
+    assert_eq!((got.width, got.height, got.overview), (124, 359, None));
+    assert_eq!((got.width, got.height, got.transform), (want.width, want.height, want.transform));
+    for (g, w) in got.bands.iter().zip(&want.bands) {
+        assert!(g.data == w.data, "band {}", g.name);
+    }
+    let notes = said(&s, mark);
+    assert!(!notes.iter().any(|n| n.contains("finest level")), "{notes:?}");
+}
