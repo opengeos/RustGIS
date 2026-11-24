@@ -146,7 +146,7 @@ fn size_step(ui: &mut egui::Ui, d: &mut Draft) {
         let label = ui.label(tl!("Size"));
         egui::ComboBox::from_id_salt("publication_wizard_size_pick")
             .selected_text(size_label(&d.size))
-            .width(260.0)
+            .width(field_width(ui))
             .show_ui(ui, |ui| {
                 for (id, ..) in PAGES {
                     ui.selectable_value(&mut d.size, (*id).to_string(), size_label(id));
@@ -194,20 +194,22 @@ fn texts_step(ui: &mut egui::Ui, d: &mut Draft) {
     egui::Grid::new("publication_wizard_texts").num_columns(2).spacing(egui::vec2(8.0, 8.0)).show(ui, |ui| {
         let line = |ui: &mut egui::Ui, label: &str, text: &mut String| {
             let caption = ui.label(label);
-            ui.add(egui::TextEdit::singleline(text).desired_width(260.0)).labelled_by(caption.id);
+            ui.add(egui::TextEdit::singleline(text).desired_width(field_width(ui))).labelled_by(caption.id);
             ui.end_row();
         };
         let label = ui.label(tl!("Title"));
-        let title = ui.add(egui::TextEdit::singleline(&mut d.title).hint_text(tl!("No title")).desired_width(260.0)).labelled_by(label.id);
+        let title = ui
+            .add(egui::TextEdit::singleline(&mut d.title).hint_text(tl!("No title")).desired_width(field_width(ui)))
+            .labelled_by(label.id);
         d.title_typed |= title.changed();
         ui.end_row();
         line(ui, tl!("Subtitle"), &mut d.subtitle);
         let label = ui.label(tl!("Note"));
-        ui.add(egui::TextEdit::multiline(&mut d.note).desired_rows(3).desired_width(260.0)).labelled_by(label.id);
+        ui.add(egui::TextEdit::multiline(&mut d.note).desired_rows(3).desired_width(field_width(ui))).labelled_by(label.id);
         ui.end_row();
         line(ui, tl!("Sources"), &mut d.sources);
         let label = ui.label(tl!("Credit line"));
-        ui.add_enabled(!d.no_author, egui::TextEdit::singleline(&mut d.author).hint_text(default_credit()).desired_width(260.0))
+        ui.add_enabled(!d.no_author, egui::TextEdit::singleline(&mut d.author).hint_text(default_credit()).desired_width(field_width(ui)))
             .labelled_by(label.id);
         ui.end_row();
         ui.label("");
@@ -283,6 +285,13 @@ fn review_step(ui: &mut egui::Ui, d: &Draft) {
 /// ("Made with RustGIS · {date}", dated when the layout is made).
 fn default_credit() -> &'static str {
     tl!("Made with RustGIS · today's date")
+}
+
+/// A field's width beside its label: 260 points, or what the row leaves once a longer label
+/// (Greek "Orientation", in a wider interface font) takes its share, so the row never widens the
+/// window.
+fn field_width(ui: &egui::Ui) -> f32 {
+    ui.available_width().min(260.0)
 }
 
 /// The wizard's width.
