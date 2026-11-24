@@ -6536,8 +6536,11 @@ fn render_frame(
             let lonlat = lonlat_box_holds && source.finds_all_by_area();
             // Every other pairing reads by the features' boxes as drawn, once a frame that read
             // them all has indexed them (#2788); not one the file's own boxes serve, even before
-            // they are found holding, which an index would only duplicate.
-            let drawn = view_only && !own_units && !lonlat_box_holds && source.visits_ids();
+            // they are found holding, which an index would only duplicate, nor a file in
+            // longitude/latitude on Web Mercator, which draws from its display copy, whose boxes
+            // aren't gathered (at the latitudes Web Mercator clamps it reads every feature).
+            let mercator_lonlat = crs == rustgis_data::raster::Crs::LonLat && matches!(flat, rustgis_map::projection::Flat::Mercator);
+            let drawn = view_only && !own_units && !lonlat_box_holds && !mercator_lonlat && source.visits_ids();
             // Only while the source is as it was opened: a file changed since reads again, and
             // one gone fails as a read of it would.
             let unchanged = match (own || lonlat || drawn).then(|| source.same_as_opened()) {

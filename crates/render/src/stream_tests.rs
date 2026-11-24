@@ -2209,6 +2209,11 @@ fn a_shapefile_on_another_map_reads_the_view_by_its_boxes_as_drawn() {
             let whole = whole.get_or_insert_with(|| data.to_vec());
             assert!(data == whole.as_slice(), "{what}, frame {frames}: the pixels changed");
             assert!(data.chunks(4).any(|p| p != &data[..4]), "{what}: nothing drawn");
+            // Every read of the first frame is of every feature: there is no index yet.
+            if frames == 0 {
+                let first = asked.lock().unwrap().clone();
+                assert!(!first.is_empty() && first.iter().all(Option::is_none), "{what}: the first frame read {first:?}");
+            }
             frames += 1;
             if asked.lock().unwrap().last().is_some_and(by_ids) {
                 break;
@@ -2232,9 +2237,26 @@ fn a_shapefile_on_another_map_reads_the_view_by_its_boxes_as_drawn() {
         // #1121); the view itself is read by ids, or drawn from the view kept, never whole.
         let before = asked_len(&asked_handle);
         let zoomed = View { camera: Camera { res: view.camera.res / 2.0, ..view.camera }, ..view };
-        assert!(render_with_backend(&mut actual.clone(), &zoomed, true, Backend::Cpu).is_some(), "{what}: a zoomed frame");
+        let Some(RenderOutput::Cpu(got)) = render_with_backend(&mut actual.clone(), &zoomed, true, Backend::Cpu) else {
+            panic!("{what}: a zoomed frame");
+        };
+        // Exactly one read of every feature (the new level's decision), the view itself read by
+        // ids or drawn from the view kept: a whole read of it would be a second.
         let asked = asked_handle.lock().unwrap();
         let zoom = &asked[before..];
-        assert!(zoom.iter().filter(|r| r.is_none()).count() <= 1 && zoom.iter().all(|r| r.is_none() || by_ids(r)), "{what}: {zoom:?}");
+        assert!(zoom.iter().filter(|r| r.is_none()).count() == 1 && zoom.iter().all(|r| r.is_none() || by_ids(r)), "{what}: {zoom:?}");
+        // And it draws what a source opened afresh, read whole, draws at that zoom.
+        let mut fresh = base.clone();
+        let mut layer = streamed(&base.layers[0], usize::MAX);
+        layer.source = Some(SourceLayer::from_path(
+            path.to_string_lossy(),
+            None,
+            Box::new(rustgis_data::source::shp::ShpSource::open_path(&path, "drawn").unwrap()),
+        ));
+        fresh.layers[0] = layer;
+        let Some(RenderOutput::Cpu(whole_zoomed)) = render_with_backend(&mut fresh, &zoomed, true, Backend::Cpu) else {
+            panic!("{what}: a zoomed whole frame");
+        };
+        assert!(got.pixmap.data() == whole_zoomed.pixmap.data(), "{what}: the zoomed pixels changed");
     }
 }

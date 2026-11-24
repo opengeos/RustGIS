@@ -451,6 +451,11 @@ impl Index {
                 matched += 1;
             }
         }
+        // None of the file's: nothing to read, not even its directory.
+        if matched == 0 {
+            crate::progress::check()?;
+            return Ok((0, true));
+        }
         match &self.storage {
             Storage::Disk(disk) => {
                 let db = connect(disk._lease.path(), false)?;

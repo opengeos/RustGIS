@@ -1317,9 +1317,9 @@ impl SourceLayer {
             // Given up once this packing is no longer the one the slot waits for.
             let replaced = || slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner).building_ticket() != Some(ticket);
             let index = DrawnBoxes::new(boxes, replaced);
-            let left = share.saturating_sub(index.as_ref().map_or(0, DrawnBoxes::bytes));
-            // The kept view is trimmed to what the index leaves only when the index is kept.
-            if slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner).finish(ticket, index, share) {
+            // The kept view is trimmed to the room the index leaves only when the index is kept.
+            let left = slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner).finish(ticket, index, share);
+            if let Some(left) = left {
                 view.lock().unwrap_or_else(std::sync::PoisonError::into_inner).trim(left);
             }
         };

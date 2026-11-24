@@ -91,6 +91,9 @@ impl DrawnBoxes {
     /// The ids of the features whose boxes meet `q`, in order; `None` when more than `most` do,
     /// or `stop` says to give up (it is asked as the search goes).
     pub fn query(&self, q: [f32; 4], most: usize, stop: impl Fn() -> bool) -> Option<Vec<u64>> {
+        if stop() {
+            return None;
+        }
         let mut out = Vec::new();
         // The levels from the top down, the leaves (level 0) last.
         let top = self.nodes.len();
@@ -196,24 +199,25 @@ impl DrawnIndex {
 
     /// Keeps the index packed with `ticket`, when that packing is still the one this slot waits
     /// for (not one for a projection, datum grids or source since replaced) and it fits `share`
-    /// and the latest room; whether it was kept. `None` (its packing couldn't start, or stopped)
-    /// keeps none, to be gathered again.
-    pub(super) fn finish(&mut self, ticket: u64, boxes: Option<DrawnBoxes>, share: usize) -> bool {
+    /// and the latest room: the room left beside it when it was kept, `None` when it wasn't.
+    /// `None` boxes (its packing couldn't start, or stopped) keep none, to be gathered again.
+    pub(super) fn finish(&mut self, ticket: u64, boxes: Option<DrawnBoxes>, share: usize) -> Option<usize> {
         if self.building != Some(ticket) {
-            return false;
+            return None;
         }
         self.building = None;
         let room = self.room.map_or(share, |r| r.min(share));
         match boxes {
             Some(b) if b.bytes() <= room => {
+                let left = room - b.bytes();
                 self.boxes = Some(Arc::new(b));
-                true
+                Some(left)
             }
             Some(b) => {
                 self.too_large = Some(b.bytes());
-                false
+                None
             }
-            None => false,
+            None => None,
         }
     }
 
@@ -279,18 +283,19 @@ mod tests {
         assert!(slot.begin(&source, "b", 1000).is_some());
         assert!(slot.get(&source, "a").is_none());
         let again = slot.begin(&source, "a", 1000).unwrap();
-        assert!(!slot.finish(a, one(), 1000), "a stale packing keeps nothing");
-        assert!(slot.finish(again, one(), 1000));
+        assert!(slot.finish(a, one(), 1000).is_none(), "a stale packing keeps nothing");
+        assert!(slot.finish(again, one(), 1000).is_some());
         assert!(slot.get(&source, "a").is_some_and(|i| i.len() == 1));
         // The room shrank while one was packed: it isn't kept, and is again once there is room.
         slot.trim(0);
         assert!(slot.get(&source, "a").is_none());
         assert!(slot.begin(&source, "a", 1).is_none(), "too large for the room now");
         let t = slot.begin(&source, "a", 1000).unwrap();
-        assert!(!slot.finish(t, one(), 1000), "the latest room is 0");
-        slot.trim(1000);
+        assert!(slot.finish(t, one(), 1000).is_none(), "the latest room is 0");
+        slot.trim(600);
         let t = slot.begin(&source, "a", 1000).unwrap();
-        assert!(slot.finish(t, one(), 1000));
+        let left = slot.finish(t, one(), 1000);
+        assert!(left.is_some_and(|l| l < 600), "what the latest room leaves beside it: {left:?}");
     }
 
     /// The index finds what a scan of every box finds, in id order, over boxes of every size,
