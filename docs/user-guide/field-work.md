@@ -217,8 +217,9 @@ Where a change meets one made on the computer since the package was made:
   map); one the area holds can't be compared with the phone's, and the sync is refused, naming it.
   Send Field Package can't list the changes of a layer holding such a feature: the package goes
   back as a whole map, and the phone says why, naming it. Bring Back of a list of changes refuses
-  only for such a feature that the list changes, naming it: one of the computer's layer the list
-  edits or deletes, or one of the package's map it adds or edits. The others stay as stored.
+  only for such a feature that the list changes, naming it: one of the computer's features that
+  the list edits or deletes, or one of the package's features that it adds or edits. The others
+  stay as stored.
 
 Each of these keeps the version that lost on the offline area: the computer's values and shape
 the phone's replaced, the phone's edits to a feature deleted on the computer, the computer's feature
