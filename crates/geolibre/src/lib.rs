@@ -1077,8 +1077,9 @@ fn load(
                                     .filter(|g| Dataset::converted_to_lonlat(&to, g).is_none())
                                     .count();
                                 if lost > 0 {
+                                    let have = if lost == 1 { "feature has" } else { "features have" };
                                     messages.push(format!(
-                                        "{layer_name}: {lost} features have a place in {} that can't be given in longitude/latitude: they are kept as read, but don't draw",
+                                        "{layer_name}: {lost} {have} a place in {} that can't be given in longitude/latitude: kept as read, but not drawn",
                                         job.crs.label()
                                     ));
                                 }

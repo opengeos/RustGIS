@@ -816,19 +816,8 @@ fn materialize_within(src: &dyn FeatureSource, budget: u64) -> Result<(Dataset, 
     }
     // The features kept with a place that can't be given in longitude/latitude, said once, as a
     // file read whole says them; a source that said them when it was opened isn't counted again.
-    if !src.says_unplaced_at_open()
-        && let Ok(to) = ds.lonlat_conversion()
-        && !to.is_identity()
-    {
-        let (mut unplaced, mut placed) = (0usize, 0usize);
-        for g in ds.features.rows().filter_map(crate::RowRef::geometry) {
-            let has = Dataset::converted_to_lonlat(&to, g).is_some();
-            placed += usize::from(has);
-            unplaced += usize::from(!has);
-        }
-        report.messages.extend(
-            crate::io::kept_unplaced_note("features", unplaced, placed == 0, ds.coord_crs()).map(|n| format!("{}: {n}", info.name)),
-        );
+    if !src.says_unplaced_at_open() {
+        report.messages.extend(ds.kept_unplaced_notes().into_iter().map(|n| format!("{}: {n}", info.name)));
     }
     Ok((ds, report))
 }

@@ -655,6 +655,19 @@ fn objects_that_cant_be_converted_are_kept_and_said() {
     assert!(says(&out, "none of the city objects has a place in longitude/latitude from EPSG:32631"), "{:?}", messages_of(&out));
 }
 
+/// An object its system converts to beyond longitude/latitude (Web Mercator a trillion metres
+/// east) is kept and draws out of place, and the layer says so (#2032 C2f-4b).
+#[test]
+fn objects_converted_beyond_longitude_latitude_are_said() {
+    let triangle =
+        |a: i64| json!({"type": "LandUse", "geometry": [{"type": "MultiSurface", "lod": "1", "boundaries": [[[a, a + 1, a + 2]]]}]});
+    let far = [[1e12, 0.0, 0.0], [1e12 + 1000.0, 0.0, 0.0], [1e12 + 1000.0, 1000.0, 0.0]];
+    let bytes = doc(json!(far), json!({"a": triangle(0)}));
+    let out = read("m.city.json", &bytes, Some(Crs::WebMercator)).unwrap();
+    assert!(out[0].0.features.rows().all(|r| r.geometry().is_some()));
+    assert!(says(&out, "coordinates are not longitude/latitude once converted from EPSG:3857"), "{:?}", messages_of(&out));
+}
+
 /// An object is counted once in a notice, however many of its geometry families it loses.
 #[test]
 fn an_object_losing_several_families_is_counted_once() {

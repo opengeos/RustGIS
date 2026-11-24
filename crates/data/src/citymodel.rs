@@ -152,6 +152,7 @@ pub(crate) struct Counts {
     /// from `crs`, which don't draw; `all_unconverted` when no object has one.
     pub(crate) unconverted: usize,
     pub(crate) all_unconverted: bool,
+    pub(crate) beyond: Option<String>,
     pub(crate) crs: Option<Crs>,
     pub(crate) bad_heights: usize,
     /// Objects whose lowest and highest Z, or lowest Z and ground, are too far apart for their
@@ -571,17 +572,23 @@ pub(crate) fn finish(
     if crs != Crs::LonLat {
         let to_lonlat = crs.transformer().map_err(|e| DataError::Format(format!("{file_name}: {e}")))?;
         let mut objects = HashSet::new();
+        let mut placed_extent = rustgis_geom::Extent::EMPTY;
         for row in &mut rows {
             // Kept as the file holds it, in its system; marked, as it doesn't draw, when it has no
             // place in longitude/latitude.
-            if let Some(g) = &row.geometry
-                && !crate::io::places_in_lonlat(g, &to_lonlat)
-            {
-                (row.unconverted, row.draws) = (true, false);
-                objects.insert(row.object);
+            if let Some(g) = &row.geometry {
+                match crate::io::places_lonlat_extent(g, &to_lonlat) {
+                    Some(e) => placed_extent = placed_extent.union(&e),
+                    None => {
+                        (row.unconverted, row.draws) = (true, false);
+                        objects.insert(row.object);
+                    }
+                }
             }
         }
         counts.unconverted += objects.len();
+        // Those that convert, beyond longitude/latitude: they draw out of place, said.
+        counts.beyond = crate::io::beyond_lonlat_note(&placed_extent, crs);
     }
     counts.parent_rounds = raise_parents(&mut built, MAX_PARENT_VISITS).unwrap_or(0);
     counts.ground_rounds = set_grounds(&mut built, MAX_PARENT_VISITS).unwrap_or(0);
@@ -1156,6 +1163,9 @@ pub(crate) fn messages(c: &Counts) -> Vec<String> {
     say(c.tin_reliefs, format!("{} TINRelief objects aren't drawn and are left out", c.tin_reliefs));
     if let Some(note) = c.crs.and_then(|crs| crate::io::kept_unplaced_note("city objects", c.unconverted, c.all_unconverted, crs)) {
         say(c.unconverted, note);
+    }
+    if let Some(note) = c.beyond.clone() {
+        say(1, note);
     }
     say(
         c.bad_heights,

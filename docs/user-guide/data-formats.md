@@ -795,14 +795,16 @@ whose `.prj` or declared system doesn't fit its numbers. Shapefile, GeoJSON (wit
 other delimited text, File Geodatabase, ArcGIS feature service answers, MapInfo, DXF, LandXML,
 CityJSON and CityGML, GML and GeoLibre projects keep such a feature as the file holds it, and one
 notice counts them; so do GeoPackage, FlatGeobuf, GeoParquet, PostGIS and Shapefiles read in
-place, and the files RustGIS reads through GDAL or DuckDB. When none of a Shapefile's, GeoJSON's,
+place, and the files RustGIS reads through GDAL or DuckDB (a layer read a view at a time is
+counted by the map, as it draws). When none of a Shapefile's, GeoJSON's,
 CSV's, MapInfo, DXF, LandXML or city model's features has a place there, the notice says its
 system doesn't seem to fit, and Define Projection can set the one that does. Such a feature
 doesn't draw (the map says how many it leaves out), and each step that needs longitude/latitude
 (an export in WGS 84, a tool, an edit) leaves it out or refuses it and says so; written back in
 its own system, it is exact. A system that converts a place to beyond ±180.5° longitude or ±90.5°
 latitude (Web Mercator a billion metres east is 8983°) doesn't fit either: such a feature is kept
-and draws out of place, and a notice says so.
+and draws out of place. Shapefile, GeoJSON, CSV, ArcGIS feature service answers, city models and
+whole reads of GeoPackage, FlatGeobuf, GeoParquet and PostGIS say so.
 
 Coordinate systems of other bodies than the Earth (Mars, the Moon and the rest of the IAU's
 `IAU_2015` codes, or any datum whose ellipsoid isn't the Earth's) aren't read as such yet: every

@@ -548,6 +548,36 @@ impl Dataset {
         Self::geometry_to_lonlat_by(&self.shown_conversion()?, g)
     }
 
+    /// What a whole read of a source says of the features it kept as the source holds them
+    /// ([`source::Reproject::place`]): how many have a place that can't be given in
+    /// longitude/latitude, and whether those that convert come out beyond it, as a file read
+    /// whole says them (#2032 C2f-4b). One pass, each place converted to be checked and none kept;
+    /// nothing while its coordinates are longitude/latitude or its system can't be converted (the
+    /// map says that).
+    pub fn kept_unplaced_notes(&self) -> Vec<String> {
+        let Ok(to) = self.lonlat_conversion() else { return Vec::new() };
+        if to.is_identity() {
+            return Vec::new();
+        }
+        let (mut unplaced, mut placed, mut extent) = (0usize, 0usize, Extent::EMPTY);
+        for g in self.features.rows().filter_map(RowRef::geometry) {
+            let (mut ok, mut e) = (true, Extent::EMPTY);
+            g.for_each_coord(|c| match to.point(c) {
+                Some(l) => e.expand(l),
+                None if !c.is_finite() => {}
+                None => ok = false,
+            });
+            if ok {
+                placed += 1;
+                extent = extent.union(&e);
+            } else {
+                unplaced += 1;
+            }
+        }
+        let crs = self.coord_crs();
+        io::kept_unplaced_note("features", unplaced, placed == 0, crs).into_iter().chain(io::beyond_lonlat_note(&extent, crs)).collect()
+    }
+
     /// [`Dataset::geometry_to_lonlat`] of `g`, feature `id`'s geometry, for an edit of that one
     /// feature: refused naming the layer and the feature when one of its places can't be given in
     /// longitude/latitude, so it can't be edited there.
