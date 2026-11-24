@@ -444,13 +444,17 @@ pub fn read(mif: &str, mid: Option<&str>, name: &str) -> Result<(Dataset, ReadRe
     if let (Some(_), Some(c)) = (&t, crs) {
         ds.held_in = c;
     }
-    let (mut lost, mut placed, mut null_text) = (0usize, 0usize, Vec::new());
+    let (mut lost, mut placed, mut placed_extent, mut null_text) = (0usize, 0usize, rustgis_geom::Extent::EMPTY, Vec::new());
     for (k, g) in geoms.into_iter().enumerate() {
         // Kept as the file holds it; counted when it has no place in longitude/latitude.
         if let (Some(t), Some(g)) = (&t, &g) {
-            let has = crate::io::places_in_lonlat(g, t);
-            placed += usize::from(has);
-            lost += usize::from(!has);
+            match crate::io::places_lonlat_extent(g, t) {
+                Some(e) => {
+                    placed += 1;
+                    placed_extent = placed_extent.union(&e);
+                }
+                None => lost += 1,
+            }
         }
         let row = rows.get(k);
         let attrs = ds
@@ -469,6 +473,7 @@ pub fn read(mif: &str, mid: Option<&str>, name: &str) -> Result<(Dataset, ReadRe
     }
     if let (Some(_), Some(c)) = (&t, crs) {
         report.messages.extend(crate::io::kept_unplaced_note("objects", lost, placed == 0, c));
+        report.messages.extend(crate::io::beyond_lonlat_note(&placed_extent, c));
     }
     report.messages.extend(crate::source::null_text_note(&ds.fields, &null_text));
     ds.geometry_type = crate::io::dominant_type(&ds);

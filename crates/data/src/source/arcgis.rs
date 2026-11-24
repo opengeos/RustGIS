@@ -658,6 +658,11 @@ impl ArcgisSource {
 }
 
 impl FeatureSource for ArcgisSource {
+    /// Its pages' notes count them ([`crate::esripbf::Losses`]).
+    fn says_unplaced_at_open(&self) -> bool {
+        true
+    }
+
     fn info(&self) -> &SourceInfo {
         &self.info
     }

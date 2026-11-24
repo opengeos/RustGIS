@@ -3023,6 +3023,29 @@ fn geojson_reads_in_longitude_latitude_leave_out_unplaced_features() {
 }
 
 #[test]
+fn geojson_a_kept_unplaced_feature_does_not_use_up_a_sample() {
+    // A line with no place in longitude/latitude whose own box meets the view, ahead of a point
+    // in it: a read of one feature there gets the point, and counts one match (#2032 C2f-4b).
+    let text = format!(
+        r#"{{"type":"FeatureCollection","crs":{},"features":[
+        {{"type":"Feature","properties":{{}},"geometry":{{"type":"LineString","coordinates":[[451500,5411500],[1e9,5411500]]}}}},
+        {{"type":"Feature","properties":{{}},"geometry":{{"type":"Point","coordinates":[451500,5411500]}}}}]}}"#,
+        named("EPSG:32631")
+    );
+    let p = dir().join("geojson-crs").join("ahead.geojson");
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    std::fs::write(&p, &text).unwrap();
+    let paris = Some(Extent { min_x: 2.0, min_y: 48.5, max_x: 2.7, max_y: 49.2 });
+    for in_memory in [crate::io::BYTES_FLOOR, 0] {
+        let src = geojson::GeoJsonSource::open_with(&p, "x", in_memory).unwrap();
+        let one = src.read(&Request { extent: paris, limit: 1, own: None }).unwrap();
+        assert_eq!((one.features.len(), one.matched), (1, 1));
+        assert!(matches!(one.features[0].geometry, Some(Geometry::Point(_))));
+        assert_eq!(src.read(&Request::all()).unwrap().features.len(), 2, "a whole read keeps both");
+    }
+}
+
+#[test]
 fn geojson_unreadable_feature_alone_does_not_make_the_layer_incomplete() {
     // A declared system, one feature with geometry that can't be read, and all the others
     // placed: nothing was lost to the system, so Define Projection stays available, both ways.

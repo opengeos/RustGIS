@@ -765,7 +765,7 @@ fn copy_stream(
     dataset.crs_incomplete = src.lost_to_crs();
     dataset.features = rows.into();
     if !src.says_unplaced_at_open() {
-        losses.extend(dataset.kept_unplaced_notes().into_iter().map(|n| format!("{}: {n}", layer.name)));
+        losses.extend(dataset.kept_unplaced_notes()?.into_iter().map(|n| format!("{}: {n}", layer.name)));
     }
     if dataset.geometry_type == rustgis_data::GeometryType::None
         && let Some(g) = dataset.features.geometry(0)

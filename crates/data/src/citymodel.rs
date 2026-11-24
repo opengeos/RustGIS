@@ -1021,7 +1021,8 @@ fn layers(stem: &str, rows: Vec<Row>, built: &[Built], crs: Crs, counts: &mut Co
     for (((ty, family), rows), name) in sorted.into_iter().zip(names) {
         // A layer of volumes stands on its base, when one of them has a height to stand by, unless
         // every one of them stands in its parts.
-        let drawn = || rows.iter().filter(|(r, _)| r.geometry.is_some());
+        // An object kept with no place in longitude/latitude draws nothing, so doesn't count.
+        let drawn = || rows.iter().filter(|(r, _)| r.geometry.is_some() && !r.unconverted);
         let standing = family == Family::Polygon
             && stands(&ty)
             && drawn().any(|(_, b)| rises(b))

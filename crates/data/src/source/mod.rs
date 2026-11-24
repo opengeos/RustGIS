@@ -817,7 +817,8 @@ fn materialize_within(src: &dyn FeatureSource, budget: u64) -> Result<(Dataset, 
     // The features kept with a place that can't be given in longitude/latitude, said once, as a
     // file read whole says them; a source that said them when it was opened isn't counted again.
     if !src.says_unplaced_at_open() {
-        report.messages.extend(ds.kept_unplaced_notes().into_iter().map(|n| format!("{}: {n}", info.name)));
+        let notes = ds.kept_unplaced_notes().map_err(DataError::of_conversion)?;
+        report.messages.extend(notes.into_iter().map(|n| format!("{}: {n}", info.name)));
     }
     Ok((ds, report))
 }

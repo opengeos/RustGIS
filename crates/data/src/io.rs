@@ -1667,8 +1667,9 @@ pub(crate) fn places_lonlat_extent(g: &Geometry, t: &crate::raster::Transformer)
 
 /// What a reader says of the `n` of its `what` (features, shapes, rows) it keeps as the file holds
 /// them, held in `crs`, though a place of theirs can't be given in longitude/latitude: they don't
-/// draw (the map says so too), and every other step that needs longitude/latitude leaves them out
-/// and says so (#2032 C2f-4b). `all` when none of the file's has a place there: then its system
+/// draw (the map says so too), and a step that needs longitude/latitude leaves them out and says
+/// so, or, where leaving one out would lose it (a write-back, the plugin host's layers, a sync of
+/// an offline area holding it), refuses naming it (#2032 C2f-4b). `all` when none of the file's has a place there: then its system
 /// doesn't seem to match its coordinates, and Define Projection can set the one that does, as
 /// nothing was lost. `None` for none.
 pub(crate) fn kept_unplaced_note(what: &str, n: usize, all: bool, crs: Crs) -> Option<String> {

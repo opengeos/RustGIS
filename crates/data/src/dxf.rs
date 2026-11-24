@@ -1696,13 +1696,17 @@ pub fn read(file_name: &str, bytes: &[u8], opts: &Options) -> Result<Vec<(Datase
             // Kept as the drawing holds them, in its system; counted where they have no place in
             // longitude/latitude.
             ds.held_in = *c;
-            let (mut lost, mut placed) = (0usize, 0usize);
+            let (mut lost, mut placed, mut placed_extent) = (0usize, 0usize, rustgis_geom::Extent::EMPTY);
             for (f, varying) in ds.features.iter().zip(&flags) {
                 crate::progress::check()?;
                 if let Some(g) = &f.geometry {
-                    let has = crate::io::places_in_lonlat(g, t);
-                    placed += usize::from(has);
-                    lost += usize::from(!has);
+                    match crate::io::places_lonlat_extent(g, t) {
+                        Some(e) => {
+                            placed += 1;
+                            placed_extent = placed_extent.union(&e);
+                        }
+                        None => lost += 1,
+                    }
                     ds.zm_dropped |= *varying;
                     varying_count += usize::from(*varying);
                 }
@@ -1714,6 +1718,7 @@ pub fn read(file_name: &str, bytes: &[u8], opts: &Options) -> Result<Vec<(Datase
             }
             ds.features.retain(|f| f.geometry.is_some());
             rep.messages.extend(crate::io::kept_unplaced_note("features", lost, placed == 0, *c));
+            rep.messages.extend(crate::io::beyond_lonlat_note(&placed_extent, *c));
         }
         if transformer.is_none() {
             for (_, loss) in losses {
