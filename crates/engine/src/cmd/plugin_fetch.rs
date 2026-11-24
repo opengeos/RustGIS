@@ -197,27 +197,28 @@ impl Session {
         }
     }
 
+    /// Whether what runs now is held to the internet: a plugin's authority is in the scope (as
+    /// for [`Self::named_reach`]), unless a test lets it reach its server on this computer.
+    pub(crate) fn plugin_held(&self) -> bool {
+        self.policy_plugin() && !allow_local()
+    }
+
     /// Holds the web addresses a plugin gives a command that connects as [`Self::named_reach`]
-    /// holds the service it names, with its wording: each one among the command's parameters (not inside the
-    /// contents of a file it gives, `data` or `text`) on this computer or the local network is
-    /// refused, naming it, before anything is read, and the rest are read only from the internet
-    /// ([`cache::restrict_to_public`]), wherever their names resolve, so what is read from them
-    /// and what that names is held there too. Addresses nested in a value (a STAC item, a
-    /// service's documents) are held by the commands that read them. Any other caller's addresses
-    /// are its own choice, as before.
+    /// holds the service it names, with its wording: each one among the command's parameters
+    /// (not inside the contents of a file it gives, `data` or `text`) on this computer or the local
+    /// network is refused, naming it, before anything is read. The rest are recorded as reaching
+    /// only the internet ([`cache::restrict_to_public`]), wherever their names resolve, so the
+    /// reads made of them later or elsewhere (a download left to the app, a tile layer drawn)
+    /// are held there too; while the command runs, all its requests are
+    /// ([`cache::held_to_public`]). Any other caller's addresses are its own choice, as before.
     ///
     /// [`cache::restrict_to_public`]: crate::render::rustgis_tiles::cache::restrict_to_public
+    /// [`cache::held_to_public`]: crate::render::rustgis_tiles::cache::held_to_public
     pub(crate) fn hold_plugin_addresses(&self, params: &Value) -> Result<(), String> {
-        if !self.policy_plugin() || allow_local() {
+        if !self.plugin_held() {
             return Ok(());
         }
-        let Some(o) = params.as_object() else { return Ok(()) };
-        let named: Vec<&str> = o
-            .iter()
-            .filter(|(key, _)| !matches!(key.as_str(), "data" | "text"))
-            .filter_map(|(_, v)| v.as_str().map(str::trim))
-            .filter(|v| is_web_address(v))
-            .collect();
+        let named = web_addresses(params);
         for url in &named {
             // An address wrong some other way (spaces in it) is the command's to judge; it is
             // held to the internet below all the same.
@@ -232,6 +233,17 @@ impl Session {
         }
         Ok(())
     }
+}
+
+/// The web addresses among a command's own parameters, not inside the contents of a file it
+/// gives (`data`, `text`).
+fn web_addresses(params: &Value) -> Vec<&str> {
+    let Some(o) = params.as_object() else { return Vec::new() };
+    o.iter()
+        .filter(|(key, _)| !matches!(key.as_str(), "data" | "text"))
+        .filter_map(|(_, v)| v.as_str().map(str::trim))
+        .filter(|v| is_web_address(v))
+        .collect()
 }
 
 /// Whether `v` is a web address the app fetches (`http://`, `https://` or `s3://`), as given or

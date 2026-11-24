@@ -588,9 +588,36 @@ pub fn allow_named(url: &str) {
     }
 }
 
+thread_local! {
+    /// Whether this thread's requests are held to the internet ([`held_to_public`]).
+    static HELD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Runs `f` with every address this thread asks for in it read only from the internet when `held`
+/// (a plugin's command: plugins reach only the internet), whatever is recorded of the address,
+/// so the requests a command derives from the address it was given (a listing, a search, a next
+/// page) are held as that address is. Nested calls only add to it; it is restored when `f`
+/// returns or panics. Requests made later or on another thread follow what is recorded
+/// ([`restrict_to_public`]).
+pub fn held_to_public<T>(held: bool, f: impl FnOnce() -> T) -> T {
+    /// Puts back the hold from before, however `f` ends.
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            HELD.with(|h| h.set(self.0));
+        }
+    }
+    let _restore = Restore(HELD.with(|h| h.replace(h.get() || held)));
+    f()
+}
+
 /// The network reach ceiling recorded for `url`: [`crate::address::Reach::Public`] when a web
-/// document named it, [`crate::address::Reach::Local`] otherwise.
+/// document named it, or while this thread's requests are [`held_to_public`],
+/// [`crate::address::Reach::Local`] otherwise.
 pub fn ceiling_for(url: &str) -> crate::address::Reach {
+    if HELD.with(std::cell::Cell::get) {
+        return crate::address::Reach::Public;
+    }
     let base = canonical_resource(url);
     if base.is_empty() {
         return crate::address::Reach::Local;
@@ -7826,6 +7853,26 @@ Connection: close
 
         allow_named(tif);
         assert_eq!(ceiling_for(tif), crate::address::Reach::Local);
+    }
+
+    /// While a thread's requests are held to the internet (a plugin's command), an address with
+    /// nothing recorded of it, as a listing or search derived from the one given, is read only
+    /// from the internet: one on this computer is refused, and read again once the hold ends.
+    #[test]
+    fn a_held_thread_reads_only_from_the_internet() {
+        let _turn = turn();
+        let ok = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".to_string();
+        let base = serve(vec![ok.clone(), ok]);
+        let derived = format!("{base}/api/collections");
+        assert_eq!(ceiling_for(&derived), crate::address::Reach::Local);
+        let held = held_to_public(true, || {
+            held_to_public(false, || assert_eq!(ceiling_for(&derived), crate::address::Reach::Public, "nested, still held"));
+            download_blocking(&derived)
+        });
+        let e = held.unwrap_err();
+        assert!(e.contains("local network"), "{e}");
+        assert_eq!(ceiling_for(&derived), crate::address::Reach::Local, "the hold ends with it");
+        assert_eq!(download_blocking(&derived).unwrap(), b"ok");
     }
 
     /// A read begun while its resource could reach the local network, and answered after a web

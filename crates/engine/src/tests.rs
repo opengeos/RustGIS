@@ -20522,6 +20522,29 @@ fn a_plugin_cannot_name_a_local_address_to_a_command() {
     rustgis_plugins::unload(id);
 }
 
+/// A plugin's command is held to the internet in every request it makes, not only at the address
+/// it gives: a bucket it names is listed through the user's connection that serves it, whose
+/// endpoint is on this computer, and the listing is refused there, while the user's own listing of
+/// it is read.
+#[test]
+fn a_plugin_lists_a_bucket_only_from_the_internet() {
+    #[cfg(not(target_arch = "wasm32"))]
+    if isolate_process_test("tests::a_plugin_lists_a_bucket_only_from_the_internet") {
+        return;
+    }
+    let listing = br#"<?xml version="1.0" encoding="UTF-8"?><ListBucketResult><Name>plugin-held-bucket</Name><Prefix></Prefix><IsTruncated>false</IsTruncated><Contents><Key>a.tif</Key><Size>3</Size></Contents></ListBucketResult>"#;
+    let base = serve(listing, 1);
+    let mut s = world();
+    s.run("s3.connect", &json!({"name": "local-minio", "endpoint": base, "buckets": ["plugin-held-bucket"], "anonymous": true})).unwrap();
+    let id = "eng-s3-local";
+    plugin(id, &["network"]);
+    let e = forward(&mut s, id, "s3.list", json!({"bucket": "plugin-held-bucket"})).unwrap_err();
+    assert!(e.contains("local network"), "{e}");
+    let own = s.run("s3.list", &json!({"bucket": "plugin-held-bucket"})).unwrap();
+    assert_eq!(own["objects"][0]["url"], "s3://plugin-held-bucket/a.tif", "{own}");
+    rustgis_plugins::unload(id);
+}
+
 /// The user's own addresses on this computer are read as ever: only a plugin's are held to the
 /// internet.
 #[test]

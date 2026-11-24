@@ -729,7 +729,13 @@ impl Session {
         }
         let still = continuation.map(|c| Arc::new(move || c.check().is_ok()) as crate::render::rustgis_tiles::cache::Still);
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            crate::render::rustgis_tiles::cache::with_optional_still(still, || f(self))
+            // Plugins reach only the internet: so does every request a command one runs makes,
+            // the ones it derives from an address it was given (a listing, a search, a next page)
+            // and the ones a saved connection sends.
+            let held = node.effects.contains(super::Effect::Network) && self.plugin_held();
+            crate::render::rustgis_tiles::cache::with_optional_still(still, || {
+                crate::render::rustgis_tiles::cache::held_to_public(held, || f(self))
+            })
         }));
         let complete =
             if let Some(cursor) = &mut self.policy.cursor { cursor.frames.pop().is_none_or(|(n, at)| n.len() == at) } else { true };

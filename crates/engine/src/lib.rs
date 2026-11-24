@@ -3290,6 +3290,12 @@ impl Session {
     /// restarts, an address it has no record of is read only from the internet, so the user's own
     /// on this computer or the local network is refused.
     fn say_public_only_full(&mut self) {
+        // A copy run ahead (`requests_into`, desktop only) leaves it for the session that takes
+        // its results.
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.requests_into.is_some() {
+            return;
+        }
         if render::rustgis_tiles::cache::take_public_only_full() {
             self.warn(
                 "web addresses: RustGIS has recorded as many addresses that may reach only the internet as it can hold, so until it restarts an address it hasn't seen before is read only from the internet, not this computer or the local network",
