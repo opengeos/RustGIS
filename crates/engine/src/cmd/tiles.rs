@@ -228,6 +228,8 @@ pub(crate) fn add_with_metadata_wait(s: &mut Session, p: &Value, metadata_wait: 
         t.blend = m;
     }
     if let Some(r) = resampling(p)? {
+        // A local archive is read first (as it is below anyway), so a picture one takes it at once.
+        read_local_header(&t, metadata_wait);
         takes_resampling(&t)?;
         t.resampling = r;
     }
@@ -896,10 +898,29 @@ const NOT_KNOWN_YET: &str = "this archive is still being read: set its resamplin
 /// and an archive not read yet might (a setting it would ignore isn't kept).
 fn takes_resampling(t: &TileLayer) -> Result<(), String> {
     match rustgis_render::tile_draws_pictures(t) {
-        Some(true) => Ok(()),
-        Some(false) => Err(NOT_PICTURES.into()),
-        None => Err(NOT_KNOWN_YET.into()),
+        Ok(Some(true)) => Ok(()),
+        Ok(Some(false)) => Err(NOT_PICTURES.into()),
+        Ok(None) => Err(NOT_KNOWN_YET.into()),
+        Err(e) => Err(format!("resampling can't be set: the archive couldn't be read ({e})")),
     }
+}
+
+/// Reads a local archive's header, waiting up to `wait`, so what it holds is known (natively; a
+/// web address and the browser's files are read as they draw).
+fn read_local_header(t: &TileLayer, wait: web_time::Duration) {
+    #[cfg(not(target_arch = "wasm32"))]
+    match t.kind {
+        TileKind::PmTiles if rustgis_render::rustgis_tiles::pmtiles::is_local(&t.url) => {
+            // Its error, if any, is reported when the setting is refused or the layer draws.
+            let _ = rustgis_render::rustgis_tiles::pmtiles::info_blocking(&t.url, wait);
+        }
+        TileKind::MbTiles => {
+            let _ = rustgis_render::rustgis_tiles::mbtiles::info_ready(&t.url, wait);
+        }
+        _ => {}
+    }
+    #[cfg(target_arch = "wasm32")]
+    let _ = (t, wait);
 }
 
 /// The `resampling` parameter: how the layer's pictures are drawn at a size other than their own.

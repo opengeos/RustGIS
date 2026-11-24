@@ -76,7 +76,8 @@ same files. New and changed code follows these rules; not every existing reader 
   writes it.
 - A project, map or layer file, a model or a web tool lists in `requires` each capability it needs
   that an older reader would lose or misread: a reader refuses one it doesn't know, naming it.
-  Task, presentation and notebook readers, and models inside a task's steps, don't check
+  `task.import` reads a task file this way (#2818), though `task.save` doesn't list anything in one
+  yet. Presentation and notebook readers, and models inside a task's steps, don't check
   `requires` yet. A release reads
   `.rgis` format 2 before any writes it (`READ_FORMAT` and `CAPABILITIES` in
   `crates/engine/src/project.rs`), so what is added to format 2 after that comes with a capability
@@ -127,7 +128,9 @@ Projects, map files and layer files whose symbology draws an image as a marker (
 a symbol's, a stacked stroke's or a dot fill's, saved styles included), or whose replayable
 commands set one (an `image` in `layer.marker`, a `layer.lineStrokes` stroke's markers or a
 `layer.fillLayers` fill), require `picture-markers`:
-an older reader must refuse them rather than fail on the marker or lose it.
+an older reader must refuse them rather than fail on the marker or lose it. Where such an image
+is an SVG, they also require `svg-markers`: a reader of PNG and JPEG markers only would draw it
+as a circle and refuse the command that sets it.
 
 Projects, model files and web tools that save a percent-slope function require `slope-percent`:
 an older reader must refuse them rather than run the saved function in degrees. Project
@@ -173,6 +176,10 @@ Likewise a label class keeping other than 2 points free round its labels (`label
 `clearance`) requires `label-clearance`, in a layer, a saved style or a saved `labels.placement`
 step: an older reader would place the labels 2 points apart and save them again without the
 clearances, or run the step without it.
+
+A label class removing duplicates (`labels.placement` with a `removeDuplicates` distance) requires
+`label-duplicates`, in a layer, a saved style or a saved `labels.placement` step: an older reader
+would place and save every label, or run the step without it.
 
 Projects and map files with a tile layer drawn nearest (`map.setTiles` with `"resampling":
 "nearest"`) require `tile-resampling`, so an older reader refuses them instead of drawing the layer

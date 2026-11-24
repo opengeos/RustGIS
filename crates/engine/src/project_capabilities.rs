@@ -60,6 +60,9 @@ impl Project {
         if !required.contains(&"picture-markers") && self.styles.iter().any(|s| s.renderer.has_picture_markers()) {
             required.push("picture-markers");
         }
+        if !required.contains(&"svg-markers") && self.styles.iter().any(|s| s.renderer.any_picture(svg_picture)) {
+            required.push("svg-markers");
+        }
         // And its labels' weights (#2803): an older reader would apply the style without them.
         if !required.contains(&"label-weight")
             && self.styles.iter().any(|s| s.labels.in_order().any(|c| c.weight != rustgis_map::symbology::DEFAULT_LABEL_WEIGHT))
@@ -71,6 +74,11 @@ impl Project {
             && self.styles.iter().any(|s| s.labels.in_order().any(|c| c.clearance != rustgis_map::symbology::DEFAULT_LABEL_CLEARANCE))
         {
             required.push("label-clearance");
+        }
+        // And whether they remove duplicates (#2847), for the same reason.
+        if !required.contains(&"label-duplicates") && self.styles.iter().any(|s| s.labels.in_order().any(|c| c.remove_duplicates.is_some()))
+        {
+            required.push("label-duplicates");
         }
         let commands: Vec<&'static str> =
             COMMAND_CAPABILITIES.iter().filter_map(|&(name, uses)| self.uses_commands(uses).then_some(name)).collect();
@@ -133,6 +141,7 @@ const COMMAND_CAPABILITIES: &[(&str, CommandCheck)] = &[
     ("tabulate-intersection-empty-zones", command_uses_tabulate_empty_zones),
     ("layout-element-background", command_uses_element_background),
     ("picture-markers", command_uses_picture_marker),
+    ("svg-markers", command_uses_svg_marker),
     ("graticule-mgrs", command_draws_mgrs_graticule),
     ("graticule-on-top", command_puts_graticule_on_top),
     ("graticule-color", command_colors_graticule),
@@ -149,8 +158,20 @@ const COMMAND_CAPABILITIES: &[(&str, CommandCheck)] = &[
     ("dggs-system", command_uses_dggs_system),
     ("label-weight", command_weighs_labels),
     ("label-clearance", command_clears_labels),
+    ("label-duplicates", command_removes_duplicate_labels),
     ("tile-resampling", command_resamples_tiles),
 ];
+
+/// A saved `labels.placement` that has a class remove duplicates, read as the command reads it
+/// (#2847): an older reader runs it without the key, saying nothing, so every label would show.
+/// False or null is what an older reader keeps.
+fn command_removes_duplicate_labels(id: &str, params: &Value) -> bool {
+    match id {
+        "labels.placement" => params.get("removeDuplicates").and_then(crate::cmd::labels::number).is_some(),
+        "script.run" => params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, command_removes_duplicate_labels)),
+        _ => false,
+    }
+}
 
 /// A saved `map.addTiles` or `map.setTiles` drawing a tile layer's pictures nearest (#2804), read as
 /// the command reads it: an older reader runs it without the key, saying nothing, so the layer would
@@ -547,16 +568,35 @@ fn tool_uses(tools: &[&str], id: &str, params: &Value, uses: fn(&Value) -> bool)
 /// `layer.marker`, a line stroke's markers or a dot fill given an image: an older reader would
 /// leave its `image` out and keep the marker it had, or refuse `"image"` as a mark.
 fn command_uses_picture_marker(id: &str, params: &Value) -> bool {
-    let any = |list: &str, image: fn(&Value) -> Option<&Value>| {
-        params.get(list).and_then(Value::as_array).is_some_and(|l| l.iter().any(|v| image(v).is_some_and(Value::is_string)))
+    command_sets_marker_image(id, params, |_| true)
+}
+
+/// [`command_uses_picture_marker`] with an SVG (#2266 part E1b): a reader of PNG and JPEG markers
+/// only would refuse the command.
+fn command_uses_svg_marker(id: &str, params: &Value) -> bool {
+    command_sets_marker_image(id, params, rustgis_render::picture_marker_is_svg)
+}
+
+/// Whether command `id` gives a marker an image (base64) that `image` holds true for.
+fn command_sets_marker_image(id: &str, params: &Value, image: fn(&str) -> bool) -> bool {
+    let any = |list: &str, at: fn(&Value) -> Option<&Value>| {
+        params.get(list).and_then(Value::as_array).is_some_and(|l| l.iter().any(|v| at(v).and_then(Value::as_str).is_some_and(image)))
     };
     match id {
-        "layer.marker" => params.get("image").is_some_and(Value::is_string),
+        "layer.marker" => params.get("image").and_then(Value::as_str).is_some_and(image),
         "layer.lineStrokes" => any("strokes", |st| st.get("markers")?.get("image")),
         "layer.fillLayers" => any("fills", |f| f.get("image")),
-        "script.run" => params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, command_uses_picture_marker)),
+        "script.run" => params
+            .get("script")
+            .and_then(Value::as_str)
+            .is_some_and(|s| script_uses(s, |id, params| command_sets_marker_image(id, params, image))),
         _ => false,
     }
+}
+
+/// Whether marker image `p` is an SVG ([`command_uses_svg_marker`]'s reason, for saved symbology).
+fn svg_picture(p: rustgis_map::Picture) -> bool {
+    rustgis_render::picture_marker_is_svg(p.base64())
 }
 
 /// Use the executor's line grammar; comments/invalid lines are not executable commands, and
@@ -614,6 +654,12 @@ fn label_clearance(layer: &Layer) -> bool {
     layer.labels.in_order().any(|c| c.clearance != rustgis_map::symbology::DEFAULT_LABEL_CLEARANCE)
 }
 
+/// Whether a layer's label classes remove duplicates (#2847): an older reader would drop the
+/// setting, and place and save every label.
+fn removes_duplicate_labels(layer: &Layer) -> bool {
+    layer.labels.in_order().any(|c| c.remove_duplicates.is_some())
+}
+
 /// The capabilities a layer needs, in [`map_capabilities`]'s order.
 fn layer_capabilities(layer: &Layer) -> Vec<&'static str> {
     [
@@ -621,10 +667,12 @@ fn layer_capabilities(layer: &Layer) -> Vec<&'static str> {
         (relief_light(layer), "shaded-relief-light"),
         (layer.size_by.is_some(), super::SIZE_BY_CAPABILITY),
         (layer.has_picture_markers(), "picture-markers"),
+        (layer.any_picture(svg_picture), "svg-markers"),
         (zarr_window(layer), "zarr-window"),
         (label_guide(layer), "label-guide"),
         (label_weight(layer), "label-weight"),
         (label_clearance(layer), "label-clearance"),
+        (removes_duplicate_labels(layer), "label-duplicates"),
         (held_natively(&layer.dataset), super::NATIVE_COORDINATES),
     ]
     .into_iter()
@@ -650,8 +698,9 @@ fn map_capabilities<'a>(maps: impl IntoIterator<Item = &'a Map>) -> Vec<&'static
         mut on_top,
         mut grid_color,
     ) = (false, false, false, false, false, false, false, false, false, false, false, false, false, false, false);
-    let mut polygon = false;
-    let (mut offline_area_id, mut paper, mut native, mut guided, mut weighed, mut cleared) = (false, false, false, false, false, false);
+    let (mut polygon, mut svg) = (false, false);
+    let (mut offline_area_id, mut paper, mut native, mut guided, mut weighed, mut cleared, mut deduped) =
+        (false, false, false, false, false, false, false);
     let mut crisp = false;
     for map in maps {
         offline_area_id |= map.offline_area_id.is_some();
@@ -660,6 +709,7 @@ fn map_capabilities<'a>(maps: impl IntoIterator<Item = &'a Map>) -> Vec<&'static
         guided |= map.layers.iter().any(label_guide);
         weighed |= map.layers.iter().any(label_weight);
         cleared |= map.layers.iter().any(label_clearance);
+        deduped |= map.layers.iter().any(removes_duplicate_labels);
         // A tile layer drawn nearest (#2804), which an older reader would draw and save blended.
         crisp |= map.tiles.iter().any(|t| t.resampling != rustgis_map::raster::Resampling::Bilinear);
         // An older reader doesn't know the MGRS graticule (#1042 piece 8): it refuses the
@@ -686,6 +736,7 @@ fn map_capabilities<'a>(maps: impl IntoIterator<Item = &'a Map>) -> Vec<&'static
         light |= map.layers.iter().any(relief_light);
         sized |= map.layers.iter().any(|layer| layer.size_by.is_some());
         pictures |= map.layers.iter().any(Layer::has_picture_markers);
+        svg |= map.layers.iter().any(|layer| layer.any_picture(svg_picture));
         zarr |= map.layers.iter().any(zarr_window);
         native |= map.layers.iter().any(|layer| held_natively(&layer.dataset));
         legends |= map.tiles.iter().any(|tile| {
@@ -705,10 +756,12 @@ fn map_capabilities<'a>(maps: impl IntoIterator<Item = &'a Map>) -> Vec<&'static
         (legends, "normalized-legend-urls"),
         (sized, super::SIZE_BY_CAPABILITY),
         (pictures, "picture-markers"),
+        (svg, "svg-markers"),
         (zarr, "zarr-window"),
         (guided, "label-guide"),
         (weighed, "label-weight"),
         (cleared, "label-clearance"),
+        (deduped, "label-duplicates"),
         (crisp, "tile-resampling"),
         (offline_area_id, "offline-map-area-id"),
         (paper, "blank-paper"),
@@ -922,6 +975,44 @@ mod tests {
         let fixture = Project::from_json(include_str!("../../../schema/fixtures/dggs_system.rgis")).unwrap();
         assert_eq!(fixture.models[0].steps[0].params["system"], "H3");
         assert_eq!(serde_json::to_value(&fixture).unwrap()["requires"], json!(["dggs-system"]));
+    }
+
+    /// A saved command that sets an SVG as a marker's image requires `svg-markers` as well as
+    /// `picture-markers`, in every replayable container: a reader of PNG and JPEG markers only
+    /// would refuse the command when it replays. A PNG requires `picture-markers` alone, and an
+    /// image that is neither is refused by the command anyway (#2266 part E1b).
+    #[test]
+    fn a_saved_command_setting_an_svg_marker_requires_svg_markers() {
+        use base64::Engine;
+        let svg = base64::engine::general_purpose::STANDARD.encode(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 4"/>"#);
+        let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAwS2OUAAAAABJRU5ErkJggg==";
+        let base = serde_json::to_value(Project::default()).unwrap();
+        for (image, expected) in [(png.to_string(), vec!["picture-markers"]), (svg, vec!["picture-markers", "svg-markers"])] {
+            for (command, params) in [
+                ("layer.marker", json!({"layer": "Cities", "image": image})),
+                ("layer.lineStrokes", json!({"layer": "Rivers", "strokes": [{"width": 1}, {"markers": {"image": image}}]})),
+                ("layer.fillLayers", json!({"layer": "Lakes", "fills": [{"pattern": "dots", "image": image}]})),
+            ] {
+                let script = format!("# Icons\n{command} {params}");
+                for (field, value) in [
+                    ("tasks", json!([{"name": "Task", "steps": [{"title": "Icon", "command": command, "params": params}]}])),
+                    (
+                        "tasks",
+                        json!([{"name": "Script", "steps": [{"title": "Icon", "command": "script.run", "params": {"script": script}}]}]),
+                    ),
+                    ("notebooks", json!([{"name": "Notebook", "cells": [{"kind": "code", "source": script}]}])),
+                    (
+                        "gp_history",
+                        json!([{"tool": "Marker", "params": {}, "command": [command, params], "ok": true, "messages": [], "millis": 0}]),
+                    ),
+                ] {
+                    let mut document = base.clone();
+                    document[field] = value;
+                    let project = Project::from_json(&document.to_string()).unwrap();
+                    assert_eq!(serde_json::to_value(&project).unwrap()["requires"], json!(expected), "{field} {command} {image}");
+                }
+            }
+        }
     }
 
     /// All replayable project containers require non-default options only when requested.

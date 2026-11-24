@@ -578,12 +578,26 @@ pub fn source_layers(kind: Kind, url: &str) -> Option<Vec<String>> {
 }
 
 /// Whether a tile archive holds vector tiles (`Some(true)`) or pictures (`Some(false)`); `None`
-/// while its header is on its way or can't be read. Other kinds aren't archives: `None`.
-pub fn archive_holds_vectors(kind: Kind, url: &str) -> Option<bool> {
+/// while its header is on its way, and an error when it can't be read or its tiles are of a type
+/// RustGIS doesn't know. Other kinds aren't archives: `None`.
+pub fn archive_holds_vectors(kind: Kind, url: &str) -> Result<Option<bool>, String> {
+    use pmtiles::TileType;
+    use rustgis_data::mbtiles::Format;
+    const UNKNOWN: &str = "its tiles are of a type RustGIS doesn't know";
     match kind {
-        Kind::PmTiles => pmtiles::info(url).ok().flatten().map(|i| i.tile_type.is_vector()),
-        Kind::MbTiles => mbtiles::info_ready(url, web_time::Duration::ZERO).ok().flatten().map(|i| i.format.is_vector()),
-        _ => None,
+        Kind::PmTiles => match pmtiles::info(url)?.map(|i| i.tile_type) {
+            None => Ok(None),
+            Some(TileType::Mvt) => Ok(Some(true)),
+            Some(TileType::Png | TileType::Jpeg | TileType::Webp | TileType::Avif) => Ok(Some(false)),
+            Some(TileType::Unknown) => Err(UNKNOWN.into()),
+        },
+        Kind::MbTiles => match mbtiles::info_ready(url, web_time::Duration::ZERO)?.map(|i| i.format) {
+            None => Ok(None),
+            Some(Format::Pbf) => Ok(Some(true)),
+            Some(Format::Png | Format::Jpeg | Format::Webp) => Ok(Some(false)),
+            Some(Format::Unknown) => Err(UNKNOWN.into()),
+        },
+        _ => Ok(None),
     }
 }
 

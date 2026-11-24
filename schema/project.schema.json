@@ -1279,6 +1279,8 @@
           "project-crs",
           "dggs-system",
           "label-clearance",
+          "svg-markers",
+          "label-duplicates",
           "tile-resampling"
         ],
         "type": "string"
@@ -1387,6 +1389,8 @@
     "project-crs",
     "dggs-system",
     "label-clearance",
+    "svg-markers",
+    "label-duplicates",
     "tile-resampling"
   ],
   "x-rustgis-reads-format": 2,

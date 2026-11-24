@@ -1773,7 +1773,7 @@ fn tile_row(app: &mut RustGisApp, ui: &mut Ui, i: usize, moves: [bool; 2], reord
         // Picture tiles drawn larger or smaller than their own pixels: blended, or each a block (#2804).
         // Only for pictures: not vector tiles, a style, or an archive holding vector tiles or not
         // read yet.
-        if rustgis_engine::render::tile_draws_pictures(tile) == Some(true) {
+        if rustgis_engine::render::tile_draws_pictures(tile) == Ok(Some(true)) {
             use rustgis_engine::map::raster::Resampling;
             crate::widgets::submenu(ui, &crate::i18n::fmt("Resampling: {how}", &[("how", tl_raw!(tile.resampling.label()))]), |ui| {
                 for r in Resampling::ALL {

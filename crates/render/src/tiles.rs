@@ -186,13 +186,14 @@ pub fn source_layers(t: &TileLayer) -> Option<Vec<String>> {
 
 /// Whether a tile layer draws pictures (`Some(true)`) rather than vector shapes (`Some(false)`):
 /// raster tiles and a cloud-optimised GeoTIFF do, vector tiles and a style don't, and an archive
-/// is known once its header is read (`None` until then).
-pub fn draws_pictures(t: &TileLayer) -> Option<bool> {
+/// is known once its header is read (`None` until then; its error when it can't be).
+pub fn draws_pictures(t: &TileLayer) -> Result<Option<bool>, String> {
+    let archive = |kind| rustgis_tiles::source::archive_holds_vectors(kind, &t.url).map(|v| v.map(|vectors| !vectors));
     match t.kind {
-        TileKind::Raster | TileKind::Cog => Some(true),
-        TileKind::Vector | TileKind::Style => Some(false),
-        TileKind::PmTiles => rustgis_tiles::source::archive_holds_vectors(Kind::PmTiles, &t.url).map(|v| !v),
-        TileKind::MbTiles => rustgis_tiles::source::archive_holds_vectors(Kind::MbTiles, &t.url).map(|v| !v),
+        TileKind::Raster | TileKind::Cog => Ok(Some(true)),
+        TileKind::Vector | TileKind::Style => Ok(Some(false)),
+        TileKind::PmTiles => archive(Kind::PmTiles),
+        TileKind::MbTiles => archive(Kind::MbTiles),
     }
 }
 
