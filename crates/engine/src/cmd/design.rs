@@ -502,7 +502,7 @@ pub fn commands() -> Vec<C> {
             // square (each moved once, and kept for the move); one that doesn't, and those
             // sharing a vertex with it, move on the ground (#1033), or for a move of no distance
             // stay as they are.
-            let own = own_grids(s);
+            let own = one_grid(s);
             let mut shifted: HashMap<(u32, usize), Geometry> = HashMap::new();
             for l in s.map().layers.iter().filter(|l| !l.is_raster() && !l.selection.is_empty() && !own.contains_key(&l.id)) {
                 let to = l.dataset.shown_conversion()?;
@@ -703,6 +703,8 @@ fn distance_unit_metres(p: &Json) -> Result<f64, String> {
 /// and is edited in Web Mercator or on the ground, as before.
 #[derive(Clone, Copy)]
 struct OwnGrid {
+    /// The system.
+    crs: rustgis_data::raster::Crs,
     /// Metres per unit of its coordinates.
     unit_m: f64,
     /// The (east, north) of a step of one along x, then along y.
@@ -719,7 +721,7 @@ impl OwnGrid {
         let (unit_m, axes) = crs.unit_and_axes();
         let [(xe, xn), (ye, yn)] = axes;
         // Axes along one line give no plane to step in.
-        ((xe * yn - ye * xn).abs() > 1e-9).then_some(Self { unit_m, axes })
+        ((xe * yn - ye * xn).abs() > 1e-9).then_some(Self { crs, unit_m, axes })
     }
 
     /// A step `(e, n)` east and north of the grid, in its units, as a step of its coordinates.
@@ -779,6 +781,26 @@ impl OwnGrid {
 /// The grid each layer with a selection is edited in ([`OwnGrid`]), by layer id.
 fn own_grids(s: &Session) -> HashMap<u32, OwnGrid> {
     s.map().layers.iter().filter(|l| !l.selection.is_empty()).filter_map(|l| Some((l.id, OwnGrid::of(l)?))).collect()
+}
+
+/// The grid a Move takes for its selection: [`own_grids`] while every layer with a selection is
+/// held in one projected system; none when they are in more than one (or some in one and some
+/// not), since a feature of one may share a place with a feature of another that a step on
+/// another grid, or in Web Mercator, would tear from it. That selection moves in Web Mercator or
+/// on the ground, as before, and says so.
+fn one_grid(s: &mut Session) -> HashMap<u32, OwnGrid> {
+    let own = own_grids(s);
+    let selected: Vec<&rustgis_map::Layer> = s.map().layers.iter().filter(|l| !l.is_raster() && !l.selection.is_empty()).collect();
+    let first = own.values().next().map(|g| g.crs);
+    if own.is_empty() || (own.len() == selected.len() && own.values().all(|g| Some(g.crs) == first)) {
+        return own;
+    }
+    let names = selected.iter().filter(|l| own.contains_key(&l.id)).map(|l| format!("'{}'", l.name)).collect::<Vec<_>>().join(", ");
+    s.warn(format!(
+        "the selection spans layers in more than one coordinate system, so {names} moved in Web Mercator (or on the ground) with the rest, \
+         not along its own grid, to keep places the layers share together: select one system's layers to move along its grid"
+    ));
+    HashMap::new()
 }
 
 /// A point moved by metres east and north (Web Mercator stretched to the point's latitude).

@@ -71,23 +71,24 @@ fn run(s: &mut Session, cmd: &str, p: serde_json::Value) -> Vec<String> {
     s.notices_since(mark).iter().map(|n| n.text.clone()).collect()
 }
 
-/// A move adds the distance to every stored coordinate, exactly as a step on the grid, in each
-/// layer of a projected system; a layer in longitude/latitude beside it moves as it always has.
+/// A move adds the distance to every stored coordinate, exactly as a step on the grid, in the
+/// layers of one projected system.
 #[test]
 fn a_move_steps_along_the_layers_own_grid() {
     let mut s = session(vec![
         held("Parcels", GeometryType::Polygon, vec![square()], UTM),
-        held("Roads", GeometryType::Polyline, vec![line()], Crs::LonLat),
+        held("Roads", GeometryType::Polyline, vec![line()], UTM),
     ]);
-    let mut alone = session(vec![held("Roads", GeometryType::Polyline, vec![line()], Crs::LonLat)]);
-    let before = stored(&s, "Parcels");
+    let (before, roads) = (stored(&s, "Parcels"), stored(&s, "Roads"));
     select_all(&mut s);
-    select_all(&mut alone);
-    run(&mut s, "edit.move", json!({"dx": 250.0, "dy": -100.0}));
-    run(&mut alone, "edit.move", json!({"dx": 250.0, "dy": -100.0}));
+    let said = run(&mut s, "edit.move", json!({"dx": 250.0, "dy": -100.0}));
+    assert!(said.iter().all(|t| !t.contains("more than one coordinate system")), "{said:?}");
     let after = stored(&s, "Parcels");
     assert_eq!(after, before.iter().map(|c| Coord::new(c.x + 250.0, c.y - 100.0)).collect::<Vec<_>>());
-    assert_eq!(stored(&s, "Roads"), stored(&alone, "Roads"), "the layer in longitude/latitude moves as before");
+    assert_eq!(stored(&s, "Roads"), roads.iter().map(|c| Coord::new(c.x + 250.0, c.y - 100.0)).collect::<Vec<_>>());
+    for l in &mut s.map_mut().layers {
+        l.selection = if l.name == "Parcels" { vec![0] } else { Vec::new() };
+    }
     // In feet, the same step in metres.
     run(&mut s, "edit.move", json!({"dx": 1000.0, "dy": 0.0, "units": "Feet"}));
     let feet = stored(&s, "Parcels");
@@ -229,4 +230,21 @@ fn a_traverse_is_drawn_on_the_layers_grid() {
         assert!((c.x - start.x - dx).abs() < 1e-6 && (c.y - start.y - dy).abs() < 1e-6, "{c:?}");
     }
     assert_eq!(p[0][0].first(), p[0][0].last(), "closed on its start, to the bit");
+}
+
+/// A selection spanning a projected layer and one in longitude/latitude moves both in Web
+/// Mercator, as before, so a corner they share stays together, and says why.
+#[test]
+fn a_selection_across_systems_moves_together_as_before() {
+    let corner = Geometry::Line(vec![vec![Coord::new(11.5, 48.7), Coord::new(11.52, 48.71)]]);
+    let mut s = session(vec![
+        held("Parcels", GeometryType::Polygon, vec![square()], UTM),
+        held("Roads", GeometryType::Polyline, vec![corner.clone()], Crs::LonLat),
+    ]);
+    select_all(&mut s);
+    let said = run(&mut s, "edit.move", json!({"dx": 250.0, "dy": -100.0}));
+    assert!(said.iter().any(|t| t.contains("more than one coordinate system") && t.contains("'Parcels'")), "{said:?}");
+    let parcel = s.map().layer_by_name("Parcels").unwrap().dataset.lonlat_conversion().unwrap().point(stored(&s, "Parcels")[0]).unwrap();
+    let road = stored(&s, "Roads")[0];
+    assert!((parcel.x - road.x).abs() < 1e-8 && (parcel.y - road.y).abs() < 1e-8, "{parcel:?} vs {road:?}");
 }
