@@ -315,7 +315,7 @@ fn build_package(s: &mut Session, p: &Value, notes: &mut rustgis_data::loss::Not
         if !photos.too_large.is_empty() {
             let named = &photos.too_large;
             losses.push(format!(
-                "{} photo(s) didn't fit in the field package with the basemaps and photos before them, so they stayed home: {}",
+                "{} photo(s) didn't fit in the field package (its size, index or entry limit), so they stayed home: {}",
                 named.len(),
                 some_of(named)
             ));
@@ -1035,8 +1035,10 @@ fn collect_photos(map: &rustgis_map::Map, budget: &mut u64, most_entries: usize)
         }
     }
     let (mut index, mut number) = (String::new(), 0u32);
+    // Each photo looked at is a step: its file is read.
+    rustgis_data::progress::begin(named.len());
     for path in named {
-        rustgis_data::progress::check().map_err(|e| e.to_string())?;
+        rustgis_data::progress::step(1).map_err(|e| e.to_string())?;
         let file = Path::new(&path);
         if !file.is_absolute() {
             found.missing.push(path.to_string());
@@ -1180,7 +1182,10 @@ fn take_photos(map: &mut rustgis_map::Map, budget: &mut u64, package: &str) -> R
                 found.unread.push(format!("{path} (its name holds a tab or a line break)"));
                 return path.to_string();
             }
-            if size > *budget {
+            // Past the budget, or past what the computer reads of the index (its line as long as it
+            // can be, with a numbered name): it stays on the phone.
+            let longest_line = PHOTOS.len() + 8 + file.file_name().map_or(0, |n| n.len()) + path.len() + 2;
+            if size > *budget || (index.len() + longest_line) as u64 > MAX_INDEX {
                 said.insert(path.to_string());
                 found.too_large.push(path.to_string());
                 return path.to_string();
