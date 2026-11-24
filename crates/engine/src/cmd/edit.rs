@@ -94,13 +94,13 @@ fn point_inputs(input: &super::InputContext<'_>, p: &Json) -> Result<super::Inpu
     // The planner already binds private selector state to the displayed approval.
     if let Some(name) = ps(p, "crs").map(str::trim) {
         if name.eq_ignore_ascii_case("map") {
-            inputs.state = json!({"projection":input.map().projection});
+            inputs.state = json!({"feature":inputs.state,"projection":input.map().projection});
         } else if let Some(layer) = input.map().layer_by_name(name) {
             let key = (input.map().instance_id(), layer.id);
             if !inputs.layers.contains(&key) {
                 inputs.layers.push(key);
             }
-            inputs.state = json!({"crs":super::navigate::layer_coordinates_system(layer).unwrap_or(rustgis_data::raster::Crs::LonLat)});
+            inputs.state = json!({"feature":inputs.state,"crs":super::navigate::layer_coordinates_system(layer).unwrap_or(rustgis_data::raster::Crs::LonLat)});
         }
     }
     Ok(inputs)
@@ -121,6 +121,7 @@ fn add_point(s: &mut Session, p: &Json) -> CmdResult {
             return Err(format!("{key} is required"));
         }
     }
+    // Combined positions are rejected above; the X/Y path produces no approximation notice.
     let (at, _) = super::navigate::typed_place(s.map(), p, false)?;
     let target = point_target(s, p)?;
     let name = match p.get("name") {
@@ -2404,6 +2405,14 @@ mod point_tests {
         let inputs = point_inputs(&s.input_context(), &json!({"x":0,"y":0})).unwrap();
         assert_eq!(inputs.layers, vec![(s.map().instance_id(), surface)]);
         assert!(inputs.uses_default);
+        for crs in ["map", "dem"] {
+            let combined = point_inputs(&s.input_context(), &json!({"x":0,"y":0,"crs":crs})).unwrap();
+            assert_eq!(
+                combined.state.pointer("/feature/surface"),
+                Some(&json!("dem")),
+                "coordinate inputs retain the feature surface binding: {crs}"
+            );
+        }
         s.run("edit.enable", &json!({"on":true})).unwrap();
         s.run("edit.addPoint", &json!({"x":0,"y":0})).unwrap();
         let id = s.active_layer.unwrap();

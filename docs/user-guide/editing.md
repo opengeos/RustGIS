@@ -6,7 +6,9 @@
 Turn editing on (also offered in the dialog), enter X and Y, optionally a name, and click
 **Add Point** or press ++enter++. Leave the coordinate system blank for longitude/latitude
 in decimal degrees or degrees, minutes and seconds, or enter a system such as `EPSG:3857`
-for numeric eastings and northings. The map's display projection does not change their meaning.
+for numeric eastings and northings. Enter `map` to use the map's current flat projection,
+or a layer's name to use that layer's coordinate system. Otherwise, changing the map's
+display projection does not change the entered coordinates' meaning.
 The dialog stays open and clears X, Y and Name after success; ++esc++ closes it when
 its fields have focus or no other work owns the key. On the map, Escape still cancels a sketch.
 
