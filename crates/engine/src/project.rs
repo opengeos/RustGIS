@@ -115,6 +115,7 @@ pub const CAPABILITIES: &[&str] = &[
     PROJECT_CRS,
     "dggs-system",
     "label-clearance",
+    "label-duplicates",
 ];
 /// An offline area keeping the versions that lost a sync or a Bring Back
 /// (`OfflineArea::conflicts`, #2468): an older reader would save it again without them.

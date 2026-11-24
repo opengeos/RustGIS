@@ -106,6 +106,10 @@ pub struct Collide {
     /// What it labels, for moving it by hand: its layer's id, its feature's id and its label
     /// class (in the layer's labeling order). None for labels not of a layer's features.
     pub source: Option<(u32, u64, u32)>,
+    /// Its class removes duplicates (#2847): left out within this many points of a label of
+    /// another feature of its [`source`](Self::source)'s layer and class with the same text; 0
+    /// keeps every label.
+    pub remove_duplicates: f32,
 }
 
 impl Default for Collide {
@@ -125,6 +129,7 @@ impl Default for Collide {
             callout_offset: None,
             pinned: false,
             source: None,
+            remove_duplicates: 0.0,
         }
     }
 }
