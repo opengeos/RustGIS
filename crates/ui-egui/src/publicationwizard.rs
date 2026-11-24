@@ -221,17 +221,17 @@ fn texts_step(ui: &mut egui::Ui, d: &mut Draft) {
 
 /// The accent step: the style's own colour, or one picked.
 fn accent_step(ui: &mut egui::Ui, d: &mut Draft, own: egui::Color32) {
-    let mut picked = d.accent.is_some();
+    let mut ticked = d.accent.is_some();
     if ui
-        .checkbox(&mut picked, tl!("Pick a colour of your own"))
-        .on_hover_text(tl!("Starts from the app's accent colour; the swatch shows the colour the layout takes."))
+        .checkbox(&mut ticked, tl!("Pick a colour of your own"))
+        .on_hover_text(tl!("Starts from the colour picked last, or the app's accent colour; the swatch shows the colour the layout takes."))
         .changed()
     {
         // Unticked, the colour picked is kept for the next tick.
-        if !picked {
+        if !ticked {
             d.picked = d.accent;
         }
-        d.accent = picked.then(|| d.picked.unwrap_or(own));
+        d.accent = ticked.then(|| d.picked.unwrap_or(own));
     }
     if let Some(c) = &mut d.accent {
         egui::color_picker::color_edit_button_srgba(ui, c, egui::color_picker::Alpha::Opaque);
@@ -350,10 +350,10 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                         None => create = crate::widgets::dialog_button(ui, tl!("Create"), Some(t.accent), size).clicked(),
                     }
                     let back = d.moved(-1);
-                    if ui.add_enabled_ui(back.is_some(), |ui| crate::widgets::dialog_button(ui, tl!("Back"), None, size).clicked()).inner {
-                        if let Some(back) = back {
-                            d.step = back;
-                        }
+                    if ui.add_enabled_ui(back.is_some(), |ui| crate::widgets::dialog_button(ui, tl!("Back"), None, size).clicked()).inner
+                        && let Some(back) = back
+                    {
+                        d.step = back;
                     }
                     close = crate::widgets::dialog_button(ui, tl!("Cancel"), None, size).clicked();
                 });
@@ -670,6 +670,24 @@ mod tests {
         h.get_by_label("Pick a colour of your own").click();
         h.run_steps(2);
         assert_eq!(h.state().dialogs.publication.as_ref().unwrap().accent, Some(red), "the colour picked before");
+    }
+
+    /// In English the style step fits its box: the last style's description shows above the
+    /// buttons without scrolling.
+    #[test]
+    fn the_style_step_fits_without_scrolling_in_english() {
+        let mut app = app();
+        open(&mut app);
+        app.dialogs.publication.as_mut().unwrap().step = Step::Style;
+        let h = harness(app);
+        let (_, about) = crate::ribbon::publication_style("poster").unwrap();
+        let last = h.get_by_label(about).rect();
+        let next = h.get_by_role_and_label(Role::Button, "Next").rect();
+        assert!(last.bottom() < next.top(), "{last:?} runs under the buttons at {next:?}");
+        assert!(
+            h.get_by_label("Classic").rect().top() > h.get_by_label_contains("Step 2 of").rect().bottom(),
+            "the first isn't scrolled away"
+        );
     }
 
     /// Cancel closes the wizard with nothing made, and the next opening starts over.
