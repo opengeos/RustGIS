@@ -2760,10 +2760,18 @@ fn an_svg_image_marker_requires_svg_markers_wherever_it_is_saved() {
     let pictures = json!(["picture-markers"]);
     let both = json!(["picture-markers", "svg-markers"]);
     let requires = |p: &Project| serde_json::to_value(p).unwrap()["requires"].clone();
-    let dir = std::env::temp_dir().join(format!("rustgis-svg-markers-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    // Removed however the test ends, and its own each run (the process id alone can repeat).
+    struct Dir(std::path::PathBuf);
+    impl Drop for Dir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+    let dir = Dir(std::env::temp_dir().join(format!("rustgis-svg-markers-{}-{nanos}", std::process::id())));
+    std::fs::create_dir_all(&dir.0).unwrap();
     let file = |s: &mut Session, command: &str, mut params: Value, name: &str| {
-        let path = dir.join(name);
+        let path = dir.0.join(name);
         params["path"] = json!(path.display().to_string());
         s.run(command, &params).unwrap();
         serde_json::from_slice::<Value>(&std::fs::read(&path).unwrap()).unwrap()["requires"].clone()
@@ -2778,6 +2786,14 @@ fn an_svg_image_marker_requires_svg_markers_wherever_it_is_saved() {
         assert_eq!(&requires(&s.project), expected, "symbol {image}");
         assert_eq!(&file(&mut s, "map.save", json!({}), "map.rgismap"), expected, "map file {image}");
         assert_eq!(&file(&mut s, "layer.save", json!({"layer": "Cities"}), "cities.rgislayer"), expected, "layer file {image}");
+        // And the map file a map package holds, for a computer and for a phone.
+        for mobile in [false, true] {
+            let pkg = dir.0.join("map.rgismpk");
+            s.run("map.package", &json!({"path": pkg.display().to_string(), "mobile": mobile})).unwrap();
+            let entries = rustgis_data::zip::read_matching(&std::fs::read(&pkg).unwrap(), |n| n.ends_with(".rgismap")).unwrap();
+            let packed: Value = serde_json::from_slice(&entries[0].1).unwrap();
+            assert_eq!(&packed["requires"], expected, "package {image}, mobile: {mobile}");
+        }
         // A saved style keeps it once the layer no longer does.
         s.run("style.new", &json!({"layer": "Cities", "name": "Icons"})).unwrap();
         s.run("layer.marker", &json!({"layer": "Cities", "shape": "circle"})).unwrap();
@@ -2797,7 +2813,6 @@ fn an_svg_image_marker_requires_svg_markers_wherever_it_is_saved() {
         assert!(s.map().layer(id).unwrap().hidden_fills.is_some());
         assert_eq!(&requires(&s.project), expected, "hidden by No Fill");
     }
-    std::fs::remove_dir_all(&dir).ok();
 }
 
 /// A saved image marker that is a GIF (which the desktop's decoder reads and the web's doesn't)
