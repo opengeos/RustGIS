@@ -3312,6 +3312,7 @@ fn calculation_preview(rows: &[rustgis_engine::cmd::edit::CalculationPreview]) -
     use std::fmt::Write as _;
     const LONGEST: usize = 40;
     /// A refusal quotes a value and may give a rule's expression: room for both, still one line.
+    /// Past it, a refusal is cut in its middle (`refusal_line`).
     const LONGEST_REFUSAL: usize = 120;
     /// Text on one line, written no further than one character past its cut.
     struct OneLine {
@@ -3343,6 +3344,20 @@ fn calculation_preview(rows: &[rustgis_engine::cmd::edit::CalculationPreview]) -
         }
         text
     }
+    /// `why` on one line, a long one cut in its middle: a refusal quotes the value first and names
+    /// the check that refuses it last, and both stay (#2873).
+    fn refusal_line(why: &str) -> String {
+        let line = one_line(why, usize::MAX);
+        let count = line.chars().count();
+        if count <= LONGEST_REFUSAL {
+            return line;
+        }
+        let head = LONGEST_REFUSAL / 3;
+        let tail = LONGEST_REFUSAL - head - 1;
+        let start: String = line.chars().take(head).collect();
+        let end: String = line.chars().skip(count - tail).collect();
+        format!("{start}…{end}")
+    }
     let values: Vec<String> = rows
         .iter()
         .map(|p| {
@@ -3364,9 +3379,7 @@ fn calculation_preview(rows: &[rustgis_engine::cmd::edit::CalculationPreview]) -
             };
             // The check that would refuse the edit, in the run's words (#2837).
             match &p.refused {
-                Some(why) => {
-                    crate::i18n::fmt_raw("{value} (refused: {why})", &[("value", &shown), ("why", &one_line(why, LONGEST_REFUSAL))])
-                }
+                Some(why) => crate::i18n::fmt_raw("{value} (refused: {why})", &[("value", &shown), ("why", &refusal_line(why))]),
                 None => shown,
             }
         })
@@ -4397,12 +4410,14 @@ mod tests {
             super::calculation_preview(&rows),
             "Preview: 2 (fraction dropped) (refused: the edit breaks the rule Even (v % 2 = 0)) · 4"
         );
-        // A refusal quoting a value keeps to one line too, and a long one is cut.
+        // A refusal quoting a value keeps to one line too, and a long one is cut in its middle, so
+        // the check that refuses it, at its end, stays (#2873).
         let quoted = format!("a\nb{} isn't allowed in v (its domain)", "x".repeat(10_000));
         let row = CalculationPreview { row: 0, value: Value::Int(1), lost: None, refused: Some(quoted) };
         let line = super::calculation_preview(&[row]);
         assert!(line.starts_with("Preview: 1 (refused: a b"), "{line}");
-        assert!(!line.contains('\n') && line.chars().count() < 200 && line.ends_with("…)"), "{line}");
+        assert!(line.ends_with("x isn't allowed in v (its domain))") && line.contains('…'), "{line}");
+        assert!(!line.contains('\n') && line.chars().count() < 200, "{line}");
     }
 
     /// A text value in the preview breaks no line (#2817): a line break (Unicode's line and
