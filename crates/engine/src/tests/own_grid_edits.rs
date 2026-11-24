@@ -127,8 +127,13 @@ fn a_move_follows_the_systems_unit_and_axes() {
     assert_eq!(lo.coord_crs().axis_directions(), [(-1.0, 0.0), (0.0, -1.0)], "Lo29 points west and south");
     let mut s = session(vec![ny, lo]);
     let (ny0, lo0) = (stored(&s, "Lots"), stored(&s, "Erven"));
-    select_all(&mut s);
-    run(&mut s, "edit.move", json!({"dx": 100.0, "dy": 50.0}));
+    // One layer at a time: two systems at once move together in Web Mercator.
+    for name in ["Lots", "Erven"] {
+        for l in &mut s.map_mut().layers {
+            l.selection = if l.name == name { vec![0] } else { Vec::new() };
+        }
+        run(&mut s, "edit.move", json!({"dx": 100.0, "dy": 50.0}));
+    }
     let ft = 1200.0 / 3937.0;
     for (a, b) in stored(&s, "Lots").iter().zip(&ny0) {
         assert!((a.x - b.x - 100.0 / ft).abs() < 1e-6 && (a.y - b.y - 50.0 / ft).abs() < 1e-6, "{a:?} vs {b:?}");
