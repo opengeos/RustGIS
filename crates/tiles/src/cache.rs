@@ -474,6 +474,8 @@ struct PublicOnly {
     /// Once capacity is reached, active public restrictions are never evicted; unknown URLs fail
     /// closed to [`crate::address::Reach::Public`] unless explicitly user-named via [`allow_named`].
     saturated: bool,
+    /// Whether [`take_public_only_full`] has said that capacity was reached.
+    said_full: bool,
 }
 
 fn public_only() -> &'static Mutex<PublicOnly> {
@@ -603,6 +605,17 @@ pub fn ceiling_for(url: &str) -> crate::address::Reach {
     } else {
         crate::address::Reach::Local
     }
+}
+
+/// Whether the addresses recorded as reaching only the internet ([`restrict_to_public`]) have
+/// filled their table ([`MAX_PUBLIC_ONLY`] addresses or [`MAX_PUBLIC_TEMPLATES`] templates) and
+/// this hasn't said so yet: from then on every address not recorded is read only from the
+/// internet, until the restrictions are reset. True once, for the session to say.
+pub fn take_public_only_full() -> bool {
+    let mut p = public_only().lock().unwrap_or_else(|e| e.into_inner());
+    let new = p.saturated && !p.said_full;
+    p.said_full |= p.saturated;
+    new
 }
 
 /// Resets document-origin public restrictions recorded by [`restrict_to_public`] and [`allow_named`].
@@ -7848,12 +7861,15 @@ Connection: close
         let first_tpl = "https://dated.example/{YYYY}/{MM}/{DD}.tif";
         restrict_to_public(first_exact);
         restrict_to_public(first_tpl);
+        assert!(!take_public_only_full(), "nothing to say before the table fills");
         for i in 0..(MAX_PUBLIC_TEMPLATES + 8) {
             restrict_to_public(&format!("https://t{i}.example/{{z}}/{{x}}/{{y}}.png"));
         }
         for i in 0..(MAX_PUBLIC_ONLY + 8) {
             restrict_to_public(&format!("https://e.example/asset-{i}.tif"));
         }
+        assert!(take_public_only_full(), "a full table is said");
+        assert!(!take_public_only_full(), "once");
         assert_eq!(ceiling_for(first_exact), crate::address::Reach::Public);
         assert_eq!(ceiling_for("https://dated.example/2025/01/15.tif"), crate::address::Reach::Public);
         assert_eq!(ceiling_for("https://unseen.example/other.tif"), crate::address::Reach::Public, "saturated table fails closed");

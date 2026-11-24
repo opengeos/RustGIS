@@ -711,6 +711,10 @@ impl Session {
         } else if decision != Decision::Allow {
             return Err("this operation needs your approval".into());
         }
+        // Plugins reach only the internet: so does every command one runs that connects.
+        if node.effects.contains(super::Effect::Network) {
+            self.hold_plugin_addresses(&node.params)?;
+        }
         Ok(Arc::new(node))
     }
     /// Keeps the admitted node and synchronous request predicate through nested execution; restores both on panic.

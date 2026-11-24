@@ -116,19 +116,27 @@ fn cache() -> std::sync::MutexGuard<'static, Cache> {
     CACHE.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
 thread_local! {
     /// Tests: let the plugin fetch from this computer (a test server) and, when `wait` is off,
     /// fetch as the browser does (pending, then run again).
     pub(crate) static TEST: std::cell::Cell<(bool, bool)> = const { std::cell::Cell::new((false, true)) };
 }
 
+/// Tests in other crates: lets the plugins this thread runs reach this computer (their test
+/// server), with `host.fetch` and the addresses they give commands, as the engine's own tests do.
+#[cfg(feature = "testing")]
+#[doc(hidden)]
+pub fn plugins_reach_this_computer() {
+    TEST.with(|t| t.set((true, t.get().1)));
+}
+
 fn allow_local() -> bool {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     {
         TEST.with(|t| t.get().0)
     }
-    #[cfg(not(test))]
+    #[cfg(not(any(test, feature = "testing")))]
     {
         false
     }
@@ -188,6 +196,50 @@ impl Session {
             Err(e) => Err(e),
         }
     }
+
+    /// Holds the web addresses a plugin gives a command that connects as [`Self::named_reach`]
+    /// holds the service it names, with its wording: each one among the command's parameters (not inside the
+    /// contents of a file it gives, `data` or `text`) on this computer or the local network is
+    /// refused, naming it, before anything is read, and the rest are read only from the internet
+    /// ([`cache::restrict_to_public`]), wherever their names resolve, so what is read from them
+    /// and what that names is held there too. Addresses nested in a value (a STAC item, a
+    /// service's documents) are held by the commands that read them. Any other caller's addresses
+    /// are its own choice, as before.
+    ///
+    /// [`cache::restrict_to_public`]: crate::render::rustgis_tiles::cache::restrict_to_public
+    pub(crate) fn hold_plugin_addresses(&self, params: &Value) -> Result<(), String> {
+        if !self.policy_plugin() || allow_local() {
+            return Ok(());
+        }
+        let Some(o) = params.as_object() else { return Ok(()) };
+        let named: Vec<&str> = o
+            .iter()
+            .filter(|(key, _)| !matches!(key.as_str(), "data" | "text"))
+            .filter_map(|(_, v)| v.as_str().map(str::trim))
+            .filter(|v| is_web_address(v))
+            .collect();
+        for url in &named {
+            // An address wrong some other way (spaces in it) is the command's to judge; it is
+            // held to the internet below all the same.
+            if let Err(e) = address::check_reach(url, address::Reach::Public)
+                && address::is_refusal(&e)
+            {
+                return Err(crate::sources::message_with_address(url, INTERNET_ONLY));
+            }
+        }
+        for url in named {
+            crate::render::rustgis_tiles::cache::restrict_to_public(url);
+        }
+        Ok(())
+    }
+}
+
+/// Whether `v` is a web address the app fetches (`http://`, `https://` or `s3://`), as given or
+/// marked with a saved login, an S3 connection or an anonymous read.
+fn is_web_address(v: &str) -> bool {
+    let plain = crate::render::rustgis_tiles::s3::split_anonymous(v).0;
+    let plain = rustgis_data::login_address::inner(rustgis_data::s3_address::inner(plain)).to_ascii_lowercase();
+    ["http://", "https://", "s3://"].iter().any(|scheme| plain.starts_with(scheme))
 }
 
 /// The answer for a fetched document: `{url, text}`, and `json` when the text is a JSON object
