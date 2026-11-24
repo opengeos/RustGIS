@@ -1473,6 +1473,9 @@ pub struct PartRead {
     /// The grid read (the full image, an overview, or every k-th pixel of it), whole: its
     /// transform, columns and rows, as a read of all of it places them.
     pub grid: (GeoTransform, u32, u32),
+    /// That grid's longitude/latitude bounds, as [`Raster::extent`] finds a raster's: every k-th
+    /// pixel's grid can pass the image's edge.
+    pub bounds: Extent,
 }
 
 /// `part` of the GeoTIFF at `path`, as [`read_path`] reads the file but holding only that part,

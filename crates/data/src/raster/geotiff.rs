@@ -1565,11 +1565,14 @@ pub(super) fn read_file_part(
     same_as: Option<&Raster>,
 ) -> Result<Option<super::PartRead>> {
     let file = crate::provenance::open(path).map_err(err)?;
+    let revision = file.metadata().and_then(|metadata| super::file_revision::FileRevision::capture(&metadata));
     // The part is of the image `same_as` was read from: of another, it would be another place.
-    if same_as.is_some_and(|r| r.check_original_handle(&file).is_err()) {
+    // The revision compared is the one the read is checked against as it goes.
+    if let Some(r) = same_as
+        && !revision.as_ref().is_ok_and(|rev| r.is_from(rev))
+    {
         return Ok(None);
     }
-    let revision = file.metadata().and_then(|metadata| super::file_revision::FileRevision::capture(&metadata));
     read_file_revision_part(path, name, sidecar_nodata, file, revision, Some(part), max)
 }
 
@@ -1989,8 +1992,8 @@ fn read_image(
         if let Some(p) = &described {
             r.apply_pam(p, super::pam::GDAL_METADATA);
         }
-        let grid = (r.transform, w, h);
-        return Ok(Some(super::PartRead { raster: r, at: (0, 0), grid }));
+        let (grid, bounds) = ((r.transform, w, h), r.extent());
+        return Ok(Some(super::PartRead { raster: r, at: (0, 0), grid, bounds }));
     }
     let mut transform = geo.transform;
     // How many full-image pixels one pixel read spans, across and down.
@@ -2082,7 +2085,8 @@ fn read_image(
         r.apply_pam(p, super::pam::GDAL_METADATA);
     }
     let at = span.map_or((0, 0), |s| (s.cols.0, s.rows.0));
-    Ok(Some(super::PartRead { raster: r, at, grid }))
+    let bounds = if span.is_some() { super::extent_of(&grid.0, r.transformer(), grid.1, grid.2) } else { r.extent() };
+    Ok(Some(super::PartRead { raster: r, at, grid, bounds }))
 }
 
 /// What turning a rotated or skewed image north up says ([`super::north_up`]): its pixels are

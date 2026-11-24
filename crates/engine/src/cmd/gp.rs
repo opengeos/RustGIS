@@ -1631,19 +1631,21 @@ pub(crate) fn tiled_inputs(
 }
 
 /// `part` of the raster file read in place at `path` (layer `name`'s, which holds `held`), read
-/// from the file at the finest level whose part fits `max` samples, in its turn ([`tiled_turn`]),
-/// with its count in [`rustgis_data::memory::held`]; `None` when the file can't be read by part,
-/// or is no longer the revision `held` was read from (read it whole with [`read_tiled`]). Never
-/// kept for a batch: another item's part is another part.
+/// from the file at the finest level whose part fits `1 / share` of what a run can hold, in its
+/// turn ([`tiled_turn`]), with its count in [`rustgis_data::memory::held`]; `None` when the file
+/// can't be read by part, or is no longer the revision `held` was read from (read it whole with
+/// [`read_tiled`]). Never kept for a batch: another item's part is another part.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn read_tiled_part(
     name: &str,
     path: &str,
     part: rustgis_data::raster::Part,
-    max: usize,
+    share: usize,
     held: &rustgis_data::raster::Raster,
 ) -> Result<Option<(rustgis_data::raster::PartRead, std::sync::Arc<rustgis_data::memory::Holding>)>, String> {
     let _turn = tiled_turn().map_err(|e| format!("{name}: {e}"))?;
+    // Planned in its turn, with what the reads before it hold counted.
+    let max = rustgis_data::raster::max_samples() / share.max(1);
     let read =
         rustgis_data::raster::read_path_part(std::path::Path::new(path), part, max, Some(held)).map_err(|e| format!("{name}: {e}"))?;
     let Some(read) = read else { return Ok(None) };

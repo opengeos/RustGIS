@@ -1757,17 +1757,17 @@ pub(crate) fn process_work(s: &Session, p: &Value) -> Result<super::workflows::W
             // only that part of the file is read (#2865).
             extent_window(r.held(), &e)?;
             let part = extent_part(r.held(), &e);
-            let bounds = r.held().extent();
             let out = name(p, format!("{}_clip", r.held().name))?;
             Ok(Box::new(move || {
                 // A third of what a run holds: the part, its clip, and the clip's file at once.
                 let input = match part {
-                    Some(part) => r.read_part(part, rustgis_data::raster::max_samples() / 3)?,
+                    Some(part) => r.read_part(part, 3)?,
                     None => r.read()?,
                 };
                 // The part goes before the clip is written as a file.
-                let clipped = match part_window(&input, bounds, &e)? {
+                let clipped = match part_window(&input, &e)? {
                     Some((cols, rows, corner)) => {
+                        input.used();
                         let clipped = clip_window(&input, cols, rows, None, corner, out)?;
                         drop(input);
                         clipped
@@ -1874,15 +1874,20 @@ fn grid_window(
 }
 
 /// [`extent_window`] of a part of a file ([`super::workflows::Input::read_part`]), found on the
-/// whole grid it was read from (whose ground is `bounds`), as a whole read finds it, then moved
-/// onto the part in whole pixels, with its corner on that grid: `None` when the part doesn't hold
-/// all of it. A raster read whole gives its own, and no corner.
-fn part_window(r: &super::workflows::Read, bounds: Extent, e: &Extent) -> Result<Option<PartWindow>, String> {
-    let Some(((c, row), (gt, w, h))) = r.place() else { return extent_window(r, e).map(|(cols, rows)| Some((cols, rows, None))) };
-    let (cols, rows) = grid_window(r, &gt, (w, h), bounds, e)?;
-    let inside = cols.start >= c && rows.start >= row && cols.end <= c + r.width && rows.end <= row + r.height;
-    let corner = gt.to_world(f64::from(cols.start), f64::from(rows.start));
-    Ok(inside.then(|| (cols.start - c..cols.end - c, rows.start - row..rows.end - row, Some(corner))))
+/// whole grid it was read from, as a whole read finds it, then moved onto the part in whole
+/// pixels, with its corner on that grid: `None` when the part doesn't hold all of it. A raster
+/// read whole gives its own, and no corner.
+fn part_window(r: &super::workflows::Read, e: &Extent) -> Result<Option<PartWindow>, String> {
+    // Only the desktop reads a part of a file.
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(place) = r.place() {
+        let ((c, row), (gt, w, h)) = (place.at, place.grid);
+        let (cols, rows) = grid_window(r, &gt, (w, h), place.bounds, e)?;
+        let inside = cols.start >= c && rows.start >= row && cols.end <= c + r.width && rows.end <= row + r.height;
+        let corner = gt.to_world(f64::from(cols.start), f64::from(rows.start));
+        return Ok(inside.then(|| (cols.start - c..cols.end - c, rows.start - row..rows.end - row, Some(corner))));
+    }
+    extent_window(r, e).map(|(cols, rows)| Some((cols, rows, None)))
 }
 
 /// A window of a raster's columns and rows, and its corner when found on another grid

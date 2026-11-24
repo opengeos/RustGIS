@@ -177,33 +177,34 @@ impl Input {
         // The browser has no files to read by path: none is read in place from one there.
         #[cfg(target_arch = "wasm32")]
         let _ = &self.file;
-        Ok(Read { raster: self.held.clone(), _count: None, place: None })
+        Ok(Read {
+            raster: self.held.clone(),
+            _count: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            place: None,
+        })
     }
 
     /// The raster the work reads, for work that uses only `part` of it: within a run, a layer read
     /// in place from a GeoTIFF on this computer reads only that part of its file, out to whole
-    /// pixels, at the finest level whose part fits `max` samples, decoding only the strips or tiles
-    /// that hold it (`rustgis_data::raster::read_path_part`), with where it lies in the grid read
-    /// ([`Read::place`]). A part isn't kept for the run's other inputs: only what the run says of
-    /// it is. A file that can't be read by part, or that is no longer the one the layer was read
-    /// from, and any other layer, give [`Input::read`].
-    pub(crate) fn read_part(&self, part: rustgis_data::raster::Part, max: usize) -> Result<Read, String> {
+    /// pixels, at the finest level whose part fits `1 / share` of what the run can hold, decoding
+    /// only the strips or tiles that hold it (`rustgis_data::raster::read_path_part`), with where
+    /// it lies in the grid read ([`Read::place`]). A part isn't kept for the run's other inputs,
+    /// and the run says what it says of it only once the work uses it ([`Read::used`]). A file
+    /// that can't be read by part, or that is no longer the one the layer was read from, and any
+    /// other layer, give [`Input::read`].
+    pub(crate) fn read_part(&self, part: rustgis_data::raster::Part, share: usize) -> Result<Read, String> {
         #[cfg(not(target_arch = "wasm32"))]
         if let Some((name, path)) = &self.file
             && RUN_READS.with(|r| r.borrow().is_some())
-            && let Some((read, count)) = super::gp::read_tiled_part(name, path, part, max, &self.held)?
+            && let Some((read, count)) = super::gp::read_tiled_part(name, path, part, share, &self.held)?
         {
-            let rustgis_data::raster::PartRead { raster, at, grid } = read;
+            let rustgis_data::raster::PartRead { raster, at, grid, bounds } = read;
             let note = super::gp::ReadNote::of(name, &raster);
-            RUN_READS.with(|r| {
-                if let Some(read) = r.borrow_mut().as_mut() {
-                    read.push(RunRead { path: None, kept: None, note });
-                }
-            });
-            return Ok(Read { raster: std::sync::Arc::new(raster), _count: Some(count), place: Some((at, grid)) });
+            return Ok(Read { raster: std::sync::Arc::new(raster), _count: Some(count), place: Some(Place { at, grid, bounds, note }) });
         }
         #[cfg(target_arch = "wasm32")]
-        let _ = (part, max);
+        let _ = (part, share);
         self.read()
     }
 }
@@ -213,19 +214,44 @@ impl Input {
 pub(crate) struct Read {
     raster: std::sync::Arc<Raster>,
     _count: Option<std::sync::Arc<rustgis_data::memory::Holding>>,
-    /// For a part of a file ([`Input::read_part`]), its first column and row in the grid read,
-    /// and that grid whole: its transform, columns and rows.
+    /// For a part of a file ([`Input::read_part`]), where it lies in the grid it was read from.
+    #[cfg(not(target_arch = "wasm32"))]
     place: Option<Place>,
 }
 
-/// Where a part of a raster file lies in the grid it was read from ([`Read::place`]).
-pub(crate) type Place = ((u32, u32), (rustgis_data::raster::GeoTransform, u32, u32));
+/// Where a part of a raster file lies in the grid it was read from ([`Read::place`]), and what
+/// the run says of it once the work uses it ([`Read::used`]).
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) struct Place {
+    /// The part's first column and row in the grid.
+    pub(crate) at: (u32, u32),
+    /// The grid, whole: its transform, columns and rows.
+    pub(crate) grid: (rustgis_data::raster::GeoTransform, u32, u32),
+    /// The grid's longitude/latitude bounds.
+    pub(crate) bounds: rustgis_geom::Extent,
+    note: super::gp::ReadNote,
+}
 
 impl Read {
     /// Where the raster lies in the grid it was read from, for a part of a file
     /// ([`Input::read_part`]); `None` for a raster read whole.
-    pub(crate) fn place(&self) -> Option<Place> {
-        self.place
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn place(&self) -> Option<&Place> {
+        self.place.as_ref()
+    }
+
+    /// Says, once the run's raster is added, what is said of a part of a file the work went on to
+    /// use (read at a coarser level, values rounded as it was read): a part it put aside for the
+    /// whole file says nothing. A raster read whole says its own as it is read.
+    pub(crate) fn used(&self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(place) = &self.place {
+            RUN_READS.with(|r| {
+                if let Some(read) = r.borrow_mut().as_mut() {
+                    read.push(RunRead { path: None, kept: None, note: place.note.clone() });
+                }
+            });
+        }
     }
 }
 
