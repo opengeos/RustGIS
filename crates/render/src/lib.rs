@@ -8280,6 +8280,8 @@ fn place_labels_with_previews(
             // Its own place, else the first alternative where all of it shows (the text moves there;
             // an icon stays).
             let mut at = None;
+            // What its curve layouts and callout search spend, given back if it goes as a duplicate.
+            let budgets = (layouts_left, searches, spots);
             let count = curves.as_ref().map_or(1 + alternatives.len(), |curves| curves.positions.len());
             let original = LabelPlace::take(&mut l);
             // A failed curve at the middle still appears there once in View Unplaced.
@@ -8394,6 +8396,8 @@ fn place_labels_with_previews(
                 if grouped {
                     placed_groups.insert(key);
                 }
+                // It is drawn nowhere, so what it spent stays for the later labels.
+                (layouts_left, searches, spots) = budgets;
                 continue;
             }
             if !show_text && !show_icon {
@@ -8468,12 +8472,12 @@ impl PlacedTexts {
 
     fn insert(&mut self, (layer, feature, class, _): rustgis_map::LabelKey, text: &str, at: [f32; 2], within: f32) {
         let (x, y) = Self::cell(at, within);
-        // The text copied only the first time it is placed.
-        if !self.0.contains_key(text) {
-            self.0.insert(text.to_owned(), Default::default());
-        }
+        let placed = (feature, at);
         if let Some(cells) = self.0.get_mut(text) {
-            cells.entry((layer, class, x, y)).or_default().push((feature, at));
+            cells.entry((layer, class, x, y)).or_default().push(placed);
+        } else {
+            // The text copied only the first time it is placed.
+            self.0.insert(text.to_owned(), std::collections::HashMap::from([((layer, class, x, y), vec![placed])]));
         }
     }
 }
@@ -10592,6 +10596,26 @@ mod tests {
             line.fallbacks = vec![banded(600.0)];
         }
         assert_eq!(shown(&place(vec![main(100.0, 1, 200.0), head])), [("Main".into(), 100)], "no other band brings it back");
+    }
+
+    /// A label removed as a duplicate gives back the callout searches it spent (#2847): with more
+    /// crowded duplicates than a placement has searches, a later label still moves to a free spot.
+    #[test]
+    fn a_removed_duplicate_gives_back_its_callout_searches() {
+        let crowded = |text: &str, fid: u64, priority: f64| {
+            let mut l = label(text, 100.0, None, 0.0);
+            l.collide.callout_reach = 40.0;
+            l.collide.callout_anchor = Some([0.0, 0.0]);
+            Candidate { remove_duplicates: Some(200.0), ..(l, priority, (1, fid, 0, 0)).into() }
+        };
+        // One "Main", then more duplicates on top of it than there are searches, each moved by its
+        // callout and then removed; "Oak" comes last, crowded too.
+        let mut cands: Vec<Candidate> = (1..=MAX_CALLOUT_SEARCHES as u64 + 1).map(|fid| crowded("Main", fid, 0.0)).collect();
+        cands.push(crowded("Oak", 10_000, -1.0));
+        let placed = place_labels_with_previews(cands, Vec::new(), 2000.0, 200.0, false, true);
+        let oak = placed.labels.iter().find(|l| l.text == "Oak");
+        assert!(oak.is_some_and(|l| l.collide.callout.is_some()), "Oak moved to a free spot with its line");
+        assert_eq!(placed.labels.iter().filter(|l| l.text == "Main").count(), 1);
     }
 
     /// A class's setting reaches its labels (#2847): two features of one layer with the same name

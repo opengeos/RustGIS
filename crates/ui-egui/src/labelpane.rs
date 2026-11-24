@@ -1027,12 +1027,12 @@ fn crowding(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
         let input_label = ui.label(tl!("Remove duplicates"));
         ui.horizontal(|ui| {
             let mut on = c.it.remove_duplicates.is_some();
-            if ui
+            let toggled = ui
                 .checkbox(&mut on, "")
                 .labelled_by(input_label.id)
                 .on_hover_text(tl!("Draw one label of a text where features of this class with the same text lie closer than this."))
-                .changed()
-            {
+                .changed();
+            if toggled {
                 let within = if on { json!(DEFAULT_LABEL_DUPLICATES) } else { json!(false) };
                 run(app, "labels.placement", c.params(json!({"removeDuplicates": within})));
             }
@@ -1053,7 +1053,8 @@ fn crowding(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
                     )
                     .labelled_by(input_label.id)
                     .on_hover_text(tl!("How close two labels of one text may be before the one placed later is left out."));
-                if drag.settled(ui, &r, &mut v) && label_duplicates(v) != within {
+                // An edit that ends in the frame the box changes yields to the box (#2847).
+                if drag.settled(ui, &r, &mut v) && !toggled && label_duplicates(v) != within {
                     run(app, "labels.placement", c.params(json!({"removeDuplicates": label_duplicates(v)})));
                 }
             });
@@ -1862,6 +1863,40 @@ mod tests {
         h.get_by_role_and_label(Role::CheckBox, "Remove duplicates").click();
         h.run();
         assert_eq!(within(&h), None, "unticked: off");
+    }
+
+    /// Unticked while a typed distance is still being edited (#2847): the click that ends the edit
+    /// leaves removal off, not back on at the typed distance.
+    #[test]
+    fn unticking_remove_duplicates_mid_edit_leaves_it_off() {
+        use egui::accesskit::Role;
+        let mut h = harness(with_cities());
+        h.run();
+        let cities = layer_id(h.state(), "Cities");
+        h.state_mut().session.run("layer.select", &json!({"layer": cities})).unwrap();
+        h.state_mut().session.run("labels.placement", &json!({"layer": cities, "removeDuplicates": 200})).unwrap();
+        h.run();
+        open_tab(&mut h, "Position");
+        h.get_by_role_and_label(Role::SpinButton, "Remove duplicates").focus();
+        h.run();
+        h.get_by_role_and_label(Role::SpinButton, "Remove duplicates").type_text("350");
+        h.run();
+        // The box pressed and let go in one frame: the edit ends in the frame the box changes.
+        let at = h.get_by_role_and_label(Role::CheckBox, "Remove duplicates").rect().center();
+        let button = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        h.event(egui::Event::PointerMoved(at));
+        h.step();
+        h.event(button(true));
+        h.event(button(false));
+        h.step();
+        h.run();
+        let within = h.state().session.map().layer_by_name("Cities").unwrap().labels.default.remove_duplicates;
+        assert_eq!(within, None, "unticked: off");
     }
 
     /// A line layer's labels can try other places along the line (#1187): the box is there for a
