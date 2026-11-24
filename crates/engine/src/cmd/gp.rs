@@ -1500,7 +1500,11 @@ pub(crate) fn tiled_inputs(
     for parameter in spec.params {
         let value = params.get(parameter.name).unwrap_or(&Value::Null);
         let names: Vec<&str> = match parameter.kind {
-            ParamKind::RasterLayer => value.as_str().into_iter().collect(),
+            // A name, or (as a suite tool may take it) an array of names.
+            ParamKind::RasterLayer => match value {
+                Value::Array(v) => v.iter().filter_map(Value::as_str).collect(),
+                v => v.as_str().into_iter().collect(),
+            },
             ParamKind::RasterLayers => rustgis_analysis::layer_list(value).unwrap_or_default(),
             // A suite tool stages any input layer or path a parameter names, not what it writes.
             ParamKind::Layer
@@ -1544,7 +1548,7 @@ pub(crate) fn tiled_inputs(
                 continue;
             }
             // A batch's read is used again only while the file is the revision it was read at.
-            let revision = rustgis_data::raster::FileRevision::of(std::path::Path::new(path));
+            let revision = file_revisions(std::path::Path::new(path));
             let kept = BATCH_READS.with(|b| b.borrow().as_ref().and_then(|reads| reads.get(path).cloned()));
             let (r, count) = match kept.filter(|(.., at)| revision.is_some() && *at == revision) {
                 Some((r, count, _)) => (r, count),
@@ -1613,8 +1617,21 @@ pub(crate) fn tiled_inputs(
 type CountedRead = (
     std::sync::Arc<rustgis_data::raster::Raster>,
     std::sync::Arc<rustgis_data::memory::Holding>,
-    Option<rustgis_data::raster::FileRevision>,
+    Option<[Option<rustgis_data::raster::FileRevision>; 3]>,
 );
+
+/// The revisions of a raster file and of the sidecars its whole-file read applies (its
+/// `.aux.xml`, a world file): a batch's read of it is used again only while none has changed, or
+/// been added or removed. `None` when the file's own can't be read.
+#[cfg(not(target_arch = "wasm32"))]
+fn file_revisions(path: &std::path::Path) -> Option<[Option<rustgis_data::raster::FileRevision>; 3]> {
+    use rustgis_data::raster::{FileRevision, world};
+    let own = FileRevision::of(path)?;
+    let mut aux = path.as_os_str().to_owned();
+    aux.push(".aux.xml");
+    let world = world::beside(path).and_then(|(p, _)| FileRevision::of(&p));
+    Some([Some(own), FileRevision::of(std::path::Path::new(&aux)), world])
+}
 
 /// Taken by each read of a raster file read in place for a run ([`tiled_inputs`]): such reads
 /// run one at a time across runs, so each plans its size with the ones before it held.
