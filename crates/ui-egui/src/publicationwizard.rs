@@ -285,8 +285,9 @@ fn review_step(ui: &mut egui::Ui, d: &Draft) {
 /// The wizard's width.
 const WIDTH: f32 = 380.0;
 
-/// The height every step takes: the style step's six styles and their descriptions.
-const STEP_HEIGHT: f32 = 300.0;
+/// The height every step takes: the style step's six styles and their descriptions, with room
+/// for the rounding a high-density screen adds to each line.
+const STEP_HEIGHT: f32 = 320.0;
 
 /// Shows the wizard while it is open; Create runs `layout.publication` as the menu does, and the
 /// wizard stays open on a layout the command refuses.
@@ -388,17 +389,22 @@ mod tests {
     fn harness(app: RustGisApp) -> egui_kittest::Harness<'static, RustGisApp> {
         // The dialogs alone: the ribbon has a Next of its own (the next extent).
         let mut fonts = false;
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 1000.0)).with_max_steps(64).build_ui_state(
-            move |ui, app: &mut RustGisApp| {
-                if !fonts {
-                    crate::theme::install_fonts(ui.ctx(), &[], None);
-                    fonts = true;
-                    return;
-                }
-                crate::dialogs::show(app, &ui.ctx().clone());
-            },
-            app,
-        );
+        let mut h =
+            egui_kittest::Harness::builder().with_size(vec2(1400.0, 1000.0)).with_pixels_per_point(2.0).with_max_steps(64).build_ui_state(
+                move |ui, app: &mut RustGisApp| {
+                    if !fonts {
+                        // The app's fonts and theme at a high-density screen's scale, so sizes, spacing
+                        // and the rounding of each line are the ones the app draws there.
+                        crate::theme::install_fonts(ui.ctx(), &[], None);
+                        let theme = app.current_theme();
+                        crate::theme::apply(ui.ctx(), &theme.tokens, &theme.metrics);
+                        fonts = true;
+                        return;
+                    }
+                    crate::dialogs::show(app, &ui.ctx().clone());
+                },
+                app,
+            );
         h.run_steps(4);
         h
     }
@@ -672,22 +678,25 @@ mod tests {
         assert_eq!(h.state().dialogs.publication.as_ref().unwrap().accent, Some(red), "the colour picked before");
     }
 
-    /// In English the style step fits its box: the last style's description shows above the
-    /// buttons without scrolling.
+    /// In English the style step fits its box: the wheel over it scrolls nothing, so the last
+    /// style's description isn't cut at the bottom.
     #[test]
     fn the_style_step_fits_without_scrolling_in_english() {
         let mut app = app();
         open(&mut app);
         app.dialogs.publication.as_mut().unwrap().step = Step::Style;
-        let h = harness(app);
-        let (_, about) = crate::ribbon::publication_style("poster").unwrap();
-        let last = h.get_by_label(about).rect();
-        let next = h.get_by_role_and_label(Role::Button, "Next").rect();
-        assert!(last.bottom() < next.top(), "{last:?} runs under the buttons at {next:?}");
-        assert!(
-            h.get_by_label("Classic").rect().top() > h.get_by_label_contains("Step 2 of").rect().bottom(),
-            "the first isn't scrolled away"
-        );
+        let mut h = harness(app);
+        let before = h.get_by_label("Classic").rect();
+        h.event(egui::Event::PointerMoved(before.center()));
+        h.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: vec2(0.0, -400.0),
+            modifiers: egui::Modifiers::NONE,
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Wheel,
+        });
+        h.run_steps(10);
+        assert_eq!(h.get_by_label("Classic").rect(), before, "the styles scroll: they don't fit the box");
     }
 
     /// Cancel closes the wizard with nothing made, and the next opening starts over.
