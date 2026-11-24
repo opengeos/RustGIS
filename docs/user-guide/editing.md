@@ -240,7 +240,11 @@ image coordinates may appear elliptical on the map; a rectangle may appear skewe
 not resampled by this choice, and shapes are not clipped to its boundary.
 
 Choose **Web Mercator grid metres** explicitly to draw in map coordinates instead; those are not
-ground-distance metres. Choosing **No image** restores that grid. Under Edit, the same choices
+ground-distance metres. Choosing **No image** restores that grid. When the target layer is held
+in a projected system with an EPSG code (UTM, a national grid; not Web Mercator, another world
+projection or a geographic system), that choice is the **Layer's own grid** instead: one grid
+unit per unit of the layer's system, y down (a grid y is minus the northing), and a shape built
+in it is written in the layer's own coordinates as built, with no conversion. Under Edit, the same choices
 are in Editing → New shape grid when a circle or rotated box tool is active. Grid changes affect
 new shapes; existing shapes retain their own construction grid when moved, resized or rotated.
 Undo/Redo retain those constructions within the session.
@@ -344,8 +348,11 @@ rules continue to apply. Box tools do not create annotation or class fields.
   completed move, resize, rotation or deletion is undoable. ++esc++ cancels a held gesture;
   press it again to leave the tool.
 
-The interactive tool starts in Web Mercator grid metres, **not ground metres**; angles run
-clockwise from grid east. Activating the interactive tool, including through `tool.set`, requires
+The interactive tool starts in the layer's own grid when it has one (see
+[Annotating an image](#annotating-an-image)), and otherwise in Web Mercator grid metres, **not
+ground metres**; angles run clockwise from grid east. `edit.addBox` without `box.frame` uses
+Web Mercator grid metres, as before; `"frame": {"epsg": 32632}` builds in that system's own grid
+(the layer's own when it is held in it). Activating the interactive tool, including through `tool.set`, requires
 an untilted, non-globe Earth view. The geometry commands (`edit.addBox`, `edit.updateBox` and
 `edit.deleteBox`) work independently of the map's projection and pitch, using the construction
 grid on an Earth map. Boxes crossing the antimeridian, the polar editing limit, and unsupported
@@ -403,7 +410,8 @@ The existing **Editing** pane opens with centre X/Y, radius and polygon toleranc
   leaves the tool. Templates, ordinary attributes and edit rules work as for other features.
 
 The interactive tool uses the same flat Earth view and frozen construction grids as Rotated
-Box. Its default radius is in **Web Mercator grid metres, not ground metres**. Scripts may
+Box: the layer's own grid when it has one, else **Web Mercator grid metres, not ground
+metres**; `edit.addCircle` without `circle.frame` uses Web Mercator grid metres, as before. Scripts may
 supply `circle.frame` from an original GeoTIFF grid via `box_edit::Frame::from_grid`; centre,
 radius and tolerance then use original image pixels, including rotated or skewed grids.
 A pixel circle may look elliptical on the map. Geometry commands remain view-independent.
@@ -596,8 +604,9 @@ clear the selection on empty space, ready to draw another shape. Drawing and mea
 keep their current selection when opening the map menu.
 
 1. Choose Circle or Rotated Box and a construction grid. The shape defaults to the active
-   Circle or Rotated Box tool when opening conversion; other tools default to Circle. The default is **Web Mercator grid
-   metres**, not ground metres. Choose an open GeoTIFF to fit in its **original image pixels**,
+   Circle or Rotated Box tool when opening conversion; other tools default to Circle. The default is the layer's own grid when
+   it has one (as for drawing), else **Web Mercator grid metres**, not ground metres, also for
+   `edit.previewShapeConversion` without `frame`. Choose an open GeoTIFF to fit in its **original image pixels**,
    preserving the source affine transform, including rotation and shear, rather than using a
    display overview. Local GeoTIFFs and embedded/browser-uploaded GeoTIFFs are supported; remote
    original grids must be downloaded and added first. An unreadable or unsupported source gives
