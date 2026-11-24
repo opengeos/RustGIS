@@ -665,7 +665,8 @@ Turn labels on per layer (Labeling › Labels › **Label**), then:
   placed first stays (the heavier class's, then the layer above); the others take no room, so
   other labels can use it, and View Unplaced doesn't show them. Only labels of the same layer and
   class are compared, by their text as drawn (case counts); a line's repeated labels aren't
-  duplicates, and a label moved by hand always shows (`labels.placement={"layer": "Streets",
+  duplicates, and a label moved by hand always shows. With labels locked, the locked labels all
+  show again, also where zooming out brings two of them closer (`labels.placement={"layer": "Streets",
   "removeDuplicates": 300}`; a number past 1 or 2000 is brought to it, with a notice; `false` or
   `null` turns it off).
 - **Callouts** (Labeling pane › Position): a label crowded off its spot moves to the nearest free

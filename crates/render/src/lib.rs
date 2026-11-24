@@ -8348,10 +8348,11 @@ fn place_labels_with_previews(
             let relative = |l: &PlacedLabel, line: [f32; 4]| [line[0] - l.x, line[1] - l.y, line[2] - l.x, line[3] - l.y];
             let mut moved_by = None;
             // Its class removes duplicates (#2847): near a label of another feature of its layer and
-            // class with the same text, placed before it, it is left out. One moved by hand always shows.
+            // class with the same text, placed before it, it is left out. One moved by hand always shows,
+            // as do the labels of a lock, which was taken with duplicates already left out.
             let duplicate = |l: &PlacedLabel| {
                 remove_duplicates
-                    .filter(|_| has_text && !collide.pinned)
+                    .filter(|_| has_text && !collide.pinned && !locked)
                     .is_some_and(|within| placed_texts.near(key, &l.text, [l.center_x(), l.y], within))
             };
             if let (true, Some([dx, dy])) = (locked && !collide.pinned, collide.callout_offset) {
@@ -10602,6 +10603,22 @@ mod tests {
             line.fallbacks = vec![banded(600.0)];
         }
         assert_eq!(shown(&place(vec![main(100.0, 1, 200.0), head])), [("Main".into(), 100)], "no other band brings it back");
+    }
+
+    /// Locked labels all show again (#2847): two labels of one text locked 300 points apart, then
+    /// 150 apart after zooming out, both stay; removing duplicates applies when the lock is taken.
+    #[test]
+    fn locked_labels_keep_their_duplicates() {
+        let twins = || {
+            [(100.0, 1), (250.0, 2)]
+                .map(|(x, fid)| Candidate { remove_duplicates: Some(200.0), ..(label("Main", x, None, 0.0), 0.0, (1, fid, 0, 0)).into() })
+        };
+        let count = |locked| {
+            let placed = place_labels_with_previews(twins(), Vec::new(), 2000.0, 200.0, locked, true);
+            placed.labels.iter().filter(|l| l.text == "Main").count()
+        };
+        assert_eq!(count(false), 1, "taking the lock: one");
+        assert_eq!(count(true), 2, "replaying the lock: both");
     }
 
     /// A label that is a duplicate where it is spends no callout search (#2847): with more crowded
