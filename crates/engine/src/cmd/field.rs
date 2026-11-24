@@ -1123,8 +1123,11 @@ fn take_photos(map: &mut rustgis_map::Map, budget: &mut u64, package: &str) -> R
     let mut said = std::collections::HashSet::new();
     // The index unpacked with each folder of photos a package brought: entry → path at home.
     let mut unpacked = Unpacked::new();
-    // Cancel is looked at before each row: reading a row's paths can look at the disk.
-    let go_on = || rustgis_data::progress::check().map_err(|e| e.to_string());
+    // Each row is a counted step, and Cancel is looked at before it: reading a row's paths can
+    // look at the disk.
+    let rows: usize = map.layers.iter().filter(|l| !l.is_raster() && photos_field(l).is_some()).map(|l| l.dataset.features.len()).sum();
+    rustgis_data::progress::begin(rows);
+    let go_on = || rustgis_data::progress::step(1).map_err(|e| e.to_string());
     rewrite_photos_until(
         map,
         |path| {
