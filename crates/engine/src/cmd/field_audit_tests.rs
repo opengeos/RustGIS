@@ -716,6 +716,105 @@ fn a_layer_held_in_its_own_system_comes_back_with_only_its_changes() {
     assert_eq!(home.map().layer(hc).unwrap().dataset.coord_crs(), rustgis_data::raster::Crs::WebMercator);
 }
 
+/// A layer held in its own system (Equal Earth) comes back by a list of version 2 giving its shapes
+/// in that system (#2032 C2f-4b): a point moved in the field lands at home exactly as the field
+/// holds it, and one moved where it has no place in longitude/latitude (which a list in
+/// longitude/latitude refused to send) comes back too, as it is held.
+#[test]
+fn a_layer_held_in_its_own_system_comes_back_exact_by_a_list_in_that_system() {
+    use rustgis_data::{Coord, Geometry, raster::Crs};
+    let equal_earth = Crs::from_epsg(8857).unwrap();
+    let temp = Temp::new("native-list");
+    let mut home = home(&temp);
+    let hc = layer(&home, "Cities");
+    home.map_mut().layer_mut(hc).unwrap().dataset.hold_in(equal_earth).unwrap();
+    let (_, out) = package(&mut home, &json!({"name": "Day", "extent": AREA})).unwrap();
+    let mut a = phone(&temp, &out, "a");
+    let cities = layer(&a, "Cities");
+    let (_, unedited) = package(&mut a, &Value::Null).unwrap();
+    assert_eq!(changes_in(&unedited).unwrap()["version"], json!(1), "nothing changed: a list any release reads");
+    let (moved, far) = {
+        let ds = &mut a.map_mut().layer_mut(cities).unwrap().dataset;
+        let moved = ds.features[0].geometry.clone();
+        let Some(Geometry::Point(c)) = moved else { panic!("{moved:?}") };
+        let to = Geometry::Point(Coord::new(c.x + 0.123_456_789, c.y - 0.987_654_321));
+        ds.features[0].geometry = Some(to.clone());
+        // No place in longitude/latitude in Equal Earth.
+        ds.features[1].geometry = Some(Geometry::Point(Coord::new(1e9, 0.0)));
+        ((ds.features[0].id, to), ds.features[1].id)
+    };
+    let (_, back) = package(&mut a, &Value::Null).unwrap();
+    let changes = changes_in(&back).unwrap();
+    assert_eq!(changes["version"], json!(2), "{changes}");
+    assert_eq!(changes["layers"][0]["crs"], serde_json::to_value(equal_earth).unwrap(), "{changes}");
+    let path = temp.0.join("a-back.rgisfield");
+    std::fs::write(&path, &back).unwrap();
+    let done = home.run("offline.bringBack", &json!({"path": path.display().to_string()})).unwrap();
+    assert_eq!((done["updated"].as_u64(), done["conflicts"].as_u64()), (Some(2), Some(0)), "{done}");
+    let place = |id: u64| {
+        let l = home.map().layer(hc).unwrap();
+        l.dataset.features.iter().find(|f| f.id == id).and_then(|f| f.geometry.clone())
+    };
+    assert_eq!(place(moved.0), Some(moved.1), "exactly as the field holds it");
+    assert_eq!(place(far), Some(Geometry::Point(Coord::new(1e9, 0.0))));
+    assert_eq!(home.map().layer(hc).unwrap().dataset.coord_crs(), equal_earth);
+}
+
+/// A list giving a layer's shapes in its own system comes back while home holds the layer in
+/// another (Define Projection meanwhile): its shapes are put in longitude/latitude to be brought
+/// back there, as a list of version 1's are.
+#[test]
+fn a_list_in_a_layers_own_system_comes_back_to_a_layer_held_in_another() {
+    use rustgis_data::{Geometry, raster::Crs};
+    let temp = Temp::new("native-list-elsewhere");
+    let mut home = home(&temp);
+    let hc = layer(&home, "Cities");
+    home.map_mut().layer_mut(hc).unwrap().dataset.hold_in(Crs::from_epsg(8857).unwrap()).unwrap();
+    let (_, out) = package(&mut home, &json!({"name": "Day", "extent": AREA})).unwrap();
+    let mut a = phone(&temp, &out, "a");
+    let cities = layer(&a, "Cities");
+    let name = text_field(&a, cities);
+    let edited = a.map().layer(cities).unwrap().dataset.features[0].id;
+    a.run("edit.setValue", &json!({"layer": cities, "row": 0, "field": name, "value": "Moved too"})).unwrap();
+    let ds = &mut a.map_mut().layer_mut(cities).unwrap().dataset;
+    let Some(Geometry::Point(c)) = ds.features[0].geometry else { panic!() };
+    ds.features[0].geometry = Some(Geometry::Point(rustgis_data::Coord::new(c.x + 1000.0, c.y)));
+    // Home holds the layer in Web Mercator now.
+    home.map_mut().layer_mut(hc).unwrap().dataset.hold_in(Crs::WebMercator).unwrap();
+    let (done, said) = bring_back(&temp, &mut a, &mut home, "a");
+    // Home's shapes were converted too (a round trip through longitude/latitude), so the moved
+    // one reads as changed at home as well: the field's wins, and that is said, as with a list in
+    // longitude/latitude.
+    assert_eq!(done["updated"].as_u64(), Some(1), "{done} {said:?}");
+    assert_eq!(value_of(&home, hc, edited, &name).as_deref(), Some("Moved too"));
+    assert_eq!(home.map().layer(hc).unwrap().dataset.coord_crs(), Crs::WebMercator);
+    let l = home.map().layer(hc).unwrap();
+    let Some(Geometry::Point(now)) = l.dataset.features.iter().find(|f| f.id == edited).and_then(|f| f.geometry.clone()) else { panic!() };
+    // 1 km east in Equal Earth, about 1 km east in Web Mercator too.
+    let Geometry::Point(was) = Crs::from_epsg(8857).unwrap().to(Crs::WebMercator).unwrap().geometry(&Geometry::Point(c)) else { panic!() };
+    assert!((now.x - was.x) > 500.0 && (now.x - was.x) < 2000.0 && (now.y - was.y).abs() < 100.0, "{now:?} {was:?}");
+}
+
+/// A list of a version this RustGIS doesn't write is refused, as is one of version 1 that gives a
+/// layer's system, which none of version 1 has.
+#[test]
+fn a_list_of_an_unknown_version_or_a_system_version_1_hasnt_is_refused() {
+    let list = |version: u32, crs: Value| {
+        let mut layer = json!({"layer": 1, "added": [5]});
+        if !crs.is_null() {
+            layer["crs"] = crs;
+        }
+        serde_json::to_vec(&json!({"version": version, "package": "p", "layers": [layer]})).unwrap()
+    };
+    let utm = serde_json::to_value(rustgis_data::raster::Crs::from_epsg(32632).unwrap()).unwrap();
+    assert!(crate::cmd::field_changes::Changes::read(&list(1, Value::Null), "p").is_ok());
+    assert!(crate::cmd::field_changes::Changes::read(&list(2, utm.clone()), "p").is_ok());
+    let newer = crate::cmd::field_changes::Changes::read(&list(3, Value::Null), "p").unwrap_err();
+    assert!(newer.contains("newer RustGIS"), "{newer}");
+    let damaged = crate::cmd::field_changes::Changes::read(&list(1, utm), "p").unwrap_err();
+    assert!(damaged.contains("damaged"), "{damaged}");
+}
+
 /// Two packages of one area. A adds a field and fills it in for a city; B, given the city before
 /// the field was there, deletes it. The city has a change B never saw, so it is kept, and said.
 #[test]
