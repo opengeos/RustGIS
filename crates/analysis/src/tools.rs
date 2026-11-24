@@ -1887,6 +1887,11 @@ enum Place {
     Edge,
 }
 
+/// The most coordinates a polygon feature may have to be kept whole without the overlay: the
+/// validity check holds about 100 bytes for each ([`crate::validity`]), so a thread's share is
+/// about a megabyte.
+const KEEP_WHOLE_COORDS: usize = 10_000;
+
 /// A clip mask's edges, on a grid, so that the edges near a feature are found without going
 /// through all of them. It holds the grid's references (one for each cell an edge's box meets)
 /// and a table of the mask's rings, not a second copy of its coordinates: an edge's ends are read
@@ -1897,6 +1902,8 @@ struct MaskEdges {
     /// polygon, and which of the polygon's rings it is: 0 for the outside, then the holes.
     rings: Vec<(usize, usize, usize)>,
     grid: ExtentIndex,
+    /// What it holds, about: the grid's storage and the table of rings.
+    bytes: usize,
     /// The mask has a coordinate that isn't finite, which no grid cell holds reliably: every
     /// feature is then [`Place::Edge`].
     unsure: bool,
@@ -1924,7 +1931,9 @@ impl MaskEdges {
         let boxes = Self::rings_of(mask).flat_map(|(_, _, ring)| {
             ring.0.windows(2).map(|w| w.iter().fold(Extent::EMPTY, |e, c| e.union(&Extent::new(c.x, c.y, c.x, c.y))))
         });
-        MaskEdges { rings, grid: ExtentIndex::new(boxes), unsure }
+        let grid = ExtentIndex::new(boxes);
+        let bytes = grid.storage_bytes().saturating_add(rings.capacity().saturating_mul(std::mem::size_of::<(usize, usize, usize)>()));
+        MaskEdges { rings, grid, bytes, unsure }
     }
 
     /// The ends of edge `i` of `mask`, which this was made from.
@@ -2170,10 +2179,10 @@ impl MaskCache {
 /// largest size of the masks one feature meets, together (found for each batch first, standing
 /// for their union); as many threads run as fit, at that much work each, in half the scratch
 /// budget, and their recent unions of several masks share `cache_bytes` (by default the other
-/// half of [`crate::parallel::scratch_budget`], less the masks' edge indexes). The masks' edge
-/// indexes ([`MaskEdges`]) are shared by the threads and kept for the run: grid references to the
-/// masks' edges, about three times the masks' coordinates, made when a polygon feature first needs
-/// a mask's (holding each of its edges' boxes meanwhile, twice its coordinates, on one thread).
+/// half of [`crate::parallel::scratch_budget`], less the masks' edge indexes made so far). The masks'
+/// edge indexes ([`MaskEdges`]) are shared by the threads and kept for the run: grid references to
+/// the masks' edges, made when a polygon feature first needs a mask's (holding each of its edges'
+/// boxes meanwhile, twice its coordinates, on one thread).
 fn clip_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>, cache_bytes: Option<usize>) -> Result<ToolResult, String> {
     let ds = input(inp, p, "input")?;
     let clip_ds = input(inp, p, "clip")?;
@@ -2255,10 +2264,6 @@ fn clip_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>, cache_bytes: Opti
     // one mask (at most all of them). Its size is taken as theirs together, which it doesn't
     // exceed by much (an overlay adds a vertex where edges cross, and takes away the overlaps).
     let mask_bytes: Vec<usize> = masks.iter().map(|(m, _)| kept_union_bytes(&[], m)).collect();
-    // The masks' edge indexes ([`MaskEdges`]) hold about three times their masks' coordinates, at
-    // most (2.3 times on the benchmark's block groups, 3.1 on a smaller set): all of them, for the
-    // run.
-    let index_bytes = mask_bytes.iter().fold(0usize, |a, &b| a.saturating_add(b)).saturating_mul(3);
     let union_bytes = |near: &[usize]| match near {
         [] | [_] => 0,
         _ => near.iter().filter_map(|&i| mask_bytes.get(i)).fold(0usize, |a, &b| a.saturating_add(b)),
@@ -2287,8 +2292,9 @@ fn clip_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>, cache_bytes: Opti
         // Single candidates reuse their normalized mask. Each thread keeps eight recent multi-mask
         // unions, so alternating neighbourhoods can reuse work too, the least recently used going
         // first; the threads' unions together stay within their share of the scratch memory.
-        // The masks' edge indexes come out of the unions' share, whether or not they have been
-        // made yet: they are shared by the threads and kept for the run.
+        // The masks' edge indexes made so far come out of the unions' share, at what each holds
+        // ([`MaskEdges::bytes`]): they are shared by the threads and kept for the run.
+        let index_bytes = edges.iter().filter_map(std::sync::OnceLock::get).fold(0usize, |a, e| a.saturating_add(e.bytes));
         let cache_cap =
             cache_bytes.unwrap_or_else(|| (crate::parallel::scratch_budget() / 2).saturating_sub(index_bytes)) / clip_threads.max(1);
         let clipped = crate::parallel::try_map_on(
@@ -2319,19 +2325,20 @@ fn clip_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>, cache_bytes: Opti
                         match place {
                             // Kept as it is only if it is one valid shape (no ring crossing itself or
                             // another, a hole inside its polygon, its interior in one piece): the
-                            // overlay would have rewritten anything else. Looked at once, and with a
-                            // bounded amount of work, a feature too complex for it going to the overlay.
+                            // overlay would have rewritten anything else. Looked at once; a feature of
+                            // more than [`KEEP_WHOLE_COORDS`] coordinates, which the check would need
+                            // about 100 bytes each for, goes to the overlay.
                             Place::Inside
                                 if *valid.get_or_insert_with(|| {
-                                    crate::validity::check(Some(&shape), crate::validity::MAX_WORK).problems.is_empty()
+                                    shape.coord_count() <= KEEP_WHOLE_COORDS
+                                        && crate::validity::check(Some(&shape), crate::validity::MAX_WORK).problems.is_empty()
                                 }) =>
                             {
                                 cache.big = None;
                                 return Ok(from_multipolygon(&whole.orient(Direction::Default)).map(|g| (g, false)));
                             }
-                            Place::Inside => edge.push(i),
+                            Place::Inside | Place::Edge => edge.push(i),
                             Place::Outside => {}
-                            Place::Edge => edge.push(i),
                         }
                     }
                     if edge.is_empty() {
@@ -13658,7 +13665,7 @@ mod tests {
         assert!(same(by_row(0), sq(2.0, 2.0, 1.0)));
         assert!(same(by_row(1), sq(6.0, 6.0, 1.0)));
         assert!(same(by_row(2), sq(9.5, 9.5, 1.0)));
-        // The crossing ring is what the overlay makes of it: the two lobes, 3.9 square degrees.
+        // The crossing ring is what the overlay makes of it: its two lobes, well over the net area.
         let Some(Geometry::Polygon(pieces)) = by_row(split_row) else { panic!("not a polygon") };
         assert_eq!(pieces.len(), 2);
         let lobes = by_row(crossing_row).and_then(|g| to_multipolygon(&g)).unwrap().unsigned_area();
