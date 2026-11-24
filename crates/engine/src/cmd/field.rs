@@ -1113,7 +1113,8 @@ fn collect_photos(map: &rustgis_map::Map, budget: &mut u64, most_entries: usize)
 /// [`Photos::missing`]. A photo a package from home brought is named by
 /// its path at home again, from the [`INDEX`] unpacked beside it ([`home_path`]), and isn't
 /// carried: home has it, so it takes none of the package's room, and a feature whose photos the
-/// field left alone names them as home does. Cancel is checked before each photo is looked at.
+/// field left alone names them as home does. Each row is a counted step, Cancel looked at before
+/// it.
 fn take_photos(map: &mut rustgis_map::Map, budget: &mut u64, package: &str) -> Result<Photos, String> {
     let mut found = Photos::default();
     // Each photo's entry and the path it was named by, for the way back.
@@ -1284,7 +1285,7 @@ fn unpacked_index(folder: &Path, package: &str) -> Result<std::collections::Hash
         return if photos { Err(format!("{}: missing beside the photos", file.display())) } else { Ok(std::collections::HashMap::new()) };
     }
     let bytes = crate::project::read_file(&file, MAX_INDEX)?;
-    let text = String::from_utf8_lossy(&bytes);
+    let text = String::from_utf8(bytes).map_err(|_| format!("{}: not UTF-8 text", file.display()))?;
     let mut index = std::collections::HashMap::new();
     // One the package didn't write that way (a line without its two fields, an entry listed twice)
     // is damaged: none of it is trusted, and the caller says so.
@@ -1882,7 +1883,7 @@ pub(crate) fn project_in(text: &str, dir: &Path) -> Result<Project, String> {
     // Photos from home that keep their names there, the unpack folder's name not being text.
     let mut unshown = 0_usize;
     // Photos from home the index lists that the package doesn't hold.
-    let mut absent = 0_usize;
+    let mut absent = std::collections::HashSet::new();
     if photos.is_dir() {
         // A package from home names its photos where they are at home; its index says which entry
         // each is.
@@ -1919,7 +1920,7 @@ pub(crate) fn project_in(text: &str, dir: &Path) -> Result<Project, String> {
                     let file = photos.join(name);
                     // A photo the index lists that isn't there: the feature keeps its name at home.
                     if named != entry && !file.is_file() {
-                        absent += 1;
+                        absent.insert(named.to_string());
                     }
                     if file.is_file() {
                         if let Some(path) = file.to_str() {
@@ -1939,12 +1940,12 @@ pub(crate) fn project_in(text: &str, dir: &Path) -> Result<Project, String> {
     // The rows as given, taken (sharing them) for `offline.keepRows` to keep, when this package
     // went out from home: a return opened here keeps none.
     project.given = super::field_changes::GivenRows::in_package(dir, &project).map(std::sync::Arc::new);
-    if absent > 0 {
+    if !absent.is_empty() {
         project.read_notices.push((
             crate::project::ReadPart::Maps,
             crate::notice_text::NoticeText::format(
                 "{count} photo(s) the field package lists aren't in it: their features keep the names they have at home, which may not be on this device.",
-                [("count", absent.to_string().into())],
+                [("count", absent.len().to_string().into())],
             ),
         ));
     }
@@ -2939,6 +2940,10 @@ mod tests {
         let said = notes(&mut project_in(&text, &unpacked).unwrap());
         assert!(said.iter().any(|t| t.starts_with("1 photo(s) the field package lists aren't in it")), "{said:?}");
         std::fs::write(&held, bytes).unwrap();
+        // An index that isn't UTF-8 text: damaged.
+        std::fs::write(&index, b"photos/home-00001.jpg\t\xff\n").unwrap();
+        let said = notes(&mut project_in(&text, &unpacked).unwrap());
+        assert!(said.iter().any(|t| t.contains("not UTF-8 text")), "{said:?}");
         // An entry listed twice: the index is damaged.
         std::fs::write(&index, format!("{listed}{listed}")).unwrap();
         let said = notes(&mut project_in(&text, &unpacked).unwrap());
