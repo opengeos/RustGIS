@@ -437,7 +437,7 @@ struct Conversion {
     path: PathBuf,
     unprojected: bool,
     in_lonlat: bool,
-    notes: Vec<String>,
+    notes: crate::loss::Notes,
     empty: bool,
 }
 
@@ -473,7 +473,10 @@ fn convert_one_fresh_in(dir: &Path, src: &Path, layer: &str, family: Option<Fami
     )?
     .ok_or_else(|| DataError::Format(format!("layer '{layer}' has no compatible declared geometry")))?;
     if converted.unprojected {
-        converted.notes.push(format!("GDAL: '{layer}' has no declared coordinate system; its coordinates were left unprojected"));
+        converted.notes.push(crate::loss::Note::loss(
+            crate::loss::LossCode::AssumedCrs,
+            format!("GDAL: '{layer}' has no declared coordinate system; its coordinates were left unprojected"),
+        ));
     }
     if converted.in_lonlat {
         converted.notes.push(in_lonlat_note(layer));
@@ -519,7 +522,7 @@ fn convert_one_fresh_in(dir: &Path, src: &Path, layer: &str, family: Option<Fami
             }
         }
     }
-    let mut notes: crate::loss::Notes = converted.notes.into();
+    let mut notes: crate::loss::Notes = converted.notes;
     notes.extend(zm_note);
     Ok(FreshConverted { path: converted.path, notes, empty: converted.empty, zm_dropped, workspace })
 }
@@ -598,7 +601,13 @@ fn convert_one_in(dir: &Path, src: &Path, layer: &str, request: ConversionReques
     if !fresh && same && out.metadata().is_ok_and(|m| m.len() > 0) {
         touch(&out);
         touch(&keyfile);
-        return Ok(Some(Conversion { path: out, unprojected: was_unprojected, in_lonlat: was_in_lonlat, notes: Vec::new(), empty: false }));
+        return Ok(Some(Conversion {
+            path: out,
+            unprojected: was_unprojected,
+            in_lonlat: was_in_lonlat,
+            notes: crate::loss::Notes::new(),
+            empty: false,
+        }));
     }
     // A count of Z/M features kept for an earlier conversion with this tag isn't this one's.
     if !fresh {
@@ -711,19 +720,23 @@ fn convert_one_in(dir: &Path, src: &Path, layer: &str, request: ConversionReques
             let count = counts.entry(line.to_string()).or_default();
             *count = count.saturating_add(1);
         }
-        let mut notes: Vec<String> = counts.into_iter().map(|(line, count)| format!("GDAL: {line} ({count} occurrence(s))")).collect();
+        let mut notes: crate::loss::Notes =
+            counts.into_iter().map(|(line, count)| format!("GDAL: {line} ({count} occurrence(s))")).collect();
         // A layer declaring one geometry type holds no other; only a mixed layer is counted. A
         // count that fails doesn't undo a good conversion: the possible loss is said instead.
         if let Some(family) = family.filter(|_| kind.is_none()) {
             match count_other_families(&full, layer, family) {
                 Ok(0) => {}
-                Ok(other) => notes.push(format!("GDAL: {other} features of another geometry type were left out")),
-                Err(_) => notes.push("GDAL: an unknown number of features of another geometry type may have been left out".into()),
+                Ok(other) => notes.push(crate::loss::Note::loss(
+                    crate::loss::LossCode::DroppedFeature,
+                    format!("GDAL: {other} features of another geometry type were left out"),
+                )),
+                Err(_) => notes.push("GDAL: an unknown number of features of another geometry type may have been left out"),
             }
         }
         notes
     } else {
-        Vec::new()
+        crate::loss::Notes::new()
     };
     Ok(Some(Conversion { path: out, unprojected, in_lonlat, notes, empty: !any }))
 }
@@ -1442,7 +1455,10 @@ mod tests {
             let fresh = convert_one_fresh_in(&dir.path().join("cache"), &path, "survey", Some(Family::Points), None).unwrap();
             let omitted = fresh.notes.iter().filter(|note| note.contains("another geometry type")).collect::<Vec<_>>();
             if mixed {
-                assert_eq!(omitted, vec!["GDAL: 2 features of another geometry type were left out"]);
+                assert_eq!(
+                    omitted.iter().map(|n| n.as_str()).collect::<Vec<_>>(),
+                    vec!["GDAL: 2 features of another geometry type were left out"]
+                );
             } else {
                 assert!(omitted.is_empty(), "{:?}", fresh.notes);
                 assert!(fresh.notes.is_empty(), "single-family input has no conversion losses: {:?}", fresh.notes);

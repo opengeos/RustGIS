@@ -743,9 +743,9 @@ const FINE_TIMES_SAMPLE: u64 = 100_000;
 /// (`fine`), which are read to the microsecond: the columns where a row looked at (up to 100,000,
 /// whichever the server returns) has one, and those that may when the rows looked at have none but
 /// weren't all of them (or the look failed).
-fn fine_times_note(conn: &Conn, from: &str, fine: &[String]) -> Vec<String> {
+fn fine_times_note(conn: &Conn, from: &str, fine: &[String]) -> crate::loss::Notes {
     if fine.is_empty() {
-        return Vec::new();
+        return crate::loss::Notes::new();
     }
     let checks: Vec<String> =
         fine.iter().map(|c| format!("MAX(CASE WHEN DATEPART(NANOSECOND, {}) % 1000 <> 0 THEN 1 ELSE 0 END)", ident(c))).collect();
@@ -765,23 +765,26 @@ fn fine_times_note(conn: &Conn, from: &str, fine: &[String]) -> Vec<String> {
 /// [`fine_times_note`]'s text: `found` counts, for each column of `fine`, whether a row looked at
 /// has a 100-nanosecond digit (`None` when the look failed); `complete` is whether the rows looked
 /// at were all of them.
-fn fine_times_said(fine: &[String], found: Option<&[usize]>, complete: bool) -> Vec<String> {
+fn fine_times_said(fine: &[String], found: Option<&[usize]>, complete: bool) -> crate::loss::Notes {
     if fine.is_empty() {
-        return Vec::new();
+        return crate::loss::Notes::new();
     }
     let fields: Vec<Field> = fine.iter().map(|c| Field::new(c.clone(), FieldType::DateTime)).collect();
     let Some(found) = found else {
-        return vec![format!(
+        return crate::loss::Notes::from(vec![format!(
             "date-times in {} may hold 100-nanosecond digits (they couldn't be checked): any are read to the microsecond, the last digit left out",
             crate::io::named_fields(&fields, &vec![1; fine.len()])
-        )];
+        )]);
     };
     let has = |i: usize| found.get(i).is_some_and(|&n| n > 0);
-    let mut notes = Vec::new();
+    let mut notes = crate::loss::Notes::new();
     if (0..fine.len()).any(has) {
-        notes.push(format!(
-            "date-times in {} hold 100-nanosecond digits: they're read to the microsecond, the last digit left out",
-            crate::io::named_fields(&fields, found)
+        notes.push(crate::loss::Note::loss(
+            crate::loss::LossCode::ChangedRounded,
+            format!(
+                "date-times in {} hold 100-nanosecond digits: they're read to the microsecond, the last digit left out",
+                crate::io::named_fields(&fields, found)
+            ),
         ));
     }
     let rest: Vec<usize> = (0..fine.len()).map(|i| usize::from(!has(i))).collect();
@@ -800,7 +803,7 @@ impl SqlServerSource {
         if conn.major < 11 {
             return Err(DataError::Unsupported("SQL Server tables are read from SQL Server 2012 and later".into()));
         }
-        let mut notes = Vec::new();
+        let mut notes = crate::loss::Notes::new();
         let g = ident(&table.column);
         let geography = table.geography();
         let columns = gdb::columns_of(&conn, &table.schema, &table.name)?;
@@ -819,7 +822,10 @@ impl SqlServerSource {
         let raw_srid =
             rows.first().and_then(|r| int_of(at(r, 0))).and_then(|n| u32::try_from(n).ok()).unwrap_or(if geography { 4326 } else { 0 });
         if raw_srid != 0 {
-            notes.push(format!("the column doesn't fix a coordinate system: rows in one other than EPSG:{raw_srid} are left out"));
+            notes.push(crate::loss::Note::loss(
+                crate::loss::LossCode::DroppedFeature,
+                format!("the column doesn't fix a coordinate system: rows in one other than EPSG:{raw_srid} are left out"),
+            ));
         }
         let mut srid = raw_srid;
         if srid == 0
@@ -835,14 +841,14 @@ impl SqlServerSource {
                     srid = u32::from(code);
                     notes.extend(note);
                 }
-                None => notes.push("the geometry doesn't say its coordinate system; read as longitude/latitude (add it again with \"crs\", such as EPSG:2263)".into()),
+                None => notes.push(crate::loss::Note::loss(crate::loss::LossCode::AssumedCrs, "the geometry doesn't say its coordinate system; read as longitude/latitude (add it again with \"crs\", such as EPSG:2263)")),
             }
         }
         if conn.config.encrypt == Encrypt::Off {
-            notes.push("the connection isn't encrypted after login (encrypt=false)".into());
+            notes.push("the connection isn't encrypted after login (encrypt=false)");
         }
         if conn.config.trust_cert {
-            notes.push("the server's certificate isn't checked (trust-server-certificate=true)".into());
+            notes.push("the server's certificate isn't checked (trust-server-certificate=true)");
         }
         let reproject = Reproject::from_epsg(Some(srid), &mut notes);
         let cols = conn.query("SELECT COLUMN_NAME, LOWER(DATA_TYPE), DATETIME_PRECISION FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = @P1 AND TABLE_NAME = @P2 ORDER BY ORDINAL_POSITION", &[&table.schema, &table.name])?;
@@ -878,9 +884,7 @@ impl SqlServerSource {
             notes.extend(r.notes);
         }
         if projection.numbered {
-            notes.push(
-                "no single-column integer key: features are numbered as read, so their ids can change from one read to the next".into(),
-            );
+            notes.push("no single-column integer key: features are numbered as read, so their ids can change from one read to the next");
         }
         let mut src = SqlServerSource {
             info: SourceInfo {
@@ -892,7 +896,7 @@ impl SqlServerSource {
                 count: None,
                 crs: if srid == 0 { "EPSG:4326".into() } else { format!("EPSG:{srid}") },
                 indexed: false,
-                notes: notes.into(),
+                notes,
                 zm_dropped: false,
             },
             conn,
@@ -1271,7 +1275,7 @@ mod tests {
         // whole without any, say nothing; a larger table without any in the rows looked at may.
         let fine = ["seen".to_string(), "logged".to_string()];
         assert_eq!(
-            fine_times_said(&fine, Some(&[0, 1]), true),
+            fine_times_said(&fine, Some(&[0, 1]), true).texts().collect::<Vec<_>>(),
             ["date-times in 'logged' hold 100-nanosecond digits: they're read to the microsecond, the last digit left out"]
         );
         assert!(fine_times_said(&fine, Some(&[0, 0]), true).is_empty());
@@ -1327,7 +1331,7 @@ mod tests {
 
     #[test]
     fn refused_database_view_is_not_a_whole_table_sample() {
-        let r = Reproject::from_crs(Crs::from_epsg(32617).unwrap(), &mut Vec::new());
+        let r = Reproject::from_crs(Crs::from_epsg(32617).unwrap(), &mut crate::loss::Notes::new());
         let req = Request { extent: Some(Extent::new(-120.0, -30.0, 10.0, 30.0)), limit: 10, own: None };
         let all = Extent::new(-84.0, 0.0, -78.0, 25.0);
         assert!(native_window(&req, all, &r, false, 160).unwrap_err().to_string().contains("can't be bounded"));
@@ -1337,7 +1341,7 @@ mod tests {
 
     #[test]
     fn native_windows_respect_database_compatibility() {
-        let reproject = Reproject::from_crs(Crs::LonLat, &mut Vec::new());
+        let reproject = Reproject::from_crs(Crs::LonLat, &mut crate::loss::Notes::new());
         let req = Request { extent: Some(Extent::new(-180.0, -90.0, 180.0, 90.0)), limit: 100, own: None };
         for compatibility in [0, 80, 90, 100] {
             assert_eq!(native_window(&req, Extent::EMPTY, &reproject, true, compatibility).unwrap(), None);

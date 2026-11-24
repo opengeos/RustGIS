@@ -196,7 +196,10 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>>
         report.messages.push(format!("{skipped} items had places that couldn't be read"));
     }
     if without > 0 {
-        report.messages.push(format!("{without} items have no place and were left out"));
+        report.messages.push(crate::loss::Note::loss(
+            crate::loss::LossCode::DroppedFeature,
+            format!("{without} items have no place and were left out"),
+        ));
     }
     if lost_holes > 0 {
         let what = if lost_holes == 1 {

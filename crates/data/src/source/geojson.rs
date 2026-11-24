@@ -226,9 +226,12 @@ impl GeoJsonSource {
         if rest.get("type").and_then(Json::as_str) != Some("FeatureCollection") {
             return Err(DataError::Unsupported("only GeoJSON FeatureCollections are read in place".into()));
         }
-        let mut notes = Vec::new();
+        let mut notes = crate::loss::Notes::new();
         if scan.skipped > 0 {
-            notes.push(format!("{} features had unreadable geometry", scan.skipped));
+            notes.push(crate::loss::Note::loss(
+                crate::loss::LossCode::DroppedFeature,
+                format!("{} features had unreadable geometry", scan.skipped),
+            ));
         }
         let reproject = Reproject::known(declared_crs(&rest, &mut notes)?);
         // The declaration may come after the features, so only now can each be tried: those the
@@ -244,10 +247,13 @@ impl GeoJsonSource {
                 *kept = kept.saturating_sub(lost);
             }
             if !pass.failed.is_empty() {
-                notes.push(format!(
-                    "{} features couldn't be converted from {} to longitude/latitude and were skipped",
-                    pass.failed.len(),
-                    reproject.label()
+                notes.push(crate::loss::Note::loss(
+                    crate::loss::LossCode::DroppedFeature,
+                    format!(
+                        "{} features couldn't be converted from {} to longitude/latitude and were skipped",
+                        pass.failed.len(),
+                        reproject.label()
+                    ),
                 ));
             }
             failed = pass.failed;
@@ -272,7 +278,7 @@ impl GeoJsonSource {
             count: Some((scan.places.len() - failed.len()) as u64),
             crs: reproject.label(),
             indexed: false,
-            notes: notes.into(),
+            notes,
             zm_dropped: false,
         };
         // Features the declared system can't convert are left out, and so are their heights.

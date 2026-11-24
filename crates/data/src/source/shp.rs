@@ -144,7 +144,7 @@ impl ShpSource {
         }
         // Taken before anything is read, so a file written while it opens is seen as changed.
         let stamps = [Stamp::of(path), Stamp::of(&dbf)];
-        let mut notes = Vec::new();
+        let mut notes = crate::loss::Notes::new();
         let table = read_table(&dbf)?;
         let cpg = crate::dbf::read_cpg(path, &mut notes);
         let encoding = crate::dbf::encoding(cpg.as_deref(), table.ldid, &mut notes);
@@ -206,8 +206,7 @@ impl ShpSource {
             // is said.
             if !zero && !(a_box && h0 <= x0 && h1 <= y0 && h2 >= x1 && h3 >= y1) {
                 notes.push(
-                    "the .shp header's bounding box doesn't hold its shapes, or isn't a box: the layer's extent is taken from the shapes"
-                        .into(),
+                    "the .shp header's bounding box doesn't hold its shapes, or isn't a box: the layer's extent is taken from the shapes",
                 );
             }
             Extent::new(f64::from(x0), f64::from(y0), f64::from(x1), f64::from(y1))
@@ -217,7 +216,7 @@ impl ShpSource {
         // holds): said, as the layer has no extent. A file of no records loses nothing by it;
         // shapes there but without a usable box are said below instead.
         if native.is_none() && index.count > 0 && index.unboxed == 0 && !zero {
-            notes.push("the .shp has no shapes to frame: its header's box isn't used, and the layer has no extent".into());
+            notes.push("the .shp has no shapes to frame: its header's box isn't used, and the layer has no extent");
         }
         // Records with no usable box, neither stored nor from their own points (a coordinate that
         // isn't a number or past f32's range, or a record that can't be read; a backwards stored
@@ -233,10 +232,12 @@ impl ShpSource {
         }
         let extent = native.map_or(Extent::EMPTY, |n| reproject.extent_to_lonlat(&n));
         if reproject.is_lonlat() && extent.beyond_lonlat() {
-            notes.push("coordinates are not longitude/latitude; RustGIS reads them as WGS 84 and they may draw out of place".into());
+            notes.push(crate::loss::Note::loss(
+                crate::loss::LossCode::AssumedCrs,
+                "coordinates are not longitude/latitude; RustGIS reads them as WGS 84 and they may draw out of place",
+            ));
         }
         let (names, not_utf8) = read_names(&dbf, table.columns.len(), &encoding)?;
-        let mut notes = crate::loss::Notes::from(notes);
         notes.extend(crate::dbf::not_utf8_names_note(&not_utf8, encoding.name()));
         let fields = table.columns.iter().zip(names).map(|(c, n)| Field::new(n, c.out)).collect();
         let mut info = SourceInfo {
@@ -303,6 +304,7 @@ impl ShpSource {
         let mut buf = Vec::new();
         let mut row = vec![0u8; self.table.row_len];
         let (mut skipped, mut unread_dates, mut null_text, mut boxed_off, mut not_utf8) = (0, Vec::new(), Vec::new(), 0u64, Vec::new());
+        let mut nonfinite = Vec::new();
         let mut deleted = 0usize;
         // The same directory, ordering, extent rules and read-only scan fallback as sampled
         // reads, with no interaction row cap. The index visits records without materializing
@@ -370,7 +372,7 @@ impl ShpSource {
                     deleted += 1;
                     return Ok(());
                 }
-                self.table.values(&row, &encoding, &self.encoding, &mut unread_dates, &mut null_text, &mut not_utf8)
+                self.table.values(&row, &encoding, &self.encoding, &mut unread_dates, &mut null_text, &mut not_utf8, &mut nonfinite)
             } else {
                 vec![Value::Null; self.table.columns.len()]
             };
@@ -392,7 +394,12 @@ impl ShpSource {
             unread_dates,
             rounded_dates: Vec::new(),
             null_text,
-            notes: boxed_off_note(boxed_off, false, late).into_iter().chain(deleted_note(deleted, false)).collect(),
+            notes: boxed_off_note(boxed_off, false, late)
+                .into_iter()
+                .chain(deleted_note(deleted, false))
+                .map(crate::loss::Note::from)
+                .chain(crate::io::nonfinite_note(&self.info.fields, &nonfinite))
+                .collect(),
             not_utf8,
         })
     }
@@ -437,6 +444,7 @@ impl FeatureSource for ShpSource {
         let mut row = vec![0u8; self.table.row_len];
         let mut features = Vec::new();
         let (mut skipped, mut unread_dates, mut null_text, mut boxed_off, mut not_utf8) = (0, Vec::new(), Vec::new(), 0u64, Vec::new());
+        let mut nonfinite = Vec::new();
         let mut deleted = 0usize;
         // An extent the file's system couldn't bound (#1925) has no boxes for the index to sample
         // by: every record is visited, tested, and the matches sampled as they come.
@@ -501,7 +509,7 @@ impl FeatureSource for ShpSource {
                 if late && !sample.wants() {
                     return Ok(());
                 }
-                self.table.values(&row, &encoding, &self.encoding, &mut unread_dates, &mut null_text, &mut not_utf8)
+                self.table.values(&row, &encoding, &self.encoding, &mut unread_dates, &mut null_text, &mut not_utf8, &mut nonfinite)
             } else {
                 if late && !sample.wants() {
                     return Ok(());
@@ -536,6 +544,8 @@ impl FeatureSource for ShpSource {
             notes: boxed_off_note(boxed_off, !late && !complete, late)
                 .into_iter()
                 .chain(deleted_note(deleted, !late && !complete))
+                .map(crate::loss::Note::from)
+                .chain(crate::io::nonfinite_note(&self.info.fields, &nonfinite))
                 .collect(),
             not_utf8,
         })
@@ -852,6 +862,7 @@ impl Table {
         unread_dates: &mut Vec<usize>,
         null_text: &mut Vec<usize>,
         not_utf8: &mut Vec<usize>,
+        nonfinite: &mut Vec<usize>,
     ) -> Vec<Value> {
         let mut out = Vec::with_capacity(self.columns.len());
         for (k, c) in self.columns.iter().enumerate() {
@@ -876,6 +887,9 @@ impl Table {
                     // Counted on the bytes: U+FFFD in the text read can also be what the file holds.
                     if matches!(v, Value::Text(_)) && declared.malformed(padded(b)) {
                         super::not_utf8_at(not_utf8, k);
+                    }
+                    if matches!(v, Value::Null) && not_finite(c, b) {
+                        super::unread_dates_by(nonfinite, k, 1);
                     }
                     v
                 }
@@ -920,6 +934,16 @@ fn trimmed(b: &[u8]) -> &[u8] {
     let start = b.iter().position(|c| *c != b' ').unwrap_or(b.len());
     let end = b.iter().rposition(|c| *c != b' ').map_or(start, |e| e + 1);
     b.get(start..end).unwrap_or(&[])
+}
+
+/// Whether a numeric `.dbf` value holds a number that isn't finite (nan or inf), which [`value`]
+/// reads as empty; a blank one doesn't.
+fn not_finite(c: &Column, b: &[u8]) -> bool {
+    match c.ty {
+        b'N' | b'F' => std::str::from_utf8(trimmed(b)).ok().and_then(|t| t.parse::<f64>().ok()).is_some_and(|v| !v.is_finite()),
+        b'O' | b'Y' => b.get(..8).and_then(|v| v.try_into().ok()).map(f64::from_le_bytes).is_some_and(|v| !v.is_finite()),
+        _ => false,
+    }
 }
 
 /// One `.dbf` value, as a Shapefile read whole gives it (blank and unreadable values are null;
@@ -976,7 +1000,7 @@ fn value(c: &Column, b: &[u8], encoding: &dyn shapefile::dbase::Encoding) -> Val
 
 /// The coordinate system in a `.prj`, with what couldn't be understood said in the notes. Another
 /// body's system that can't be read is an error, as when the file is read whole.
-fn shp_reproject(prj: Option<&str>, notes: &mut Vec<String>) -> Result<Reproject> {
+fn shp_reproject(prj: Option<&str>, notes: &mut crate::loss::Notes) -> Result<Reproject> {
     use crate::raster::planetary;
     let crs = match prj.map(|p| (p, crate::raster::wkt::read_wkt(p))) {
         None => crate::raster::Crs::LonLat,
@@ -990,7 +1014,10 @@ fn shp_reproject(prj: Option<&str>, notes: &mut Vec<String>) -> Result<Reproject
             if let Some(refused) = planetary::refused_wkt(p, &e) {
                 return Err(DataError::Format(format!("the .prj file: {refused}")));
             }
-            notes.push(format!("the .prj file: {e}; coordinates are read as longitude/latitude"));
+            notes.push(crate::loss::Note::loss(
+                crate::loss::LossCode::AssumedCrs,
+                format!("the .prj file: {e}; coordinates are read as longitude/latitude"),
+            ));
             crate::raster::Crs::LonLat
         }
     };

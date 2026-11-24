@@ -517,10 +517,10 @@ pub fn read_path(path: &Path) -> Result<(Dataset, ReadReport)> {
         }
         "dbf" => {
             check_size(path)?;
-            let mut notes = Vec::new();
+            let mut notes = crate::loss::Notes::new();
             let cpg = crate::dbf::read_cpg(path, &mut notes);
             let (ds, mut report) = read_dbf(std::fs::read(path)?, cpg.as_deref(), &name, &mut csv_memory_budget())?;
-            report.messages.extend(notes.into_iter().map(|n| format!("{name}: {n}")));
+            report.messages.extend(notes.prefixed(&name));
             (ds, report)
         }
         "shp" => read_shapefile_in(path, &name, None)?,
@@ -1545,7 +1545,10 @@ fn clip(s: &str) -> String {
 /// An IAU code (another body's system, as GDAL writes `urn:ogc:def:crs:IAU_2015::49900`) is read
 /// as longitude/latitude with a notice when it is planetocentric. Any other IAU code is an error,
 /// because its coordinates would land in the wrong place ([`planetary::declared`]).
-pub(crate) fn declared_crs(root: &Map<String, Json>, messages: &mut Vec<String>) -> Result<Option<(Crs, crate::raster::Transformer)>> {
+pub(crate) fn declared_crs(
+    root: &Map<String, Json>,
+    messages: &mut crate::loss::Notes,
+) -> Result<Option<(Crs, crate::raster::Transformer)>> {
     let Some(decl) = root.get("crs").filter(|v| !v.is_null()) else { return Ok(None) };
     if let Some(name) = decl.get("properties").and_then(|p| p.get("name")).and_then(Json::as_str).filter(|n| n.len() <= CRS_NAME_MAX)
         && let Some((authority, code)) = iau_name(name)
@@ -1569,7 +1572,10 @@ pub(crate) fn declared_crs(root: &Map<String, Json>, messages: &mut Vec<String>)
                     None => "of an unknown shape".to_string(),
                 },
             };
-            messages.push(format!("GeoJSON crs {shown}: {why}; coordinates are read as longitude/latitude"));
+            messages.push(crate::loss::Note::loss(
+                crate::loss::LossCode::AssumedCrs,
+                format!("GeoJSON crs {shown}: {why}; coordinates are read as longitude/latitude"),
+            ));
             None
         }
     })
@@ -1926,9 +1932,12 @@ impl Collector {
         let mut ds = Dataset::new(name, GeometryType::None, fields);
         ds.features.reserve(self.features.len());
         if report.skipped > 0 {
-            report.messages.push(format!("{} features had unreadable geometry", report.skipped));
+            report.messages.push(crate::loss::Note::loss(
+                crate::loss::LossCode::DroppedFeature,
+                format!("{} features had unreadable geometry", report.skipped),
+            ));
         }
-        let mut said = Vec::new();
+        let mut said = crate::loss::Notes::new();
         let declared = declared_crs(root, &mut said)?;
         report.messages.extend(said);
         let mut unconverted = 0usize;
@@ -1969,9 +1978,9 @@ impl Collector {
             ds.held_in = *crs;
             if unconverted > 0 {
                 report.skipped += unconverted;
-                report.messages.push(format!(
-                    "{unconverted} features couldn't be converted from {} to longitude/latitude and were skipped",
-                    crs.label()
+                report.messages.push(crate::loss::Note::loss(
+                    crate::loss::LossCode::DroppedFeature,
+                    format!("{unconverted} features couldn't be converted from {} to longitude/latitude and were skipped", crs.label()),
                 ));
             }
             // What couldn't be converted can't come back by defining the projection again.
@@ -2850,7 +2859,9 @@ pub(crate) fn read_rows(
         report.messages.push(note);
     }
     if malformed > 0 {
-        report.messages.push(format!("{malformed} rows were malformed and skipped"));
+        report
+            .messages
+            .push(crate::loss::Note::loss(crate::loss::LossCode::DroppedFeature, format!("{malformed} rows were malformed and skipped")));
     }
     let gt = if xy.is_some() { GeometryType::Point } else { GeometryType::None };
     let mut ds = Dataset::new(name, gt, fields);
@@ -2865,10 +2876,14 @@ pub(crate) fn read_rows(
         let column = headers.get(w).map_or("", |h| h.trim());
         match workbook.and_then(|(_, empty)| empty.get(w)).copied().unwrap_or(0) {
             0 => {}
-            1 => report.messages.push(format!("1 value in '{column}' isn't a date and was read as empty, so its row has no geometry")),
-            n => report
-                .messages
-                .push(format!("{n} values in '{column}' aren't dates and were read as empty, so their rows have no geometry")),
+            1 => report.messages.push(crate::loss::Note::loss(
+                crate::loss::LossCode::DroppedValue,
+                format!("1 value in '{column}' isn't a date and was read as empty, so its row has no geometry"),
+            )),
+            n => report.messages.push(crate::loss::Note::loss(
+                crate::loss::LossCode::DroppedValue,
+                format!("{n} values in '{column}' aren't dates and were read as empty, so their rows have no geometry"),
+            )),
         }
     }
     let (mut bad_wkt, mut zm_rows, mut collection_rows) = (0usize, 0usize, 0usize);
@@ -2932,18 +2947,22 @@ pub(crate) fn read_rows(
         let was = if extra_cells == 1 { "was" } else { "were" };
         let rows = if extra_rows == 1 { "row" } else { "rows" };
         let columns = if headers.len() == 1 { "column" } else { "columns" };
-        report
-            .messages
-            .push(format!("{extra_cells} {cells} past the header's {} {columns} {was} omitted in {extra_rows} {rows}", headers.len()));
+        report.messages.push(crate::loss::Note::loss(
+            crate::loss::LossCode::DroppedExtraAttributes,
+            format!("{extra_cells} {cells} past the header's {} {columns} {was} omitted in {extra_rows} {rows}", headers.len()),
+        ));
     }
     ds.drop_zm(&mut report, zm_rows);
     if collection_rows > 0 {
         let column = wkt.and_then(|i| headers.get(i)).map_or("", |h| h.trim());
         let what = if collection_rows == 1 { "WKT value" } else { "WKT values" };
-        report.messages.push(format!("{collection_rows} {what} in '{column}' lost later non-empty geometry-collection members; only the first non-empty member is kept"));
+        report.messages.push(crate::loss::Note::loss(crate::loss::LossCode::DroppedGeometry, format!("{collection_rows} {what} in '{column}' lost later non-empty geometry-collection members; only the first non-empty member is kept")));
     }
     if report.skipped > malformed {
-        report.messages.push(format!("{} rows had no usable coordinates", report.skipped - malformed));
+        report.messages.push(crate::loss::Note::loss(
+            crate::loss::LossCode::DroppedFeature,
+            format!("{} rows had no usable coordinates", report.skipped - malformed),
+        ));
     }
     if bad_wkt > 0 {
         report.messages.push(format!("{bad_wkt} rows had geometry that isn't readable WKT"));
@@ -2965,7 +2984,10 @@ pub(crate) fn read_rows(
         (None, Some(code)) => match crate::raster::Crs::from_epsg(code) {
             Some(c) => Some(c),
             None => {
-                report.messages.push(format!("unknown coordinate system SRID {code}; coordinates are read as longitude/latitude"));
+                report.messages.push(crate::loss::Note::loss(
+                    crate::loss::LossCode::AssumedCrs,
+                    format!("unknown coordinate system SRID {code}; coordinates are read as longitude/latitude"),
+                ));
                 None
             }
         },
@@ -2988,7 +3010,10 @@ pub(crate) fn read_rows(
         }
         if lost > 0 {
             report.skipped += lost;
-            report.messages.push(format!("{lost} rows couldn't be converted from {} to longitude/latitude", c.label()));
+            report.messages.push(crate::loss::Note::loss(
+                crate::loss::LossCode::DroppedFeature,
+                format!("{lost} rows couldn't be converted from {} to longitude/latitude", c.label()),
+            ));
         }
     }
     let read_as_degrees = crs.is_none_or(Crs::is_geographic);
@@ -3344,7 +3369,7 @@ pub fn read_shapefile_in(path: &Path, name: &str, crs: Option<Crs>) -> Result<(D
     if shx.is_file() {
         check_size_with(&shx, shapefile_size_error)?;
     }
-    let mut notes = Vec::new();
+    let mut notes = crate::loss::Notes::new();
     let parts = ShapefileParts {
         shp: crate::provenance::read(path)?,
         shx: if shx.is_file() { Some(crate::provenance::read(shx)?) } else { None },
@@ -3353,7 +3378,7 @@ pub fn read_shapefile_in(path: &Path, name: &str, crs: Option<Crs>) -> Result<(D
         cpg: crate::dbf::read_cpg(path, &mut notes),
     };
     let (ds, mut report) = read_shapefile_parts(parts, name, crs)?;
-    report.messages.extend(notes.into_iter().map(|n| format!("{name}: {n}")));
+    report.messages.extend(notes.prefixed(name));
     Ok((ds, report))
 }
 
@@ -3769,9 +3794,9 @@ struct DbfRead {
 /// `name` is the layer's, for the error of a `.dbf` it can't open.
 fn dbf_reader(mut bytes: Vec<u8>, cpg: Option<&[u8]>, name: &str) -> Result<DbfRead> {
     use std::io::Cursor;
-    let mut declared = Vec::new();
+    let mut declared = crate::loss::Notes::new();
     let encoding = crate::dbf::encoding(cpg, bytes.get(29).copied().unwrap_or(0), &mut declared);
-    let mut encoding_notes = crate::loss::Notes::from(declared);
+    let mut encoding_notes = declared;
     // Counted before a date column is marked a character one below: its values aren't text.
     let (names, not_utf8) = crate::dbf::not_utf8(&bytes, &encoding);
     encoding_notes.extend(crate::dbf::not_utf8_names_note(&names, encoding.name()));
@@ -3861,8 +3886,14 @@ fn read_dbf(bytes: Vec<u8>, cpg: Option<&[u8]>, name: &str, budget: &mut usize) 
     integral_numeric_to_integer(&mut ds, &decimals);
     match report.skipped {
         0 => {}
-        1 => report.messages.push(format!("{name}: 1 dBASE record was unreadable and left out")),
-        n => report.messages.push(format!("{name}: {n} dBASE records were unreadable and left out")),
+        1 => report.messages.push(crate::loss::Note::loss(
+            crate::loss::LossCode::DroppedFeature,
+            format!("{name}: 1 dBASE record was unreadable and left out"),
+        )),
+        n => report.messages.push(crate::loss::Note::loss(
+            crate::loss::LossCode::DroppedFeature,
+            format!("{name}: {n} dBASE records were unreadable and left out"),
+        )),
     }
     *budget = left;
     Ok((ds, report))
@@ -3949,6 +3980,21 @@ impl DbfCounts {
     }
 }
 
+/// Says the numbers in a `.dbf` that aren't finite (nan or inf), read as empty, with the count for
+/// each field in `counts` (by field index).
+pub(crate) fn nonfinite_note(fields: &[Field], counts: &[usize]) -> Option<crate::loss::Note> {
+    let total: usize = counts.iter().sum();
+    if total == 0 {
+        return None;
+    }
+    let what = if total == 1 {
+        "1 number isn't finite (nan or inf) and was".to_string()
+    } else {
+        format!("{total} numbers aren't finite (nan or inf) and were")
+    };
+    Some(crate::loss::Note::loss(crate::loss::LossCode::DroppedValue, format!("{what} read as empty, in {}", named_fields(fields, counts))))
+}
+
 /// Reports date, numeric and `<Null>` cells read as null, and text that isn't UTF-8, identically
 /// for tables and Shapefiles.
 fn dbf_notices(ds: &Dataset, report: &mut ReadReport, counts: &DbfCounts) {
@@ -3956,18 +4002,7 @@ fn dbf_notices(ds: &Dataset, report: &mut ReadReport, counts: &DbfCounts) {
     let name = &ds.name;
     report.unread_dates = crate::source::unread_dates_note(&ds.fields, unread_dates);
     report.messages.extend(report.unread_dates.iter().map(|n| n.clone().prefixed(name)));
-    let nonfinite_total: usize = nonfinite.iter().sum();
-    if nonfinite_total > 0 {
-        let what = if nonfinite_total == 1 {
-            "1 number isn't finite (nan or inf) and was".to_string()
-        } else {
-            format!("{nonfinite_total} numbers aren't finite (nan or inf) and were")
-        };
-        report.messages.push(crate::loss::Note::loss(
-            crate::loss::LossCode::DroppedValue,
-            format!("{name}: {what} read as empty, in {}", named_fields(&ds.fields, nonfinite)),
-        ));
-    }
+    report.messages.extend(nonfinite_note(&ds.fields, nonfinite).map(|n| n.prefixed(name)));
     report.messages.extend(crate::source::null_text_note(&ds.fields, null_text).map(|n| n.prefixed(name)));
     report.messages.extend(crate::source::not_utf8_note(&ds.fields, not_utf8, encoding).map(|n| n.prefixed(name)));
 }
@@ -4136,10 +4171,10 @@ pub(crate) fn read_shapefile_parts(parts: ShapefileParts, name: &str, crs: Optio
             .push(format!("{name}: {extra_shapes} shape(s) past the .dbf's last record have no attributes and were left out{unreadable}"));
     }
     if lost_track && records > pairs {
-        report.messages.push(format!(
+        report.messages.push(crate::loss::Note::loss(crate::loss::LossCode::DroppedFeature, format!(
             "{name}: shape {pairs} can't be read and the Shapefile has no .shx to find the next one by: the {} record(s) after it were left out",
             records.saturating_sub(pairs)
-        ));
+        )));
     } else if records > pairs && extra_shapes == 0 && !lost_track {
         report
             .messages
@@ -4162,25 +4197,28 @@ pub(crate) fn read_shapefile_parts(parts: ShapefileParts, name: &str, crs: Optio
     // doesn't match the coordinates), or as they are without a system to convert from.
     let e = if to_lonlat.is_some() { lonlat_extent } else { ds.extent() };
     if e.beyond_lonlat() {
-        report.messages.push(if to_lonlat.is_some() {
+        report.messages.push(crate::loss::Note::loss(crate::loss::LossCode::AssumedCrs, if to_lonlat.is_some() {
             "coordinates are not longitude/latitude once converted from the .prj's coordinate system; the .prj may not match them, and they may draw out of place"
         } else {
             "coordinates are not longitude/latitude; RustGIS reads them as WGS 84 and they may draw out of place"
-        });
+        }));
     }
     if report.skipped > 0 {
         report.messages.push(format!("{} shapes were unreadable or unsupported", report.skipped));
     }
     if not_numbers > 0 {
-        report.messages.push(format!(
+        report.messages.push(crate::loss::Note::loss(crate::loss::LossCode::DroppedGeometry, format!(
             "{name}: {not_numbers} shape(s) have a coordinate that isn't a number (NaN or infinite): their features are kept without geometry"
-        ));
+        )));
     }
     ds.crs_incomplete = unconverted > 0;
     if unconverted > 0 && converted == 0 {
         report.messages.push("no shape could be converted to longitude/latitude: the .prj doesn't seem to match the coordinates");
     } else if unconverted > 0 {
-        report.messages.push(format!("{unconverted} shapes couldn't be converted to longitude/latitude and have no geometry"));
+        report.messages.push(crate::loss::Note::loss(
+            crate::loss::LossCode::DroppedGeometry,
+            format!("{unconverted} shapes couldn't be converted to longitude/latitude and have no geometry"),
+        ));
     }
     Ok((ds, report))
 }
@@ -4202,7 +4240,10 @@ fn shapefile_crs(prj: Option<&str>, report: &mut ReadReport) -> Result<Option<(C
             if let Some(refused) = planetary::refused_wkt(prj, &e) {
                 return Err(DataError::Format(format!("the .prj file: {refused}")));
             }
-            report.messages.push(format!("the .prj file: {e}; coordinates are read as longitude/latitude"));
+            report.messages.push(crate::loss::Note::loss(
+                crate::loss::LossCode::AssumedCrs,
+                format!("the .prj file: {e}; coordinates are read as longitude/latitude"),
+            ));
             return Ok(None);
         }
     };
@@ -4212,7 +4253,10 @@ fn shapefile_crs(prj: Option<&str>, report: &mut ReadReport) -> Result<Option<(C
     match crs.transformer() {
         Ok(t) => Ok(Some((crs, t))),
         Err(e) => {
-            report.messages.push(format!("the .prj file: {e}; coordinates are read as longitude/latitude"));
+            report.messages.push(crate::loss::Note::loss(
+                crate::loss::LossCode::AssumedCrs,
+                format!("the .prj file: {e}; coordinates are read as longitude/latitude"),
+            ));
             Ok(None)
         }
     }
@@ -5780,7 +5824,8 @@ mod tests {
             assert_eq!(ds.features[0].attrs, [Value::Int(7), Value::Text("kept".into())]);
             assert_eq!(ds.features[1].attrs, [Value::Int(8), Value::Null]);
             assert_eq!(report.skipped, 0);
-            assert_eq!(report.messages, expected);
+            assert_eq!(report.messages.texts().collect::<Vec<_>>(), expected);
+            assert!(report.messages.iter().all(|m| m.loss == Some(crate::loss::LossCode::DroppedExtraAttributes)));
         }
     }
 
@@ -6517,7 +6562,8 @@ mod tests {
                 let (ds, report) = read_geojson(&root.to_string(), "collection").unwrap();
                 assert!(ds.features.is_empty(), "must not retain a partial collection: {root}");
                 assert_eq!(report.skipped, 1);
-                assert_eq!(report.messages, ["1 features had unreadable geometry"]);
+                assert_eq!(report.messages.texts().collect::<Vec<_>>(), ["1 features had unreadable geometry"]);
+                assert_eq!(report.messages[0].loss, Some(crate::loss::LossCode::DroppedFeature));
                 assert!(to_geojson(&ds)["features"].as_array().unwrap().is_empty());
             }
         }
@@ -6603,7 +6649,7 @@ mod tests {
         let ds = ds.in_lonlat().unwrap().into_owned();
         let Some(Geometry::Point(c)) = &ds.features[0].geometry else { panic!() };
         assert!((c.x + 73.96).abs() < 0.05 && (c.y - 40.78).abs() < 0.05, "{c:?}");
-        assert_eq!(rep.messages, ["1 rows had no usable coordinates"]);
+        assert_eq!(rep.messages.texts().collect::<Vec<_>>(), ["1 rows had no usable coordinates"]);
         // Without the coordinate system, the points are said to be out of place.
         let (_, rep) = read_csv_with(text, "t", &CsvOptions { crs: None, ..opts.clone() }).unwrap();
         assert!(rep.messages.iter().any(|m| m.contains("\"crs\"")), "{:?}", rep.messages);
@@ -6658,7 +6704,7 @@ mod tests {
         let (ds, report) = read_csv(&csv, "collections").unwrap();
         assert_eq!(report.skipped, 0);
         assert_eq!(
-            report.messages,
+            report.messages.texts().collect::<Vec<_>>(),
             ["2 WKT values in 'wkt' lost later non-empty geometry-collection members; only the first non-empty member is kept"]
         );
         assert_eq!(ds.held_in, crate::raster::Crs::LonLat);
@@ -6679,7 +6725,10 @@ mod tests {
             report.messages,
             [
                 crate::loss::Note::loss(crate::loss::LossCode::DroppedZm, crate::zm_note(Some(1))),
-                "1 WKT value in 'wkt' lost later non-empty geometry-collection members; only the first non-empty member is kept".into()
+                crate::loss::Note::loss(
+                    crate::loss::LossCode::DroppedGeometry,
+                    "1 WKT value in 'wkt' lost later non-empty geometry-collection members; only the first non-empty member is kept"
+                )
             ]
         );
     }
@@ -6766,7 +6815,7 @@ mod tests {
         let (ds, rep) = read_geojson(mixed, "mixed").unwrap();
         assert!(ds.features.is_empty() && !ds.zm_dropped && !said(&rep));
         assert_eq!(rep.skipped, 1);
-        assert_eq!(rep.messages, ["1 features had unreadable geometry"]);
+        assert_eq!(rep.messages.texts().collect::<Vec<_>>(), ["1 features had unreadable geometry"]);
         let curve = r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{},"geometry":{"type":"Curve","coordinates":[[1,2,3]]}},{"type":"Feature","properties":{},"geometry":{"type":"Point","coordinates":[1,2]}}]}"#;
         let (ds, rep) = read_geojson(curve, "curve").unwrap();
         assert!(!ds.zm_dropped && !said(&rep) && rep.skipped == 1, "{rep:?}");
@@ -9704,7 +9753,11 @@ mod tests {
         let path = three_named_points(dir.path());
         let clean = std::fs::read(path.with_extension("dbf")).unwrap();
         let notes = |r: &ReadReport| {
-            r.messages.iter().filter(|m| m.contains("marked deleted") || m.contains("unreadable")).cloned().collect::<Vec<_>>()
+            r.messages
+                .iter()
+                .filter(|m| m.contains("marked deleted") || m.contains("unreadable"))
+                .map(|m| m.as_str().to_string())
+                .collect::<Vec<_>>()
         };
         let (ds, report) = read_bytes("t.dbf", &clean).unwrap();
         assert_eq!(ds.features.len(), 3);

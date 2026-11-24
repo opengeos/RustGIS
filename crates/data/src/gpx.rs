@@ -200,7 +200,10 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>>
         }
         report.skipped = skipped;
         if skipped > 0 {
-            report.messages.push(format!("{name}: {skipped} points, routes or tracks without usable geometry were skipped"));
+            report.messages.push(crate::loss::Note::loss(
+                crate::loss::LossCode::DroppedFeature,
+                format!("{name}: {skipped} points, routes or tracks without usable geometry were skipped"),
+            ));
         }
     }
     if out.is_empty() {

@@ -186,9 +186,9 @@ pub fn read(bytes: &[u8], name: &str) -> Result<(Dataset, ReadReport)> {
     let mut page = read_page(bytes, name)?;
     page.report.messages.extend(page.losses.messages());
     if page.exceeded_transfer_limit {
-        page.report.messages.push(format!(
-            "the service sent {} features only (its record limit); the rest aren't in this answer",
-            page.dataset.features.len()
+        page.report.messages.push(crate::loss::Note::loss(
+            crate::loss::LossCode::DroppedOverLimit,
+            format!("the service sent {} features only (its record limit); the rest aren't in this answer", page.dataset.features.len()),
         ));
     }
     Ok((page.dataset, page.report))
@@ -323,7 +323,10 @@ pub fn read_page_within(bytes: &[u8], name: &str, limit: usize) -> Result<Page> 
             || esri_wkt_over_code(code, wkt.as_deref()).is_some()
             || !wkt.as_deref().is_some_and(crate::raster::wkt::parses))
     {
-        report.messages.push("the coordinate system's WKT isn't valid UTF-8; the bytes that can't be read are replaced with U+FFFD");
+        report.messages.push(crate::loss::Note::loss(
+            crate::loss::LossCode::ChangedEncoding,
+            "the coordinate system's WKT isn't valid UTF-8; the bytes that can't be read are replaced with U+FFFD",
+        ));
     }
     let said_before = report.messages.len();
     let (crs, to_lonlat) = crate::filegdb::esri_crs(code, wkt.as_deref(), &mut report)?;
@@ -340,7 +343,10 @@ pub fn read_page_within(bytes: &[u8], name: &str, limit: usize) -> Result<Page> 
         && crate::filegdb::crs_of_code(code) != Some(crate::raster::Crs::LonLat)
     {
         unread_code = true;
-        report.messages.push(format!("coordinate system {code} can't be used; coordinates are read as longitude/latitude"));
+        report.messages.push(crate::loss::Note::loss(
+            crate::loss::LossCode::AssumedCrs,
+            format!("coordinate system {code} can't be used; coordinates are read as longitude/latitude"),
+        ));
     }
 
     let layer_type = match shape_kind {

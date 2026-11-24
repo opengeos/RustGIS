@@ -369,7 +369,10 @@ impl Reader {
             self.report.messages.push(format!("{what} left out: {}{more}", shown.join("; ")));
         }
         if self.over {
-            self.report.messages.push(format!("a photo layer holds up to {MAX_PHOTOS} photos; the rest were left out"));
+            self.report.messages.push(crate::loss::Note::loss(
+                crate::loss::LossCode::DroppedOverLimit,
+                format!("a photo layer holds up to {MAX_PHOTOS} photos; the rest were left out"),
+            ));
         }
         (self.ds, self.report)
     }

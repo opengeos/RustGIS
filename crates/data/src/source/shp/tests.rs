@@ -665,7 +665,7 @@ fn a_nan_shape_outside_an_area_its_system_cant_bound_is_counted_as_of_the_layer(
             p
         };
         let view = Extent::new(-120.0, -30.0, 10.0, 30.0);
-        let r = Reproject::from_crs(crs, &mut Vec::new());
+        let r = Reproject::from_crs(crs, &mut crate::loss::Notes::new());
         assert!(r.extent_from_lonlat(&view).is_none(), "the view's edge is refused");
         const SAID: &str = "have a coordinate that isn't a number under a bounding box that is one";
         let said = |notes: &[crate::loss::Note]| notes.iter().filter(|n| n.contains(SAID)).map(|n| n.text.clone()).collect::<Vec<_>>();

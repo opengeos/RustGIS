@@ -71,9 +71,9 @@ pub fn read(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Vec<(Data
     let crs = crs.or_else(|| file_crs.and_then(Crs::from_epsg));
     match (crs, file_crs) {
         (Some(_), _) => {}
-        (None, Some(code)) => report.messages.push(format!(
+        (None, Some(code)) => report.messages.push(crate::loss::Note::loss(crate::loss::LossCode::AssumedCrs, format!(
             "the file's coordinate system, EPSG:{code}, isn't one RustGIS converts (give \"crs\" as a WKT or another code): coordinates are kept as they are"
-        )),
+        ))),
         (None, None) => report
             .messages
             .push("the file doesn't say its coordinate system (give \"crs\", such as EPSG:2263): coordinates are kept as they are"),
@@ -193,7 +193,10 @@ pub fn read(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Vec<(Data
         }
         for (i, f) in elements(&s, "F").enumerate() {
             if i >= MAX_FACES {
-                report.messages.push(format!("surface '{sname}' has more than {MAX_FACES} faces: the rest are left out"));
+                report.messages.push(crate::loss::Note::loss(
+                    crate::loss::LossCode::DroppedOverLimit,
+                    format!("surface '{sname}' has more than {MAX_FACES} faces: the rest are left out"),
+                ));
                 break;
             }
             // Invisible faces (i="1") are holes in the surface.
@@ -217,11 +220,17 @@ pub fn read(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Vec<(Data
 
     if missing_parcels > 0 {
         let (parcels, verb) = if missing_parcels == 1 { ("parcel", "was") } else { ("parcels", "were") };
-        report.messages.push(format!("{missing_parcels} LandXML {parcels} without CoordGeom {verb} left out"));
+        report.messages.push(crate::loss::Note::loss(
+            crate::loss::LossCode::DroppedFeature,
+            format!("{missing_parcels} LandXML {parcels} without CoordGeom {verb} left out"),
+        ));
     }
     report.skipped = skipped + missing_parcels;
     if skipped > 0 {
-        report.messages.push(format!("{skipped} points, faces or figures couldn't be read and were left out"));
+        report.messages.push(crate::loss::Note::loss(
+            crate::loss::LossCode::DroppedFeature,
+            format!("{skipped} points, faces or figures couldn't be read and were left out"),
+        ));
     }
     let mut out: Vec<(Dataset, ReadReport)> = Vec::new();
     let transformer = match crs.filter(|c| *c != Crs::LonLat) {
@@ -249,7 +258,10 @@ pub fn read(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Vec<(Data
                 }
             }
             if lost > 0 {
-                rep.messages.push(format!("{lost} features couldn't be converted from {}", c.label()));
+                rep.messages.push(crate::loss::Note::loss(
+                    crate::loss::LossCode::DroppedFeature,
+                    format!("{lost} features couldn't be converted from {}", c.label()),
+                ));
             }
         }
         out.push((ds, rep));
@@ -271,7 +283,7 @@ mod tests {
         assert_eq!(layers.len(), 1);
         assert_eq!(layers[0].0.features[0].geometry, Some(Geometry::Point(Coord::new(2.0, 1.0))));
         assert_eq!(layers[0].0.value(0, 0), &Value::Text("kept".into()));
-        assert_eq!(layers[0].1.messages, ["2 LandXML parcels without CoordGeom were left out"]);
+        assert_eq!(layers[0].1.messages.texts().collect::<Vec<_>>(), ["2 LandXML parcels without CoordGeom were left out"]);
         let clean = br#"<LandXML><CoordinateSystem epsgCode="4326"/><CgPoints><CgPoint name="kept">1 2</CgPoint></CgPoints></LandXML>"#;
         assert!(read("a.xml", clean, None).unwrap()[0].1.messages.is_empty());
     }

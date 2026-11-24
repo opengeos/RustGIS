@@ -283,7 +283,10 @@ fn read_points<R: Read + Seek + Send + Sync>(mut r: R, name: &str, crs: Option<C
                 Some(c)
             }
             Some(Err(e)) => {
-                report.messages.push(format!("{name}: {e}; coordinates are kept as they are"));
+                report.messages.push(crate::loss::Note::loss(
+                    crate::loss::LossCode::AssumedCrs,
+                    format!("{name}: {e}; coordinates are kept as they are"),
+                ));
                 said = true;
                 None
             }
@@ -299,13 +302,19 @@ fn read_points<R: Read + Seek + Send + Sync>(mut r: R, name: &str, crs: Option<C
         Some(c) => match c.transformer() {
             Ok(t) => Some(t),
             Err(e) => {
-                report.messages.push(format!("{name}: the coordinate system: {e}; coordinates are kept as they are"));
+                report.messages.push(crate::loss::Note::loss(
+                    crate::loss::LossCode::AssumedCrs,
+                    format!("{name}: the coordinate system: {e}; coordinates are kept as they are"),
+                ));
                 None
             }
         },
     };
     if crs.is_none() && !lonlat_bounds && !said {
-        report.messages.push(format!("{name}: the file doesn't say its coordinate system; coordinates are kept as they are"));
+        report.messages.push(crate::loss::Note::loss(
+            crate::loss::LossCode::AssumedCrs,
+            format!("{name}: the file doesn't say its coordinate system; coordinates are kept as they are"),
+        ));
     }
 
     let has_rgb = matches!(h.format, 2 | 3 | 5 | 7 | 8 | 10);
@@ -351,7 +360,10 @@ fn read_points<R: Read + Seek + Send + Sync>(mut r: R, name: &str, crs: Option<C
                     "its compressed points couldn't be read (a damaged file, or one written with a LAZ variant RustGIS doesn't read)",
                 ));
             }
-            report.messages.push(format!("{name}: decompression stopped after {read} of {readable} points (a damaged or cut-off file)"));
+            report.messages.push(crate::loss::Note::loss(
+                crate::loss::LossCode::DroppedFeature,
+                format!("{name}: decompression stopped after {read} of {readable} points (a damaged or cut-off file)"),
+            ));
         }
     } else {
         let mut rec = vec![0u8; rec_len];
@@ -366,7 +378,10 @@ fn read_points<R: Read + Seek + Send + Sync>(mut r: R, name: &str, crs: Option<C
             }
             pos = Some(at.saturating_add(rec_len as u64));
             if r.read_exact(&mut rec).is_err() {
-                report.messages.push(format!("{name}: the file ends before its last points"));
+                report.messages.push(crate::loss::Note::loss(
+                    crate::loss::LossCode::DroppedFeature,
+                    format!("{name}: the file ends before its last points"),
+                ));
                 break;
             }
             if let Some(p) = point(&h, &rec) {
@@ -377,7 +392,10 @@ fn read_points<R: Read + Seek + Send + Sync>(mut r: R, name: &str, crs: Option<C
         }
     }
     if stride > 1 {
-        report.messages.push(format!("{name}: {} of its {total} points are shown, evenly spread", points.len()));
+        report.messages.push(crate::loss::Note::loss(
+            crate::loss::LossCode::DroppedOverLimit,
+            format!("{name}: {} of its {total} points are shown, evenly spread", points.len()),
+        ));
     }
     // LAS colours are 16-bit by the standard, but some writers store 8-bit values: a file whose
     // colours never pass 255 (over every point read) is taken as 8-bit. A 16-bit file that dark
@@ -413,7 +431,10 @@ fn read_points<R: Read + Seek + Send + Sync>(mut r: R, name: &str, crs: Option<C
     }
     if lost > 0 {
         report.skipped += lost;
-        report.messages.push(format!("{name}: {lost} points couldn't be converted to longitude/latitude"));
+        report.messages.push(crate::loss::Note::loss(
+            crate::loss::LossCode::DroppedFeature,
+            format!("{name}: {lost} points couldn't be converted to longitude/latitude"),
+        ));
     }
     Ok((ds, report, total))
 }
