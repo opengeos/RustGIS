@@ -80,6 +80,7 @@ pub fn read(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Vec<(Data
     }
     let mut skipped = 0usize;
     let mut missing_parcels = 0usize;
+    let mut missing_alignments = 0usize;
     // Vertices left out of a shape that is kept (a point a CoordGeom names that isn't there):
     // geometry lost, not features, which `skipped` counts.
     let mut vertices = 0usize;
@@ -116,8 +117,11 @@ pub fn read(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Vec<(Data
         named.get(n.attribute("pntRef")?).copied()
     };
     // The points along a CoordGeom: each Line, Curve or Spiral's start (and end).
+    // `skipped` counts the vertices that can't be read, each once: a point one segment ends at
+    // and the next starts at, named by the same `pntRef`, is one vertex.
     let path = |cg: &Node, skipped: &mut usize| -> Vec<Coord> {
         let mut pts: Vec<Coord> = Vec::new();
+        let mut missing: std::collections::HashSet<&str> = std::collections::HashSet::new();
         for seg in cg.children().filter(|c| c.is_element() && matches!(local(c), "Line" | "Curve" | "Spiral" | "IrregularLine")) {
             // A curve's PI (where its tangents meet) is off the curve: its chord runs Start to End.
             for k in ["Start", "End"] {
@@ -125,7 +129,10 @@ pub fn read(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Vec<(Data
                     match pt(&n) {
                         Some(c) if pts.last() != Some(&c) => pts.push(c),
                         Some(_) => {}
-                        None => *skipped += 1,
+                        None => match n.attribute("pntRef") {
+                            Some(name) if !missing.insert(name) => {}
+                            _ => *skipped += 1,
+                        },
                     }
                 }
             }
@@ -166,9 +173,10 @@ pub fn read(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Vec<(Data
         vec![Field::new("name", FieldType::Text), Field::new("length", FieldType::Double), Field::new("staStart", FieldType::Double)],
     );
     for a in elements(&root, "Alignment") {
-        // An alignment without its CoordGeom has no shape to draw: left out, and counted.
+        // An alignment without its CoordGeom has no shape to draw: left out, and counted, as a
+        // parcel without one is.
         let Some(cg) = a.children().find(|c| c.is_element() && local(c) == "CoordGeom") else {
-            skipped += 1;
+            missing_alignments += 1;
             continue;
         };
         let mut unread = 0usize;
@@ -233,7 +241,14 @@ pub fn read(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Vec<(Data
             format!("{missing_parcels} LandXML {parcels} without CoordGeom {verb} left out"),
         ));
     }
-    report.skipped = skipped + missing_parcels;
+    if missing_alignments > 0 {
+        let (alignments, verb) = if missing_alignments == 1 { ("alignment", "was") } else { ("alignments", "were") };
+        report.messages.push(crate::loss::Note::loss(
+            crate::loss::LossCode::DroppedFeature,
+            format!("{missing_alignments} LandXML {alignments} without CoordGeom {verb} left out"),
+        ));
+    }
+    report.skipped = skipped + missing_parcels + missing_alignments;
     if skipped > 0 {
         report.messages.push(crate::loss::Note::loss(
             crate::loss::LossCode::DroppedFeature,
@@ -335,7 +350,7 @@ mod tests {
         let layers = read("a.xml", xml.as_bytes(), None).unwrap();
         assert_eq!(layers[0].1.skipped, 1);
         let said: Vec<_> = layers[0].1.messages.iter().filter(|m| m.contains("left out")).map(|m| (m.as_str(), m.loss)).collect();
-        assert_eq!(said, [("1 point, face or figure couldn't be read and was left out", Some(crate::loss::LossCode::DroppedFeature))]);
+        assert_eq!(said, [("1 LandXML alignment without CoordGeom was left out", Some(crate::loss::LossCode::DroppedFeature))]);
     }
 
     /// A point a parcel's CoordGeom names that isn't there is a vertex left out of a parcel that
@@ -355,6 +370,16 @@ mod tests {
             said,
             [("1 LandXML vertex couldn't be read and was left out of its shape", Some(crate::loss::LossCode::DroppedGeometry))]
         );
+        // A missing point one line ends at and the next starts at is one vertex, not two.
+        let junction = r#"<LandXML><Parcels><Parcel name="kept"><CoordGeom>
+  <Line><Start>0 0</Start><End>1 0</End></Line>
+  <Line><Start>1 0</Start><End pntRef="missing"/></Line>
+  <Line><Start pntRef="missing"/><End>1 1</End></Line>
+  <Line><Start>1 1</Start><End>0 1</End></Line>
+</CoordGeom></Parcel></Parcels></LandXML>"#;
+        let layers = read("j.xml", junction.as_bytes(), None).unwrap();
+        let said: Vec<_> = layers[0].1.messages.texts().filter(|m| m.contains("vertex") || m.contains("vertices")).collect();
+        assert_eq!(said, ["1 LandXML vertex couldn't be read and was left out of its shape"]);
     }
 
     #[test]
