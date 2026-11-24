@@ -8,6 +8,8 @@ mod formats_out;
 #[cfg(not(target_arch = "wasm32"))]
 #[path = "tests/held_databases.rs"]
 mod held_databases;
+#[path = "tests/own_grid_edits.rs"]
+mod own_grid_edits;
 #[cfg(not(target_arch = "wasm32"))]
 #[path = "tests/scene_losses.rs"]
 mod scene_losses;
@@ -17,8 +19,6 @@ mod services_own;
 #[cfg(not(target_arch = "wasm32"))]
 #[path = "tests/sources_own.rs"]
 mod sources_own;
-#[path = "tests/own_grid_edits.rs"]
-mod own_grid_edits;
 #[path = "tests/unplaced_edits.rs"]
 mod unplaced_edits;
 #[path = "tests/unplaced_gp.rs"]

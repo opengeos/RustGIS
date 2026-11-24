@@ -725,7 +725,7 @@ impl OwnGrid {
     }
 
     /// A step `(e, n)` east and north of the grid, in its units, as a step of its coordinates.
-    fn from_east_north(self, e: f64, n: f64) -> Coord {
+    fn coords_of(self, e: f64, n: f64) -> Coord {
         let [(xe, xn), (ye, yn)] = self.axes;
         let det = xe * yn - ye * xn;
         Coord::new((e * yn - n * ye) / det, (xe * n - xn * e) / det)
@@ -739,7 +739,7 @@ impl OwnGrid {
 
     /// A step of `dx` and `dy` metres east and north of the grid, in its coordinates.
     fn step(self, dx: f64, dy: f64) -> Coord {
-        self.from_east_north(dx / self.unit_m, dy / self.unit_m)
+        self.coords_of(dx / self.unit_m, dy / self.unit_m)
     }
 
     /// `g` with each vertex `f` gives for it (one missing a coordinate, or with an infinite one,
@@ -766,7 +766,7 @@ impl OwnGrid {
         let c = g.extent().center();
         Self::map(g, |p| {
             let (e, n) = self.east_north(Coord::new(p.x - c.x, p.y - c.y));
-            let d = self.from_east_north(e * cos - n * sin, e * sin + n * cos);
+            let d = self.coords_of(e * cos - n * sin, e * sin + n * cos);
             Coord::new(c.x + d.x, c.y + d.y)
         })
     }
