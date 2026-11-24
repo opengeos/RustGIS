@@ -1768,7 +1768,8 @@ impl Calculation {
     }
 
     /// [`Calculation::eval_or_fault`] for a row with `offset` rows before `ds`'s first in its
-    /// layer ([`rustgis_data::query::value_or_fault_at`]); the earlier calculator reads no row number.
+    /// layer ([`rustgis_data::query::value_or_fault_at`]). `Calc` reads no row number, so it takes
+    /// no offset.
     pub(crate) fn eval_or_fault_at(
         &self,
         ds: &rustgis_data::Dataset,

@@ -3358,16 +3358,16 @@ fn calculation_preview(rows: &[rustgis_engine::cmd::edit::CalculationPreview]) -
                 // The phrases the run's notices give for the same errors.
                 PreviewLoss::Error(fault) => tl_raw!(fault.describe()),
             });
-            let value = match loss {
+            let shown = match loss {
                 Some(loss) => crate::i18n::fmt_raw("{value} ({loss})", &[("value", &value), ("loss", loss)]),
                 None => value,
             };
             // The check that would refuse the edit, in the run's words (#2837).
             match &p.refused {
                 Some(why) => {
-                    crate::i18n::fmt_raw("{value} (refused: {why})", &[("value", &value), ("why", &one_line(why, LONGEST_REFUSAL))])
+                    crate::i18n::fmt_raw("{value} (refused: {why})", &[("value", &shown), ("why", &one_line(why, LONGEST_REFUSAL))])
                 }
-                None => value,
+                None => shown,
             }
         })
         .collect();
