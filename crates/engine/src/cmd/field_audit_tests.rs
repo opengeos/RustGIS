@@ -722,7 +722,7 @@ fn a_layer_held_in_its_own_system_comes_back_with_only_its_changes() {
 /// longitude/latitude refused to send) comes back too, as it is held.
 #[test]
 fn a_layer_held_in_its_own_system_comes_back_exact_by_a_list_in_that_system() {
-    crate::cmd::field_changes::test_bases::write_own_systems();
+    let _own = crate::cmd::field_changes::test_bases::write_own_systems();
     use rustgis_data::{Coord, Geometry, raster::Crs};
     let equal_earth = Crs::from_epsg(8857).unwrap();
     let temp = Temp::new("native-list");
@@ -766,7 +766,7 @@ fn a_layer_held_in_its_own_system_comes_back_exact_by_a_list_in_that_system() {
 /// back there, as a list of version 1's are.
 #[test]
 fn a_list_in_a_layers_own_system_comes_back_to_a_layer_held_in_another() {
-    crate::cmd::field_changes::test_bases::write_own_systems();
+    let _own = crate::cmd::field_changes::test_bases::write_own_systems();
     use rustgis_data::{Geometry, raster::Crs};
     let temp = Temp::new("native-list-elsewhere");
     let mut home = home(&temp);
@@ -801,7 +801,7 @@ fn a_list_in_a_layers_own_system_comes_back_to_a_layer_held_in_another() {
 /// return; once the list touches it, it does, naming it.
 #[test]
 fn only_a_feature_the_list_touches_can_refuse_a_converted_return() {
-    crate::cmd::field_changes::test_bases::write_own_systems();
+    let _own = crate::cmd::field_changes::test_bases::write_own_systems();
     use rustgis_data::{Coord, Geometry, raster::Crs};
     let temp = Temp::new("native-list-untouched");
     let mut home = home(&temp);
@@ -876,6 +876,33 @@ fn a_home_feature_an_addition_renumbers_around_doesnt_refuse_a_converted_return(
         l.dataset.features.iter().find(|f| f.id == at_home).and_then(|f| f.geometry.clone()),
         Some(Geometry::Point(Coord::new(1e9, 0.0)))
     );
+}
+
+/// A shape the computer moved where it has no place in longitude/latitude, which the field's then
+/// replaces, is kept among the conflicts without that place (they are in longitude/latitude), and
+/// the return says so.
+#[test]
+fn a_displaced_shape_with_no_place_in_longitude_latitude_is_said() {
+    use rustgis_data::{Coord, Geometry, raster::Crs};
+    let _own = crate::cmd::field_changes::test_bases::write_own_systems();
+    let temp = Temp::new("native-list-placeless-conflict");
+    let mut home = home(&temp);
+    let hc = layer(&home, "Cities");
+    home.map_mut().layer_mut(hc).unwrap().dataset.hold_in(Crs::from_epsg(8857).unwrap()).unwrap();
+    let (_, out) = package(&mut home, &json!({"name": "Day", "extent": AREA})).unwrap();
+    let mut a = phone(&temp, &out, "a");
+    let cities = layer(&a, "Cities");
+    let moved = a.map().layer(cities).unwrap().dataset.features[0].id;
+    let ds = &mut a.map_mut().layer_mut(cities).unwrap().dataset;
+    let Some(Geometry::Point(c)) = ds.features[0].geometry else { panic!() };
+    ds.features[0].geometry = Some(Geometry::Point(Coord::new(c.x + 10.0, c.y)));
+    // Home moves the same city where it has no place in longitude/latitude.
+    let ds = &mut home.map_mut().layer_mut(hc).unwrap().dataset;
+    let row = ds.features.iter().position(|f| f.id == moved).unwrap();
+    ds.features.set_geometry(row, Some(Geometry::Point(Coord::new(1e9, 0.0))));
+    let (done, said) = bring_back(&temp, &mut a, &mut home, "a");
+    assert_eq!((done["updated"].as_u64(), done["conflicts"].as_u64()), (Some(1), Some(1)), "{done} {said:?}");
+    assert!(said.iter().any(|t| t.contains("1 shape(s) that lost") && t.contains("don't hold that place")), "{said:?}");
 }
 
 /// A list of a version this RustGIS doesn't write is refused, as is one of version 1 that gives a

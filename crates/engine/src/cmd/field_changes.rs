@@ -55,12 +55,12 @@ const LAYERS_V2: &str = "layers.v2.json";
 /// Whether a copy keeps a layer held in its own system in that system ([`BaseLayer::crs`]), so its
 /// list of changes is of version 2. Off until a release that reads version 2 has shipped
 /// (`docs/maintaining.md`: a new version is read a release before anything writes it): copies are
-/// kept, and lists written, in longitude/latitude as before. Tests turn it on
+/// kept, and lists written, in longitude/latitude as before. A test turns it on for itself
 /// ([`test_bases::write_own_systems`]).
 fn writes_own_systems() -> bool {
     #[cfg(test)]
     {
-        test_bases::OWN_SYSTEMS.load(std::sync::atomic::Ordering::Relaxed)
+        test_bases::OWN_SYSTEMS.with(std::cell::Cell::get)
     }
     #[cfg(not(test))]
     {
@@ -802,6 +802,8 @@ pub(crate) fn apply(s: &mut Session, ai: usize, edited: &rustgis_map::Map, chang
         ));
     }
     let mut done = Applied::default();
+    // Shapes that lost kept without a place that can't be given in longitude/latitude: said.
+    let placeless = std::cell::Cell::new(0usize);
     let tag = |layer: &str, id: u64| format!("{layer} #{id}");
     let src = s.project.maps.get_mut(si).ok_or("the source map is gone")?;
     for lc in &changes.layers {
@@ -854,7 +856,15 @@ pub(crate) fn apply(s: &mut Session, ai: usize, edited: &rustgis_map::Map, chang
         // which the list of conflicts says.
         let to_lonlat = if native { Some(listed.to(Crs::LonLat).map_err(error)?) } else { None };
         let kept_shape = |g: Option<Option<Geometry>>| match &to_lonlat {
-            Some(to) => g.map(|g| g.map(|g| to.geometry(&g))),
+            Some(to) => g.map(|g| {
+                g.map(|g| {
+                    let lonlat = to.geometry(&g);
+                    if g.is_finite() && !lonlat.is_finite() {
+                        placeless.set(placeless.get() + 1);
+                    }
+                    lonlat
+                })
+            }),
             None => g,
         };
         // Every id the layer had, or kept new ones above, before this return.
@@ -984,6 +994,15 @@ pub(crate) fn apply(s: &mut Session, ai: usize, edited: &rustgis_map::Map, chang
     }
     super::workspace::renew_area(s, ai, si, offline_map, next_generation)?;
     super::workspace::keep_conflicts(s, ai, std::mem::take(&mut done.lost));
+    if placeless.get() > 0 {
+        s.notify(
+            format!(
+                "Offline area '{area_name}': {} shape(s) that lost to the field's have a place that can't be given in longitude/latitude, so the versions kept in Data › Offline › Conflicts don't hold that place",
+                placeless.get()
+            ),
+            false,
+        );
+    }
     done.say(s, &area_name, &source);
     Ok(json!({
         "updated": done.updated,
@@ -1293,7 +1312,7 @@ mod tests {
     /// [`LAYERS`], as before. This release reads either.
     #[test]
     fn a_copy_with_a_layer_in_its_own_system_is_listed_where_older_releases_dont_look() {
-        test_bases::write_own_systems();
+        let _own = test_bases::write_own_systems();
         let held = crate::sample::world_project();
         let mut native = held.clone();
         native.maps[0].layers[0].dataset.hold_in(Crs::from_epsg(8857).unwrap()).unwrap();
@@ -1308,17 +1327,17 @@ mod tests {
         }
     }
 
-    /// As a release keeps them ([`writes_own_systems`] off): a layer held in its own system is kept
-    /// in longitude/latitude, listed in [`LAYERS`], and an unchanged return's list is of version 1,
-    /// which every release reads.
+    /// As a release keeps them ([`writes_own_systems`] off, as on any test's thread that doesn't
+    /// turn it on): a layer held in its own system is kept in longitude/latitude, listed in
+    /// [`LAYERS`], and an unchanged return's list is of version 1, which every release reads.
     #[test]
     fn a_release_keeps_the_copy_in_longitude_latitude_until_version_2_is_written() {
+        assert!(!writes_own_systems());
         let mut project = crate::sample::world_project();
         project.maps[0].layers[0].dataset.hold_in(Crs::from_epsg(8857).unwrap()).unwrap();
         let id = crate::project::field_id().unwrap();
+        assert!(keep_base(&GivenRows::of(&project, &id)).unwrap().is_empty());
         let dir = base_dir(&id).unwrap();
-        std::fs::create_dir_all(&dir).unwrap();
-        write_base(&GivenRows::of(&project, &id), &dir, false).unwrap();
         assert!(dir.join(LAYERS).is_file() && !dir.join(LAYERS_V2).exists());
         let text = std::fs::read(dir.join(LAYERS)).unwrap();
         let layers: Vec<BaseLayer> = serde_json::from_slice(&text).unwrap();
@@ -1459,14 +1478,27 @@ mod tests {
 /// In tests, given copies go in a folder of each test's own thread, removed when it ends.
 #[cfg(test)]
 pub(crate) mod test_bases {
-    /// Turns on keeping copies, and writing lists, in each layer's own system
-    /// ([`super::writes_own_systems`]) for this test process; off by default, as in a release.
-    /// Every test passes either way, so tests sharing a process don't depend on it.
-    pub(crate) static OWN_SYSTEMS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    std::thread_local! {
+        /// Whether copies are kept, and lists written, in each layer's own system
+        /// ([`super::writes_own_systems`]) on this test's thread: off, as in a release, unless
+        /// the test turns it on. A copy is kept on the thread that runs `offline.keepRows` in
+        /// tests, the test's own.
+        pub(crate) static OWN_SYSTEMS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
 
-    /// [`OWN_SYSTEMS`] on.
-    pub(crate) fn write_own_systems() {
-        OWN_SYSTEMS.store(true, std::sync::atomic::Ordering::Relaxed);
+    /// [`OWN_SYSTEMS`] on for this test, until what it returns is dropped.
+    #[must_use = "the switch is off again once this is dropped"]
+    pub(crate) fn write_own_systems() -> OwnSystems {
+        OwnSystems(OWN_SYSTEMS.with(|on| on.replace(true)))
+    }
+
+    /// Puts [`OWN_SYSTEMS`] back as it was when dropped.
+    pub(crate) struct OwnSystems(bool);
+
+    impl Drop for OwnSystems {
+        fn drop(&mut self) {
+            OWN_SYSTEMS.with(|on| on.set(self.0));
+        }
     }
 
     use std::path::PathBuf;
