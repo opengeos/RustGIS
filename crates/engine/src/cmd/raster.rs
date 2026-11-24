@@ -415,7 +415,19 @@ pub(super) fn read_notices(s: &mut Session, name: &str, layer: &mut RasterLayer)
         }
         if let Some(count) = rounded_count(r) {
             let held = "pixels are held as 32-bit floats, exact for whole numbers up to 16,777,216 and to about 7 significant digits";
-            s.notify(format!("{name}: {count} rounded as the file was read: {held}, so an export writes the rounded values"), false);
+            // Read in place, the count is of the overview held; the finer levels the map and an
+            // export draw round their own values too, not counted.
+            if layer.reads_in_place() {
+                s.notify(
+                    format!(
+                        "{name}: {count} rounded in its {} × {} overview as it was read: {held}, so the map and an export, which read finer levels too, show rounded values there and in more places",
+                        r.width, r.height
+                    ),
+                    false,
+                );
+            } else {
+                s.notify(format!("{name}: {count} rounded as the file was read: {held}, so an export writes the rounded values"), false);
+            }
         }
     }
 }
