@@ -830,7 +830,12 @@ pub fn shortcuts(app: &mut RustGisApp, ctx: &egui::Context) {
     let point_dialog_owns_escape = app.dialogs.open == Some("createPointXY")
         && match ctx.memory(|m| m.focused()) {
             Some(id) => ctx.read_response(id).is_some_and(|r| r.layer_id.id == egui::Id::unique(("dialog", "createPointXY"))),
-            None => app.map.sketch_len() == 0 && !app.session.map().view.first_person,
+            None => {
+                app.map.sketch_len() == 0
+                    && !app.session.map().view.first_person
+                    && !crate::boxedit::drawing(app)
+                    && !crate::circleedit::drawing(app)
+            }
         };
     if point_dialog_owns_escape && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
         app.dialogs.open = None;

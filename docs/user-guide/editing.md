@@ -2,7 +2,7 @@
 
 ## Creating features
 
-**Edit › Features › Create Point by Coordinates…** creates points from known X/Y coordinates.
+**Edit › Features › Create ▾ › Point by Coordinates…** creates points from known X/Y coordinates.
 Turn editing on (also offered in the dialog), enter X and Y, optionally a name, and click
 **Add Point** or press ++enter++. Leave the coordinate system blank for longitude/latitude
 in decimal degrees or degrees, minutes and seconds, or enter a system such as `EPSG:3857`

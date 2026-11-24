@@ -2836,16 +2836,6 @@ fn edit_tab(app: &mut RustGisApp, ui: &mut Ui) {
         );
     });
     group(ui, "Features", |ui| {
-        small(
-            ui,
-            app,
-            "goto_xy",
-            "Create Point by Coordinates…",
-            "Create a point at typed coordinates, in the selected point layer or a new Points layer.",
-            "ui.dialog",
-            json!({"name":"createPointXY"}),
-            false,
-        );
         let gt = app.session.active_layer.and_then(|id| app.session.map().layer(id)).map(|l| l.geometry_type());
         let (tool, icon) = match gt {
             Some(GeometryType::Polyline) => (Tool::CreateLine, "line_tool"),
@@ -2853,7 +2843,7 @@ fn edit_tab(app: &mut RustGisApp, ui: &mut Ui) {
             _ => (Tool::CreatePoint, "point_tool"),
         };
         let checked = app.session.tool.creates();
-        let r = big(
+        let (r, options) = big_split_menu(
             ui,
             app,
             icon,
@@ -2862,8 +2852,14 @@ fn edit_tab(app: &mut RustGisApp, ui: &mut Ui) {
             "tool.set",
             json!({"tool": tool.code()}),
             checked,
-            false,
+            "Create options",
+            "Create a feature by drawing or by coordinates.",
+            true,
+            |ui, app| {
+                menu_item(ui, app, "goto_xy", "Point by Coordinates…", "ui.dialog", json!({"name":"createPointXY"}));
+            },
         );
+        crate::showme::ring(ui, app, options.rect, "ui.dialog", &json!({"name":"createPointXY"}));
         if r.clicked() {
             app.map.cancel_sketch();
         }

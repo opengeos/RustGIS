@@ -4962,6 +4962,7 @@ mod tests {
         assert!(h.query_by_label("Add").is_none(), "grouped features have no individual Add");
         assert!(h.query_by_label("Remove").is_none(), "grouped features are removed in the Layers pane");
     }
+
     /// Drive the full app, including the shortcuts that own Escape and the dialog's Enter.
     #[test]
     fn coordinate_point_form_repeats_and_retains_invalid_input() {
@@ -5033,6 +5034,35 @@ mod tests {
         h.run_steps(3);
         assert_eq!(h.state().map.sketch_len(), 0);
         assert_eq!(h.state().dialogs.open, Some("createPointXY"));
+        let shapes = h.state_mut().session.map_mut().add_dataset(rustgis_engine::data::Dataset::new(
+            "Shapes",
+            rustgis_engine::data::GeometryType::Polygon,
+            vec![],
+        ));
+        h.state_mut().session.active_layer = Some(shapes);
+        for circle in [true, false] {
+            h.state_mut().run("tool.set", json!({"tool":if circle {"circle"} else {"rotatedBox"}})).unwrap();
+            h.run_steps(3);
+            let view = h.state().map.view_rect.unwrap().0;
+            let start = view.right_bottom() - vec2(120.0, 120.0);
+            if circle {
+                assert!(crate::circleedit::drag_start(h.state_mut(), view, start, true));
+                crate::circleedit::drag_to(h.state_mut(), view, start + vec2(40.0, 40.0));
+            } else {
+                assert!(crate::boxedit::drag_start(h.state_mut(), view, start, true));
+                crate::boxedit::drag_to(h.state_mut(), view, start + vec2(40.0, 40.0), false);
+            }
+            h.key_press(egui::Key::Escape);
+            h.run_steps(3);
+            assert!(
+                !crate::circleedit::drawing(h.state()) && !crate::boxedit::drawing(h.state()),
+                "Escape cancels the active shape gesture"
+            );
+            assert_eq!(h.state().dialogs.open, Some("createPointXY"));
+            crate::circleedit::drag_stop(h.state_mut());
+            crate::boxedit::drag_stop(h.state_mut());
+            assert!(h.state().session.map().layer(shapes).unwrap().dataset.features.is_empty());
+        }
         h.key_press(egui::Key::Escape);
         h.run_steps(4);
         assert_eq!(h.state().dialogs.open, None);

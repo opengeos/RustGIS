@@ -90,6 +90,19 @@ fn point_inputs(input: &super::InputContext<'_>, p: &Json) -> Result<super::Inpu
     let mut inputs = super::Inputs::layers(target.and_then(|id| input.map().layer(id)).map(|l| (input.map(), l)));
     inputs.uses_default = p.get("layer").is_none_or(Json::is_null);
     super::design::include_new_feature_surface(input, &mut inputs);
+    // Match typed_place's resolution order: map, a layer name, then a literal system.
+    // The planner already binds private selector state to the displayed approval.
+    if let Some(name) = ps(p, "crs").map(str::trim) {
+        if name.eq_ignore_ascii_case("map") {
+            inputs.state = json!({"projection":input.map().projection});
+        } else if let Some(layer) = input.map().layer_by_name(name) {
+            let key = (input.map().instance_id(), layer.id);
+            if !inputs.layers.contains(&key) {
+                inputs.layers.push(key);
+            }
+            inputs.state = json!({"crs":super::navigate::layer_coordinates_system(layer).unwrap_or(rustgis_data::raster::Crs::LonLat)});
+        }
+    }
     Ok(inputs)
 }
 
@@ -138,16 +151,15 @@ fn add_point(s: &mut Session, p: &Json) -> CmdResult {
         {
             attributes.insert(field, json!(name));
         }
-        let mut result = add_geometry(s, id, &json!({"attributes":attributes}), Geometry::Point(at))?;
+        let result = add_geometry(s, id, &json!({"attributes":attributes}), Geometry::Point(at))?;
         if target.is_none() {
             // The UI explains the fallback before submission; non-UI callers need it too.
             s.notify("Created a Points layer because no loaded point layer was selected", false);
         }
-        result["layer"] = json!(id);
-        Ok(result)
+        Ok(json!({"layer":id,"row":result.get("row")}))
     };
-    // Only fallback creation needs its own savepoint: it never writes an existing layer's rows.
-    // A plugin may handle the error and continue; it must not keep an empty fallback layer.
+    // Existing-layer refusals are rolled back by add_geometry without a row snapshot.
+    // Fallback also restores the layer it created if a plugin handles the error.
     if target.is_none() { s.savepoint("Create Point by Coordinates", create) } else { create(s) }
 }
 
@@ -256,11 +268,24 @@ pub(crate) fn add_geometry(s: &mut Session, id: u32, p: &Json, g: Geometry) -> C
     let layer = l.dataset.name.clone();
     let defaults = template.as_ref().map_or(&[][..], |t| &t.defaults[..]);
     let (attrs, losses, left_out) = new_row(&l.dataset.fields, p, defaults)?;
+    let row = l.dataset.features.len();
+    let fields = l.dataset.fields.len();
     l.dataset.push(Some(g), attrs);
+    if let Err(error) = super::design::apply(s, id, vec![super::design::Change { before: None, row: Some(row) }]) {
+        // Design only writes the new row, apart from appending an elevation column of nulls
+        // to older rows. Remove both on refusal without retaining another full row vector.
+        if let Some(l) = s.map_mut().layer_mut(id) {
+            l.dataset.features.truncate_rows(row);
+            for field in (fields..l.dataset.fields.len()).rev() {
+                l.dataset.features.remove_column(field);
+            }
+            l.dataset.fields.truncate(fields);
+        }
+        return Err(error);
+    }
+    let l = s.map_mut().layer_mut(id).ok_or("no layer")?;
     l.touch_geometry();
-    let row = l.dataset.features.len() - 1;
     l.selection = vec![row];
-    super::design::apply(s, id, vec![super::design::Change { before: None, row: Some(row) }])?;
     for (field, key) in losses {
         notify_loss(s, key, &layer, field, row);
     }
@@ -2255,6 +2280,51 @@ mod tests {
 mod point_tests {
     use super::*;
 
+    /// A caller that handles a command error must not keep a point refused by its surface.
+    #[test]
+    fn coordinate_point_surface_refusal_does_not_append_in_a_shared_call() {
+        use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster};
+        let mut s = Session::new(crate::Project::default());
+        s.run("edit.enable", &json!({"on":true})).unwrap();
+        s.run("layer.template", &json!({"template":"points"})).unwrap();
+        let id = s.active_layer.unwrap();
+        s.run("edit.addPoint", &json!({"x":1,"y":1})).unwrap();
+        let kept = s.map().layer(id).unwrap().dataset.clone();
+        let selection = s.map().layer(id).unwrap().selection.clone();
+        let counts = s.edit_counts.clone();
+        let raster = Raster::new(
+            "south",
+            1,
+            1,
+            vec![vec![12.0]],
+            GeoTransform { origin_x: -1.0, origin_y: 1.0, pixel_width: 2.0, pixel_height: -2.0 },
+            Crs::Epsg(3031),
+            None,
+            ColorHint::Gray,
+            "Float32",
+        )
+        .unwrap();
+        s.map_mut().add_raster("south", rustgis_map::RasterLayer::from_path(raster, "south.tif"));
+        s.map_mut().editing.settings.elevation = rustgis_map::design::Elevation::Surface("south".into());
+        s.active_layer = Some(id);
+        let error = add_point(&mut s, &json!({"x":0,"y":90})).unwrap_err();
+        assert!(error.contains("surface"), "{error}");
+        assert_eq!(s.map().layer(id).unwrap().dataset, kept, "a caught refusal must not retain the appended row");
+        assert_eq!(s.map().layer(id).unwrap().selection, selection);
+        assert_eq!(s.edit_counts, counts);
+        s.map_mut().editing.settings.elevation = rustgis_map::design::Elevation::Constant(5.0);
+        s.map_mut().layer_mut(id).unwrap().design.rules.push(rustgis_map::design::AttributeRule {
+            name: "Reject".into(),
+            kind: rustgis_map::design::RuleKind::Constraint,
+            field: String::new(),
+            expression: "1 = 0".into(),
+        });
+        assert!(add_point(&mut s, &json!({"x":2,"y":2})).unwrap_err().contains("Reject"));
+        assert_eq!(s.map().layer(id).unwrap().dataset, kept, "a late refusal also removes the added z column from older rows");
+        assert_eq!(s.map().layer(id).unwrap().selection, selection);
+        assert_eq!(s.edit_counts, counts);
+    }
+
     #[test]
     fn coordinate_points_share_a_layer_and_undo_as_single_edits() {
         let mut s = Session::new(crate::Project::default());
@@ -2307,6 +2377,7 @@ mod point_tests {
         assert!((at.x - 7.44).abs() < 1e-8);
         assert!((at.y - 46.95).abs() < 1e-8);
     }
+
     #[test]
     fn coordinate_points_respect_editing_and_declare_the_surface_for_a_new_layer() {
         use super::super::InputSource;
