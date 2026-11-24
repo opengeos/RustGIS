@@ -116,7 +116,7 @@ fn cache() -> std::sync::MutexGuard<'static, Cache> {
     CACHE.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-#[cfg(any(test, feature = "testing"))]
+#[cfg(any(test, all(feature = "testing", debug_assertions)))]
 thread_local! {
     /// Tests: let the plugin fetch from this computer (a test server) and, when `wait` is off,
     /// fetch as the browser does (pending, then run again).
@@ -125,18 +125,19 @@ thread_local! {
 
 /// Tests in other crates: lets the plugins this thread runs reach this computer (their test
 /// server), with `host.fetch` and the addresses they give commands, as the engine's own tests do.
-#[cfg(feature = "testing")]
+/// Only in a test build: the `testing` feature with debug assertions, never a release build.
+#[cfg(all(feature = "testing", debug_assertions))]
 #[doc(hidden)]
 pub fn plugins_reach_this_computer() {
     TEST.with(|t| t.set((true, t.get().1)));
 }
 
 fn allow_local() -> bool {
-    #[cfg(any(test, feature = "testing"))]
+    #[cfg(any(test, all(feature = "testing", debug_assertions)))]
     {
         TEST.with(|t| t.get().0)
     }
-    #[cfg(not(any(test, feature = "testing")))]
+    #[cfg(not(any(test, all(feature = "testing", debug_assertions))))]
     {
         false
     }
