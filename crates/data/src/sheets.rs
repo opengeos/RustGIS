@@ -79,9 +79,12 @@ pub fn read(bytes: &[u8], name: &str, sheet: Option<&str>, opts: &CsvOptions) ->
         report.messages.push(message);
     }
     if rounded > 0 {
-        report.messages.push(format!(
-            "{rounded} serial date values were rounded to the nearest microsecond, in {}",
-            crate::io::named_fields(&fields, &g.rounded_dates)
+        report.messages.push(crate::loss::Note::loss(
+            crate::loss::LossCode::ChangedRounded,
+            format!(
+                "{rounded} serial date values were rounded to the nearest microsecond, in {}",
+                crate::io::named_fields(&fields, &g.rounded_dates)
+            ),
         ));
     }
     let others: Vec<&str> = g.names.iter().filter(|n| **n != g.pick).map(String::as_str).take(20).collect();
@@ -741,6 +744,7 @@ mod tests {
             assert_eq!(notices.len(), usize::from(rounded), "{serial}: {report:?}");
             if rounded {
                 assert!(notices[0].contains("1 serial date") && notices[0].contains("moment"));
+                assert_eq!(notices[0].loss, Some(crate::loss::LossCode::ChangedRounded));
             }
             if serial == "0.500001" {
                 assert_eq!(ds.fields[0].ty, FieldType::Text);
