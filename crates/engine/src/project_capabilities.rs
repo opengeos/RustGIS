@@ -75,6 +75,11 @@ impl Project {
         {
             required.push("label-clearance");
         }
+        // And whether they remove duplicates (#2847), for the same reason.
+        if !required.contains(&"label-duplicates") && self.styles.iter().any(|s| s.labels.in_order().any(|c| c.remove_duplicates.is_some()))
+        {
+            required.push("label-duplicates");
+        }
         let commands: Vec<&'static str> =
             COMMAND_CAPABILITIES.iter().filter_map(|&(name, uses)| self.uses_commands(uses).then_some(name)).collect();
         required.extend(commands.into_iter().filter(|name| !required.contains(name)).collect::<Vec<_>>());
@@ -150,11 +155,23 @@ const COMMAND_CAPABILITIES: &[(&str, CommandCheck)] = &[
     ("blank-paper", command_uses_blank_paper),
     ("layout-frame-border", command_uses_frame_border),
     ("layout-text-size", command_uses_text_size),
+    ("layout-scale-bar-details", command_uses_scale_bar_details),
     ("dggs-system", command_uses_dggs_system),
     ("label-weight", command_weighs_labels),
     ("label-clearance", command_clears_labels),
-    ("layout-scale-bar-details", command_uses_scale_bar_details),
+    ("label-duplicates", command_removes_duplicate_labels),
 ];
+
+/// A saved `labels.placement` that has a class remove duplicates, read as the command reads it
+/// (#2847): an older reader runs it without the key, saying nothing, so every label would show.
+/// False or null is what an older reader keeps.
+fn command_removes_duplicate_labels(id: &str, params: &Value) -> bool {
+    match id {
+        "labels.placement" => params.get("removeDuplicates").and_then(crate::cmd::labels::number).is_some(),
+        "script.run" => params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, command_removes_duplicate_labels)),
+        _ => false,
+    }
+}
 
 /// A saved `labels.placement` that gives a class a clearance other than 2, read as the command
 /// reads it (#2828): an older reader runs it without the key, saying nothing, so the labels would
@@ -674,6 +691,12 @@ fn label_clearance(layer: &Layer) -> bool {
     layer.labels.in_order().any(|c| c.clearance != rustgis_map::symbology::DEFAULT_LABEL_CLEARANCE)
 }
 
+/// Whether a layer's label classes remove duplicates (#2847): an older reader would drop the
+/// setting, and place and save every label.
+fn removes_duplicate_labels(layer: &Layer) -> bool {
+    layer.labels.in_order().any(|c| c.remove_duplicates.is_some())
+}
+
 /// The capabilities a layer needs, in [`map_capabilities`]'s order.
 fn layer_capabilities(layer: &Layer) -> Vec<&'static str> {
     [
@@ -686,6 +709,7 @@ fn layer_capabilities(layer: &Layer) -> Vec<&'static str> {
         (label_guide(layer), "label-guide"),
         (label_weight(layer), "label-weight"),
         (label_clearance(layer), "label-clearance"),
+        (removes_duplicate_labels(layer), "label-duplicates"),
         (held_natively(&layer.dataset), super::NATIVE_COORDINATES),
     ]
     .into_iter()
@@ -712,7 +736,8 @@ fn map_capabilities<'a>(maps: impl IntoIterator<Item = &'a Map>) -> Vec<&'static
         mut grid_color,
     ) = (false, false, false, false, false, false, false, false, false, false, false, false, false, false, false);
     let (mut polygon, mut svg) = (false, false);
-    let (mut offline_area_id, mut paper, mut native, mut guided, mut weighed, mut cleared) = (false, false, false, false, false, false);
+    let (mut offline_area_id, mut paper, mut native, mut guided, mut weighed, mut cleared, mut deduped) =
+        (false, false, false, false, false, false, false);
     for map in maps {
         offline_area_id |= map.offline_area_id.is_some();
         // A blank basemap's paper colour (#2532), which an older reader would draw and save white.
@@ -720,6 +745,7 @@ fn map_capabilities<'a>(maps: impl IntoIterator<Item = &'a Map>) -> Vec<&'static
         guided |= map.layers.iter().any(label_guide);
         weighed |= map.layers.iter().any(label_weight);
         cleared |= map.layers.iter().any(label_clearance);
+        deduped |= map.layers.iter().any(removes_duplicate_labels);
         // An older reader doesn't know the MGRS graticule (#1042 piece 8): it refuses the
         // project by name rather than failing to read the type.
         mgrs |= map.graticule_type == rustgis_map::graticule::GraticuleType::Mgrs;
@@ -769,6 +795,7 @@ fn map_capabilities<'a>(maps: impl IntoIterator<Item = &'a Map>) -> Vec<&'static
         (guided, "label-guide"),
         (weighed, "label-weight"),
         (cleared, "label-clearance"),
+        (deduped, "label-duplicates"),
         (offline_area_id, "offline-map-area-id"),
         (paper, "blank-paper"),
         (native, super::NATIVE_COORDINATES),

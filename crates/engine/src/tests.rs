@@ -9495,6 +9495,133 @@ fn saved_label_clearances_are_required_by_name() {
     assert_eq!(serde_json::to_value(&s.project).unwrap()["requires"], json!(["label-clearance"]));
 }
 
+/// A label class removes its duplicates within some points (#2847), 1 to 2000, off by default. A
+/// fraction is kept; a number out of range is held and said, junk refused, false or null turns it
+/// off. It undoes in one step, keeps a lock, is saved only when on, and then requires
+/// `label-duplicates`, which an older reader refuses rather than drop.
+#[test]
+fn a_label_class_removes_duplicates_within_a_distance() {
+    let mut s = world();
+    let id = s.map().layer_by_name("Cities").unwrap().id;
+    let within = |s: &Session| {
+        let l = &s.map().layer(id).unwrap().labels;
+        (l.default.remove_duplicates, l.classes.first().map(|c| c.remove_duplicates))
+    };
+    let said = |s: &Session, mark| s.notices_since(mark).iter().map(|n| n.text.clone()).collect::<Vec<_>>();
+    assert_eq!(within(&s), (None, None));
+    let mark = s.notice_mark();
+    s.run("labels.placement", &json!({"layer": "Cities", "removeDuplicates": 200})).unwrap();
+    assert_eq!(within(&s), (Some(200.0), None));
+    assert!(said(&s, mark).is_empty(), "{:?}", said(&s, mark));
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(within(&s), (None, None), "undoes");
+    // A fraction is kept, as a text number is read.
+    s.run("labels.placement", &json!({"layer": "Cities", "removeDuplicates": 2.5})).unwrap();
+    assert_eq!(within(&s).0, Some(2.5));
+    s.run("labels.placement", &json!({"layer": "Cities", "removeDuplicates": "300"})).unwrap();
+    assert_eq!(within(&s).0, Some(300.0));
+    for (given, kept, note) in
+        [(json!(5000), 2000.0, "removeDuplicates 5000 adjusted to 2000"), (json!(0), 1.0, "removeDuplicates 0 adjusted to 1")]
+    {
+        let mark = s.notice_mark();
+        s.run("labels.placement", &json!({"layer": "Cities", "removeDuplicates": given})).unwrap();
+        assert_eq!(within(&s).0, Some(kept), "{given}");
+        let notes = said(&s, mark);
+        assert!(notes.iter().any(|n| n.contains(note)), "{given}: {notes:?}");
+    }
+    for bad in [json!("near"), json!(true), json!([1])] {
+        let err = s.run("labels.placement", &json!({"layer": "Cities", "removeDuplicates": bad})).unwrap_err();
+        assert!(err.contains("removeDuplicates must be a number of points from 1 to 2000 (false or null: off)"), "{bad}: {err}");
+    }
+    for off in [json!(false), json!(null)] {
+        s.run("labels.placement", &json!({"layer": "Cities", "removeDuplicates": 50})).unwrap();
+        s.run("labels.placement", &json!({"layer": "Cities", "removeDuplicates": off})).unwrap();
+        assert_eq!(within(&s), (None, None), "{off}: off");
+    }
+    // The class named, not Default.
+    s.run("labels.class.add", &json!({"layer": "Cities", "name": "Big"})).unwrap();
+    s.run("labels.placement", &json!({"layer": "Cities", "class": "Big", "removeDuplicates": 120})).unwrap();
+    assert_eq!(within(&s), (None, Some(Some(120.0))));
+    // A lock holds: the labels it keeps stay where they are.
+    let key = (id, 0, 0, 0);
+    s.map_mut().label_lock = Some(vec![(key, rustgis_map::LockedPlace { place: 0, callout: None })]);
+    s.run("labels.placement", &json!({"layer": "Cities", "class": "Big", "removeDuplicates": 150})).unwrap();
+    assert!(s.map().label_lock.is_some(), "removing duplicates keeps the lock");
+    // Saved, it requires `label-duplicates`, and reads back.
+    let saved = serde_json::to_value(&s.project).unwrap();
+    assert_eq!(saved["requires"], json!(["label-duplicates"]));
+    let read = Project::from_json(&saved.to_string()).unwrap();
+    let layer = read.maps[0].layers.iter().find(|l| l.id == id).unwrap();
+    assert_eq!(layer.labels.classes[0].remove_duplicates, Some(150.0));
+    // Off everywhere: nothing to require, and nothing saved.
+    s.run("labels.placement", &json!({"layer": "Cities", "class": "Big", "removeDuplicates": false})).unwrap();
+    let saved = serde_json::to_value(&s.project).unwrap();
+    assert!(saved.get("requires").is_none());
+    assert!(!saved.to_string().contains("remove_duplicates"), "off isn't written");
+    // The fixture (`label_duplicates.rgis`) reads back as saved, saying nothing.
+    let mut fixture = Project::from_json(include_str!("../../../schema/fixtures/label_duplicates.rgis")).unwrap();
+    assert_eq!(fixture.maps[0].layers[0].labels.default.remove_duplicates, Some(150.0));
+    assert!(fixture.take_read_notices(&crate::project::ALL_PARTS).is_empty());
+    assert_eq!(serde_json::to_value(&fixture).unwrap()["requires"], json!(["label-duplicates"]));
+    // A distance out of range or junk in a file is held or dropped, and said once.
+    let mut damaged = serde_json::to_value(&world().project).unwrap();
+    damaged["maps"][0]["layers"][0]["labels"]["remove_duplicates"] = json!(9999);
+    damaged["maps"][0]["layers"][1]["labels"]["remove_duplicates"] = json!("x");
+    // False is off, as the command has it: nothing to say.
+    damaged["maps"][0]["layers"][2]["labels"]["remove_duplicates"] = json!(false);
+    let read = Session::new(Project::from_json(&damaged.to_string()).unwrap());
+    assert_eq!(read.map().layers[0].labels.default.remove_duplicates, Some(2000.0));
+    assert_eq!(read.map().layers[1].labels.default.remove_duplicates, None);
+    assert_eq!(read.map().layers[2].labels.default.remove_duplicates, None);
+    let notes: Vec<_> = read.notices.iter().filter(|n| n.text.contains("duplicate")).map(|n| n.text.clone()).collect();
+    assert!(notes.len() == 1 && notes[0].contains("2 label duplicate distance(s)"), "{notes:?}");
+}
+
+/// Removing duplicates saved in a task, a model's step or a script, or in a saved style, also
+/// requires `label-duplicates`: an older reader would run the step, or apply the style, without
+/// it, saying nothing (#2847). False or null needs nothing: that is what an older reader keeps.
+#[test]
+fn saved_label_duplicate_removal_is_required_by_name() {
+    let s = world();
+    let with_task = |params: Value| {
+        let mut project = s.project.clone();
+        project.tasks = vec![
+            serde_json::from_value(
+                json!({"name": "Dedupe", "steps": [{"title": "Dedupe", "command": "labels.placement", "params": params}]}),
+            )
+            .unwrap(),
+        ];
+        serde_json::to_value(&project).unwrap().get("requires").cloned()
+    };
+    for within in [json!(200), json!("200"), json!(2.5), json!(0), json!(5000)] {
+        assert_eq!(
+            with_task(json!({"layer": "Cities", "position": "above", "removeDuplicates": within})),
+            Some(json!(["label-duplicates"])),
+            "{within}"
+        );
+    }
+    for nothing in [
+        json!({"layer": "Cities", "removeDuplicates": false}),
+        json!({"layer": "Cities", "removeDuplicates": null}),
+        json!({"layer": "Cities", "position": "above"}),
+    ] {
+        assert_eq!(with_task(nothing.clone()), None, "{nothing}");
+    }
+    // In a script, too.
+    let script = json!({"script": "labels.placement {\"layer\": \"Cities\", \"removeDuplicates\": 90}"});
+    let mut project = s.project.clone();
+    project.tasks = vec![
+        serde_json::from_value(json!({"name": "Script", "steps": [{"title": "Run", "command": "script.run", "params": script}]})).unwrap(),
+    ];
+    assert_eq!(serde_json::to_value(&project).unwrap()["requires"], json!(["label-duplicates"]));
+    // A saved style keeps the setting its layer had.
+    let mut s = world();
+    s.run("labels.placement", &json!({"layer": "Cities", "removeDuplicates": 200})).unwrap();
+    s.run("style.new", &json!({"layer": "Cities", "name": "Deduped"})).unwrap();
+    s.run("labels.placement", &json!({"layer": "Cities", "removeDuplicates": null})).unwrap();
+    assert_eq!(serde_json::to_value(&s.project).unwrap()["requires"], json!(["label-duplicates"]));
+}
+
 /// A label class takes an offset with its placement and a background with its text symbol; junk
 /// is refused, numbers kept within their ranges, and each change undoes.
 #[test]
@@ -20949,6 +21076,28 @@ fn local_data_server() -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>
     serve_files(vec![("/points.geojson".into(), points.to_vec()), ("/stac/collections".into(), collections.to_vec())])
 }
 
+/// Project text a plugin gives is held by both holds: what it names is held to the internet as a
+/// received file's is, said, and nothing it names is read from this computer, a raster read in
+/// place among them.
+#[test]
+fn project_text_a_plugin_gives_reads_nothing_from_this_computer() {
+    use crate::render::rustgis_tiles::{address::Reach, cache};
+    let mut s = world();
+    let id = "eng-received-text";
+    plugin(id, &["network", "edit", "files"]);
+    let (base, asked) = local_data_server();
+    let scene = format!("{base}/received/scene.tif");
+    let mut given = Session::new(Project::default());
+    given.map_mut().add_raster("Scene".to_string(), rustgis_map::raster::RasterLayer::unread_in_place(scene.clone()));
+    let (text, _) = given.project.saved_text(None).unwrap();
+    cache::allow_named(&scene);
+    forward(&mut s, id, "map.import", json!({"text": text})).unwrap();
+    s.wait_in_place_reads();
+    assert_eq!(cache::ceiling_for(&scene), Reach::Public);
+    assert_eq!(asked.lock().unwrap().as_slice(), &[] as &[String], "nothing was read from this computer");
+    assert!(s.notices.iter().any(|n| n.text.starts_with("the map file came from the internet, so the 1 address(es)")));
+}
+
 /// Plugins reach only the internet, and so does every command a plugin runs that connects: an
 /// address it gives on this computer or the local network is refused before anything is read,
 /// naming it and why (the STAC, open data portal, web file, tile and OpenStreetMap commands
@@ -24775,6 +24924,90 @@ fn a_pending_answer_is_no_undo_step() {
     assert_eq!(r.unwrap()["pending"], true);
     assert_eq!(s.undo.len(), undo + 4, "the map's step and the plugin's");
     assert_eq!(s.take_url_requests().len(), 1);
+}
+
+/// A command's "changed nothing" flag is its own: a nested command that only left a request (not
+/// mutating, so nothing takes the flag) or set it and failed (the caller handles the error) must
+/// not make the command that ran it skip its undo step (#2637).
+#[test]
+fn a_nested_commands_request_flag_is_not_the_enclosing_commands() {
+    let mut s = Session::new(Project::default());
+    s.map_mut().name = "Before".into();
+    let undo = s.undo.len();
+    let url = json!({"url": "https://x.org/a.geojson"});
+    let r = s.guarded("Outer", true, |s| {
+        s.guarded("Quiet request", false, |s| s.request_url(&url))?;
+        s.map_mut().name = "After".into();
+        Ok(Value::Null)
+    });
+    assert!(r.is_ok());
+    assert_eq!(s.undo.len(), undo + 1, "the outer edit takes its step");
+    assert!(s.undo());
+    assert_eq!(s.map().name, "Before");
+    // Set and then failed (`layer.addUrl` for a download added to another map), and the outer
+    // command went on.
+    let undo = s.undo.len();
+    let r = s.guarded("Outer", true, |s| {
+        let failed = s.guarded("Failed request", true, |s| {
+            s.request_only = true;
+            Err("no".to_string())
+        });
+        assert!(failed.is_err());
+        s.map_mut().name = "After".into();
+        Ok(Value::Null)
+    });
+    assert!(r.is_ok());
+    assert_eq!(s.undo.len(), undo + 1, "a failed nested request doesn't hide the outer edit");
+    // The command's own claim still stands after a nested run.
+    let undo = s.undo.len();
+    let r = s.guarded("Outer", true, |s| {
+        s.guarded("Quiet", false, |_| Ok(Value::Null))?;
+        s.request_only = true;
+        Ok(Value::Null)
+    });
+    assert!(r.is_ok());
+    assert_eq!(s.undo.len(), undo, "a command that left only a request takes no step");
+}
+
+/// A nested command that sets the flag and then panics: the panic becomes its error, the flag goes
+/// with it, and the enclosing command that goes on keeps its undo step (#2637).
+#[test]
+fn a_nested_panic_leaves_the_enclosing_commands_request_flag_alone() {
+    let mut s = Session::new(Project::default());
+    s.map_mut().name = "Before".into();
+    let undo = s.undo.len();
+    let r = s.guarded("Outer", true, |s| {
+        let panicked = s.guarded("Panics", true, |s| {
+            s.request_only = true;
+            panic!("nested command panicked");
+        });
+        assert!(panicked.is_err());
+        s.map_mut().name = "After".into();
+        Ok(Value::Null)
+    });
+    assert!(r.is_ok());
+    assert_eq!(s.undo.len(), undo + 1, "the outer edit keeps its step");
+    assert!(s.undo());
+    assert_eq!(s.map().name, "Before");
+}
+
+/// A script whose lines leave a request (`layer.addUrl` held for the app, no network) and then edit
+/// is one undo step; one that only left the request has none (#2637).
+#[test]
+fn a_script_that_leaves_a_request_and_then_edits_is_one_undo_step() {
+    let mut s = Session::new(Project::default());
+    s.leave_downloads = true;
+    let undo = s.undo.len();
+    let ask = r#"layer.addUrl {"url": "https://x.org/a.geojson"}"#;
+    s.run("script.run", &json!({"script": ask})).unwrap();
+    assert_eq!(s.take_url_requests().len(), 1);
+    assert_eq!(s.undo.len(), undo, "a request alone is no step");
+    let maps = s.project.maps.len();
+    s.run("script.run", &json!({"script": format!("{ask}\nmap.new {{\"name\": \"B\"}}")})).unwrap();
+    assert_eq!(s.take_url_requests().len(), 1);
+    assert_eq!(s.undo.len(), undo + 1, "the edit after the request takes the script's step");
+    assert!(s.undo());
+    assert_eq!(s.project.maps.len(), maps);
 }
 
 /// A command that left a request for the front end and then failed takes the request back with
@@ -49100,6 +49333,19 @@ fn geolibre_download_finishes_in_its_original_map_and_position() {
         assert!(s.project.saved_text(None).is_ok());
     }
     assert_eq!(s.project.maps[target].layer(id).unwrap().dataset.features.len(), 1);
+}
+
+/// The import calls `request_import_url` itself, which sets the flag in the import's own scope: it
+/// edited the project, so it keeps its undo step (#2637).
+#[test]
+fn geolibre_import_that_leaves_a_download_is_one_undo_step() {
+    let mut s = world();
+    s.leave_downloads = true;
+    let undo = s.undo.len();
+    let text = json!({"version":"0.2.0","name":"Remote","mapView":{},"basemapStyleUrl":"","layers":[{"id":"g","name":"Remote","type":"geojson","source":{"url":"https://example.org/a.geojson"}}]}).to_string();
+    s.run("project.importGeolibre", &json!({"text": text})).unwrap();
+    assert_eq!(s.take_url_requests().len(), 1);
+    assert_eq!(s.undo.len(), undo + 1, "the import takes its step");
 }
 
 #[test]
