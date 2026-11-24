@@ -188,36 +188,56 @@ const MAX_UNPLACED: usize = 1000;
 /// The selected features [`targets`] leaves out, by layer and row, while Edit Vertices is on:
 /// those with a place that can't be given in longitude/latitude (#2032 C2f-4b), where handles are
 /// drawn and dragged. On a map in the layer's own system such a feature is drawn and selected.
-/// Up to [`MAX_UNPLACED`] of them; `true` when there are more.
-fn unplaced_targets(app: &RustGisApp) -> (Vec<(u32, usize)>, bool) {
+/// Up to [`MAX_UNPLACED`] of them.
+struct Unplaced {
+    rows: Vec<(u32, usize)>,
+    /// There are more than [`MAX_UNPLACED`].
+    more: bool,
+    /// How many of each layer's selected rows the scan went through, by live layer: past them,
+    /// nothing it says depends on the selection ([`unplaced_signature`]).
+    visited: Vec<(u64, usize)>,
+}
+
+fn unplaced_targets(app: &RustGisApp) -> Unplaced {
     let m = app.session.map();
     // The features `targets` looks at, in its order, until it has its cap of placed ones: a
     // feature past that gets no handles either way, so isn't counted. Each layer's conversion is
-    // made once.
-    let (mut out, mut placed) = (Vec::new(), 0usize);
+    // made once. A row without geometry counts towards neither bound.
+    let mut found = Unplaced { rows: Vec::new(), more: false, visited: Vec::new() };
+    let mut placed = 0usize;
     for l in m.layers.iter().filter(|l| m.shows(l) && !l.selection.is_empty() && !l.is_raster() && !l.graphics && !l.is_streamed()) {
         let to = l.dataset.shown_conversion();
+        let mut visited = 0;
         for r in &l.selection {
             if placed >= MAX_FEATURES {
-                return (out, false);
+                break;
             }
+            visited += 1;
             if let Some(g) = l.dataset.features.geometry(*r) {
                 match to.as_ref().ok().and_then(|to| Dataset::converted_to_lonlat(to, g)) {
                     Some(_) => placed += 1,
-                    None if out.len() >= MAX_UNPLACED => return (out, true),
-                    None => out.push((l.id, *r)),
+                    None if found.rows.len() >= MAX_UNPLACED => {
+                        found.more = true;
+                        break;
+                    }
+                    None => found.rows.push((l.id, *r)),
                 }
             }
         }
+        found.visited.push((l.instance_id(), visited));
+        if placed >= MAX_FEATURES || found.more {
+            break;
+        }
     }
-    (out, false)
+    found
 }
 
 /// What [`unplaced_targets`] depends on: the map and each layer it looks at (the live layer, its
 /// replacement and geometry revisions and rows' allocation, which any mutable row access renews,
 /// its system, the map system it is shown through, and its selection: its length and the rows the
-/// scan can reach, at most [`MAX_FEATURES`] placed and [`MAX_UNPLACED`] not, so a large selection
-/// isn't hashed whole each frame). While it is unchanged, the selection isn't converted again.
+/// last scan went through, `visited`, so a large selection isn't hashed whole each frame). While
+/// those are unchanged, the scan would go through the same rows and stop where it did, so the
+/// selection isn't converted again.
 fn unplaced_signature(app: &RustGisApp) -> u64 {
     use std::hash::{Hash, Hasher};
     let m = app.session.map();
@@ -226,7 +246,8 @@ fn unplaced_signature(app: &RustGisApp) -> u64 {
     for l in m.layers.iter().filter(|l| m.shows(l) && !l.selection.is_empty() && !l.is_raster() && !l.graphics && !l.is_streamed()) {
         let rows = l.dataset.features.allocation_key().as_ptr() as usize;
         let revisions = (l.instance_id(), l.replacement_revision(), l.geometry_rev, rows);
-        let reached = l.selection.get(..l.selection.len().min(MAX_FEATURES + MAX_UNPLACED)).unwrap_or_default();
+        let visited = app.map.vertex_unplaced_visited.iter().find(|(id, _)| *id == l.instance_id()).map_or(0, |(_, n)| *n);
+        let reached = l.selection.get(..l.selection.len().min(visited)).unwrap_or_default();
         (revisions, l.dataset.coord_crs(), l.dataset.shown_in, l.selection.len(), reached).hash(&mut h);
     }
     h.finish()
@@ -251,6 +272,7 @@ pub(crate) fn say_unplaced(app: &mut RustGisApp) {
         app.map.vertex_unplaced_said.clear();
         app.map.vertex_unplaced_more = false;
         app.map.vertex_unplaced_seen = None;
+        app.map.vertex_unplaced_visited.clear();
         return;
     }
     let signature = unplaced_signature(app);
@@ -261,7 +283,8 @@ pub(crate) fn say_unplaced(app: &mut RustGisApp) {
     // The map's index and the live layer go with the features: another map's layers, or a layer
     // added in a removed one's place, may have the same ids.
     let map = app.session.project.active_map;
-    let (found, more) = unplaced_targets(app);
+    let Unplaced { rows: found, more, visited } = unplaced_targets(app);
+    app.map.vertex_unplaced_visited = visited;
     let m = app.session.map();
     let live = |id: u32| m.layer(id).map_or(0, |l| l.instance_id());
     let left: Vec<(usize, u64, usize)> = found.iter().map(|(l, r)| (map, live(*l), *r)).collect();
@@ -728,7 +751,8 @@ mod tests {
         }
         layer.selection = (0..53).collect();
         // 49 placed, two unplaced (49, 50), the 50th placed (51): the cap; 52 is past it.
-        assert_eq!(unplaced_targets(&app), (vec![(id, 49), (id, 50)], false));
+        let found = unplaced_targets(&app);
+        assert_eq!((found.rows, found.more), (vec![(id, 49), (id, 50)], false));
         assert_eq!(targets(&app).len(), MAX_FEATURES);
         let mark = app.session.notice_mark();
         say_unplaced(&mut app);
@@ -772,12 +796,44 @@ mod tests {
         assert!(said.len() == 1 && said[0].contains(&format!(": {MAX_UNPLACED} of the selected")), "{said:?}");
         // One more: the same features found, and more, which is said.
         app.session.map_mut().layer_mut(id).unwrap().selection = (0..MAX_UNPLACED + 5).collect();
-        let (found, more) = unplaced_targets(&app);
-        assert!(found.len() == MAX_UNPLACED && more);
+        let found = unplaced_targets(&app);
+        assert!(found.rows.len() == MAX_UNPLACED && found.more);
         let mark = app.session.notice_mark();
         say_unplaced(&mut app);
         let said: Vec<String> = app.session.notices_since(mark).iter().map(|n| n.text.clone()).collect();
         assert!(said.len() == 1 && said[0].contains(&format!("at least {MAX_UNPLACED} of the selected")), "{said:?}");
+    }
+
+    /// Rows without geometry count towards neither bound, so the scan goes past them, and a change
+    /// in the selection beyond them is looked at again: a different unplaced feature there is said.
+    #[test]
+    fn an_unplaced_feature_past_rows_without_geometry_is_said_when_it_changes() {
+        let far = Geometry::Polygon(vec![vec![vec![
+            Coord::new(500_000., 0.),
+            Coord::new(1e9, 0.),
+            Coord::new(500_000., 1.),
+            Coord::new(500_000., 0.),
+        ]]]);
+        let n = MAX_FEATURES + MAX_UNPLACED + 10;
+        let mut app = app(std::iter::repeat_n(far, n + 2));
+        let id = app.session.active_layer.unwrap();
+        app.session.map_mut().editing.settings.enabled = true;
+        let layer = app.session.map_mut().layer_mut(id).unwrap();
+        layer.dataset.held_in = rustgis_engine::data::raster::Crs::from_epsg(32631).unwrap();
+        for r in 0..n {
+            layer.dataset.features.set_geometry(r, None);
+        }
+        layer.touch_geometry();
+        let said = |app: &mut RustGisApp, rows: Vec<usize>| {
+            app.session.map_mut().layer_mut(id).unwrap().selection = rows;
+            let mark = app.session.notice_mark();
+            say_unplaced(app);
+            app.session.notices_since(mark).iter().map(|n| n.text.clone()).collect::<Vec<_>>()
+        };
+        let first = said(&mut app, (0..n).chain([n]).collect());
+        assert!(first.len() == 1 && first[0].contains(&format!("feature {n} has a place")), "{first:?}");
+        let second = said(&mut app, (0..n).chain([n + 1]).collect());
+        assert!(second.len() == 1 && second[0].contains(&format!("feature {} has a place", n + 1)), "{second:?}");
     }
 
     /// A held gesture scans once, retains no rows, reprojects after camera changes, and drops

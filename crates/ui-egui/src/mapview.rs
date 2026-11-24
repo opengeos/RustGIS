@@ -319,6 +319,8 @@ pub struct MapView {
     pub(crate) vertex_unplaced_said: Vec<(usize, u64, usize)>,
     /// Whether there were more than those, the notice saying "at least" so many.
     pub(crate) vertex_unplaced_more: bool,
+    /// How many of each layer's selected rows that scan went through, by live layer.
+    pub(crate) vertex_unplaced_visited: Vec<(u64, usize)>,
     /// What those features were last looked for under, so they aren't looked for each frame.
     pub(crate) vertex_unplaced_seen: Option<u64>,
     /// Session-only opt-in for coincident polygon moves; never saved with a project or preference.
@@ -460,6 +462,7 @@ impl Default for MapView {
             vertex_drag_owner: None,
             vertex_unplaced_said: Vec::new(),
             vertex_unplaced_more: false,
+            vertex_unplaced_visited: Vec::new(),
             vertex_unplaced_seen: None,
             move_shared_vertices: false,
             trace_edges: false,
@@ -536,6 +539,7 @@ impl MapView {
             self.gpu_turn_declined = None;
             self.vertex_unplaced_said.clear();
             self.vertex_unplaced_more = false;
+            self.vertex_unplaced_visited.clear();
             self.vertex_unplaced_seen = None;
             self.labels.clear();
             self.label_lonlat.clear();
