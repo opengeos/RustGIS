@@ -5075,8 +5075,11 @@ mod tests {
         };
         let mut c = Canvas::new(200, 120).unwrap();
         chart(&mut c, Rect::from_xywh(0.0, 0.0, 200.0, 120.0).unwrap(), &sliver, &look, INK, 1.0, false);
+        // In the bar's rows, those it paints down its middle, which the key's green swatch is not in.
+        let rows: Vec<u32> = (0..120).filter(|y| c.pixmap().pixel(100, *y).is_some_and(|p| p.alpha() > 0)).collect();
+        assert!(rows.len() > 5, "the bar's rows, {rows:?}");
         let greens = (0..200)
-            .flat_map(|x| (0..120).map(move |y| (x, y)))
+            .flat_map(|x| rows.iter().map(move |y| (x, *y)))
             .filter(|(x, y)| c.pixmap().pixel(*x, *y).is_some_and(|p| p.green() > 150 && p.red() < 100))
             .count();
         assert!(greens > 0, "the thin stretch keeps its green");
