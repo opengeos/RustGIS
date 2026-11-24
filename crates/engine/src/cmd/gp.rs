@@ -1502,12 +1502,21 @@ pub(crate) fn tiled_inputs(
         let names: Vec<&str> = match parameter.kind {
             ParamKind::RasterLayer => value.as_str().into_iter().collect(),
             ParamKind::RasterLayers => rustgis_analysis::layer_list(value).unwrap_or_default(),
-            // A suite tool stages any layer a parameter names, whatever its kind.
-            _ if tiled == Tiled::ByPath => match value {
-                Value::String(t) => t.split(';').map(str::trim).collect(),
-                Value::Array(v) => v.iter().filter_map(Value::as_str).collect(),
-                _ => continue,
-            },
+            // A suite tool stages any input layer or path a parameter names, not what it writes.
+            ParamKind::Layer
+            | ParamKind::PolygonLayer
+            | ParamKind::PointLayer
+            | ParamKind::VectorLayer
+            | ParamKind::VectorLayers
+            | ParamKind::Path
+                if tiled == Tiled::ByPath =>
+            {
+                match value {
+                    Value::String(t) => t.split(';').map(str::trim).collect(),
+                    Value::Array(v) => v.iter().filter_map(Value::as_str).collect(),
+                    _ => continue,
+                }
+            }
             _ => continue,
         };
         for name in names {
@@ -1534,8 +1543,11 @@ pub(crate) fn tiled_inputs(
                 }
                 continue;
             }
-            let (r, count) = match BATCH_READS.with(|b| b.borrow().as_ref().and_then(|reads| reads.get(path).cloned())) {
-                Some(kept) => kept,
+            // A batch's read is used again only while the file is the revision it was read at.
+            let revision = rustgis_data::raster::FileRevision::of(std::path::Path::new(path));
+            let kept = BATCH_READS.with(|b| b.borrow().as_ref().and_then(|reads| reads.get(path).cloned()));
+            let (r, count) = match kept.filter(|(.., at)| revision.is_some() && *at == revision) {
+                Some((r, count, _)) => (r, count),
                 None => {
                     #[cfg(test)]
                     TILED_READS.with(|n| n.set(n.get() + 1));
@@ -1558,7 +1570,7 @@ pub(crate) fn tiled_inputs(
                     let count = std::sync::Arc::new(rustgis_data::memory::Holding::of(bytes as u64));
                     BATCH_READS.with(|b| {
                         if let Some(reads) = b.borrow_mut().as_mut() {
-                            reads.insert(path.to_string(), (r.clone(), count.clone()));
+                            reads.insert(path.to_string(), (r.clone(), count.clone(), revision.clone()));
                         }
                     });
                     (r, count)
@@ -1594,10 +1606,15 @@ pub(crate) fn tiled_inputs(
     Ok(read)
 }
 
-/// A raster file read in place for a run, and its count in [`rustgis_data::memory::held`], which
-/// lasts as long as anything holds it.
+/// A raster file read in place for a run, its count in [`rustgis_data::memory::held`], which lasts
+/// as long as anything holds it, and the revision of the file taken before it was read (a batch
+/// uses it again only while the file is still that revision).
 #[cfg(not(target_arch = "wasm32"))]
-type CountedRead = (std::sync::Arc<rustgis_data::raster::Raster>, std::sync::Arc<rustgis_data::memory::Holding>);
+type CountedRead = (
+    std::sync::Arc<rustgis_data::raster::Raster>,
+    std::sync::Arc<rustgis_data::memory::Holding>,
+    Option<rustgis_data::raster::FileRevision>,
+);
 
 /// Taken by each read of a raster file read in place for a run ([`tiled_inputs`]): such reads
 /// run one at a time across runs, so each plans its size with the ones before it held.

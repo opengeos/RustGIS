@@ -1165,8 +1165,21 @@ pub(crate) mod tests {
         )
         .unwrap();
         r.copyright = Some("Example Survey".into());
-        let credited = layout_of(super::super::cogwrite::write(&r, 0).unwrap());
+        let file = super::super::cogwrite::write(&r, 0).unwrap();
+        let credited = layout_of(file.clone());
         assert_eq!(credited.copyright.as_deref(), Some("Example Survey"));
+        // Everything but the tag's own bytes held: the layout asks for them rather than say the
+        // copyright is lost, and reads it once they are in.
+        let at = file.windows(14).position(|w| w == b"Example Survey").unwrap();
+        let held = Sparse::default().with(0, file[..at].to_vec()).with((at + 14) as u64, file[at + 14..].to_vec());
+        match layout(&held).unwrap() {
+            Parse::Need(a, b) => assert!(a <= at as u64 && b > at as u64, "asks for {a}..{b}, the tag at {at}"),
+            _ => panic!("the copyright's bytes weren't asked for"),
+        }
+        match layout(&held.with(at as u64, file[at..at + 14].to_vec())).unwrap() {
+            Parse::Done(l) => assert_eq!((l.copyright.as_deref(), l.lost.len()), (Some("Example Survey"), 0)),
+            _ => panic!("not read once its bytes are in"),
+        }
     }
 
     #[test]
