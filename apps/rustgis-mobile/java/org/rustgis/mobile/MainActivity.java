@@ -450,10 +450,9 @@ public class MainActivity extends NativeActivity {
             // Several files only where the front end takes several, as in the browser: two
             // projects would replace one another, and a dialog's options go with one file.
             intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, purpose.equals("data") || purpose.equals("shapefile"));
-            // A project is opened for writing too, kept across restarts: Save writes it back.
+            // A project is opened for writing too, for this session: Save writes it back.
             if (purpose.equals("project")) {
-                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-                        | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
             }
             if (!start(intent, PICK)) {
                 picking = false;
@@ -469,7 +468,7 @@ public class MainActivity extends NativeActivity {
                 if (project) {
                     add(writeBackFailed(name, new java.io.IOException(DocumentWrite.BUSY), null));
                 } else {
-                    saveFailed(false, name, "another file is being chosen.");
+                    saveFailed(false, name, writing ? "another file is being saved." : "another file is being chosen.");
                 }
                 return;
             }
@@ -686,8 +685,8 @@ public class MainActivity extends NativeActivity {
 
     /**
      * The document's address when RustGIS may write a project back to it: a project file
-     * ({@code .rgis}), granted for writing ({@code grants}), whose provider writes it. The grant is
-     * kept across restarts where the provider allows it. Null otherwise.
+     * ({@code .rgis}), granted for writing ({@code grants}), whose provider writes it. The grant
+     * lasts for this session: after a restart, Save asks where. Null otherwise.
      */
     private String writable(Uri uri, String name, int grants) {
         // A project file, as the Rust side's is_project_file has it (.rgis, or the older .rgisx).
@@ -703,14 +702,6 @@ public class MainActivity extends NativeActivity {
             }
         } catch (RuntimeException e) {
             return null;
-        }
-        if ((grants & Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION) != 0) {
-            try {
-                getContentResolver().takePersistableUriPermission(uri,
-                        Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
-            } catch (RuntimeException e) {
-                // Kept for this session only: Save still writes back until the app ends.
-            }
         }
         return uri.toString();
     }

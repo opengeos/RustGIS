@@ -74,8 +74,8 @@ Rust calls Java and never the other way: each frame the app collects what happen
   a plugin, a delimited text file) goes to the dialog that asked, as in the browser.
 - **Saving.** Save As and the exports offer their file through the picker, as the browser offers
   a download. Save writes a project (`.rgis`, `.rgisx`) back to the document it was opened from or
-  last saved as, where the provider lets the app write it: Open Project asks for leave to write
-  and keeps it (`takePersistableUriPermission`). It writes a complete copy to `files/saved/…`
+  last saved as, where the provider lets the app write it: Open Project asks for leave to write,
+  for the session (after a restart, Save asks where). It writes a complete copy to `files/saved/…`
   first, then writes over the document from its start, cuts it to length and syncs it; the copy
   goes once that is done. A project saved on the phone names its picked data by the copies' paths
   in the app's storage.
