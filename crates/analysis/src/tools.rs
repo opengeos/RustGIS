@@ -1888,10 +1888,14 @@ enum Place {
 }
 
 /// A clip mask's edges, on a grid, so that the edges near a feature are found without going
-/// through all of them. Holds one box per edge (32 bytes, twice the edge's own coordinates) and
-/// the grid's references: about three times the mask's coordinates.
+/// through all of them. It holds the grid's references (one for each cell an edge's box meets)
+/// and a table of the mask's rings, not a second copy of its coordinates: an edge's ends are read
+/// from the mask it was made for, which is passed to [`MaskEdges::near`]. Making it holds each
+/// edge's box until the grid is built.
 struct MaskEdges {
-    boxes: Vec<Extent>,
+    /// Each ring's first edge's number (edges are numbered through the rings in order), its
+    /// polygon, and which of the polygon's rings it is: 0 for the outside, then the holes.
+    rings: Vec<(usize, usize, usize)>,
     grid: ExtentIndex,
     /// The mask has a coordinate that isn't finite, which no grid cell holds reliably: every
     /// feature is then [`Place::Edge`].
@@ -1899,20 +1903,48 @@ struct MaskEdges {
 }
 
 impl MaskEdges {
-    /// The edges of every ring of `mask`.
-    fn new(mask: &MultiPolygon<f64>) -> Self {
-        let rings = mask.0.iter().flat_map(|p| std::iter::once(p.exterior()).chain(p.interiors().iter()));
-        let unsure = mask.coords_iter().any(|c| !c.x.is_finite() || !c.y.is_finite());
-        let boxes: Vec<Extent> = rings
-            .flat_map(|r| r.0.windows(2).map(|w| w.iter().fold(Extent::EMPTY, |e, c| e.union(&Extent::new(c.x, c.y, c.x, c.y)))))
-            .collect();
-        let grid = ExtentIndex::new(boxes.iter().copied());
-        MaskEdges { boxes, grid, unsure }
+    /// The rings of every polygon of `mask`: the outside, then the holes.
+    fn rings_of(mask: &MultiPolygon<f64>) -> impl Iterator<Item = (usize, usize, &geo::LineString<f64>)> {
+        mask.0.iter().enumerate().flat_map(|(p, poly)| {
+            std::iter::once(poly.exterior()).chain(poly.interiors().iter()).enumerate().map(move |(r, ring)| (p, r, ring))
+        })
     }
 
-    /// Whether any edge's box meets `ext`: exactly, so an edge within `ext`'s padding counts.
-    fn near(&self, ext: &Extent) -> bool {
-        self.unsure || self.grid.any_candidate(ext, |i| self.boxes.get(i).is_none_or(|b| b.intersects(ext)))
+    /// The edges of every ring of `mask`.
+    fn new(mask: &MultiPolygon<f64>) -> Self {
+        let unsure = mask.coords_iter().any(|c| !c.x.is_finite() || !c.y.is_finite());
+        let mut first = 0;
+        let rings: Vec<(usize, usize, usize)> = Self::rings_of(mask)
+            .map(|(p, r, ring)| {
+                let start = first;
+                first += ring.0.len().saturating_sub(1);
+                (start, p, r)
+            })
+            .collect();
+        let boxes = Self::rings_of(mask).flat_map(|(_, _, ring)| {
+            ring.0.windows(2).map(|w| w.iter().fold(Extent::EMPTY, |e, c| e.union(&Extent::new(c.x, c.y, c.x, c.y))))
+        });
+        MaskEdges { rings, grid: ExtentIndex::new(boxes), unsure }
+    }
+
+    /// The ends of edge `i` of `mask`, which this was made from.
+    fn edge(&self, mask: &MultiPolygon<f64>, i: usize) -> Option<[geo::Coord<f64>; 2]> {
+        let (start, p, r) = *self.rings.get(self.rings.partition_point(|ring| ring.0 <= i).checked_sub(1)?)?;
+        let poly = mask.0.get(p)?;
+        let ring = if r == 0 { poly.exterior() } else { poly.interiors().get(r - 1)? };
+        let j = i - start;
+        Some([*ring.0.get(j)?, *ring.0.get(j + 1)?])
+    }
+
+    /// Whether any edge of `mask`, which this was made from, has a box that meets `ext`: exactly,
+    /// so an edge within `ext`'s padding counts. An edge it can't find counts too.
+    fn near(&self, mask: &MultiPolygon<f64>, ext: &Extent) -> bool {
+        self.unsure
+            || self.grid.any_candidate(ext, |i| {
+                self.edge(mask, i).is_none_or(|[a, b]| {
+                    a.x.min(b.x) <= ext.max_x && a.x.max(b.x) >= ext.min_x && a.y.min(b.y) <= ext.max_y && a.y.max(b.y) >= ext.min_y
+                })
+            })
     }
 }
 
@@ -1943,7 +1975,7 @@ fn place_against(whole: &MultiPolygon<f64>, ext: &Extent, mask: &MultiPolygon<f6
     if ext.is_empty() || !whole.coords_iter().all(|c| c.x.is_finite() && c.y.is_finite()) || !rings_have_area(whole, ext) {
         return Place::Edge;
     }
-    if edges.near(ext) {
+    if edges.near(mask, ext) {
         return Place::Edge;
     }
     let Some(c) = whole.coords_iter().next() else { return Place::Edge };
@@ -1962,9 +1994,9 @@ fn place_against(whole: &MultiPolygon<f64>, ext: &Extent, mask: &MultiPolygon<f6
 /// may cross it are unioned and overlaid (see [`place_against`]).
 /// Cancel is looked at, and progress counted, mask by mask and feature by feature; one mask's
 /// union, one mask's edge index (made when a polygon feature first needs it), and one feature's
-/// overlay, can't be stopped once started (#1562). Masks with no polygon,
-/// or whose union has no area, are left out and counted (a mask selected twice is used once);
-/// with none left, it's an error.
+/// overlay, can't be stopped once started (#1562). Masks with no polygon, or whose union has no
+/// area, are left out and counted (a mask selected twice is used once); with none left, it's an
+/// error.
 fn clip(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     clip_on(inp, p, None, None)
 }
@@ -2135,8 +2167,8 @@ impl MaskCache {
 /// for their union); as many threads run as fit, at that much work each, in half the scratch
 /// budget, and their recent unions of several masks share `cache_bytes` (by default the other
 /// half of [`crate::parallel::scratch_budget`]). The masks' edge indexes ([`MaskEdges`]) are
-/// shared by the threads and kept for the run: about three times the coordinates of the masks
-/// the polygon features meet, which the run holds already.
+/// shared by the threads and kept for the run: only grid references to the masks' edges, which
+/// the run holds already.
 fn clip_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>, cache_bytes: Option<usize>) -> Result<ToolResult, String> {
     let ds = input(inp, p, "input")?;
     let clip_ds = input(inp, p, "clip")?;
@@ -2263,13 +2295,15 @@ fn clip_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>, cache_bytes: Opti
                 // A polygon feature wholly inside one mask is kept as it is, and the masks it is
                 // wholly outside take nothing from it: the overlay (and the union of the masks
                 // it meets) is only for those whose edges it may cross.
-                let mut crossing = std::borrow::Cow::Borrowed(near.as_slice());
+                let mut crossing = Cow::Borrowed(near.as_slice());
                 if let Some(whole) = to_multipolygon(&shape) {
                     let mut edge = Vec::with_capacity(near.len());
                     for &i in &near {
-                        let Some((mask, _)) = masks.get(i) else { continue };
-                        let mask_edges = edges.get(i).map(|e| e.get_or_init(|| MaskEdges::new(mask)));
-                        match mask_edges.map_or(Place::Edge, |e| place_against(&whole, &ext, mask, e)) {
+                        // A mask that isn't there (not so, as `near` is of the masks) is left to the overlay.
+                        let place = masks.get(i).zip(edges.get(i)).map_or(Place::Edge, |((mask, _), cell)| {
+                            place_against(&whole, &ext, mask, cell.get_or_init(|| MaskEdges::new(mask)))
+                        });
+                        match place {
                             Place::Inside => {
                                 cache.big = None;
                                 return Ok(from_multipolygon(&whole.orient(Direction::Default)).map(|g| (g, false)));
@@ -2282,7 +2316,7 @@ fn clip_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>, cache_bytes: Opti
                         cache.big = None;
                         return Ok(None);
                     }
-                    crossing = std::borrow::Cow::Owned(edge);
+                    crossing = Cow::Owned(edge);
                 }
                 Ok(if let [i] = crossing.as_ref() {
                     cache.big = None;
@@ -13523,7 +13557,7 @@ mod tests {
     /// ones clear of every edge are kept as they are or dropped without an overlay, and the rest
     /// clip as the whole mask would (their pieces in the same order, with their own attributes).
     #[test]
-    fn clip_sends_only_features_near_a_mask_edge_to_the_overlay() {
+    fn clip_keeps_polygon_features_clear_of_mask_edges_as_the_overlay_would() {
         use geo::Area;
         let mut masks = Dataset::new("masks", GeometryType::Polygon, vec![]);
         // Two squares that overlap, and a square with a hole.
@@ -13617,6 +13651,48 @@ mod tests {
         }
         let ext = Extent::new(0.4, 0.4, 0.5, 0.5);
         assert_eq!(place_against(&to_multipolygon(&bad).unwrap(), &ext, &mask, &edges), Place::Edge);
+    }
+
+    /// The edges found near a box are the ones a scan of every edge's box finds, for a mask of
+    /// several polygons with holes, enough edges to be on a grid, and boxes everywhere around them.
+    #[test]
+    fn mask_edges_find_what_a_scan_of_the_edges_finds() {
+        let ring = |cx: f64, cy: f64, r: f64, n: usize| {
+            geo::LineString::from(
+                (0..=n)
+                    .map(|i| {
+                        let a = std::f64::consts::TAU * (i % n) as f64 / n as f64;
+                        (cx + r * a.cos(), cy + r * a.sin())
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        };
+        let mask = MultiPolygon::new(vec![
+            geo::Polygon::new(ring(0.0, 0.0, 10.0, 40), vec![ring(0.0, 0.0, 4.0, 20), ring(6.0, 0.0, 1.0, 8)]),
+            geo::Polygon::new(ring(30.0, 5.0, 3.0, 12), vec![]),
+        ]);
+        let edges = MaskEdges::new(&mask);
+        let boxes: Vec<Extent> = MaskEdges::rings_of(&mask)
+            .flat_map(|(_, _, r)| {
+                r.0.windows(2).map(|w| Extent::new(w[0].x.min(w[1].x), w[0].y.min(w[1].y), w[0].x.max(w[1].x), w[0].y.max(w[1].y)))
+            })
+            .collect();
+        assert!(edges.grid.cell_size().is_some());
+        let mut seed = 7_u32;
+        let mut next = move || {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            f64::from(seed >> 8) / f64::from(1_u32 << 24)
+        };
+        let mut found = [0, 0];
+        for _ in 0..4000 {
+            let (x, y, w, h) = (next() * 50.0 - 12.0, next() * 30.0 - 12.0, next() * 2.0, next() * 2.0);
+            let ext = Extent::new(x, y, x + w, y + h);
+            let want = boxes.iter().any(|b| b.intersects(&ext));
+            assert_eq!(edges.near(&mask, &ext), want, "{ext:?}");
+            found[usize::from(want)] += 1;
+        }
+        // Both answers came up.
+        assert!(found.iter().all(|&n| n > 100), "{found:?}");
     }
 
     #[test]
