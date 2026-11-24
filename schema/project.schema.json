@@ -1279,6 +1279,7 @@
           "project-crs",
           "dggs-system",
           "label-clearance",
+          "svg-markers",
           "label-duplicates"
         ],
         "type": "string"
@@ -1387,6 +1388,7 @@
     "project-crs",
     "dggs-system",
     "label-clearance",
+    "svg-markers",
     "label-duplicates"
   ],
   "x-rustgis-reads-format": 2,

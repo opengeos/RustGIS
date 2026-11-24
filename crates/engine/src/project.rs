@@ -115,6 +115,7 @@ pub const CAPABILITIES: &[&str] = &[
     PROJECT_CRS,
     "dggs-system",
     "label-clearance",
+    "svg-markers",
     "label-duplicates",
 ];
 /// An offline area keeping the versions that lost a sync or a Bring Back
