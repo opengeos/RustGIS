@@ -1032,11 +1032,13 @@ impl Reproject {
         ok.then_some(out)
     }
 
-    /// A geometry as the file holds it, kept in the source's own coordinates
-    /// ([`Reproject::crs`]), with its box in longitude/latitude for a request's extent to test
-    /// ([`Reproject::place`]); `None` when a coordinate can't be converted to longitude/latitude,
-    /// as a feature that can't be placed is left out. Each coordinate is converted to be checked,
+    /// A geometry as the source holds it, kept in its own coordinates ([`Reproject::crs`]), with
+    /// its box in longitude/latitude for a request's extent to test, for a source read by its
+    /// rows (MySQL, SQL Server); `None` when a coordinate can't be converted to
+    /// longitude/latitude, as such a feature is left out there (the others keep it:
+    /// [`Reproject::place`]). Each coordinate is converted to be checked,
     /// none is kept converted.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn read(&self, g: Geometry) -> Option<Placed> {
         let Some(t) = &self.t else {
             let lonlat = g.extent();
@@ -1441,6 +1443,7 @@ pub(crate) fn in_request(g: &Geometry, req: &Request) -> bool {
 
 /// A geometry a source read, in its own coordinates, and its box in longitude/latitude
 /// ([`Reproject::read`]).
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct Placed {
     pub(crate) geometry: Geometry,
     pub(crate) lonlat: Extent,
