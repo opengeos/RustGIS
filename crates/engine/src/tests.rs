@@ -43948,8 +43948,11 @@ fn layout_charts_draw_a_line_round_their_bars() {
     s.run("layout.update", &json!({"element": chart, "barOutline": {"color": "#C2185B"}})).unwrap();
     let pink = Rgba::rgb(0xC2, 0x18, 0x5B);
     assert_eq!(outline(&s), Some(ChartOutline { color: pink, width: 0.5 }));
+    let mark = s.notice_mark();
     s.run("layout.update", &json!({"element": chart, "barOutline": {"width": 2}})).unwrap();
     assert_eq!(outline(&s), Some(ChartOutline { color: pink, width: 2.0 }));
+    let said = s.notices_since(mark).iter().map(|n| n.text.clone()).collect::<Vec<_>>();
+    assert!(!said.iter().any(|t| t.contains("held to")), "a width within the limits is not held: {said:?}");
     // Past 5 points it is held to them, and said.
     let mark = s.notice_mark();
     s.run("layout.update", &json!({"element": chart, "barOutline": {"width": 9}})).unwrap();

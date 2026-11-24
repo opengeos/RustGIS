@@ -4526,8 +4526,9 @@ impl ChartBars<'_> {
     /// The line runs just inside the bar's edge, so it takes no room the bars leave to their
     /// values, labels and title, and is laid once between two stretches, centred where they meet,
     /// so a see-through one reads the same everywhere. So that every stretch keeps its colour, the
-    /// edge's line narrows to a third of the bar's thickness and of its first and last stretches,
-    /// and each line between two stretches to a third of either, kept within the edge's line.
+    /// edge's line narrows to a third of the bar's thickness, across each end to a third of the
+    /// stretch there too, and each line between two stretches to a third of either, kept within
+    /// the edge's line.
     fn bar(&self, pm: &mut Canvas, stretches: &[(f32, f32, Rgba)], cross: (f32, f32), across: bool) {
         // A box from where it starts and how long it is along the run, and across it.
         let rect = |along: f32, run: f32, across_at: f32, thick: f32| {
@@ -4542,10 +4543,12 @@ impl ChartBars<'_> {
         order.sort_by(|a, b| a.0.total_cmp(&b.0));
         let (Some(first), Some(last)) = (order.first(), order.last()) else { return };
         let (lo, hi) = (first.0, last.0 + last.1);
-        let line = (o.width as f32 * self.ppp).min(cross.1 / 3.0).min(first.1 / 3.0).min(last.1 / 3.0);
+        let line = (o.width as f32 * self.ppp).min(cross.1 / 3.0);
         if line <= 0.0 {
             return;
         }
+        // Across the ends, narrowed only there by the stretch it would cover.
+        let (start, end) = (line.min(first.1 / 3.0), line.min(last.1 / 3.0));
         // The whole line, round the bar and between its stretches, is one shape filled once: boxes
         // filled each on its own would cover a pixel they share in part twice over, leaving a
         // lighter seam where they meet and a darker spot where they overlap. Boxes, not a stroke:
@@ -4558,15 +4561,15 @@ impl ChartBars<'_> {
         };
         boxed(rect(lo, hi - lo, cross.0, line));
         boxed(rect(lo, hi - lo, cross.0 + cross.1 - line, line));
-        boxed(rect(lo, line, cross.0 + line, cross.1 - 2.0 * line));
-        boxed(rect(hi - line, line, cross.0 + line, cross.1 - 2.0 * line));
+        boxed(rect(lo, start, cross.0 + line, cross.1 - 2.0 * line));
+        boxed(rect(hi - end, end, cross.0 + line, cross.1 - 2.0 * line));
         // Between two stretches, inside the edge's line, and kept there along the bar too: a
         // stretch drawn a pixel long though its share is shorter has the next start inside it,
         // near the bar's end.
         for pair in order.windows(2) {
             let &[(_, a), (at, b)] = pair else { continue };
             let d = line.min(a / 3.0).min(b / 3.0);
-            let (from, to) = ((at - d / 2.0).max(lo + line), (at + d / 2.0).min(hi - line));
+            let (from, to) = ((at - d / 2.0).max(lo + start), (at + d / 2.0).min(hi - end));
             boxed(rect(from, to - from, cross.0 + line, cross.1 - 2.0 * line));
         }
         if let Some(shape) = shape.finish() {
@@ -5072,7 +5075,10 @@ mod tests {
         };
         let mut c = Canvas::new(200, 120).unwrap();
         chart(&mut c, Rect::from_xywh(0.0, 0.0, 200.0, 120.0).unwrap(), &sliver, &look, INK, 1.0, false);
-        let greens = (0..200).filter(|x| c.pixmap().pixel(*x, 25).is_some_and(|p| p.green() > 150 && p.red() < 100)).count();
+        let greens = (0..200)
+            .flat_map(|x| (0..120).map(move |y| (x, y)))
+            .filter(|(x, y)| c.pixmap().pixel(*x, *y).is_some_and(|p| p.green() > 150 && p.red() < 100))
+            .count();
         assert!(greens > 0, "the thin stretch keeps its green");
         // A first stretch drawn a pixel long though its share is far shorter: the next starts
         // inside it, and the line, a third of a pixel, still stays inside the bar, between the
@@ -5093,6 +5099,12 @@ mod tests {
                 .count();
             assert_eq!(spilt, 0, "{orientation:?}: the lines round and between the stretches stay inside the bar");
         }
+        // Only the bar's end next to that stretch narrows: along the rest of the bar, the edge
+        // keeps its width.
+        let mut c = Canvas::new(200, 120).unwrap();
+        chart(&mut c, Rect::from_xywh(0.0, 0.0, 200.0, 120.0).unwrap(), &tiny, &look, INK, 1.0, false);
+        let lined = (0..120).filter(|y| c.pixmap().pixel(100, *y).is_some_and(|p| p.red() > 150 && p.blue() < 100)).count();
+        assert!(lined >= 6, "both edges of the bar a few pixels wide, {lined} rows");
         // The edge is one shape: where its sides meet off the pixel grid, the shared pixel is
         // covered once, not twice in part with the bar's blue showing through between them.
         let one = rustgis_map::layout::ChartData {
