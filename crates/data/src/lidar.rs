@@ -399,7 +399,7 @@ fn read_points<R: Read + Seek + Send + Sync>(mut r: R, name: &str, crs: Option<C
     // Each point is converted once to be checked: one with no place in longitude/latitude is
     // kept too and counted, and a sample keeps the places for its reads to test.
     let (mut not_numbers, mut unplaced, mut beyond) = (0usize, 0usize, 0usize);
-    let mut places = (sample && transform.is_some()).then(Vec::new);
+    let mut places = (sample && transform.is_some()).then(|| Vec::with_capacity(points.len()));
     for (id, p) in points.into_iter().enumerate() {
         let c = Coord::new(p.x, p.y);
         if !c.is_finite() {
@@ -440,8 +440,10 @@ fn read_points<R: Read + Seek + Send + Sync>(mut r: R, name: &str, crs: Option<C
         ds.crs = Some(c);
         ds.held_in = c;
         let kept = ds.features.len();
-        let notes = crate::io::kept_unplaced_note("points", unplaced, unplaced == kept, c).into_iter();
-        report.messages.extend(notes.chain(crate::io::beyond_lonlat_note("points", beyond, c)).map(|m| format!("{name}: {m}")));
+        // A sample counts the points it shows, which the notice above says are a sample.
+        let what = if stride > 1 { "points shown" } else { "points" };
+        let notes = crate::io::kept_unplaced_note(what, unplaced, unplaced == kept, c).into_iter();
+        report.messages.extend(notes.chain(crate::io::beyond_lonlat_note(what, beyond, c)).map(|m| format!("{name}: {m}")));
     }
     Ok(Cloud { ds, report, count: total, places })
 }
@@ -705,6 +707,10 @@ mod tests {
         assert!(!ds.crs_incomplete);
         assert_eq!(report.skipped, 1);
         assert_eq!(report.messages.len(), 1, "{:?}", report.messages);
+        // The sample's places stay in step with its points past the one left out.
+        let around = Extent::new(4.0, -1.0, 5.0, 1.0);
+        let batch = src.read(&crate::source::Request { extent: Some(around), limit: 10, own: None }).unwrap();
+        assert_eq!(batch.features.iter().map(|f| f.id).collect::<Vec<_>>(), [0]);
         bytes.truncate(bytes.len() - usize::from(RECORD_LEN[0]));
         assert!(crate::io::read_bytes("truncated.las", &bytes).is_err());
         let truncated = crate::source::open_bytes("truncated.las", bytes, None).unwrap();

@@ -1036,9 +1036,10 @@ impl Reproject {
     /// its box in longitude/latitude for a request's extent to test, for a source read by its
     /// rows (MySQL, SQL Server). A geometry with a place that can't be given in
     /// longitude/latitude is kept as well, with no box (#2032 C2f-4b): within a read with no
-    /// extent (a whole read) and outside any extent, as [`Reproject::place`] keeps it. `None` for
-    /// one with a coordinate that isn't a number, which the reader leaves out and counts. Each
-    /// coordinate is converted to be checked, none is kept converted.
+    /// extent (a whole read) and outside any extent, as [`Reproject::place`] keeps it. For a
+    /// source in another system than longitude/latitude, `None` for one with a coordinate that
+    /// isn't a number, which the reader leaves out and counts. Each coordinate is converted to be
+    /// checked, none is kept converted.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn read(&self, g: Geometry) -> Option<Placed> {
         let Some(t) = &self.t else {
