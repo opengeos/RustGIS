@@ -2876,11 +2876,11 @@ pub(crate) fn read_rows(
         match workbook.and_then(|(_, empty)| empty.get(w)).copied().unwrap_or(0) {
             0 => {}
             1 => report.messages.push(crate::loss::Note::loss(
-                crate::loss::LossCode::DroppedValue,
+                crate::loss::LossCode::DroppedGeometry,
                 format!("1 value in '{column}' isn't a date and was read as empty, so its row has no geometry"),
             )),
             n => report.messages.push(crate::loss::Note::loss(
-                crate::loss::LossCode::DroppedValue,
+                crate::loss::LossCode::DroppedGeometry,
                 format!("{n} values in '{column}' aren't dates and were read as empty, so their rows have no geometry"),
             )),
         }
