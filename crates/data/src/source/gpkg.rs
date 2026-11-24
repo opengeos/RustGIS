@@ -168,11 +168,12 @@ fn has_table(conn: &Connection, name: &str) -> Result<bool> {
 /// (NULL, text, a negative): the table is counted instead.
 fn kept_count(conn: &Connection, table: &str) -> Option<i64> {
     conn.query_row(
-        "SELECT feature_count FROM gpkg_ogr_contents
-         WHERE lower(table_name) = lower(?1) AND typeof(feature_count) = 'integer' AND feature_count >= 0
+        // The table's row (its own name first, then one differing in case), then whether its count holds.
+        "SELECT feature_count FROM (SELECT feature_count FROM gpkg_ogr_contents WHERE lower(table_name) = lower(?1)
+                                    ORDER BY table_name = ?1 DESC LIMIT 1)
+         WHERE typeof(feature_count) = 'integer' AND feature_count >= 0
            AND (SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND lower(tbl_name) = lower(?1) AND lower(name) IN
-                (lower('trigger_insert_feature_count_' || ?1), lower('trigger_delete_feature_count_' || ?1))) = 2
-         ORDER BY table_name = ?1 DESC LIMIT 1",
+                (lower('trigger_insert_feature_count_' || ?1), lower('trigger_delete_feature_count_' || ?1))) = 2",
         [table],
         |r| r.get(0),
     )
