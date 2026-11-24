@@ -4977,6 +4977,7 @@ mod tests {
         app.dialogs.a = "14.3".into();
         app.dialogs.b = "-41.2".into();
         app.dialogs.text = "Survey".into();
+        app.ws.recording = Some(Vec::new());
         let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 1000.0)).with_max_steps(64).build_ui_state(
             |ui, app: &mut RustGisApp| {
                 let ctx = ui.ctx().clone();
@@ -4995,6 +4996,10 @@ mod tests {
         let point_layer = h.state().session.active_layer.unwrap();
         assert_eq!(h.state().session.map().layers.len(), 2);
         assert_eq!(h.state().session.map().layer(point_layer).unwrap().dataset.features.len(), 1);
+        assert!(
+            h.state().ws.recording.as_ref().unwrap().last().unwrap().params.get("layer").is_none(),
+            "fallback records no incompatible target"
+        );
         h.event(egui::Event::Text("bad".into()));
         h.run_steps(3);
         assert_eq!(h.state().dialogs.a, "bad", "successful fallback keeps typing in X after the streamed-layer hint disappears");
@@ -5010,6 +5015,11 @@ mod tests {
         assert!(h.state().dialogs.error.is_none());
         assert_eq!(h.state().session.map().layers.len(), 2);
         assert_eq!(h.state().session.map().layer(point_layer).unwrap().dataset.features.len(), 2);
+        assert_eq!(
+            h.state().ws.recording.as_ref().unwrap().last().unwrap().params["layer"],
+            "Points",
+            "later points record their actual target"
+        );
         h.state_mut().run("tool.set", json!({"tool":"measure"})).unwrap();
         h.run_steps(3);
         let at = h.state().map.view_rect.unwrap().0.right_bottom() - vec2(80.0, 80.0);
