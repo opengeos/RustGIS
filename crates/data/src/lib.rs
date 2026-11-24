@@ -552,7 +552,7 @@ impl Dataset {
     /// ([`source::Reproject::place`]): how many have a place that can't be given in
     /// longitude/latitude, and whether those that convert come out beyond it, as a file read
     /// whole says them (#2032 C2f-4b). One pass, each place converted to be checked and none kept,
-    /// looking at Cancel between features; nothing while its coordinates are longitude/latitude
+    /// looking at Cancel every 256 features; nothing while its coordinates are longitude/latitude
     /// or its system can't be converted (the map says that).
     pub fn kept_unplaced_notes(&self) -> std::result::Result<Vec<String>, String> {
         let Ok(to) = self.lonlat_conversion() else { return Ok(Vec::new()) };
