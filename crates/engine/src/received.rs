@@ -11,6 +11,7 @@
 use crate::Session;
 use crate::render::rustgis_tiles::{address, address::Reach, cache, logins};
 use serde_json::Value;
+use std::collections::HashSet;
 
 /// How many addresses a notice names; the count covers them all.
 const NAMED: usize = 3;
@@ -20,7 +21,9 @@ impl Session {
     /// A file downloaded by its web address is read within the reach it was read at
     /// ([`Session::receiving`]); file text or data supplied by anything but the user (the
     /// Assistant, MCP, a plugin) within the internet; a file read from a path, or given by the user,
-    /// within this computer and the local network, as before.
+    /// within this computer and the local network, as before. That includes a path an attached
+    /// agent opens, even one it wrote: what the file names reaches no further than the agent's own
+    /// approved commands do already (its `layer.addUrl` of a local server reads from there).
     pub(crate) fn file_reach(&self, p: &Value) -> Reach {
         let supplied = ["text", "data"].iter().any(|k| p.get(k).is_some_and(Value::is_string));
         let given = if supplied && !self.policy_user() { Reach::Public } else { Reach::Local };
@@ -41,64 +44,119 @@ impl Session {
 #[derive(Debug, Default)]
 #[must_use = "say what the file names"]
 pub(crate) struct Named {
-    /// The distinct addresses named there.
-    local: Vec<String>,
-    /// Whether they are held to the internet (the file arrived from there).
-    held: bool,
+    /// The distinct addresses named there that are read from there.
+    read: Few,
+    /// The distinct addresses named there that are held to the internet: all of them when the file
+    /// arrived from there, else those something received from there named first.
+    held: Few,
+    /// Whether the file arrived from the internet.
+    received: bool,
     /// Whether holding them filled the record of addresses held there, so every address is.
     filled: bool,
+    /// Every distinct address counted, so each counts once however often the file names it.
+    seen: HashSet<String>,
+}
+
+/// How many addresses there are, and the first few, for a notice.
+#[derive(Debug, Default)]
+struct Few {
+    first: Vec<String>,
+    count: usize,
+}
+
+impl Few {
+    fn add(&mut self, a: &str) {
+        if self.first.len() < NAMED {
+            self.first.push(a.to_string());
+        }
+        self.count += 1;
+    }
+
+    /// The first few as a notice shows them, and how many more.
+    fn shown(&self) -> String {
+        let mut shown: Vec<String> = self.first.iter().map(|a| crate::sources::address_in_message(a)).collect();
+        if self.count > NAMED {
+            shown.push(format!("and {} more", self.count - NAMED));
+        }
+        shown.join(", ")
+    }
+}
+
+/// The web address an address a file names is fetched from, whatever wraps it: a tile template
+/// (`pmtiles:`, `cog:`), an anonymous read, a saved S3 connection or a login. `None` for one not
+/// fetched from the web (a file, a database).
+fn fetched_from(a: &str) -> Option<String> {
+    use crate::render::rustgis_tiles::s3;
+    let archive = crate::sources::template_archive(a).map_or(a, |(_, archive)| archive);
+    let (plain, _) = s3::split_anonymous(archive);
+    let web = match s3::bound_destination(plain) {
+        Ok(Some(destination)) => destination,
+        Ok(None) if s3::is_s3(plain) => s3::https_url(plain).ok()?,
+        Ok(None) => logins::inner(plain).to_string(),
+        Err(_) => return None,
+    };
+    rustgis_map::tiles::is_web(&web).then_some(web)
 }
 
 /// Holds every web address a file names (`addresses`, its whole list as login bindings are cleared
 /// from it) within `reach`, before anything it names is read: within the internet, each is
 /// recorded so ([`cache::restrict_to_public`]), with a Shapefile's parts, so it is fetched only
-/// from there, however its name resolves. Within the local network, nothing is recorded, and the
-/// addresses reach as before. Returns what the file names on this computer or the local network.
+/// from there, however its name resolves; an address inside a tile template or a wrapper is held
+/// by what it is fetched from. Within the local network, nothing is recorded, and the addresses
+/// reach as before. Returns what the file names on this computer or the local network.
 pub(crate) fn hold(addresses: impl IntoIterator<Item = impl AsRef<str>>, reach: Reach) -> Named {
-    let held = reach == Reach::Public;
+    let received = reach == Reach::Public;
     let full = cache::public_restrictions_full();
-    let mut named = Named { held, ..Named::default() };
+    let mut named = Named { received, ..Named::default() };
     for a in addresses {
         let a = a.as_ref();
-        if !rustgis_map::tiles::is_web(a) {
-            continue;
-        }
-        if held {
+        let Some(web) = fetched_from(a) else { continue };
+        if received {
             cache::restrict_to_public(a);
             for (_, part) in rustgis_data::io::shapefile_part_urls(a).unwrap_or_default() {
                 cache::restrict_to_public(&part);
             }
         }
-        if address::reach(logins::inner(a)) != Reach::Public && !named.local.iter().any(|n| n == a) {
-            named.local.push(a.to_string());
+        if address::reach(&web) != Reach::Public && named.seen.insert(a.to_string()) {
+            if received || cache::ceiling_for(a) == Reach::Public {
+                named.held.add(a);
+            } else {
+                named.read.add(a);
+            }
         }
     }
-    named.filled = held && !full && cache::public_restrictions_full();
+    named.filled = received && !full && cache::public_restrictions_full();
     named
 }
 
 impl Named {
     /// Says, once, what `what` (a project, a map file, a layer file) names on this computer or the
     /// local network, with how many and the first few: held to the internet, or read from there as
-    /// the user's own. And that holding them filled the record of held addresses, if it did.
+    /// the user's own, and which of those stay held because something received from the internet
+    /// named them first. And that holding them filled the record of held addresses, if it did.
     pub(crate) fn say(self, s: &mut Session, what: &str) {
-        if !self.local.is_empty() {
-            let n = self.local.len();
-            let mut shown: Vec<String> = self.local.iter().take(NAMED).map(|a| crate::sources::address_in_message(a)).collect();
-            if n > NAMED {
-                shown.push(format!("and {} more", n - NAMED));
+        let (read, held) = (self.read.count, self.held.count);
+        let kept = "stay held to the internet, as something received from the internet named them first, and aren't read";
+        let said = match (self.received, read, held) {
+            (_, 0, 0) => None,
+            (true, _, _) => Some(format!(
+                "{what} came from the internet, so the {held} address(es) it names on this computer or the local network are held to the internet and aren't read: {}",
+                self.held.shown()
+            )),
+            (false, _, 0) => {
+                Some(format!("{what} reads from {read} address(es) on this computer or the local network: {}", self.read.shown()))
             }
-            let shown = shown.join(", ");
-            s.notify(
-                if self.held {
-                    format!(
-                        "{what} came from the internet, so the {n} address(es) it names on this computer or the local network are held to the internet and aren't read: {shown}"
-                    )
-                } else {
-                    format!("{what} reads from {n} address(es) on this computer or the local network: {shown}")
-                },
-                false,
-            );
+            (false, 0, _) => {
+                Some(format!("{what} names {held} address(es) on this computer or the local network that {kept}: {}", self.held.shown()))
+            }
+            (false, _, _) => Some(format!(
+                "{what} reads from {read} address(es) on this computer or the local network: {}. {held} more it names there {kept}: {}",
+                self.read.shown(),
+                self.held.shown()
+            )),
+        };
+        if let Some(said) = said {
+            s.notify(said, false);
         }
         if self.filled {
             s.notify(
@@ -331,5 +389,87 @@ mod tests {
             let from_document = asked[0].get("fromDocument").and_then(Value::as_bool) == Some(true);
             assert_eq!((reach[0], from_document), if received.is_some() { (Reach::Public, true) } else { (Reach::Local, false) });
         }
+    }
+
+    /// An address inside a tile template or a wrapper is held by what it is fetched from: a
+    /// received project's PMTiles archives on the local network, one read anonymously, are held
+    /// there and said.
+    #[test]
+    fn a_received_projects_wrapped_archives_are_held_too() {
+        use crate::render::rustgis_tiles::{pmtiles, s3};
+        use rustgis_map::tiles::{TileKind, TileLayer};
+        let plain = "http://192.168.1.5:8080/wrapped-reach/a.pmtiles".to_string();
+        let anonymous = "http://192.168.1.6/wrapped-reach/b.pmtiles".to_string();
+        let mut s = Session::new(Project::default());
+        s.project.name = "wrapped".into();
+        s.map_mut().tiles.push(TileLayer::new("A", TileKind::PmTiles, pmtiles::template(&plain)));
+        s.map_mut().tiles.push(TileLayer::new("B", TileKind::PmTiles, pmtiles::template(&s3::anonymous(&anonymous))));
+        let (text, _) = s.project.saved_text(None).unwrap();
+        let mut downloaded = Session::new(Project::default());
+        cache::allow_named(&plain);
+        cache::allow_named(&anonymous);
+        downloaded.receiving(Some(Reach::Public));
+        downloaded.run("project.openText", &json!({"text": text})).unwrap();
+        downloaded.receiving(None);
+        assert_eq!([&plain, &anonymous].map(|a| cache::ceiling_for(a)), [Reach::Public; 2]);
+        let notices = said(&downloaded);
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert!(notices[0].starts_with("the project 'wrapped' came from the internet, so the 2 address(es)"), "{notices:?}");
+    }
+
+    /// A project of the user's own, opened after a received one named some of its servers, says
+    /// which stay held to the internet rather than that it reads from them; the rest it reads.
+    #[test]
+    fn your_own_project_says_which_addresses_a_received_one_left_held() {
+        let (mut s, addresses) = project("held-before");
+        let (received, _) = s.project.saved_text(None).unwrap();
+        let mine = "http://localhost:18081/held-before/{z}/{x}/{y}.png";
+        s.run("map.addTiles", &json!({"url": mine, "name": "Also mine"})).unwrap();
+        let (own, _) = s.project.saved_text(None).unwrap();
+        // As a new process has the record.
+        for a in addresses.iter().map(String::as_str).chain([mine]) {
+            cache::allow_named(a);
+        }
+        let mut downloaded = Session::new(Project::default());
+        downloaded.receiving(Some(Reach::Public));
+        downloaded.run("project.openText", &json!({"text": received})).unwrap();
+        downloaded.receiving(None);
+        // The user's own project next, in the same process.
+        let mut opened = Session::new(Project::default());
+        opened.run("project.openText", &json!({"text": own})).unwrap();
+        assert_eq!([0, 1].map(|i| cache::ceiling_for(&addresses[i])), [Reach::Public; 2]);
+        assert_eq!(cache::ceiling_for(mine), Reach::Local);
+        let notices = said(&opened);
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert!(
+            notices[0].starts_with("the project 'held-before' reads from 1 address(es) on this computer or the local network: ")
+                && notices[0].contains("localhost:18081")
+                && notices[0].contains(". 2 more it names there stay held to the internet"),
+            "{notices:?}"
+        );
+    }
+
+    /// A received project reads nothing it names before holding it: its raster read in place
+    /// from a server on this computer is never asked for.
+    #[test]
+    fn a_received_project_reads_nothing_before_it_is_held() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let scene = format!("http://{}/read-order/scene.tif", listener.local_addr().unwrap());
+        let mut s = Session::new(Project::default());
+        s.map_mut().add_raster("Scene".to_string(), rustgis_map::raster::RasterLayer::unread_in_place(scene.clone()));
+        let (text, _) = s.project.saved_text(None).unwrap();
+        cache::allow_named(&scene);
+        let mut downloaded = Session::new(Project::default());
+        downloaded.receiving(Some(Reach::Public));
+        downloaded.run("project.openText", &json!({"text": text})).unwrap();
+        downloaded.receiving(None);
+        downloaded.wait_in_place_reads();
+        assert_eq!(cache::ceiling_for(&scene), Reach::Public);
+        assert_eq!(
+            listener.accept().map(|_| ()).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock,
+            "the raster was read before the hold"
+        );
     }
 }

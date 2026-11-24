@@ -42,7 +42,8 @@ A project, package, template, map or layer file received from the internet reach
 internet: one opened by its web address (`?project=`), or given as text by the AI Assistant, MCP
 or a plugin. An address it names on this computer or the local network isn't read. A file you
 open from your own disk reaches your own servers as before. Either way, opening a file that names
-such addresses says how many, and the first few.
+such addresses says how many, and names the first three. One that something received from the
+internet named earlier in the session stays held, and the notice says so.
 
 This version already reads format 2, a newer `.rgis` format
 ([#1853](https://github.com/opengeos/RustGIS/issues/1853)), when the file needs nothing this

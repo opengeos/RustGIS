@@ -663,28 +663,31 @@ fn open(s: &mut Session, p: &Value) -> CmdResult {
     let origin = if is_package { path.canonicalize() } else { std::path::absolute(&path) }
         .map_err(|error| format!("{}: {error}", path.display()))?;
     super::connections::clear_active();
+    // What it names is held within this as it is read, before anything it names is read.
+    let reach = s.file_reach(p);
     let proj = (|| -> Result<_, String> {
         if is_field {
             let bytes = crate::project::read_file(&path, MAX_PACKAGE)?;
             let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
             let (dir, text, notes) = super::field::unpack(&bytes, &stem)?;
-            Ok((super::field::project_in(&text, &dir)?, notes))
+            let (proj, named) = super::field::project_in_within(&text, &dir, reach)?;
+            Ok((proj, named, notes))
         } else if is_package {
             let bytes = crate::project::read_file(&path, MAX_PACKAGE)?;
-            Ok((Project::from_import_json(&super::items::package_text(&bytes)?, None)?, Vec::new()))
+            let (proj, named) = Project::from_import_json_within(&super::items::package_text(&bytes)?, None, reach)?;
+            Ok((proj, named, Vec::new()))
         } else {
-            Ok((Project::load(&path)?, Vec::new()))
+            let (proj, named) = Project::load_within(&path, Some(reach))?;
+            Ok((proj, named, Vec::new()))
         }
     })();
-    let (mut proj, notes) = match proj {
+    let (proj, named, notes) = match proj {
         Ok(proj) => proj,
         Err(error) => {
             super::connections::restore_active(s);
             return Err(error);
         }
     };
-    // Before anything it names is read (as it is installed).
-    let named = crate::received::hold(proj.addresses_mut(), s.file_reach(p));
     reset(s, proj);
     // The rows a package from home gave are kept on this device. The app keeps them on a thread of
     // its own (it runs `offline.keepRows` next); a script or the command line keeps them here.
@@ -750,16 +753,16 @@ fn open_text(s: &mut Session, p: &Value) -> CmdResult {
     let text = super::ps(p, "text").ok_or("text is required")?;
     let package = super::b(p, "package").unwrap_or(false);
     super::connections::clear_active();
-    let proj = if package { Project::from_import_json(text, None) } else { Project::from_json(text) };
-    let mut proj = match proj {
+    // What it names is held within this as it is read, before anything it names is read.
+    let reach = s.file_reach(p);
+    let proj = if package { Project::from_import_json_within(text, None, reach) } else { Project::from_json_within(text, reach) };
+    let (proj, named) = match proj {
         Ok(proj) => proj,
         Err(error) => {
             super::connections::restore_active(s);
             return Err(error);
         }
     };
-    // Before anything it names is read (as it is installed).
-    let named = crate::received::hold(proj.addresses_mut(), s.file_reach(p));
     reset(s, proj);
     let legacy_field = package && legacy_field_package(&s.project);
     unlink_partial_copies(s, legacy_field);

@@ -226,7 +226,9 @@ pub fn commands() -> Vec<C> {
             let name = super::within("name", "a project's name", name, 200)?;
             let text = read_text(p)?;
             super::connections::clear_active();
-            let mut proj = match Project::from_import_json(&text, None) {
+            // What it names is held within this as it is read, before anything it names is read.
+            let reach = s.file_reach(p);
+            let (mut proj, named) = match Project::from_import_json_within(&text, None, reach) {
                 Ok(proj) => proj,
                 Err(error) => {
                     super::connections::restore_active(s);
@@ -234,8 +236,6 @@ pub fn commands() -> Vec<C> {
                 }
             };
             proj.name = name;
-            // Before anything it names is read (as it is installed).
-            let named = crate::received::hold(proj.addresses_mut(), s.file_reach(p));
             super::project::reset_to(s, proj);
             named.say(s, "the template");
             s.path = None;
@@ -530,7 +530,10 @@ fn import_maps(s: &mut Session, p: &Value) -> CmdResult {
     crate::project::check_format(&text, "map file, project or package")?;
     let dir = ps(p, "path").and_then(|path| std::path::absolute(path).ok()).and_then(|p| p.parent().map(Path::to_path_buf));
     super::connections::clear_active();
-    let maps: Vec<Map> = match serde_json::from_str::<Map>(&text) {
+    // What they name is held within this before anything they name is read: a map file's before
+    // its maps are added, a project's as it is read.
+    let reach = s.file_reach(p);
+    let (maps, named): (Vec<Map>, _) = match serde_json::from_str::<Map>(&text) {
         Ok(mut m) => {
             if crate::project::ensure_map_imports_complete(&m).is_err() {
                 super::connections::restore_active(s);
@@ -548,10 +551,11 @@ fn import_maps(s: &mut Session, p: &Value) -> CmdResult {
             for notice in crate::project::picture_notices(&m.layers, []) {
                 s.notify_text(notice, false);
             }
-            vec![m]
+            let named = crate::received::hold(m.addresses_mut(), reach);
+            (vec![m], named)
         }
-        Err(_) => match Project::from_import_maps_json(&text, dir.as_deref(), MAX_IMPORTED_MAPS) {
-            Ok(mut project) => {
+        Err(_) => match Project::from_import_maps_json_within(&text, dir.as_deref(), MAX_IMPORTED_MAPS, reach) {
+            Ok((mut project, named)) => {
                 let parts = [crate::project::ReadPart::Labels, crate::project::ReadPart::Diagrams, crate::project::ReadPart::Maps];
                 for notice in project.take_read_notices(&parts) {
                     s.notify_text(notice, false);
@@ -561,7 +565,7 @@ fn import_maps(s: &mut Session, p: &Value) -> CmdResult {
                 for (_, notice) in crate::project::label_losses::hidden(imported) {
                     s.notify(notice, false);
                 }
-                project.maps
+                (project.maps, named)
             }
             Err(error) => {
                 super::connections::restore_active(s);
@@ -569,9 +573,6 @@ fn import_maps(s: &mut Session, p: &Value) -> CmdResult {
             }
         },
     };
-    // Before anything they name is read (as they are added).
-    let mut maps = maps;
-    let named = crate::received::hold(maps.iter_mut().take(MAX_IMPORTED_MAPS).flat_map(Map::addresses_mut), s.file_reach(p));
     named.say(s, "the map file");
     let mut names = Vec::new();
     let first_map = s.project.maps.len();

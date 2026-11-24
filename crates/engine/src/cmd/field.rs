@@ -1910,9 +1910,14 @@ fn read_manifest(bytes: &[u8]) -> Vec<String> {
 /// photos stay usable after opening a recovery copy, which has no unpack directory of its own.
 /// References that cannot store an absolute path are left relative and reported on open. A package
 /// that went out from home has the rows it gives taken (`Project::given`), for
-/// `offline.keepRows` to keep on this device.
-pub(crate) fn project_in(text: &str, dir: &Path) -> Result<Project, String> {
-    let mut project = Project::from_import_json(text, Some(dir))?;
+/// `offline.keepRows` to keep on this device. What the project names is held within `reach` before
+/// anything it names is read ([`Project::from_import_json_within`]).
+pub(crate) fn project_in_within(
+    text: &str,
+    dir: &Path,
+    reach: crate::render::rustgis_tiles::address::Reach,
+) -> Result<(Project, crate::received::Named), String> {
+    let (mut project, named) = Project::from_import_json_within(text, Some(dir), reach)?;
     let photos = std::path::absolute(dir.join(PHOTOS)).map_err(|e| e.to_string())?;
     let mut relative = 0_usize;
     // Photos from home that keep their names there, the unpack folder's name not being text.
@@ -2002,7 +2007,13 @@ pub(crate) fn project_in(text: &str, dir: &Path) -> Result<Project, String> {
             ),
         ));
     }
-    Ok(project)
+    Ok((project, named))
+}
+
+/// [`project_in_within`] for a package of the user's own.
+#[cfg(test)]
+pub(crate) fn project_in(text: &str, dir: &Path) -> Result<Project, String> {
+    project_in_within(text, dir, crate::render::rustgis_tiles::address::Reach::Local).map(|(p, _)| p)
 }
 
 /// Removes the offline areas past the first `had` of this project: those a field package just made,

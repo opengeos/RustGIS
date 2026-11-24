@@ -1955,6 +1955,13 @@ pub fn download_blocking_omitting(url: &str, omit: &'static [u16]) -> Result<Vec
     download_blocking_omitting_within(url, MAX_DOWNLOAD, BLOCKING_TIMEOUT, omit).map_err(large_file_hint)
 }
 
+/// [`download_blocking_omitting`] reaching no wider than `ceiling` (a file of a store, within the
+/// store's reach), nor than [`ceiling_for`] its own address.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn download_blocking_omitting_at(url: &str, omit: &'static [u16], ceiling: crate::address::Reach) -> Result<Vec<u8>, String> {
+    download_blocking_with_origin_within(url, MAX_DOWNLOAD, BLOCKING_TIMEOUT, omit, ceiling).map(|f| f.bytes).map_err(large_file_hint)
+}
+
 /// A waited-for download's error, with where a large file goes instead when it timed out.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn large_file_hint(e: String) -> String {
