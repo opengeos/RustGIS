@@ -1456,9 +1456,13 @@ impl Part {
     /// its size, or for every k-th pixel of it its size over k, which the grid's last pixel
     /// passes when k doesn't divide it.
     fn span(self, (w, h): (u32, u32), extent: (f64, f64)) -> geotiff::Span {
+        // An edge a rounding error from a pixel's edge is on it: a part made from whole pixels
+        // (`53248 / 83517` of the width, say, which multiplies back to `53247.99999999999`) is
+        // those pixels, not one more each way.
+        let snap = |v: f64| if (v - v.round()).abs() < 1e-6 { v.round() } else { v };
         let edges = |a: f64, b: f64, n: u32, units: f64| {
-            let start = ((a * units).floor() as u32).min(n.saturating_sub(1));
-            (start, ((b * units).ceil() as u32).min(n).max(start.saturating_add(1).min(n)))
+            let start = (snap(a * units).floor() as u32).min(n.saturating_sub(1));
+            (start, (snap(b * units).ceil() as u32).min(n).max(start.saturating_add(1).min(n)))
         };
         geotiff::Span { cols: edges(self.left, self.right, w, extent.0), rows: edges(self.top, self.bottom, h, extent.1) }
     }
@@ -2161,6 +2165,22 @@ fn extent_of(transform: &GeoTransform, transformer: &Transformer, width: u32, he
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    /// A part made from whole pixels of a grid is those pixels, whatever the fractions round to:
+    /// blocks of a file next to each other share no pixel (#2865), and an edge between pixels
+    /// still takes both.
+    #[test]
+    fn a_part_of_whole_pixels_is_those_pixels() {
+        let (w, h) = (83_517u32, 78_739u32);
+        for (c0, c1, r0, r1) in [(53_248u32, 57_344u32, 512u32, 1024u32), (0, 4096, 78_336, 78_739), (81_920, 83_517, 0, 512)] {
+            let f = |v: u32, n: u32| f64::from(v) / f64::from(n);
+            let part = Part::new(f(c0, w), f(r0, h), f(c1, w), f(r1, h)).unwrap();
+            let span = part.span((w, h), (f64::from(w), f64::from(h)));
+            assert_eq!((span.cols, span.rows), ((c0, c1), (r0, r1)));
+        }
+        let between = Part::new(0.25, 0.25, 0.5005, 0.5).unwrap().span((1000, 1000), (1000.0, 1000.0));
+        assert_eq!((between.cols, between.rows), ((250, 501), (250, 500)));
+    }
 
     #[test]
     fn elevation_files_are_raster_names() {
