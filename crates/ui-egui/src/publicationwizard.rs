@@ -259,6 +259,9 @@ fn review_step(ui: &mut egui::Ui, d: &Draft) {
     });
 }
 
+/// The height every step takes: the style step's six styles and their descriptions.
+const STEP_HEIGHT: f32 = 300.0;
+
 /// Shows the wizard while it is open; Create runs `layout.publication` as the menu does, and the
 /// wizard stays open on a layout the command refuses.
 pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
@@ -286,13 +289,20 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
             );
             ui.label(egui::RichText::new(heading).strong());
             ui.separator();
-            match d.step {
-                Step::Size => size_step(ui, &mut d),
-                Step::Style => style_step(ui, &mut d),
-                Step::Texts => texts_step(ui, &mut d),
-                Step::Accent => accent_step(ui, &mut d, t.accent),
-                Step::Review => review_step(ui, &d),
-            }
+            // Every step as tall as the tallest (the styles and their descriptions), so the
+            // window keeps its size and Next stays under the pointer from step to step.
+            // `set_min_height`, not `allocate_ui_with_layout`, which in egui 0.37 keeps only what
+            // was drawn.
+            ui.vertical(|ui| {
+                ui.set_min_height(STEP_HEIGHT);
+                match d.step {
+                    Step::Size => size_step(ui, &mut d),
+                    Step::Style => style_step(ui, &mut d),
+                    Step::Texts => texts_step(ui, &mut d),
+                    Step::Accent => accent_step(ui, &mut d, t.accent),
+                    Step::Review => review_step(ui, &d),
+                }
+            });
             ui.separator();
             let size = egui::vec2(84.0, 28.0);
             ui.horizontal(|ui| {
@@ -507,6 +517,20 @@ mod tests {
         assert!(app.session.notices[said..].iter().any(|n| n.text.contains("unknown")), "said");
         assert_eq!(app.dialogs.open, Some("publicationWizard"));
         assert_eq!(app.dialogs.publication.as_ref().map(|d| d.step), Some(Step::Review));
+    }
+
+    /// Next stays where it was from one step to the next: every step is as tall as the tallest.
+    #[test]
+    fn next_stays_under_the_pointer_from_step_to_step() {
+        let mut app = app();
+        open(&mut app);
+        let mut h = harness(app);
+        let at = |h: &egui_kittest::Harness<'static, RustGisApp>| h.get_by_role_and_label(Role::Button, "Next").rect();
+        let first = at(&h);
+        for _ in 0..3 {
+            click(&mut h, "Next");
+            assert_eq!(at(&h), first, "{:?}", step(&h));
+        }
     }
 
     /// Cancel closes the wizard with nothing made, and the next opening starts over.
