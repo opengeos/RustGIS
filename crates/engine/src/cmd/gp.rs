@@ -1615,7 +1615,7 @@ pub(crate) fn tiled_inputs(
             }
             let (r, count) = read_tiled(&l.name, path)?;
             held.push(count);
-            said.push((l.name.clone(), r.clone()));
+            said.push(ReadNote::of(&l.name, &r));
             read.insert(key, r);
         }
     }
@@ -1630,37 +1630,57 @@ pub(crate) fn tiled_inputs(
     Ok(read)
 }
 
-/// `part` of the raster file read in place at `path` (layer `name`'s), read from the file at the
-/// finest level whose part the run can hold, in its turn ([`tiled_turn`]), with its count in
-/// [`rustgis_data::memory::held`]; `None` when the file can't be read by part (read it whole with
-/// [`read_tiled`]). Never kept for a batch: another item's part is another part.
+/// `part` of the raster file read in place at `path` (layer `name`'s, which holds `held`), read
+/// from the file at the finest level whose part fits `max` samples, in its turn ([`tiled_turn`]),
+/// with its count in [`rustgis_data::memory::held`]; `None` when the file can't be read by part,
+/// or is no longer the revision `held` was read from (read it whole with [`read_tiled`]). Never
+/// kept for a batch: another item's part is another part.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn read_tiled_part(
     name: &str,
     path: &str,
     part: rustgis_data::raster::Part,
-) -> Result<Option<(std::sync::Arc<rustgis_data::raster::Raster>, std::sync::Arc<rustgis_data::memory::Holding>)>, String> {
+    max: usize,
+    held: &rustgis_data::raster::Raster,
+) -> Result<Option<(rustgis_data::raster::PartRead, std::sync::Arc<rustgis_data::memory::Holding>)>, String> {
     let _turn = tiled_turn().map_err(|e| format!("{name}: {e}"))?;
-    let Some(r) = rustgis_data::raster::read_path_part(std::path::Path::new(path), part).map_err(|e| format!("{name}: {e}"))? else {
-        return Ok(None);
-    };
-    let bytes: usize = r.bands.iter().map(|b| b.data.len().saturating_mul(4)).sum();
-    Ok(Some((std::sync::Arc::new(r), std::sync::Arc::new(rustgis_data::memory::Holding::of(bytes as u64)))))
+    let read =
+        rustgis_data::raster::read_path_part(std::path::Path::new(path), part, max, Some(held)).map_err(|e| format!("{name}: {e}"))?;
+    let Some(read) = read else { return Ok(None) };
+    let bytes: usize = read.raster.bands.iter().map(|b| b.data.len().saturating_mul(4)).sum();
+    Ok(Some((read, std::sync::Arc::new(rustgis_data::memory::Holding::of(bytes as u64)))))
+}
+
+/// What a run says of a raster file read in place it read again from its file ([`read_tiled`]):
+/// its layer's name, how many of its values were rounded as it was read, and, read coarser than
+/// the file, its size and the file's (or the part's) in the file's pixels.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone)]
+pub(crate) struct ReadNote {
+    name: String,
+    rounded: u64,
+    overview: Option<((u32, u32), (u32, u32))>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl ReadNote {
+    pub(crate) fn of(name: &str, r: &rustgis_data::raster::Raster) -> ReadNote {
+        ReadNote { name: name.to_string(), rounded: r.rounded.iter().sum(), overview: r.overview.map(|full| ((r.width, r.height), full)) }
+    }
 }
 
 /// What a run says of the raster files read in place it read again from their file
-/// ([`read_tiled`]), each with its layer's name: one notice of each kind, naming each raster.
-/// `whose` says whose results are built on values rounded as they were read.
+/// ([`read_tiled`]): one notice of each kind, naming each raster. `whose` says whose results are
+/// built on values rounded as they were read.
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn tiled_read_notes(read: &[(String, std::sync::Arc<rustgis_data::raster::Raster>)], whose: &str) -> Vec<String> {
+pub(crate) fn tiled_read_notes(read: &[ReadNote], whose: &str) -> Vec<String> {
     let (mut rounded, mut overviews) = (Vec::new(), Vec::new());
-    for (name, r) in read {
-        let n: u64 = r.rounded.iter().sum();
-        if n > 0 {
+    for ReadNote { name, rounded: n, overview } in read {
+        if *n > 0 {
             rounded.push(format!("{name} {n}"));
         }
-        if let Some((fw, fh)) = r.overview {
-            overviews.push(format!("{name} at its {} × {} overview of the {fw} × {fh} raster", r.width, r.height));
+        if let Some(((w, h), (fw, fh))) = overview {
+            overviews.push(format!("{name} at its {w} × {h} overview of the {fw} × {fh} raster"));
         }
     }
     let mut notes = Vec::new();

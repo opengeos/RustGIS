@@ -1451,26 +1451,40 @@ impl Part {
     }
 
     /// The columns and rows of a grid `w` × `h` the part covers, out to whole pixels: one at
-    /// least, of a grid that has any.
-    fn span(self, w: u32, h: u32) -> geotiff::Span {
-        let edges = |a: f64, b: f64, n: u32| {
-            let n64 = f64::from(n);
-            let start = ((a * n64).floor() as u32).min(n.saturating_sub(1));
-            (start, ((b * n64).ceil() as u32).min(n).max(start.saturating_add(1).min(n)))
+    /// least, of a grid that has any. The image spans `extent` of the grid's pixels each way:
+    /// its size, or for every k-th pixel of it its size over k, which the grid's last pixel
+    /// passes when k doesn't divide it.
+    fn span(self, (w, h): (u32, u32), extent: (f64, f64)) -> geotiff::Span {
+        let edges = |a: f64, b: f64, n: u32, units: f64| {
+            let start = ((a * units).floor() as u32).min(n.saturating_sub(1));
+            (start, ((b * units).ceil() as u32).min(n).max(start.saturating_add(1).min(n)))
         };
-        geotiff::Span { cols: edges(self.left, self.right, w), rows: edges(self.top, self.bottom, h) }
+        geotiff::Span { cols: edges(self.left, self.right, w, extent.0), rows: edges(self.top, self.bottom, h, extent.1) }
     }
 }
 
+/// A part of a raster file read ([`read_path_part`]): its pixels, and where they lie in the grid
+/// they were read from, so a window found on that grid ([`GeoTransform::to_pixel`]) is placed on
+/// the part in whole pixels, without rounding again.
+pub struct PartRead {
+    pub raster: Raster,
+    /// The part's first column and row in the grid read.
+    pub at: (u32, u32),
+    /// The grid read (the full image, an overview, or every k-th pixel of it), whole: its
+    /// transform, columns and rows, as a read of all of it places them.
+    pub grid: (GeoTransform, u32, u32),
+}
+
 /// `part` of the GeoTIFF at `path`, as [`read_path`] reads the file but holding only that part,
-/// at the finest level whose part fits [`max_samples`]: the full image when it does, read from
-/// the strips or tiles that hold it alone. The `.aux.xml` beside it is applied as it is to the
-/// whole file. `Ok(None)` when the file isn't read so: not a GeoTIFF, one with a world file
-/// beside it, or one [`geotiff`] can't read by part (rotated, skewed or without coordinates).
-/// Read the whole file then. A part read at a coarser level says it with `overview`, the part's
-/// size in the file's pixels.
+/// at the finest level whose part fits `max` samples: the full image when it does, read from the
+/// strips or tiles that hold it alone. The `.aux.xml` beside it is applied as it is to the whole
+/// file. `Ok(None)` when the file isn't read so: not a GeoTIFF, one with a world file beside it,
+/// one [`geotiff`] can't read by part (rotated, skewed or without coordinates), or, with
+/// `same_as`, no longer the revision of the file that raster was read from, which the part was
+/// found on. Read the whole file then. A part read at a coarser level says it with `overview`,
+/// the part's size in the file's pixels.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn read_path_part(path: &Path, part: Part) -> Result<Option<Raster>> {
+pub fn read_path_part(path: &Path, part: Part, max: usize, same_as: Option<&Raster>) -> Result<Option<PartRead>> {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
     if !matches!(ext.as_str(), "tif" | "tiff") {
         return Ok(None);
@@ -1485,7 +1499,8 @@ pub fn read_path_part(path: &Path, part: Part) -> Result<Option<Raster>> {
     let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("raster").to_string();
     let pam = pam::read(path);
     let sidecar_nodata = pam.as_ref().and_then(pam::Pam::nodata);
-    let Some(mut r) = geotiff::read_file_part(path, &name, sidecar_nodata, part)? else { return Ok(None) };
+    let Some(mut read) = geotiff::read_file_part(path, &name, sidecar_nodata, part, max, same_as)? else { return Ok(None) };
+    let r = &mut read.raster;
     // As [`read_path_placing`]: read again with the no-data the bands it has give, so the
     // rounded count leaves out just its pixels.
     let applied = pam.as_ref().map(|p| p.nodata_within(r.bands.len()));
@@ -1494,15 +1509,15 @@ pub fn read_path_part(path: &Path, part: Part) -> Result<Option<Raster>> {
         && r.nodata.is_none()
         && matches!(r.data_type.as_str(), "UInt32" | "Int32" | "UInt64" | "Int64" | "Float64")
     {
-        drop(r);
-        let Some(again) = geotiff::read_file_part(path, &name, nd, part)? else { return Ok(None) };
-        r = again;
+        drop(read);
+        let Some(again) = geotiff::read_file_part(path, &name, nd, part, max, same_as)? else { return Ok(None) };
+        read = again;
     }
     if let Some(p) = &pam {
-        r.apply_pam(p, pam::SIDECAR);
+        read.raster.apply_pam(p, pam::SIDECAR);
     }
-    r.source = Some(path.display().to_string());
-    Ok(Some(r))
+    read.raster.source = Some(path.display().to_string());
+    Ok(Some(read))
 }
 
 /// A picture at `path` with the world file beside it applied (#2075). A scan is placed by it, in

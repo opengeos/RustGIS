@@ -1551,14 +1551,26 @@ pub(super) fn read_file_with_nodata(path: &std::path::Path, name: &str, sidecar_
 }
 
 /// [`read_file_with_nodata`] of `part` of the image only, at the finest level whose part of it
-/// fits [`max_samples`], decoding only the chunks that hold it (see [`read_part`]): `Ok(None)`
-/// when the file can't be read by part. The raster's pixels aren't the file's whole grid, so it
-/// keeps no revision of the file to pair later reads of the grid with.
+/// fits `max` samples, decoding only the chunks that hold it (see [`read_part`]): `Ok(None)` when
+/// the file can't be read by part, or isn't the revision `same_as` was read from. The raster's
+/// pixels aren't the file's whole grid, so it keeps no revision of the file to pair later reads of
+/// the grid with.
 #[cfg(not(target_arch = "wasm32"))]
-pub(super) fn read_file_part(path: &std::path::Path, name: &str, sidecar_nodata: Option<f64>, part: super::Part) -> Result<Option<Raster>> {
+pub(super) fn read_file_part(
+    path: &std::path::Path,
+    name: &str,
+    sidecar_nodata: Option<f64>,
+    part: super::Part,
+    max: usize,
+    same_as: Option<&Raster>,
+) -> Result<Option<super::PartRead>> {
     let file = crate::provenance::open(path).map_err(err)?;
+    // The part is of the image `same_as` was read from: of another, it would be another place.
+    if same_as.is_some_and(|r| r.check_original_handle(&file).is_err()) {
+        return Ok(None);
+    }
     let revision = file.metadata().and_then(|metadata| super::file_revision::FileRevision::capture(&metadata));
-    read_file_revision_part(path, name, sidecar_nodata, file, revision, Some(part))
+    read_file_revision_part(path, name, sidecar_nodata, file, revision, Some(part), max)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1576,7 +1588,9 @@ fn read_file_with_revision(
     file: std::fs::File,
     revision: std::io::Result<super::file_revision::FileRevision>,
 ) -> Result<Raster> {
-    read_file_revision_part(path, name, sidecar_nodata, file, revision, None)?.ok_or_else(|| err("the image couldn't be read"))
+    read_file_revision_part(path, name, sidecar_nodata, file, revision, None, max_samples())?
+        .map(|p| p.raster)
+        .ok_or_else(|| err("the image couldn't be read"))
 }
 
 /// [`read_file_with_revision`], of `part` of the image only when given (`Ok(None)` when the file
@@ -1589,7 +1603,8 @@ fn read_file_revision_part(
     file: std::fs::File,
     revision: std::io::Result<super::file_revision::FileRevision>,
     part: Option<super::Part>,
-) -> Result<Option<Raster>> {
+    max: usize,
+) -> Result<Option<super::PartRead>> {
     let revision = revision.map_err(|e| e.to_string());
     let open = || -> std::io::Result<Reader<'static>> {
         let file = crate::provenance::open(path)?;
@@ -1604,9 +1619,8 @@ fn read_file_revision_part(
         }
         reader(std::io::BufReader::new(file))
     };
-    let decoded = reader(std::io::BufReader::new(file))
-        .map_err(err)
-        .and_then(|r| read_image(r, name, max_samples(), Some(&open), sidecar_nodata, None, part));
+    let decoded =
+        reader(std::io::BufReader::new(file)).map_err(err).and_then(|r| read_image(r, name, max, Some(&open), sidecar_nodata, None, part));
     // A file cut short while it is read fails to decode: the revision says whether that was a
     // change to wait out (Cancel is said as itself).
     if let Ok(original) = &revision
@@ -1619,12 +1633,12 @@ fn read_file_revision_part(
             return Err(err(load_revision_error("The image file changed while its pixels were read")));
         }
     }
-    let Some(mut raster) = decoded? else { return Ok(None) };
+    let Some(mut read) = decoded? else { return Ok(None) };
     // A part's pixels aren't the file's grid: no later read of it pairs with them.
     if part.is_none() {
-        raster.source_file = Some(revision);
+        read.raster.source_file = Some(revision);
     }
-    Ok(Some(raster))
+    Ok(Some(read))
 }
 
 /// [`read`], holding at most `max` samples (the tests' small limit exercises the overviews), with
@@ -1644,7 +1658,7 @@ pub(super) fn read_limited_with_nodata(
     asked: Option<Crs>,
 ) -> Result<Raster> {
     // Only a part is ever not read.
-    read_image(r, name, max, open, sidecar_nodata, asked, None)?.ok_or_else(|| err("the image couldn't be read"))
+    read_image(r, name, max, open, sidecar_nodata, asked, None)?.map(|p| p.raster).ok_or_else(|| err("the image couldn't be read"))
 }
 
 /// [`read_limited_with_nodata`] of `part` of the image only: the finest level (the full image, an
@@ -1656,7 +1670,7 @@ pub(super) fn read_limited_with_nodata(
 /// descriptions are the whole image's. `overview`, when the level isn't the full image, is the
 /// part's size in the full image's pixels.
 #[cfg(test)]
-pub(super) fn read_part(r: Reader<'_>, name: &str, max: usize, part: super::Part) -> Result<Option<Raster>> {
+pub(super) fn read_part(r: Reader<'_>, name: &str, max: usize, part: super::Part) -> Result<Option<super::PartRead>> {
     read_image(r, name, max, None, None, None, Some(part))
 }
 
@@ -1669,7 +1683,7 @@ fn read_image(
     sidecar_nodata: Option<f64>,
     asked: Option<Crs>,
     part: Option<super::Part>,
-) -> Result<Option<Raster>> {
+) -> Result<Option<super::PartRead>> {
     // The full image says whether it is read as a palette image, whichever image is read, as a
     // COG window has it: a grey full image's stray colour table colours nothing, nor do palette
     // overviews of it.
@@ -1708,9 +1722,11 @@ fn read_image(
     let bytes = sample_bytes(&mut dec);
     // The decoded image is held at its own pixel size before conversion to f32, so bound bytes
     // as well as samples.
-    let fits = |w: u32, h: u32, spp: usize, bytes: usize| {
+    // `w` × `h` pixels whose image spans `extent` of them each way (every k-th pixel's grid
+    // passes the image's edge when k doesn't divide its size).
+    let fits = |w: u32, h: u32, extent: (f64, f64), spp: usize, bytes: usize| {
         // Of a part, its pixels at that size.
-        let (w, h) = part.map_or((w, h), |p| p.span(w, h).size());
+        let (w, h) = part.map_or((w, h), |p| p.span((w, h), extent).size());
         let n = (w as usize).saturating_mul(h as usize).saturating_mul(spp);
         n <= max && n.saturating_mul(bytes) <= max.saturating_mul(4)
     };
@@ -1720,7 +1736,7 @@ fn read_image(
     let mut decimate_by = 1u32;
     // The image read: 0, the full one, or an overview.
     let mut image = 0;
-    if !fits(w, h, spp, bytes) {
+    if !fits(w, h, (f64::from(w), f64::from(h)), spp, bytes) {
         // The largest overview that fits, whatever order the images are in; a damaged image
         // ends the search rather than the open.
         let mut best: Option<(usize, u32, u32)> = None;
@@ -1741,7 +1757,7 @@ fn read_image(
             // would read as another kind of image: the full image is read sparsely instead.
             if ospp == spp
                 && extra_alpha(&mut dec) == full_alpha
-                && fits(ow, oh, ospp, obytes)
+                && fits(ow, oh, (f64::from(ow), f64::from(oh)), ospp, obytes)
                 && best.is_none_or(|(_, bw, bh)| ow as u64 * oh as u64 > bw as u64 * bh as u64)
             {
                 best = Some((index, ow, oh));
@@ -1749,7 +1765,7 @@ fn read_image(
         }
         // Every k-th pixel of the full image, the fewest left out that fit.
         let mut k = 2u32;
-        while !fits(full_w.div_ceil(k), full_h.div_ceil(k), spp, 4) {
+        while !fits(full_w.div_ceil(k), full_h.div_ceil(k), (f64::from(full_w) / f64::from(k), f64::from(full_h) / f64::from(k)), spp, 4) {
             k = k.saturating_mul(2);
             if k > 1 << 20 {
                 break;
@@ -1842,7 +1858,14 @@ fn read_image(
     };
     let planar = dec.find_tag_unsigned::<u16>(Tag::PlanarConfiguration).ok().flatten() == Some(2);
     // The pixels kept of the grid read (`w` × `h`): a part's, else all of them.
-    let span = part.map(|p| p.span(w, h));
+    // The image's extent in the grid's pixels: every k-th pixel's grid passes its edge when k
+    // doesn't divide its size.
+    let extent = if decimate_by > 1 {
+        (f64::from(full_w) / f64::from(decimate_by), f64::from(full_h) / f64::from(decimate_by))
+    } else {
+        (f64::from(w), f64::from(h))
+    };
+    let span = part.map(|p| p.span((w, h), extent));
     let (ow, oh) = span.map_or((w, h), Span::size);
     let n = (ow as usize) * (oh as usize);
     // Extra samples the decoder leaves out can make padded edge tiles spill into the next row
@@ -1966,7 +1989,8 @@ fn read_image(
         if let Some(p) = &described {
             r.apply_pam(p, super::pam::GDAL_METADATA);
         }
-        return Ok(Some(r));
+        let grid = (r.transform, w, h);
+        return Ok(Some(super::PartRead { raster: r, at: (0, 0), grid }));
     }
     let mut transform = geo.transform;
     // How many full-image pixels one pixel read spans, across and down.
@@ -2029,6 +2053,8 @@ fn read_image(
             }
         }
     };
+    // The grid read, whole, as a whole read of it places it.
+    let grid = (transform, w, h);
     // A part: its corner, and its size in the full image's pixels when it is coarser.
     let (w, h, overview) = match span {
         Some(span) => {
@@ -2055,7 +2081,8 @@ fn read_image(
     if let Some(p) = &described {
         r.apply_pam(p, super::pam::GDAL_METADATA);
     }
-    Ok(Some(r))
+    let at = span.map_or((0, 0), |s| (s.cols.0, s.rows.0));
+    Ok(Some(super::PartRead { raster: r, at, grid }))
 }
 
 /// What turning a rotated or skewed image north up says ([`super::north_up`]): its pixels are
@@ -3627,7 +3654,9 @@ mod tests {
     /// A part of a tiled file (#2865) is the pixels, place, no-data, system and band names of
     /// the whole file read at the same level then cut to it: the full image when the part fits,
     /// the finest overview whose part does when it doesn't, and every other pixel of a file
-    /// without overviews. Only the tiles that hold it are read.
+    /// without overviews (a file whose size two doesn't divide too, whose last pixel read passes
+    /// its edge). It covers all the ground asked for, says where it lies in the grid read, and
+    /// only the tiles that hold it are read.
     #[test]
     fn a_part_is_the_whole_file_read_at_its_level_then_cut_to_it() {
         use super::super::Part;
@@ -3653,51 +3682,60 @@ mod tests {
             Example { int8: true, ..base },
             Example { bottom_up: true, ..base },
             Example { no_overviews: true, ..base },
+            Example { size: 1001, no_overviews: true, ..base },
         ];
-        // Columns 307 to 431 and rows 563 to 922 of the full image.
-        let part = Part::new(0.3, 0.55, 0.42, 0.9).unwrap();
+        // The parts: one inside, and one reaching the image's right and bottom edges.
+        let parts = [Part::new(0.3, 0.55, 0.42, 0.9).unwrap(), Part::new(0.987, 0.9, 1.0, 1.0).unwrap()];
         for e in cases {
             let file = example_with(&e);
-            let bands = usize::from(e.bands);
-            // The part fits at full size; then only at half size (an overview, or every other
-            // pixel); the whole file is read at that size to compare.
-            for (part_max, whole_max, size) in [(200_000 * bands, 1024 * 1024 * bands, 1024), (20_000 * bands, 512 * 512 * bands, 512)] {
-                let read = std::rc::Rc::new(std::cell::Cell::new(0));
-                let r = read_part(reader(Counting(std::io::Cursor::new(file.clone()), read.clone())).unwrap(), "part", part_max, part)
-                    .unwrap()
-                    .expect("read by part");
-                let whole = read_limited(reader(std::io::Cursor::new(&file)).unwrap(), "whole", whole_max, None).unwrap();
-                assert_eq!(whole.width, size, "{e:?}");
-                let at = |v: f64, origin: f64, px: f64| ((v - origin) / px).round() as i64;
-                let (c0, r0) = (
-                    at(r.transform.origin_x, whole.transform.origin_x, whole.transform.pixel_width),
-                    at(r.transform.origin_y, whole.transform.origin_y, whole.transform.pixel_height),
-                );
-                let scale = 1024 / size;
-                let expected = (307 / scale, (431u32).div_ceil(scale), 563 / scale, (922u32).div_ceil(scale));
-                let got = (c0 as u32, c0 as u32 + r.width, r0 as u32, r0 as u32 + r.height);
-                assert_eq!(got, expected, "{e:?} at {size}");
-                assert_eq!(
-                    (r.transform.pixel_width, r.transform.pixel_height),
-                    (whole.transform.pixel_width, whole.transform.pixel_height)
-                );
-                assert_eq!(
-                    (r.crs, r.nodata, r.color.clone(), r.data_type.clone(), r.step),
-                    (whole.crs, whole.nodata, whole.color.clone(), whole.data_type.clone(), whole.step)
-                );
-                let names = |r: &Raster| r.bands.iter().map(|b| (b.name.clone(), b.wavelength)).collect::<Vec<_>>();
-                assert_eq!(names(&r), names(&whole), "{e:?}");
-                for b in 0..r.band_count() {
-                    for y in 0..i64::from(r.height) {
-                        for x in 0..i64::from(r.width) {
-                            assert_eq!(r.value(b, x, y), whole.value(b, x + c0, y + r0), "{e:?} at {size}: band {b} at {x},{y}");
+            let (bands, size) = (usize::from(e.bands), e.size as usize);
+            for part in parts {
+                // The part fits at full size; then only at half size (an overview, or every other
+                // pixel); the whole file is read at that size to compare.
+                let (pw, ph) = part.span((e.size, e.size), (f64::from(e.size), f64::from(e.size))).size();
+                let at_full = pw as usize * ph as usize * bands;
+                for (part_max, whole_max, half) in
+                    [(at_full, size * size * bands, false), (at_full - 1, size.div_ceil(2).pow(2) * bands, true)]
+                {
+                    let read = std::rc::Rc::new(std::cell::Cell::new(0));
+                    let p = read_part(reader(Counting(std::io::Cursor::new(file.clone()), read.clone())).unwrap(), "part", part_max, part)
+                        .unwrap()
+                        .expect("read by part");
+                    let whole = read_limited(reader(std::io::Cursor::new(&file)).unwrap(), "whole", whole_max, None).unwrap();
+                    let r = &p.raster;
+                    let at = format!("{e:?}, {part:?}, half {half}");
+                    assert_eq!(whole.width as usize, if half { size.div_ceil(2) } else { size }, "{at}");
+                    assert_eq!(p.grid, (whole.transform, whole.width, whole.height), "{at}");
+                    let (c0, r0) = (i64::from(p.at.0), i64::from(p.at.1));
+                    let gt = r.transform;
+                    assert!((gt.origin_x - whole.transform.to_world(c0 as f64, r0 as f64).x).abs() < 1e-9, "{at}");
+                    assert_eq!((gt.pixel_width, gt.pixel_height), (whole.transform.pixel_width, whole.transform.pixel_height));
+                    // Every place asked for is on it: the part of the full image's ground, in the
+                    // grid's pixels (the full image's size over how many of its pixels one spans).
+                    let (sx, sy) = whole.file_pixels();
+                    let (ex, ey) = (f64::from(e.size) / sx, f64::from(e.size) / sy);
+                    assert!(c0 as f64 <= part.left * ex + 1e-9, "{at}: starts past the part");
+                    assert!(c0 as f64 + f64::from(r.width) >= part.right * ex - 1e-9, "{at}: ends before the part does");
+                    assert!(r0 as f64 <= part.top * ey + 1e-9, "{at}: starts below the part");
+                    assert!(r0 as f64 + f64::from(r.height) >= part.bottom * ey - 1e-9, "{at}: ends above the part's end");
+                    assert_eq!(
+                        (r.crs, r.nodata, r.color.clone(), r.data_type.clone(), r.step),
+                        (whole.crs, whole.nodata, whole.color.clone(), whole.data_type.clone(), whole.step)
+                    );
+                    let names = |r: &Raster| r.bands.iter().map(|b| (b.name.clone(), b.wavelength)).collect::<Vec<_>>();
+                    assert_eq!(names(r), names(&whole), "{at}");
+                    for b in 0..r.band_count() {
+                        for y in 0..i64::from(r.height) {
+                            for x in 0..i64::from(r.width) {
+                                assert_eq!(r.value(b, x, y), whole.value(b, x + c0, y + r0), "{at}: band {b} at {x},{y}");
+                            }
                         }
                     }
+                    // Its size in the full image's pixels when coarser, as an overview of it.
+                    let scale = |n: u32, by: f64| (f64::from(n) * by).round() as u32;
+                    assert_eq!(r.overview, half.then(|| (scale(r.width, sx), scale(r.height, sy))), "{at}");
+                    assert!(read.get() < file.len() as u64 / 4, "{at}: {} bytes of {} read", read.get(), file.len());
                 }
-                // Its size in the full image's pixels when coarser, as an overview of it.
-                let full = |n: u32| n * scale;
-                assert_eq!(r.overview, (size < 1024).then(|| (full(r.width), full(r.height))), "{e:?}");
-                assert!(read.get() < file.len() as u64 / 4, "{e:?} at {size}: {} bytes of {} read", read.get(), file.len());
             }
         }
     }
