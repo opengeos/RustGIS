@@ -722,6 +722,7 @@ fn a_layer_held_in_its_own_system_comes_back_with_only_its_changes() {
 /// longitude/latitude refused to send) comes back too, as it is held.
 #[test]
 fn a_layer_held_in_its_own_system_comes_back_exact_by_a_list_in_that_system() {
+    crate::cmd::field_changes::test_bases::write_own_systems();
     use rustgis_data::{Coord, Geometry, raster::Crs};
     let equal_earth = Crs::from_epsg(8857).unwrap();
     let temp = Temp::new("native-list");
@@ -765,6 +766,7 @@ fn a_layer_held_in_its_own_system_comes_back_exact_by_a_list_in_that_system() {
 /// back there, as a list of version 1's are.
 #[test]
 fn a_list_in_a_layers_own_system_comes_back_to_a_layer_held_in_another() {
+    crate::cmd::field_changes::test_bases::write_own_systems();
     use rustgis_data::{Geometry, raster::Crs};
     let temp = Temp::new("native-list-elsewhere");
     let mut home = home(&temp);
@@ -799,6 +801,7 @@ fn a_list_in_a_layers_own_system_comes_back_to_a_layer_held_in_another() {
 /// return; once the list touches it, it does, naming it.
 #[test]
 fn only_a_feature_the_list_touches_can_refuse_a_converted_return() {
+    crate::cmd::field_changes::test_bases::write_own_systems();
     use rustgis_data::{Coord, Geometry, raster::Crs};
     let temp = Temp::new("native-list-untouched");
     let mut home = home(&temp);
@@ -837,9 +840,42 @@ fn only_a_feature_the_list_touches_can_refuse_a_converted_return() {
     a.run("edit.setValue", &json!({"layer": cities, "row": 1, "field": name, "value": "Far"})).unwrap();
     let (_, back) = package(&mut a, &Value::Null).unwrap();
     std::fs::write(&path, &back).unwrap();
+    let before = serde_json::to_value(&home.project).unwrap();
     let err = home.run("offline.bringBack", &json!({"path": path.display().to_string()})).unwrap_err();
     assert!(err.contains(&format!("feature {far} has a place")), "{err}");
-    assert_ne!(value_of(&home, hc, edited, &name).as_deref(), Some("Kept"));
+    assert_eq!(serde_json::to_value(&home.project).unwrap(), before, "a refused return changes nothing");
+}
+
+/// A feature added in the field whose id home has meanwhile given to a feature of its own with no
+/// place in longitude/latitude takes a new id: home's feature stays as stored, and doesn't refuse
+/// the return.
+#[test]
+fn a_home_feature_an_addition_renumbers_around_doesnt_refuse_a_converted_return() {
+    use rustgis_data::{Coord, Geometry, raster::Crs};
+    let temp = Temp::new("renumbered-unplaced");
+    let mut home = home(&temp);
+    let hc = layer(&home, "Cities");
+    let name = text_field(&home, hc);
+    let (_, out) = package(&mut home, &json!({"name": "Day", "extent": AREA})).unwrap();
+    // Home holds the layer in Equal Earth and adds a feature there with no place in
+    // longitude/latitude: it takes the next id, which the phone's addition takes too.
+    home.map_mut().layer_mut(hc).unwrap().dataset.hold_in(Crs::from_epsg(8857).unwrap()).unwrap();
+    let at_home = add_point(&mut home, hc, &name, "Home's", [10.0, 10.0]);
+    let ds = &mut home.map_mut().layer_mut(hc).unwrap().dataset;
+    let row = ds.features.iter().position(|f| f.id == at_home).unwrap();
+    ds.features.set_geometry(row, Some(Geometry::Point(Coord::new(1e9, 0.0))));
+    let mut a = phone(&temp, &out, "a");
+    let cities = layer(&a, "Cities");
+    let added = add_point(&mut a, cities, &name, "Field's", [11.0, 11.0]);
+    assert_eq!(added, at_home, "the same id");
+    let (done, said) = bring_back(&temp, &mut a, &mut home, "a");
+    assert_eq!((done["added"].as_u64(), done["renumbered"].as_u64()), (Some(1), Some(1)), "{done} {said:?}");
+    assert_eq!(with_label(&home, hc, &name, "Field's"), 1);
+    let l = home.map().layer(hc).unwrap();
+    assert_eq!(
+        l.dataset.features.iter().find(|f| f.id == at_home).and_then(|f| f.geometry.clone()),
+        Some(Geometry::Point(Coord::new(1e9, 0.0)))
+    );
 }
 
 /// A list of a version this RustGIS doesn't write is refused, as is one of version 1 that gives a

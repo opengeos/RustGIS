@@ -52,6 +52,22 @@ const LAYERS: &str = "layers.json";
 /// so it finds no copy instead, and the package goes back as a whole map, which it says.
 const LAYERS_V2: &str = "layers.v2.json";
 
+/// Whether a copy keeps a layer held in its own system in that system ([`BaseLayer::crs`]), so its
+/// list of changes is of version 2. Off until a release that reads version 2 has shipped
+/// (`docs/maintaining.md`: a new version is read a release before anything writes it): copies are
+/// kept, and lists written, in longitude/latitude as before. Tests turn it on
+/// ([`test_bases::write_own_systems`]).
+fn writes_own_systems() -> bool {
+    #[cfg(test)]
+    {
+        test_bases::OWN_SYSTEMS.load(std::sync::atomic::Ordering::Relaxed)
+    }
+    #[cfg(not(test))]
+    {
+        false
+    }
+}
+
 /// The file listing the copy in `dir`, when it is complete.
 fn layers_file(dir: &Path) -> Option<PathBuf> {
     [LAYERS_V2, LAYERS].into_iter().map(|name| dir.join(name)).find(|p| p.is_file())
@@ -449,7 +465,7 @@ pub(crate) fn keep_base(given: &GivenRows) -> Kept {
     let parent = dir.parent().ok_or("no folder for the field package's rows")?;
     std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
     let part = parent.join(format!("{}.{}.part", given.package, crate::project::field_id()?));
-    let written = write_base(given, &part).and_then(|()| publish(&part, &dir));
+    let written = write_base(given, &part, writes_own_systems()).and_then(|()| publish(&part, &dir));
     let mut notes = Vec::new();
     if part.exists() {
         notes.extend(let_go(&part, "a copy of the field package's rows cut short"));
@@ -499,16 +515,17 @@ fn publish(part: &Path, dir: &Path) -> Result<(), String> {
 }
 
 /// Writes the rows `given` holds into `dir`: see [`keep_base`].
-fn write_base(given: &GivenRows, dir: &Path) -> Result<(), String> {
+fn write_base(given: &GivenRows, dir: &Path, own_systems: bool) -> Result<(), String> {
     use rustgis_data::progress;
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     progress::begin(given.layers.iter().map(|(_, _, d)| d.features.len()).sum());
     let mut layers = Vec::new();
     for (id, name, dataset) in &given.layers {
-        // Each row's shape is kept in the layer's own system, as it is held: a feature whose place
-        // can't be given in longitude/latitude comes back exact too.
-        let crs = dataset.coord_crs();
-        let to = crs.to(crs).map_err(|e| format!("{name}: {e}"))?;
+        // Each row's shape is kept in the layer's own system, as it is held, so a feature whose
+        // place can't be given in longitude/latitude comes back exact too ([`writes_own_systems`]);
+        // else in longitude/latitude, as before.
+        let crs = if own_systems { dataset.coord_crs() } else { Crs::LonLat };
+        let to = dataset.coord_crs().to(crs).map_err(|e| format!("{name}: {e}"))?;
         let ds = dataset;
         let fields: Vec<Option<usize>> = (0..ds.fields.len()).map(Some).collect();
         let rows_path = dir.join(format!("{id}.rows"));
@@ -560,6 +577,7 @@ fn write_base(given: &GivenRows, dir: &Path) -> Result<(), String> {
 
 /// `row`'s shape by `to` (the layer's conversion to the copy's system, made once): borrowed when it
 /// is held there already; refused, naming the feature, when one of its places can't be given there.
+/// (`Dataset::converted_to_lonlat` converts into `to`'s target, whatever system that is.)
 fn in_system<'a>(
     to: &rustgis_data::raster::Reprojection,
     row: RowRef<'a>,
@@ -814,8 +832,10 @@ pub(crate) fn apply(s: &mut Session, ai: usize, edited: &rustgis_map::Map, chang
         // Converted, a feature with a place that can't be given in longitude/latitude loses its
         // shape there: one the list doesn't touch stays as it is (at home as stored, by
         // `merged_from_lonlat`); one it touches refuses the return, naming it.
-        let touched: HashSet<u64> =
-            lc.added.iter().copied().chain(lc.deleted.iter().map(|g| g.id)).chain(lc.edited.iter().map(|g| g.id)).collect();
+        // Home's features the list replaces or removes; a field addition whose id home uses takes
+        // a new one, leaving home's feature as it is, so it counts only in the package's map.
+        let changed: HashSet<u64> = lc.deleted.iter().map(|g| g.id).chain(lc.edited.iter().map(|g| g.id)).collect();
+        let touched: HashSet<u64> = changed.iter().copied().chain(lc.added.iter().copied()).collect();
         let theirs = if native {
             std::borrow::Cow::Borrowed(&ol.dataset)
         } else {
@@ -826,7 +846,7 @@ pub(crate) fn apply(s: &mut Session, ai: usize, edited: &rustgis_map::Map, chang
         let held = (!native && sl.dataset.coord_crs() != Crs::LonLat).then(|| sl.dataset.clone());
         if let Some(own) = &held {
             let (lonlat, _) = own.in_lonlat_leaving_out().map_err(error)?;
-            unplaced_touched(own, &lonlat, &touched).map_err(error)?;
+            unplaced_touched(own, &lonlat, &changed).map_err(error)?;
             sl.dataset = lonlat.into_owned();
         }
         // A shape that lost is kept in longitude/latitude ([`AreaConflict::geometry`]): from the
@@ -1273,6 +1293,7 @@ mod tests {
     /// [`LAYERS`], as before. This release reads either.
     #[test]
     fn a_copy_with_a_layer_in_its_own_system_is_listed_where_older_releases_dont_look() {
+        test_bases::write_own_systems();
         let held = crate::sample::world_project();
         let mut native = held.clone();
         native.maps[0].layers[0].dataset.hold_in(Crs::from_epsg(8857).unwrap()).unwrap();
@@ -1285,6 +1306,25 @@ mod tests {
             let map = project.maps.first().unwrap();
             assert!(list(map, &id).unwrap().unwrap().layers.is_empty(), "{file}: nothing changed");
         }
+    }
+
+    /// As a release keeps them ([`writes_own_systems`] off): a layer held in its own system is kept
+    /// in longitude/latitude, listed in [`LAYERS`], and an unchanged return's list is of version 1,
+    /// which every release reads.
+    #[test]
+    fn a_release_keeps_the_copy_in_longitude_latitude_until_version_2_is_written() {
+        let mut project = crate::sample::world_project();
+        project.maps[0].layers[0].dataset.hold_in(Crs::from_epsg(8857).unwrap()).unwrap();
+        let id = crate::project::field_id().unwrap();
+        let dir = base_dir(&id).unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        write_base(&GivenRows::of(&project, &id), &dir, false).unwrap();
+        assert!(dir.join(LAYERS).is_file() && !dir.join(LAYERS_V2).exists());
+        let text = std::fs::read(dir.join(LAYERS)).unwrap();
+        let layers: Vec<BaseLayer> = serde_json::from_slice(&text).unwrap();
+        assert!(layers.iter().all(|l| l.crs.is_none()));
+        let changes = list(project.maps.first().unwrap(), &id).unwrap().unwrap();
+        assert_eq!((changes.version, changes.layers.len()), (1, 0));
     }
 
     /// A folder a racing send removed first is gone, not a failure to remove it.
@@ -1419,6 +1459,16 @@ mod tests {
 /// In tests, given copies go in a folder of each test's own thread, removed when it ends.
 #[cfg(test)]
 pub(crate) mod test_bases {
+    /// Turns on keeping copies, and writing lists, in each layer's own system
+    /// ([`super::writes_own_systems`]) for this test process; off by default, as in a release.
+    /// Every test passes either way, so tests sharing a process don't depend on it.
+    pub(crate) static OWN_SYSTEMS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+    /// [`OWN_SYSTEMS`] on.
+    pub(crate) fn write_own_systems() {
+        OWN_SYSTEMS.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
     use std::path::PathBuf;
 
     struct Root(PathBuf);
