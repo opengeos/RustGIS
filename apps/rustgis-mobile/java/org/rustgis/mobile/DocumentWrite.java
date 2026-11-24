@@ -33,8 +33,8 @@ final class DocumentWrite {
     /**
      * What an earlier process left in {@code dir}, one write-back's staging folder: the copy to say
      * (its document was opened for writing, so it may be damaged, and nothing has said so yet), or
-     * null. A folder whose document was never opened is removed: the document is as it was. Half a
-     * copy ({@link #PART}) is removed with it.
+     * null. A folder whose document was never opened is removed, with any half copy
+     * ({@link #PART}) in it: the document is as it was.
      */
     static java.io.File unfinished(java.io.File dir) {
         java.io.File[] files = dir.listFiles();
@@ -45,7 +45,9 @@ final class DocumentWrite {
         java.io.File copy = null;
         for (java.io.File file : files) {
             String name = file.getName();
-            if (name.endsWith(PART) || (!opened && !name.equals(OPENED))) {
+            // Opened, the copy was whole and named before the mark was made: whatever its name
+            // (a document's own may end in .part), it is the copy.
+            if (!opened) {
                 file.delete();
             } else if (file.isFile() && !name.equals(OPENED)) {
                 copy = file;

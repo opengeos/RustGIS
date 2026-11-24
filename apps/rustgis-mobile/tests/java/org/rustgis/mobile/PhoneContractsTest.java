@@ -60,11 +60,15 @@ public final class PhoneContractsTest {
             java.io.File unopened = folder(root, "unopened", "site.rgis");
             java.io.File opened = folder(root, "opened", "site.rgis", DocumentWrite.OPENED);
             java.io.File said = folder(root, "said", "site.rgis", DocumentWrite.OPENED, DocumentWrite.REPORTED);
+            // A document whose own name ends in .part: its whole copy is kept and said.
+            java.io.File named = folder(root, "named", "site" + DocumentWrite.PART, DocumentWrite.OPENED);
             assert DocumentWrite.unfinished(half) == null && !half.exists();
             assert DocumentWrite.unfinished(unopened) == null && !unopened.exists();
             java.io.File copy = DocumentWrite.unfinished(opened);
             assert copy != null && copy.getName().equals("site.rgis") && copy.isFile();
             assert DocumentWrite.unfinished(said) == null && said.exists();
+            java.io.File part = DocumentWrite.unfinished(named);
+            assert part != null && part.getName().equals("site" + DocumentWrite.PART) && part.isFile();
         } catch (java.io.IOException e) {
             throw new AssertionError(e);
         }
