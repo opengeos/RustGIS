@@ -4517,11 +4517,19 @@ fn mirrored(align: text::Align) -> text::Align {
 
 impl ChartBars<'_> {
     /// A bar, or a stretch of one, filled with `colour` and with the look's outline round it
-    /// (#2487 part 4b).
+    /// (#2487 part 4b). The line runs just inside the bar's edge, so it takes no room the bars
+    /// leave to their values, labels and title; a bar no wider than the line is the line's colour.
     fn bar(&self, pm: &mut Canvas, colour: Rgba, x: f32, y: f32, w: f32, h: f32) {
+        let Some(o) = self.look.bar_outline else {
+            return fill(pm, colour, x, y, w, h);
+        };
+        let line = o.width as f32 * self.ppp;
+        if w <= line || h <= line {
+            return fill(pm, o.color, x, y, w, h);
+        }
         fill(pm, colour, x, y, w, h);
-        if let (Some(o), Some(b)) = (self.look.bar_outline, Rect::from_xywh(x, y, w, h)) {
-            let stroke = Stroke { width: o.width as f32 * self.ppp, ..Stroke::default() };
+        if let Some(b) = Rect::from_xywh(x + line / 2.0, y + line / 2.0, w - line, h - line) {
+            let stroke = Stroke { width: line, ..Stroke::default() };
             pm.stroke_path(&PathBuilder::from_rect(b), &paint(o.color, 1.0), &stroke, Transform::identity(), None);
         }
     }
@@ -4951,16 +4959,29 @@ mod tests {
         let plain = chart_drawn(&[(50.0, "a")], json!({}));
         assert!(!red(&plain, 100, 19) && bar_blue(&plain, 100, 25), "no outline unless given");
         let c = chart_drawn(&[(50.0, "a")], outline.clone());
-        assert!(red(&c, 100, 19) && red(&c, 100, 31) && bar_blue(&c, 100, 25), "along its top and bottom, filled within");
+        assert!(red(&c, 100, 19) && red(&c, 100, 30) && bar_blue(&c, 100, 25), "inside its top and bottom, filled within");
         let mut mirrored = outline.clone();
         mirrored["mirror"] = json!(true);
         let c = chart_drawn(&[(50.0, "a"), (25.0, "b")], mirrored);
-        assert!(red(&c, 199, 25) && red(&c, 150, 36) && bar_blue(&c, 150, 43), "round the bars from the right");
+        assert!(red(&c, 199, 25) && red(&c, 150, 37) && bar_blue(&c, 150, 43), "round the bars from the right");
         assert!(red(&c, 102, 43) && !bar_blue(&c, 50, 43), "the shorter bar's line where it ends, on the left");
+        // Within each bar: a wide line paints nothing the bars leave blank, so it never runs into
+        // their values, labels or title, nor past the chart's room.
+        let blank = |c: &Canvas, x: u32, y: u32| c.pixmap().pixel(x, y).is_some_and(|p| p.alpha() < 16);
+        for look in [json!({"values": true}), json!({"mirror": true}), json!({"orientation": "Vertical", "values": true})] {
+            let vals = [(50.0, "a"), (25.0, "b"), (0.5, "c")];
+            let plain = chart_drawn(&vals, look.clone());
+            let mut wide = look.clone();
+            wide["bar_outline"] = json!({"color": [208, 16, 16, 255], "width": 5.0});
+            let c = chart_drawn(&vals, wide);
+            let spilt =
+                (0..200).flat_map(|x| (0..120).map(move |y| (x, y))).filter(|(x, y)| blank(&plain, *x, *y) && red(&c, *x, *y)).count();
+            assert_eq!(spilt, 0, "{look}");
+        }
         let mut columns = outline.clone();
         (columns["orientation"], columns["title"]) = (json!("Vertical"), json!(""));
         let c = chart_drawn(&[(50.0, "a")], columns);
-        assert!(red(&c, 100, 0) && red(&c, 30, 60) && red(&c, 170, 60) && bar_blue(&c, 100, 60), "round the column");
+        assert!(red(&c, 100, 0) && red(&c, 30, 60) && red(&c, 169, 60) && bar_blue(&c, 100, 60), "round the column");
         // Round each stretch: a line between the two of a bar split 6 to 4.
         let stacked = rustgis_map::layout::ChartData {
             bars: vec![(10.0, String::new())],

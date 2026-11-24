@@ -608,7 +608,7 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
 - **Bar outline**: a chart's **Bar outline** draws a line round each bar, and round each stretch
   of a stacked one, in the colour and width beside it: dark grey and half a point when first
   turned on, up to 5 points. Light bars on a white page, or bars a shade apart, then keep their
-  edges. From a command: `layout.update={"element":6,"barOutline":{"color":"#333333","width":1}}`,
+  edges. The line runs just inside each bar, so it never covers the values, labels or title. From a command: `layout.update={"element":6,"barOutline":{"color":"#333333","width":1}}`,
   the keys not given keeping the outline's, and `"barOutline":null` (or a width of 0) for none;
   `layout.addElement` takes it too.
 - **Rulers and guides**: rulers start on along the top and left and show millimetres from the page's corner.
