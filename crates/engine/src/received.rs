@@ -51,8 +51,6 @@ pub(crate) struct Named {
     held: Few,
     /// Whether the file arrived from the internet.
     received: bool,
-    /// Whether holding them filled the record of addresses held there, so every address is.
-    filled: bool,
     /// Every distinct address counted, so each counts once however often the file names it.
     seen: HashSet<String>,
 }
@@ -117,7 +115,6 @@ fn fetched_from(a: &str) -> Fetched {
 /// reach as before. Returns what the file names on this computer or the local network.
 pub(crate) fn hold(addresses: impl IntoIterator<Item = impl AsRef<str>>, reach: Reach) -> Named {
     let received = reach == Reach::Public;
-    let full = cache::public_restrictions_full();
     let mut named = Named { received, ..Named::default() };
     // Recorded together: the cache forgets their earlier reads in one pass, not one per address.
     let mut held = Vec::new();
@@ -142,7 +139,6 @@ pub(crate) fn hold(addresses: impl IntoIterator<Item = impl AsRef<str>>, reach: 
         }
     }
     cache::restrict_all_to_public(held.iter().map(String::as_str));
-    named.filled = received && !full && cache::public_restrictions_full();
     named
 }
 
@@ -150,7 +146,8 @@ impl Named {
     /// Says, once, what `what` (a project, a map file, a layer file) names on this computer or the
     /// local network, with how many and the first few: held to the internet, or read from there as
     /// the user's own, and which of those stay held because something received from the internet
-    /// named them first. And that holding them filled the record of held addresses, if it did.
+    /// named them first. (Filling the record of held addresses is said after the command, as any
+    /// way of filling it is: `Session::say_public_only_full`.)
     pub(crate) fn say(self, s: &mut Session, what: &str) {
         let (read, held) = (self.read.count, self.held.count);
         let kept = "stay held to the internet, as something received from the internet named them first, and aren't read";
@@ -174,14 +171,6 @@ impl Named {
         };
         if let Some(said) = said {
             s.notify(said, false);
-        }
-        if self.filled {
-            s.notify(
-                format!(
-                    "holding what {what} names to the internet filled the record of addresses held there: until RustGIS is restarted, every address is held to the internet, and services on this computer or the local network can't be reached"
-                ),
-                false,
-            );
         }
     }
 }
