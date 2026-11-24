@@ -1653,7 +1653,8 @@ pub struct CalculationPreview {
     pub value: Value,
     pub lost: Option<PreviewLoss>,
     /// What the run would refuse the edit with, when the layer's checks refuse this row: its
-    /// error, word for word.
+    /// error, word for word, for the checks the preview runs. An edit whose area reads are
+    /// ambiguous is refused before them, with that error instead, which the preview doesn't give.
     pub refused: Option<String>,
 }
 
