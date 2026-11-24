@@ -255,7 +255,7 @@ fn a_search_area_file_leaves_out_what_it_cant_place() {
         let said = loaded.notices.iter().any(|n| n.contains("longitude/latitude"));
         assert_eq!(said, far, "{:?}", loaded.notices);
         if far {
-            assert!(loaded.notices.iter().any(|n| n.contains("kept as the file holds them")), "{:?}", loaded.notices);
+            assert!(loaded.notices.iter().any(|n| n.contains("kept as the file holds it")), "{:?}", loaded.notices);
         }
     }
     std::fs::remove_dir_all(&dir).ok();

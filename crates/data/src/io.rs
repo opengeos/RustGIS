@@ -1665,20 +1665,6 @@ pub(crate) fn places_lonlat_extent(g: &Geometry, t: &crate::raster::Transformer)
     ok.then_some(e)
 }
 
-/// The box in longitude/latitude of a geometry in the coordinates `t` converts, for a reader that
-/// keeps the geometry as the file holds it: `None` where [`geometry_to_lonlat`] refuses it (a
-/// coordinate that can't be converted, or comes out beyond longitude/latitude). Each coordinate
-/// is converted to be checked, none is kept.
-pub(crate) fn lonlat_box(g: &Geometry, t: &crate::raster::Transformer) -> Option<rustgis_geom::Extent> {
-    let mut ok = true;
-    let mut out = rustgis_geom::Extent::EMPTY;
-    g.for_each_coord(|c: Coord| match t.to_lonlat(c) {
-        Some(l) if l.is_finite() && l.x.abs() <= 180.5 && l.y.abs() <= 90.5 => out.expand(l),
-        _ => ok = false,
-    });
-    ok.then_some(out)
-}
-
 /// What a reader says of the `n` of its `what` (features, shapes, rows) it keeps as the file holds
 /// them, held in `crs`, though a place of theirs can't be given in longitude/latitude: they don't
 /// draw (the map says so too), and every other step that needs longitude/latitude leaves them out
