@@ -185,7 +185,7 @@ impl Losses {
                 (format!("{} features", self.beyond), "have", "they")
             };
             out.push(format!(
-                "{count} {have} coordinates that come out beyond longitude/latitude once converted from the answer's coordinate system: it may not be theirs, and {they} may draw out of place"
+                "{count} {have} coordinates that come out beyond longitude/latitude once converted from the answer's coordinate system: it may not be their coordinate system, and {they} may draw out of place"
             ));
         }
         if self.with_zm > 0 {

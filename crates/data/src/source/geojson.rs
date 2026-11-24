@@ -509,7 +509,7 @@ fn read_place(f: &mut BufReader<impl Read + Seek>, pos: &mut u64, buf: &mut Vec<
 /// What a pass over a file's features converts to longitude/latitude finds.
 struct Pass {
     /// Features with geometry the transformer can't give in longitude/latitude (see
-    /// [`crate::io::places_in_lonlat`]), and those it can, with their box there.
+    /// [`crate::io::places_lonlat_extent`]), and those it can, with their box there.
     unplaced: usize,
     placed: usize,
     /// Those of them whose places come out beyond longitude/latitude.

@@ -1644,17 +1644,11 @@ pub(crate) fn is_epsg_or_crs84_name(name: &str) -> bool {
     up == "CRS84" || up == "OGC:CRS84" || up.strip_prefix("OGC:").and_then(|rest| tail(rest, ':')).is_some_and(|c| c == "CRS84")
 }
 
-/// Whether every coordinate of `g`, in the system `t` converts, has a place in longitude/latitude
-/// (a finite one): a reader keeps the geometry as the file holds it, held in its system
-/// ([`Dataset::held_in`]), either way, and counts those that don't ([`kept_unplaced_note`]).
-/// Each coordinate is converted to be checked, none is kept.
-pub(crate) fn places_in_lonlat(g: &Geometry, t: &crate::raster::Transformer) -> bool {
-    places_lonlat_extent(g, t).is_some()
-}
-
-/// [`places_in_lonlat`] with the box of the places in longitude/latitude, for a reader that says
-/// when they come out beyond it (a `.prj` that doesn't match the coordinates): `None` when one of
-/// them has no place there.
+/// The box in longitude/latitude of `g`'s places, in the system `t` converts: `None` when one of
+/// them has no place there (none that is finite). A reader keeps the geometry as the file holds
+/// it, held in its system ([`Dataset::held_in`]), either way, and counts those with none
+/// ([`kept_unplaced_note`]) and those whose box comes out beyond longitude/latitude
+/// ([`beyond_lonlat_note`]). Each coordinate is converted to be checked, none is kept.
 pub(crate) fn places_lonlat_extent(g: &Geometry, t: &crate::raster::Transformer) -> Option<rustgis_geom::Extent> {
     let mut ok = true;
     let mut e = rustgis_geom::Extent::EMPTY;
@@ -1954,7 +1948,7 @@ impl Collector {
         let mut swapped = 0usize;
         for (n, (geom, values, had_z)) in self.features.into_iter().enumerate() {
             // Kept as the file holds it, in its declared system, and counted when it has no place
-            // in longitude/latitude ([`places_in_lonlat`]), as when the file is read in place.
+            // in longitude/latitude ([`places_lonlat_extent`]), as when the file is read in place.
             if let (Some((_, t)), Some(g)) = (&declared, &geom) {
                 match places_lonlat_extent(g, t) {
                     Some(e) => {
@@ -4014,7 +4008,7 @@ pub(crate) fn read_shapefile_parts(parts: ShapefileParts, name: &str, crs: Optio
     let (mut converted, mut unconverted, mut zm_shapes, mut not_numbers) = (0usize, 0usize, 0usize, 0usize);
     // The box of the converted places in longitude/latitude, for the notice of a `.prj` that
     // doesn't match the coordinates.
-    let mut lonlat_extent = rustgis_geom::Extent::EMPTY;
+    let mut beyond = 0usize;
     let mut counts = DbfCounts::new(ds.fields.len(), not_utf8, encoding);
     let mut source_kind = GeometryType::None;
     let pt = |x: f64, y: f64| Coord::new(x, y);
@@ -4118,7 +4112,7 @@ pub(crate) fn read_shapefile_parts(parts: ShapefileParts, name: &str, crs: Optio
         if let (Some(t), Some(g)) = (&to_lonlat, &geom) {
             let placed = places_lonlat_extent(g, t);
             if let Some(e) = &placed {
-                lonlat_extent = lonlat_extent.union(e);
+                beyond += usize::from(e.beyond_lonlat());
             }
             converted += usize::from(placed.is_some());
             unconverted += usize::from(placed.is_none());
@@ -4161,15 +4155,14 @@ pub(crate) fn read_shapefile_parts(parts: ShapefileParts, name: &str, crs: Optio
     if let Some(c) = ds.crs.filter(|_| to_lonlat.is_some()) {
         ds.held_in = c;
     }
-    // In longitude/latitude, as the file's places come out there (beyond it: a `.prj` that
-    // doesn't match the coordinates), or as they are without a system to convert from.
-    let e = if to_lonlat.is_some() { lonlat_extent } else { ds.extent() };
-    if e.beyond_lonlat() {
-        report.messages.push(if to_lonlat.is_some() {
-            "coordinates are not longitude/latitude once converted from the .prj's coordinate system; the .prj may not match them, and they may draw out of place"
-        } else {
-            "coordinates are not longitude/latitude; RustGIS reads them as WGS 84 and they may draw out of place"
-        });
+    // Beyond longitude/latitude: as the file's shapes come out there from the `.prj`'s system
+    // (one that doesn't match them), counted; or as they are without a system to convert from.
+    match ds.crs.filter(|_| to_lonlat.is_some()) {
+        Some(c) => report.messages.extend(beyond_lonlat_note("shapes", beyond, c)),
+        None if ds.extent().beyond_lonlat() => {
+            report.messages.push("coordinates are not longitude/latitude; RustGIS reads them as WGS 84 and they may draw out of place")
+        }
+        None => {}
     }
     if report.skipped > 0 {
         report.messages.push(format!("{} shapes were unreadable or unsupported", report.skipped));

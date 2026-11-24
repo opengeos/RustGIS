@@ -558,7 +558,7 @@ fn coordinates_that_cant_be_converted_are_said() {
     assert!(rows[0].geometry.is_some() && rows[1].geometry.is_some(), "{:?}", rows[1].geometry);
     assert!(!ds.crs_incomplete);
     assert!(
-        report.messages.iter().any(|m| m.starts_with("1 features have a place that can't be given in longitude/latitude")),
+        report.messages.iter().any(|m| m.starts_with("one feature has a place that can't be given in longitude/latitude")),
         "{report:?}"
     );
 }

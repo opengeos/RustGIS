@@ -441,7 +441,11 @@ fn read_table(name: &str, t: &[u8], x: &[u8], wkid: Option<u32>) -> Result<Optio
     if unprojected > 0 {
         report
             .messages
-            .push(format!("{unprojected} features have a place that can't be given in longitude/latitude (coordinates outside their coordinate system): they are kept as the file holds them, but don't draw"));
+            .push(if unprojected == 1 {
+                "one feature has a place that can't be given in longitude/latitude (coordinates outside its coordinate system): it is kept as the file holds it, but doesn't draw".to_string()
+            } else {
+                format!("{unprojected} features have a place that can't be given in longitude/latitude (coordinates outside their coordinate system): they are kept as the file holds them, but don't draw")
+            });
     }
     if zm {
         // The table declares them for every shape.
