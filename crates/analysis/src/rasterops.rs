@@ -1340,6 +1340,9 @@ pub struct ClassMeans<'a> {
     windows: Vec<(Range<u32>, Range<u32>)>,
     /// Each polygon's sums of `bands` over its pixels so far, and how many.
     sums: Vec<(Vec<f64>, usize)>,
+    /// What the sums hold, counted in what RustGIS holds while they live, so the reads they're
+    /// made from plan for them.
+    _held: rustgis_data::memory::Holding,
 }
 
 impl<'a> ClassMeans<'a> {
@@ -1386,7 +1389,8 @@ impl<'a> ClassMeans<'a> {
             .iter()
             .map(|(cols, rows)| (if cols.is_empty() || rows.is_empty() { Vec::new() } else { vec![0.0; bands.len()] }, 0))
             .collect();
-        Ok(ClassMeans { zone, bands, polygons, boxes, windows, sums })
+        let _held = rustgis_data::memory::Holding::of((under as u64).saturating_mul(per));
+        Ok(ClassMeans { zone, bands, polygons, boxes, windows, sums, _held })
     }
 
     /// Each polygon's box: the extent of its rings' places.

@@ -1586,8 +1586,12 @@ pub(crate) fn supervised_work(s: &Session, p: &Value) -> Result<super::workflows
             while strip > 1 && !super::in_blocks::affordable(row.saturating_mul(u64::from(strip)).saturating_mul(2)) {
                 strip /= 2;
             }
+            // From the start of the row of tiles the window begins in (a block's rows, which a
+            // file's tiles of 256 or 512 rows divide), so no row of tiles is read for two strips;
+            // the rows above the window are visited by no polygon.
+            let top = under.start / bh * bh;
             reading
-                .each_block((cols.start, cols.end), (under.start, under.end), (width, strip), |_, _, read| {
+                .each_block((cols.start, cols.end), (top, under.end), (width, strip), |_, _, read| {
                     means.add(&read.raster, read.at, &read.grid.0).map_err(String::from)
                 })
                 .map_err(explain)?;
