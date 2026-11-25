@@ -848,10 +848,10 @@ impl IdwColumns {
     /// The value at `c`, east-west distances times `kx`: that of the first point within
     /// [`IDW_EXACT_D2`] of it, else the mean of every point's value weighted by 1/dᵖ.
     ///
-    /// At a power of 2 that is one pass, with w = 1/d². At any other power, or should 1/d²
-    /// overflow or vanish (at distances far from any map's), a first pass finds the nearest point
-    /// and a second weighs each by (dₙ²/d²)^(p/2): the same ratios, which can't overflow for a
-    /// high power.
+    /// At a power of 2 that is one pass, with w = 1/d², at most 1e24 once no point is within
+    /// [`IDW_EXACT_D2`]. At any other power, or should the sums overflow (from huge values) or the
+    /// weights vanish (at distances near f64's limit), a first pass finds the nearest point and a
+    /// second weighs each by (dₙ²/d²)^(p/2): the same ratios, which can't overflow for a high power.
     fn at(&self, c: Coord, kx: f64, power: f64) -> f64 {
         let nearest = if power == 2.0 {
             let (num, den, nearest) = self.sums(c, kx, |d2| 1.0 / d2);
@@ -867,7 +867,12 @@ impl IdwColumns {
             return on.map_or(f64::NAN, |(_, v)| *v);
         }
         let half = power / 2.0;
-        let (num, den, _) = self.sums(c, kx, |d2| (nearest / d2).powf(half));
+        let (num, den, _) = self.sums(c, kx, |d2| {
+            // Past f64's range the squared ratio would vanish where the ratio of distances, raised
+            // to a small power, still weighs something: then the distances are taken.
+            let ratio = nearest / d2;
+            if ratio >= f64::MIN_POSITIVE { ratio.powf(half) } else { (nearest.sqrt() / d2.sqrt()).powf(power) }
+        });
         num / den
     }
 
@@ -963,10 +968,10 @@ fn idw_on(
     let geographic = crs.is_geographic();
     let exact = if squared { IDW_EXACT_D2 } else { 1e-12 };
     // With every point weighed, each cell takes one pass over them as columns, with no buffer.
-    let every = (k == points.len()).then(|| IdwColumns::new(points));
+    let all = k == points.len();
     // Each row on its own, on several threads when the work is large (#1252); a thread's
     // distances for the nearest few go into its own buffer.
-    let scratch_bytes = if every.is_some() { 0 } else { points.len().saturating_mul(std::mem::size_of::<(f64, f64)>()) };
+    let scratch_bytes = if all { 0 } else { points.len().saturating_mul(std::mem::size_of::<(f64, f64)>()) };
     // Every cell weighs every point: as many times the work as there are threads (#1291).
     let work = w.saturating_mul(h).saturating_mul(points.len());
     let threads = threads.unwrap_or_else(|| crate::parallel::threads_for_rows(h, work, scratch_bytes));
@@ -978,12 +983,13 @@ fn idw_on(
             crate::parallel::UNCAPPED_HINT
         ));
     }
+    let every = all.then(|| IdwColumns::new(points));
     let mut data = new_band(w, h, NODATA)?;
     crate::control::begin(h);
     crate::parallel::for_each_row(
         data.chunks_mut(w),
         threads,
-        || (Vec::with_capacity(if every.is_some() { 0 } else { points.len() }), crate::control::Pace::default()),
+        || (Vec::with_capacity(if all { 0 } else { points.len() }), crate::control::Pace::default()),
         |(near, pace): &mut (Vec<(f64, f64)>, crate::control::Pace), row, out: &mut [f32]| {
             // East-west degrees shrink with latitude, which only changes by row; a projected
             // system's units don't.
@@ -1001,15 +1007,11 @@ fn idw_on(
                     continue;
                 }
                 near.clear();
-                let d2 = |p: &Coord| {
-                    let dx = (p.x - c.x) * kx;
-                    dx * dx + (p.y - c.y).powi(2)
-                };
                 // One loop or the other, each kept tight.
                 if squared {
-                    near.extend(points.iter().map(|(p, v)| (d2(p), *v)));
+                    near.extend(points.iter().map(|(p, v)| (d2(c, kx, p.x, p.y), *v)));
                 } else {
-                    near.extend(points.iter().map(|(p, v)| (d2(p).sqrt(), *v)));
+                    near.extend(points.iter().map(|(p, v)| (d2(c, kx, p.x, p.y).sqrt(), *v)));
                 }
                 if k < near.len() {
                     near.select_nth_unstable_by(k - 1, |a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
@@ -2653,6 +2655,20 @@ mod tests {
         run.cancel();
         let _installed = crate::control::install(Some(run));
         assert_eq!(idw_on(Some(1), &pts, &extent, 0.01, 2.0, 0, "idw", Crs::LonLat).unwrap_err(), crate::control::CANCELLED);
+    }
+
+    /// From every point at a small power, a point so far that its squared distance's ratio to the
+    /// nearest's is past f64's range still pulls the cell: its weight, (dₙ/d)ᵖ, isn't lost to the
+    /// squares.
+    #[test]
+    fn idw_from_every_point_keeps_a_far_points_weight_at_a_small_power() {
+        let pts = [(Coord::new(1e-10, 0.0), 0.0), (Coord::new(1e154, 0.0), 100.0)];
+        let g = idw(&pts, &Extent::new(-0.5, -0.5, 0.5, 0.5), 1.0, 0.01, 0, "idw", Crs::LonLat).unwrap_or_else(|e| panic!("{e}"));
+        // The cell at (0, 0): weights 1 and (1e-10 / 1e154)^0.01 = 10^-1.64.
+        let far = 10f64.powf(-1.64);
+        let want = (100.0 * far / (1.0 + far)) as f32;
+        let got = g.bands[0].data[0];
+        assert!((got - want).abs() <= want * 1e-5, "{got} vs {want}");
     }
 
     /// Rows made on several threads give the same surface, bit for bit, as one thread (#1252),
