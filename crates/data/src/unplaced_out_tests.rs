@@ -84,14 +84,14 @@ fn an_export_writes_a_feature_it_cant_place_without_its_geometry_and_says_so() {
 
 #[test]
 fn a_download_writes_a_feature_it_cant_place_without_its_geometry_and_says_so() {
-    let (bytes, left_out, notes) = crate::io::write_bytes_noted(&lines(true), "geojson", Crs::LonLat, "lines.geojson").unwrap();
+    let (bytes, left_out, notes, _) = crate::io::write_bytes_noted(&lines(true), "geojson", Crs::LonLat, "lines.geojson").unwrap();
     assert_eq!(left_out, 0);
     assert_eq!(notes.len(), 1, "{notes:?}");
     assert!(notes[0].starts_with("lines.geojson: 1 feature(s) of lines have a place"), "{}", notes[0]);
     let (back, _) = crate::io::read_geojson(std::str::from_utf8(&bytes).unwrap(), "lines").unwrap();
     assert_eq!(back.features.len(), 2);
     assert!(back.features[1].geometry.is_none());
-    let (_, _, notes) = crate::io::write_bytes_noted(&lines(false), "geojson", Crs::LonLat, "clean.geojson").unwrap();
+    let (_, _, notes, _) = crate::io::write_bytes_noted(&lines(false), "geojson", Crs::LonLat, "clean.geojson").unwrap();
     assert!(notes.is_empty());
     // The strict writer still refuses it, naming the feature.
     let e = crate::io::write_bytes_in(&lines(true), "geojson", Crs::LonLat).unwrap_err().to_string();
@@ -269,4 +269,16 @@ fn an_export_takes_its_box_from_its_one_conversion_on_any_number_of_threads() {
     assert!(matches!(e, crate::DataError::Cancelled), "{e}");
     let done = probe.done.load(std::sync::atomic::Ordering::Relaxed);
     assert!(done < ds.features.len() as u64, "stopped short of the end: {done}");
+    // A Cancel once every piece is taken still stops the run: with one feature left (the threads
+    // look between features) and, on several threads, after the last (looked at once they finish).
+    let n = ds.features.len() as u64;
+    let after = if crate::threads::max() > 1 { vec![n - 1, n] } else { vec![n - 1] };
+    for after in after {
+        let probe = Counted::cancelling_after(after);
+        let _g = crate::progress::install(Some(probe.clone()));
+        crate::progress::begin(ds.features.len());
+        let mut cancelled = ds.features.to_vec();
+        let e = crate::io::project_each_leaving_out(&mut cancelled, &to, true).unwrap_err();
+        assert!(matches!(e, crate::DataError::Cancelled), "cancelled after {after}: {e}");
+    }
 }

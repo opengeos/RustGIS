@@ -737,7 +737,7 @@ fn project_leaving_out_placed(ds: &Dataset, crs: Crs) -> Result<(Dataset, usize,
 /// From [`PARALLEL_FEATURES`] features on, the features are converted on several threads
 /// ([`crate::threads::max`]), each written as one thread would write it, so the output is the
 /// same bit for bit; one thread below that and in the browser. Each thread looks at Cancel
-/// between its pieces, and counts them toward the progress when `count` is set.
+/// between features, and counts each toward the progress when `count` is set.
 ///
 /// [`Reprojection::point`]: crate::raster::Reprojection::point
 pub(crate) fn project_each_leaving_out(
@@ -751,6 +751,16 @@ pub(crate) fn project_each_leaving_out(
         return project_pieces_leaving_out(features, to, count, threads);
     }
     let _ = threads;
+    project_one_by_one(features, to, count)
+}
+
+/// [`project_each_leaving_out`] on this thread, looking at Cancel before each feature and
+/// counting it when `count` is set.
+fn project_one_by_one(
+    features: &mut [crate::Feature],
+    to: &crate::raster::Reprojection,
+    count: bool,
+) -> Result<(usize, rustgis_geom::Extent)> {
     let mut unplaced = 0usize;
     let mut placed = rustgis_geom::Extent::EMPTY;
     for f in features {
@@ -779,8 +789,16 @@ fn conversion_threads(n: usize) -> usize {
 
 /// [`project_each_leaving_out`] on `threads` threads, this one among them: each takes the next
 /// [`PIECE_FEATURES`] features until none are left, one has failed or the run is cancelled (the
-/// run's probe installed on each). The boxes of the pieces are joined in their order. A thread
-/// the OS refuses leaves its share to the others; one that panics passes its panic on.
+/// run's probe installed on each), looking at Cancel and counting between features, and once more
+/// after they all finish, so a Cancel that comes once every piece is taken still stops the run.
+/// The boxes of the pieces are joined in their order. A thread the OS refuses leaves its share to
+/// the others; one that panics passes its panic on.
+///
+/// The features up to the first with a place go first, on this thread, so the conversion is asked
+/// first for the place one thread asks first: its advisory missing-grid check looks only at the
+/// first place it converts (terrio's `note_missing_grid`), and for a custom system with no EPSG
+/// code nothing else asks earlier, so the notice of a missing grid would otherwise depend on which
+/// thread got there first.
 #[cfg(not(target_arch = "wasm32"))]
 fn project_pieces_leaving_out(
     features: &mut [crate::Feature],
@@ -790,6 +808,18 @@ fn project_pieces_leaving_out(
 ) -> Result<(usize, rustgis_geom::Extent)> {
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, Ordering};
+    let first = features
+        .iter()
+        .position(|f| {
+            f.geometry.as_ref().is_some_and(|g| {
+                let mut any = false;
+                g.for_each_coord(|_| any = true);
+                any
+            })
+        })
+        .map_or(features.len(), |k| k + 1);
+    let (head, features) = features.split_at_mut(first);
+    let (head_unplaced, head_placed) = project_one_by_one(head, to, count)?;
     let pieces = features.len().div_ceil(PIECE_FEATURES);
     let next = Mutex::new(features.chunks_mut(PIECE_FEATURES).enumerate());
     let done: Mutex<Vec<(usize, rustgis_geom::Extent)>> = Mutex::new(vec![(0, rustgis_geom::Extent::EMPTY); pieces]);
@@ -798,19 +828,28 @@ fn project_pieces_leaving_out(
     let probe = crate::progress::current();
     let work = || {
         let _probe = crate::progress::install(probe.clone());
-        while !failed.load(Ordering::Relaxed) {
+        let stop = |e: DataError| {
+            failed.store(true, Ordering::Relaxed);
+            if let Ok(mut f) = failure.lock() {
+                f.get_or_insert(e);
+            }
+        };
+        'pieces: while !failed.load(Ordering::Relaxed) {
             // The lock is held only to take a piece; a poisoned one means a thread panicked.
             let Some((k, piece)) = next.lock().ok().and_then(|mut n| n.next()) else { break };
-            let looked = if count { crate::progress::step(piece.len()) } else { crate::progress::check() };
-            if let Err(e) = looked {
-                failed.store(true, Ordering::Relaxed);
-                if let Ok(mut f) = failure.lock() {
-                    f.get_or_insert(e);
-                }
+            if let Err(e) = crate::progress::check() {
+                stop(e);
                 break;
             }
-            let mut placed = rustgis_geom::Extent::EMPTY;
-            let unplaced = piece.iter_mut().map(|f| usize::from(leave_out_unplaced(f, to, &mut placed))).sum();
+            let (mut unplaced, mut placed) = (0usize, rustgis_geom::Extent::EMPTY);
+            for f in piece {
+                unplaced += usize::from(leave_out_unplaced(f, to, &mut placed));
+                let looked = if count { crate::progress::step(1) } else { crate::progress::check() };
+                if let Err(e) = looked {
+                    stop(e);
+                    break 'pieces;
+                }
+            }
             if let Some(slot) = done.lock().ok().as_mut().and_then(|d| d.get_mut(k)) {
                 *slot = (unplaced, placed);
             }
@@ -828,8 +867,10 @@ fn project_pieces_leaving_out(
     if let Some(e) = failure.into_inner().ok().flatten() {
         return Err(e);
     }
+    // A Cancel that came after the last piece was taken, which no thread may have seen.
+    crate::progress::check()?;
     let done = done.into_inner().map_err(|_| DataError::Format("the features couldn't be converted".into()))?;
-    Ok(done.iter().fold((0, rustgis_geom::Extent::EMPTY), |(n, e), (u, p)| (n + u, e.union(p))))
+    Ok(done.iter().fold((head_unplaced, head_placed), |(n, e), (u, p)| (n + u, e.union(p))))
 }
 
 /// Converts `f`'s geometry with `to`, place for place where it lies, or leaves it out when a place
@@ -967,8 +1008,9 @@ pub fn write_bytes_in(ds: &Dataset, ext: &str, crs: Crs) -> Result<(Vec<u8>, usi
 
 /// [`write_bytes_in`] for an export (named `name` in its notes): a feature with a place `crs`
 /// can't hold is written without its geometry ([`project_leaving_out`]), and the notes say how
-/// many ([`unplaced_export_note`]).
-pub fn write_bytes_noted(ds: &Dataset, ext: &str, crs: Crs, name: &str) -> Result<(Vec<u8>, usize, Vec<String>)> {
+/// many ([`unplaced_export_note`]). Also gives the dataset's [`Dataset::lonlat_extent`], as
+/// [`write_path_placed`] does, so a download converts each place once too.
+pub fn write_bytes_noted(ds: &Dataset, ext: &str, crs: Crs, name: &str) -> Result<(Vec<u8>, usize, Vec<String>, rustgis_geom::Extent)> {
     let ext = ext.to_ascii_lowercase();
     if crs != Crs::LonLat {
         if !holds_a_system(&ext) {
@@ -978,11 +1020,21 @@ pub fn write_bytes_noted(ds: &Dataset, ext: &str, crs: Crs, name: &str) -> Resul
     }
     if crs == ds.coord_crs() {
         let (bytes, left_out) = projected_bytes(ds, &ext, crs)?;
-        return Ok((bytes, left_out, Vec::new()));
+        return Ok((bytes, left_out, Vec::new(), ds.lonlat_extent()));
     }
-    let (projected, unplaced) = project_leaving_out(ds, crs)?;
+    let (projected, unplaced, placed) = project_leaving_out_placed(ds, crs)?;
     let (bytes, left_out) = projected_bytes(&projected, &ext, crs)?;
-    Ok((bytes, left_out, unplaced_export_note(name, &ds.name, unplaced, crs).into_iter().collect()))
+    let notes = unplaced_export_note(name, &ds.name, unplaced, crs).into_iter().collect();
+    Ok((bytes, left_out, notes, lonlat_extent_placed(ds, crs, placed)))
+}
+
+/// `ds`'s [`Dataset::lonlat_extent`]: `placed`, the box of the places converted to `crs` for an
+/// export, when `crs` is longitude/latitude, else worked out from `ds`.
+fn lonlat_extent_placed(ds: &Dataset, crs: Crs, placed: Option<rustgis_geom::Extent>) -> rustgis_geom::Extent {
+    match placed {
+        Some(e) if crs == Crs::LonLat => e,
+        _ => ds.lonlat_extent(),
+    }
 }
 
 /// [`write_bytes_in`] for a dataset already in `crs`'s coordinates.
@@ -1078,11 +1130,7 @@ pub fn write_path_placed(
     gpkg: &GpkgTable,
 ) -> Result<(usize, Option<GpkgWritten>, Vec<String>, rustgis_geom::Extent)> {
     let (left_out, table, notes, placed) = write_path_as(ds, path, crs, gpkg, true)?;
-    let extent = match placed {
-        Some(e) if crs == Crs::LonLat => e,
-        _ => ds.lonlat_extent(),
-    };
-    Ok((left_out, table, notes, extent))
+    Ok((left_out, table, notes, lonlat_extent_placed(ds, crs, placed)))
 }
 
 /// [`write_path_to`], leaving out a geometry `crs` can't hold (`leaving_out`, said in the notes)
