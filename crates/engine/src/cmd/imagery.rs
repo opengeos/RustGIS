@@ -1874,19 +1874,22 @@ pub(crate) fn process_work(s: &Session, p: &Value) -> Result<super::workflows::W
                 // Planned with blocks of the factor alone; the file's tiles, which the work reads
                 // as it runs (not here, on the window's thread), choose the blocks it reads.
                 let plain = resample_block(k, None, |_, _| true);
-                if (held || super::in_blocks::streams(bands)) && super::in_blocks::affordable(resample_need(w, h, bands, held, plain, k)) {
+                // One too large to hold needs a folder to write to: without one, it reads the
+                // file as before.
+                let folder = (!held).then(|| super::in_blocks::results_folder(s).ok()).flatten();
+                if (held || (super::in_blocks::streams(bands) && folder.is_some()))
+                    && super::in_blocks::affordable(resample_need(w, h, bands, held, plain, k))
+                {
                     reading.refused_in_script(s)?;
-                    let folder = match held {
-                        true => None,
-                        false => Some(super::in_blocks::results_folder(s)?),
-                    };
                     return Ok(Box::new(move || {
                         // Blocks of whole tiles where the part reader reads them at full size and
                         // the computer can give them now, else of the factor alone; the memory
                         // planned for is the blocks read.
                         let fits = |cols: u32, rows: u32| reading.part_fits(cols, rows);
                         let blocks = [resample_block(k, reading.chunk(), fits), resample_block(k, None, fits)];
-                        let block = blocks.into_iter().find(|b| super::in_blocks::affordable(resample_need(w, h, bands, held, *b, k)));
+                        let block = blocks
+                            .into_iter()
+                            .find(|b| fits(b.0, b.1) && super::in_blocks::affordable(resample_need(w, h, bands, held, *b, k)));
                         match block {
                             Some(block) => resample_in_blocks(&reading, k, out, folder, block),
                             // Short of it since then: the file read as before.
@@ -1914,6 +1917,7 @@ pub(crate) fn resample_factor(p: &Value) -> u32 {
 /// file as it is read: its samples, and its tiles as decoded, about as many again.
 #[cfg(not(target_arch = "wasm32"))]
 fn resample_need(w: u32, h: u32, bands: usize, held: bool, block: (u32, u32), k: u32) -> u64 {
+    // 4 bytes a sample, twice: as held, and as its tiles are decoded.
     let input = u64::from(block.0).saturating_mul(u64::from(block.1)).saturating_mul(bands as u64).saturating_mul(4 * 2);
     if held {
         let copies = if bands > 1 { 3 } else { 2 };
@@ -2006,7 +2010,20 @@ fn resample_whole(r: &super::workflows::Input, factor: u32, out: String) -> Resu
     });
     // The blocks average values rounded when the file was read, some or all of them.
     out.keep_rounded_mark(&r);
-    super::workflows::made(out, None)
+    let notes: Vec<String> = resample_palette_note(&r, &r.name).into_iter().collect();
+    let then: super::workflows::Then = Box::new(move |s: &mut Session, _: &mut Value| {
+        for note in notes {
+            s.notify(note, false);
+        }
+    });
+    super::workflows::made_then(out, None, Some(then))
+}
+
+/// What a resample of `r` (layer `layer`) says it leaves out: a palette's colour table, whose
+/// indexes it averages as grey values (a mean of indexes is no colour of the table).
+fn resample_palette_note(r: &Raster, layer: &str) -> Option<String> {
+    matches!(r.color, ColorHint::Palette(_))
+        .then(|| format!("{layer}: its colour table isn't kept: its colour indexes are resampled as grey values"))
 }
 
 /// A resample by `k` of a large file read in place, made a block at a time from the file at its
@@ -2027,7 +2044,11 @@ fn resample_in_blocks(
     let (w, h) = ((fw / k).max(1), (fh / k).max(1));
     let need = resample_need(w, h, reading.held().band_count(), folder.is_none(), size, k);
     let _held = rustgis_data::memory::Holding::of(need);
-    let note = |rounded: u64| super::gp::tiled_read_notes(&[super::gp::ReadNote::rounded(reading.layer(), rounded)], "its");
+    let note = |rounded: u64| {
+        let mut notes = super::gp::tiled_read_notes(&[super::gp::ReadNote::rounded(reading.layer(), rounded)], "its");
+        notes.extend(resample_palette_note(reading.held(), reading.layer()));
+        notes
+    };
     let Some(folder) = folder else {
         let mut res: Vec<Vec<f32>> = Vec::new();
         let mut first: Option<Raster> = None;

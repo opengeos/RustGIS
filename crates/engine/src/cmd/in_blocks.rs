@@ -178,8 +178,8 @@ fn written(full: (u32, u32)) -> bool {
 /// command that works in blocks ([`in_blocks`]) over a layer too large to read whole, whose
 /// result is too large to hold, or a resample of such a layer whose result is ([`holds`]) and
 /// can be written ([`streams`]). The permission check adds that it writes files. It doesn't ask
-/// whether the memory is there now: a run that finds it isn't reads the file as before, having
-/// asked for more than it did.
+/// whether the memory or a results folder is there now. When either isn't, the run reads the file
+/// as before, and the check has asked for more than the run needed.
 pub(crate) fn writes_file(context: &impl super::InputSource, id: &str, params: &Value) -> bool {
     let resample = id == "raster.process" && params.get("operation").and_then(Value::as_str) == Some("resample");
     if !in_blocks(id, params) && !resample {

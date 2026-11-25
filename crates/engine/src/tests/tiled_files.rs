@@ -802,9 +802,37 @@ fn a_resampled_pixel_with_no_value_takes_the_no_data_value() {
         let mut s = Session::new(Project::default());
         s.run("layer.addData", &json!({"path": path.display().to_string()})).unwrap();
         assert_eq!(raster(&s, "gaps").tiled, in_blocks);
+        let mark = s.notice_mark();
         s.run("raster.process", &p).unwrap();
         let out = raster(&s, "out").data.clone().unwrap();
         assert_eq!((out.width, out.nodata), (N / 2, Some(-9999.0)), "in blocks {in_blocks}");
         assert_eq!(out.bands[0].data[..2], [-9999.0, 6.0], "in blocks {in_blocks}");
+        assert!(!said(&s, mark).iter().any(|n| n.contains("colour table")), "in blocks {in_blocks}: no palette, nothing said");
+    }
+}
+
+/// A palette raster's resample says its colour table isn't kept (its indexes are averaged as grey
+/// values), whether the file is held whole or read a block at a time.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_resampled_palette_says_its_colours_go() {
+    let d = dir("resample-palette");
+    const N: u32 = 600;
+    let band: Vec<f32> = (0..N * N).map(|i| (i % 4) as f32).collect();
+    let gt = GeoTransform { origin_x: 10.0, origin_y: 46.0, pixel_width: 0.001, pixel_height: -0.001 };
+    let colours = (0..256u32).map(|i| [i as u8, 0, 255 - i as u8, 255]).collect();
+    let r = Raster::new("classes", N, N, vec![band], gt, Crs::LonLat, None, ColorHint::Palette(colours), "UInt8").unwrap();
+    let path = d.join("classes.tif");
+    rustgis_data::raster::cogwrite::write_file(&r, 0, &path).unwrap();
+    let p = json!({"layer": "classes", "operation": "resample", "factor": 2, "name": "out"});
+    for in_blocks in [false, true] {
+        let (_held, _blocks) = (HeldWhole::at(if in_blocks { 1000 } else { 1_000_000 }), BlocksPast::at(100_000));
+        let mut s = Session::new(Project::default());
+        s.run("layer.addData", &json!({"path": path.display().to_string()})).unwrap();
+        assert_eq!(raster(&s, "classes").tiled, in_blocks);
+        let mark = s.notice_mark();
+        s.run("raster.process", &p).unwrap();
+        let notes: Vec<String> = said(&s, mark).into_iter().filter(|n| n.contains("colour table isn't kept")).collect();
+        assert_eq!(notes.len(), 1, "in blocks {in_blocks}: {notes:?}");
     }
 }

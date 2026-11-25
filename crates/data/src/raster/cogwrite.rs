@@ -1418,6 +1418,9 @@ impl<'a, W: Write + Seek> TileStream<'a, W> {
         let Some(lv) = self.levels.get(i) else { return Ok(()) };
         let (w, across) = (lv.w as usize, lv.across as usize);
         let (t, given, bytes, spp, holding) = (TILE as usize, self.given_nodata, self.bytes, self.bands(), self.holding());
+        // The full image's values, or a classes' overview's, which picks a pixel: a value with
+        // none there is one.
+        let full = i == 0 || self.classes;
         let size = if bytes { 1 } else { 4 };
         let line = t * spp * size;
         let (sample, predictor) = (self.plan.sample, predictor(&self.plan));
@@ -1428,7 +1431,7 @@ impl<'a, W: Write + Seek> TileStream<'a, W> {
                     let col = tx * t + x;
                     for (b, band) in rows.iter().enumerate() {
                         let v = if col < w { band.get(y * w + col).copied().unwrap_or(given) } else { given };
-                        let v = holding.of(b, v, i == 0);
+                        let v = holding.of(b, v, full);
                         if bytes {
                             raw.push(v.round().clamp(0.0, 255.0) as u8);
                         } else {
@@ -1515,7 +1518,7 @@ impl<'a, W: Write + Seek> TileStream<'a, W> {
         // on a float's scale, no-data as the file says it.
         let mut data = data;
         for (b, band) in data.iter_mut().enumerate() {
-            band.iter_mut().for_each(|v| *v = holding.of(b, *v, level == 0));
+            band.iter_mut().for_each(|v| *v = holding.of(b, *v, level == 0 || self.classes));
         }
         let (data, kind): (Vec<Vec<f32>>, _) = match self.bytes {
             true => (data.into_iter().map(|b| b.into_iter().map(|v| v.round().clamp(0.0, 255.0)).collect()).collect(), "UInt8"),
