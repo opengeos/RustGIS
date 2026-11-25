@@ -107,8 +107,8 @@ you edit the value or choose units; click **Apply elevation** to apply the new i
   its layer's own system reaches) is left as it is by Move, Rotate and Scale, Split and Cut
   Polygon (except in a layer edited in its own grid, where it changes with the rest), and a
   notice counts them by layer; Flip Line flips it in the layer's own coordinates. An edit of that
-  one feature (a vertex, Reshape, Trace, Merge with it, a shape conversion) is refused, outside a
-  layer edited in its own grid, naming the layer and the feature; Set Geometry gives it a new shape, and Delete removes it.
+  one feature (a vertex, a shape conversion; Reshape, Trace or Merge with it, outside a layer
+  edited in its own grid) is refused, naming the layer and the feature; Set Geometry gives it a new shape, and Delete removes it.
   Beyond 85.05°, where Web Mercator stops, Move, Rotate and Scale work on the ground: a feature
   that reaches beyond it, or that the edit would take beyond it, moves rigidly, together with the
   selected features sharing a vertex with it (their center goes the distance and direction asked,
