@@ -13303,6 +13303,11 @@ fn publication_layouts_fit_their_pages() {
     s.project.layouts.pop();
     assert_eq!(capitals("Fontes, {date} e {pageName}"), "FONTES, {date} E {pageName}");
     assert_eq!(capitals("Dados {2024 e {só} }"), "DADOS {2024 E {SÓ} }", "a lone or odd brace is text");
+    assert_eq!(
+        capitals("Cidades {count:New York} e {sum:Cities:pop}, {max:Cities:pop} ({min:a:b"),
+        "CIDADES {count:New York} E {sum:Cities:pop}, {max:Cities:pop} ({MIN:A:B",
+        "a layer statistic (#2853) is a token the layout fills in its own case"
+    );
     assert_eq!(grid_step(&rustgis_geom::Extent::new(10.0, 45.0, 11.0, 46.0)), 0.25);
     assert_eq!(grid_step(&rustgis_geom::Extent::new(-180.0, -90.0, 180.0, 90.0)), 30.0);
     assert_eq!((step_text(2.0), step_text(0.25), step_text(0.02)), ("2°".to_string(), "15′".to_string(), "1′12″".to_string()));
@@ -39975,6 +39980,13 @@ fn layout_text_statistics_without_a_figure_are_said() {
     assert_eq!(said, Vec::<String>::new(), "a move doesn't say it again");
     let (_, said) = run(&mut s, "layout.addElement", json!({"kind": "text", "text": "{max:Countries:nosuch}", "x": 10, "y": 40}));
     assert_eq!(said, ["{max:Countries:nosuch} shows as written: 'Countries' has no field named 'nosuch'"]);
+    // A publication layout's texts are checked as an added text is.
+    let (_, said) = run(
+        &mut s,
+        "layout.publication",
+        json!({"extent": [-46.8, -11.6, -38.5, -2.2], "title": "{count:Nowhere}", "sources": ["{count:Countries}"]}),
+    );
+    assert_eq!(said, ["{count:Nowhere} shows as written: the map of the layout's first frame has no layer named 'Nowhere'"]);
 }
 
 #[test]

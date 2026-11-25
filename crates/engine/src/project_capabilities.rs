@@ -211,9 +211,20 @@ fn text_statistics(e: &rustgis_map::layout::Element) -> bool {
 /// A layout command that gives a text a layer statistic (#2853), read as a text reads its tokens
 /// ([`rustgis_map::layout::stat_tokens`]): only a text takes `"text"`.
 fn command_uses_text_statistics(id: &str, params: &Value) -> bool {
-    let holds = |p: &Value| p.get("text").and_then(Value::as_str).is_some_and(|t| !rustgis_map::layout::stat_tokens(t).is_empty());
+    // A text, or a list of them (a publication's `sources`).
+    fn holds(v: &Value) -> bool {
+        match v {
+            Value::String(t) => !rustgis_map::layout::stat_tokens(t).is_empty(),
+            Value::Array(texts) => texts.iter().any(holds),
+            _ => false,
+        }
+    }
     match id {
-        "layout.addElement" | "layout.update" => holds(params),
+        "layout.addElement" | "layout.update" => params.get("text").is_some_and(holds),
+        // The texts a publication layout is made of, which keep the tokens as they are written.
+        "layout.publication" => ["title", "subtitle", "note", "sources", "reference", "author", "headings"]
+            .iter()
+            .any(|key| params.get(*key).is_some_and(holds)),
         "layout.import" => imported_layout_uses(params, &["{count:", "{sum:", "{mean:", "{min:", "{max:"], text_statistics),
         "script.run" => params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, command_uses_text_statistics)),
         _ => false,
@@ -2583,6 +2594,10 @@ mod tests {
             ("layout.update", json!({"element": 1, "text": "Mean {mean:Sites:visits}"}), true),
             ("layout.update", json!({"element": 1, "text": "{sum:Sites}"}), false),
             ("layout.update", json!({"element": 1, "x": 3}), false),
+            ("layout.publication", json!({"extent": [-1, -1, 1, 1], "title": "{count:Sites}"}), true),
+            ("layout.publication", json!({"extent": [-1, -1, 1, 1], "sources": ["Data", "{mean:Sites:visits}"]}), true),
+            ("layout.publication", json!({"extent": [-1, -1, 1, 1], "author": "{max:Sites:visits}"}), true),
+            ("layout.publication", json!({"extent": [-1, -1, 1, 1], "title": "{scale} {projection}", "sources": "Data"}), false),
             ("layout.import", json!({"text": layout}), true),
         ] {
             let script = format!("{id} {params}");

@@ -305,8 +305,9 @@ project says it repaired.
 Projects with a layout text that holds a layer statistic (`{count:Layer}`, `{sum:Layer:field}`,
 `{mean:…}`, `{min:…}` or `{max:…}`, #2853) require `layout-text-statistics`, so an older reader
 refuses them by name instead of printing the token as written. A saved `layout.addElement` or
-`layout.update` whose `text` holds one requires it too, as does a saved `layout.import` whose
-`text` has such a text; other braces (`{scale}`, `{foo}`, `{count:}`) need nothing.
+`layout.update` whose `text` holds one requires it too, as does a saved `layout.publication` whose
+`title`, `subtitle`, `note`, `sources`, `reference`, `author` or `headings` do, and a saved
+`layout.import` whose `text` has such a text; other braces (`{scale}`, `{foo}`, `{count:}`) need nothing.
 
 Projects, map files and layer files with a layer or table held in a coordinate system of its own
 (`Dataset::held_in`: a file's system, kept since #2580) save its features in that system, exactly,

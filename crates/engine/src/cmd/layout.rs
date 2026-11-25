@@ -553,13 +553,21 @@ fn projected_extent(s: &Session, e: &Extent) -> Extent {
 }
 
 /// `t` in capitals, its `{tokens}` as they are: the layout fills a token (`{date}`) when it draws
-/// only in its own case. A token is a closed `{name}` of letters and digits; a lone brace is text.
+/// only in its own case. A token is a closed `{name}` of letters and digits, or a layer statistic
+/// (`{count:Cities}`, #2853); a lone brace is text.
 pub(crate) fn capitals(t: &str) -> String {
     let mut out = String::with_capacity(t.len());
     let mut rest = t;
     while let Some(c) = rest.chars().next() {
-        let token =
-            (c == '{').then(|| rest.find('}')).flatten().filter(|&end| end > 1 && rest[1..end].chars().all(|c| c.is_ascii_alphanumeric()));
+        let token = (c == '{')
+            .then(|| {
+                let closed = rest.find('}').filter(|&end| end > 1 && rest[1..end].chars().all(|c| c.is_ascii_alphanumeric()));
+                closed.or_else(|| {
+                    let statistic = rustgis_map::layout::stat_tokens(rest).into_iter().next()?;
+                    rest.starts_with(statistic.token).then(|| statistic.token.len() - 1)
+                })
+            })
+            .flatten();
         match token {
             Some(end) => {
                 out.push_str(&rest[..=end]);
@@ -3029,6 +3037,12 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
     s.active_layout = Some(i);
     for cut in [name_cut, locator_cut].into_iter().flatten() {
         s.notify(cut, false);
+    }
+    // A layer statistic in a text it was given (#2853) that has no figure is said, as for an added text.
+    let texts: Vec<u32> =
+        s.project.layouts[i].elements.iter().filter(|e| matches!(e.kind, ElementKind::Text { .. })).map(|e| e.id).collect();
+    for id in texts {
+        say_text_statistics(s, i, id);
     }
     let locator = locator_map.map(|(map, ..)| map);
     Ok(

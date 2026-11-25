@@ -1189,17 +1189,17 @@ pub fn statistic_notices(layout: &Layout, maps: &[Map], text: &str) -> Vec<Strin
         }
         seen.push(t.token);
         let (layer, field) = (t.layer, t.field.unwrap_or_default());
-        let found = map.map(|m| m.layer_by_name(layer));
-        let why = match found.map(|l| l.map(|l| rustgis_map::layout::layer_statistic(l, t.stat, t.field))) {
+        let found =
+            map.map(|m| m.layer_by_name(layer).map(|l| (l.is_streamed(), rustgis_map::layout::layer_statistic(l, t.stat, t.field))));
+        // A layer read in place holds only what is loaded, so its figure is partial, and one with
+        // no number yet gets some as more is loaded.
+        if let Some(Some((true, Ok(_) | Err(StatMissing::NoValue)))) = found {
+            said.push(format!("{} covers only the features of '{layer}' that are loaded: it is read in place", t.token));
+        }
+        let why = match found.map(|l| l.map(|(_, figure)| figure)) {
             None => "the layout has no map frame whose map it would read".to_string(),
             Some(None) => format!("the map of the layout's first frame has no layer named '{layer}'"),
-            // A layer read in place holds only what is loaded, so its figure is partial.
-            Some(Some(Ok(_))) => {
-                if found.flatten().is_some_and(|l| l.is_streamed()) {
-                    said.push(format!("{} covers only the features of '{layer}' that are loaded: it is read in place", t.token));
-                }
-                continue;
-            }
+            Some(Some(Ok(_))) => continue,
             Some(Some(Err(StatMissing::Raster))) => format!("'{layer}' is a raster layer, which has no features"),
             Some(Some(Err(StatMissing::Field))) => format!("'{layer}' has no field named '{field}'"),
             Some(Some(Err(StatMissing::NotNumeric))) => format!("'{field}' of '{layer}' holds no numbers"),
@@ -10673,8 +10673,9 @@ Elaboração: RustGIS",
     fn a_streamed_layers_statistic_says_it_covers_what_is_loaded() {
         use rustgis_data::{Dataset, Field, FieldType, GeometryType, Value};
         let layer = |name: &str| {
-            let mut ds = Dataset::new(name, GeometryType::None, vec![Field::new("mw", FieldType::Double)]);
-            ds.push(None, vec![Value::Float(1.0)]);
+            let fields = vec![Field::new("mw", FieldType::Double), Field::new("blank", FieldType::Double)];
+            let mut ds = Dataset::new(name, GeometryType::None, fields);
+            ds.push(None, vec![Value::Float(1.0), Value::Null]);
             ds
         };
         let mut map = Map::new("m");
@@ -10687,11 +10688,14 @@ Elaboração: RustGIS",
         layout.add("Frame", (0.0, 0.0, 50.0, 50.0), kind);
         let maps = [map];
         assert_eq!(
-            statistic_notices(&layout, &maps, "{count:Held} {count:Streamed} {count:Streamed} {sum:Streamed:mw} {sum:Streamed:no}"),
+            statistic_notices(&layout, &maps, "{count:Held} {count:Streamed} {count:Streamed} {sum:Streamed:mw} {sum:Streamed:no} {max:Streamed:blank}"),
             vec![
                 "{count:Streamed} covers only the features of 'Streamed' that are loaded: it is read in place".to_string(),
                 "{sum:Streamed:mw} covers only the features of 'Streamed' that are loaded: it is read in place".to_string(),
                 "{sum:Streamed:no} shows as written: 'Streamed' has no field named 'no'".to_string(),
+                // No number loaded yet, but a later load may bring some: the scope is said as well.
+                "{max:Streamed:blank} covers only the features of 'Streamed' that are loaded: it is read in place".to_string(),
+                "{max:Streamed:blank} shows as written: no feature of 'Streamed' its definition query keeps has a number in 'blank', or the figure is past a number's range".to_string(),
             ]
         );
     }
