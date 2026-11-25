@@ -248,13 +248,10 @@ fn grid_unguarded(mut wb: Sheets<Cursor<&[u8]>>, sheet: Option<&str>) -> Result<
         (row, cells, had_error, phantom)
     });
     let (mut empty_error_rows, mut empty_phantom_rows) = (0, 0);
-    let mut keep = |(_, cells, had_error, phantom): &(usize, Vec<String>, bool, Vec<usize>)| {
+    let mut keep = |(_, cells, had_error, _): &(usize, Vec<String>, bool, Vec<usize>)| {
         let nonempty = cells.iter().any(|c| !c.trim().is_empty());
         if !nonempty && *had_error {
             empty_error_rows += 1;
-        } else if !nonempty && !phantom.is_empty() {
-            // A row whose only values were serial-60 dates, read as empty: left out whole.
-            empty_phantom_rows += 1;
         }
         nonempty
     };
@@ -281,7 +278,12 @@ fn grid_unguarded(mut wb: Sheets<Cursor<&[u8]>>, sheet: Option<&str>) -> Result<
         })
         .collect();
     let rows = rows
-        .inspect(|(_, _, _, phantom)| {
+        .inspect(|(_, cells, had_error, phantom)| {
+            // A data row whose only values were serial-60 dates, read as empty: left out whole
+            // (one with error cells too is said with those).
+            if !had_error && !phantom.is_empty() && cells.iter().all(|c| c.trim().is_empty()) {
+                empty_phantom_rows += 1;
+            }
             for k in phantom {
                 if let Some(n) = phantom_dates.get_mut(*k) {
                     *n += 1;
@@ -864,6 +866,13 @@ mod tests {
         assert!(report.messages.iter().any(|m| m.contains("1 value in 'wkt' isn't a date")), "{:?}", report.messages);
         let row = report.messages.iter().find(|m| m.contains("row was omitted")).unwrap();
         assert_eq!(row.loss, Some(crate::loss::LossCode::DroppedFeature));
+        // One above the heading is no data row: nothing of it is said.
+        let above = xlsx(&[("Places", &[&["", phantom], &["name", "wkt"], &["a", "POINT (1 2)"]])]);
+        let mut entries = crate::zip::read(&above).unwrap();
+        entries.push(("xl/styles.xml".into(), br#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><cellXfs count="1"><xf numFmtId="14"/></cellXfs></styleSheet>"#.to_vec()));
+        let (ds, report) = read(&crate::zip::write(&entries).unwrap(), "places", None, &opts).unwrap();
+        assert_eq!(ds.features.len(), 1);
+        assert!(!report.messages.iter().any(|m| m.contains("omitted") || m.contains("isn't a date")), "{:?}", report.messages);
     }
 
     /// Multiple errors in one column and another column count once each; blank cells don't.

@@ -1168,9 +1168,9 @@ struct Drawing {
     block_lost: HashMap<String, LostCounts>,
 }
 
-/// Entities that can't be drawn, counted by layer (as written, lower-cased), paper space, and
-/// kind: one RustGIS doesn't draw (its name), or one it can't read (`None`).
-type LostCounts = BTreeMap<(String, String, bool, Option<String>), usize>;
+/// Entities that can't be drawn, counted by layer (as written; compared ignoring case), paper
+/// space, and kind: one RustGIS doesn't draw (its name), or one it can't read (`None`).
+type LostCounts = BTreeMap<(String, bool, Option<String>), usize>;
 
 /// The magnitude of an ACI color index (negative means its layer is off). The one signed
 /// integer without a positive counterpart is malformed and must not overflow while reading.
@@ -1259,7 +1259,7 @@ fn drawing(records: &[Record]) -> Result<Drawing> {
                 // model or paper space.
                 let mut count_lost = |kind: Option<String>| {
                     let layer = g.s(8).map(str::trim).unwrap_or("0");
-                    let key = (layer.to_string(), layer.to_ascii_lowercase(), g.i(67) == Some(1), kind);
+                    let key = (layer.to_string(), g.i(67) == Some(1), kind);
                     let counts = match &block {
                         Some(_) if section == "BLOCKS" => Some(&mut block_lost),
                         _ if section == "ENTITIES" => Some(&mut d.lost),
@@ -1407,7 +1407,7 @@ fn emit(
     // What can't be drawn here, counted as a drawn entity would be placed: a step each, in paper
     // space only when that is drawn, and on the layer asked for (layer 0 in a block takes the
     // INSERT's).
-    for ((layer, _, paper, kind), &n) in lost.into_iter().flatten() {
+    for ((layer, paper, kind), &n) in lost.into_iter().flatten() {
         crate::progress::check()?;
         out.steps = out.steps.saturating_add(n);
         if out.steps > MAX_STEPS {
