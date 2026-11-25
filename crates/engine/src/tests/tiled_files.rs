@@ -593,3 +593,127 @@ fn indices_over_a_file_too_large_to_read_whole_run_a_block_at_a_time() {
     s.run("script.run", &json!({"script": format!("raster.index {scripted}")})).unwrap();
     assert!(folder.join("scripted.tif").is_file());
 }
+
+/// The other commands that work cell by cell, or over a cell's neighbours, run a block at a time
+/// over a file too large to read whole too (#2865), each making the raster it makes of the file
+/// held whole, held or written to the results folder: Raster Functions by cell and over a cell's
+/// neighbours (the cells around each block read with it; a hillshade held and written as bytes;
+/// a remap's or threshold's overview of its classes), the Function Editor, and Process's
+/// resample, which is made a block at a time when it can be held. What a remap meets is said as
+/// of the whole raster. A chain that remaps after a step over neighbours reads the file as before,
+/// and asks for no files.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn raster_functions_and_resamples_run_a_block_at_a_time() {
+    let d = dir("functions");
+    let path = thousandths(&d);
+    let open = |s: &mut Session| {
+        s.run("layer.addData", &json!({"path": path})).unwrap();
+    };
+    let cases = [
+        ("raster.function", json!({"layer": "checks", "function": "slope", "band": 1, "name": "out"})),
+        ("raster.function", json!({"layer": "checks", "function": "hillshade", "band": 2, "name": "out"})),
+        (
+            "raster.function",
+            json!({"layer": "checks", "function": "remap", "band": 1, "ranges": [[0, 100, 1], [100, 300, 2], [7, 7, 3]], "name": "out"}),
+        ),
+        ("raster.function", json!({"layer": "checks", "function": "threshold", "band": 3, "value": 128, "name": "out"})),
+        ("raster.function", json!({"layer": "checks", "function": "bandMath", "expression": "b1 * 2 - b3", "name": "out"})),
+        (
+            "raster.functionChain",
+            json!({"layer": "checks", "steps": [{"function": "bandMath", "expression": "b1 + b2"}, {"function": "aspect"}, {"function": "slope"}], "name": "out"}),
+        ),
+        ("raster.process", json!({"layer": "checks", "operation": "resample", "factor": 3, "name": "out"})),
+    ];
+    let reads = || crate::cmd::gp::TILED_READS.with(std::cell::Cell::get);
+    for (command, p) in &cases {
+        // Of the file held whole.
+        let mut whole = Session::new(Project::default());
+        open(&mut whole);
+        let mark = whole.notice_mark();
+        whole.run(command, p).unwrap();
+        let want = raster(&whole, "out").data.clone().unwrap();
+        let said_whole: Vec<String> = said(&whole, mark).into_iter().filter(|n| n.contains("matches no")).collect();
+        assert_eq!(said_whole.is_empty(), p["function"] != "remap", "{command}: a range of the remap is empty, and said");
+        // Held, then (one band past the limit) written, a block at a time.
+        let resample = *command == "raster.process";
+        for (past, written) in [(1_000_000, false), (900_000, !resample)] {
+            let why = format!("{command} {p}, written {written}");
+            let (_held, _blocks) = (HeldWhole::at(1_000_000), BlocksPast::at(past));
+            let mut s = Session::new(Project::default());
+            s.path = Some(d.join("Survey.rgis"));
+            open(&mut s);
+            assert!(raster(&s, "checks").tiled);
+            let (before, mark) = (reads(), s.notice_mark());
+            s.run(command, p).unwrap();
+            assert_eq!(reads(), before, "{why}: the file isn't read whole");
+            let rl = raster(&s, "out");
+            assert_eq!(rl.tiled, written, "{why}");
+            let got_raster = if written {
+                rustgis_data::raster::read_path(std::path::Path::new(rl.path.as_deref().unwrap())).unwrap()
+            } else {
+                rl.data.as_deref().unwrap().clone()
+            };
+            assert_eq!(
+                (got_raster.width, got_raster.height, got_raster.transform, got_raster.nodata, got_raster.data_type.as_str()),
+                (want.width, want.height, want.transform, want.nodata, want.data_type.as_str()),
+                "{why}"
+            );
+            for (g, w) in got_raster.bands.iter().zip(&want.bands) {
+                assert!(g.data == w.data, "{why}: band {} is the whole raster's", w.name);
+                assert_eq!(g.name, w.name, "{why}");
+            }
+            // What a remap met is said as of the whole raster.
+            let said_blocks: Vec<String> = said(&s, mark).into_iter().filter(|n| n.contains("matches no")).collect();
+            assert_eq!(said_blocks, said_whole, "{why}");
+            // A remap's or threshold's overview held is of its classes, never an average of two.
+            if written && matches!(p["function"].as_str(), Some("remap" | "threshold")) {
+                let classes: std::collections::BTreeSet<u32> = want.bands[0].data.iter().map(|v| v.to_bits()).collect();
+                let held = rl.data.as_deref().unwrap();
+                assert!(held.overview.is_some(), "{why}: an overview held");
+                assert!(held.bands[0].data.iter().all(|v| classes.contains(&v.to_bits())), "{why}: the overview holds only its classes");
+            }
+            if p["function"] == "hillshade" {
+                assert_eq!(rl.style.renderer, raster(&whole, "out").style.renderer, "{why}: drawn as a hillshade");
+            }
+            // Cancelled at its checks (a spread of them), it leaves nothing behind.
+            let files = || std::fs::read_dir(d.join("Survey.rgis.data")).map(|r| r.count()).unwrap_or(0);
+            let (before, count) = (files(), rustgis_analysis::control::Control::cancelled_at_look(u64::MAX));
+            let run = crate::cmd::workflows::raster_start(&mut s, command, p).unwrap();
+            let id = run.id;
+            drop(run.run(&count));
+            crate::cmd::workflows::raster_abandon(&mut s, id);
+            assert!(count.looked() > 6, "{why}: it looks at Cancel between its blocks");
+            for n in (1..=count.looked()).step_by((count.looked() as usize / 8).max(1)) {
+                let control = rustgis_analysis::control::Control::cancelled_at_look(n);
+                let run = crate::cmd::workflows::raster_start(&mut s, command, p).unwrap();
+                let id = run.id;
+                match run.run(&control) {
+                    Err(e) => assert!(e.contains("was cancelled"), "{why}, check {n}: {e}"),
+                    Ok(_) => assert!(control.looked() < n, "{why}, check {n}: not cancelled"),
+                }
+                crate::cmd::workflows::raster_abandon(&mut s, id);
+                assert_eq!(files(), before, "{why}, check {n}: left a file");
+            }
+        }
+    }
+    // A chain that remaps after a step over neighbours reads the file as before, writing nothing,
+    // and the Assistant isn't asked for files for it.
+    struct Live;
+    impl crate::policy::Revocation for Live {
+        fn allows(&self, _: crate::policy::Effects) -> bool {
+            true
+        }
+    }
+    let (_held, _blocks) = (HeldWhole::at(1_000_000), BlocksPast::at(900_000));
+    let mut s = Session::new(Project::default());
+    s.path = Some(d.join("Fallback.rgis"));
+    open(&mut s);
+    let p = json!({"layer": "checks", "steps": [{"function": "slope"}, {"function": "threshold", "value": 5}], "name": "out"});
+    let scope = crate::policy::Scope::assistant(8, std::sync::Arc::new(Live));
+    assert!(matches!(s.review(&scope, &crate::policy::Call::command("raster.functionChain", p.clone())), crate::policy::Outcome::Allowed));
+    let before = reads();
+    s.run("raster.functionChain", &p).unwrap();
+    assert_eq!(reads(), before + 1, "read as before");
+    assert!(!d.join("Fallback.rgis.data").exists());
+}
