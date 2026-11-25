@@ -679,7 +679,7 @@ fn find(archive: String, info: Arc<Info>, id: u64, dir: Arc<Vec<Entry>>, depth: 
     if e.run_length > 0 {
         let tile = info.tile;
         // Within the tile data section (when the header gives its length).
-        let inside = info.data_length == 0 || e.offset.saturating_add(e.length) <= info.data_length;
+        let inside = info.data_length == 0 || e.offset.checked_add(e.length).is_some_and(|end| end <= info.data_length);
         let Some(at) = info.data_offset.checked_add(e.offset).filter(|_| inside) else {
             done(Err("a tile outside the archive".into()));
             return;
@@ -692,11 +692,11 @@ fn find(archive: String, info: Arc<Info>, id: u64, dir: Arc<Vec<Entry>>, depth: 
         done(Err("PMTiles directories nested too deep".into()));
         return;
     }
-    if e.offset.saturating_add(e.length) > info.leaf_length {
+    let inside = e.offset.checked_add(e.length).is_some_and(|end| end <= info.leaf_length);
+    let Some(at) = info.leaf_offset.checked_add(e.offset).filter(|_| inside) else {
         done(Err("a leaf directory outside the archive".into()));
         return;
-    }
-    let at = info.leaf_offset.saturating_add(e.offset);
+    };
     let key = (archive.clone(), at);
     // Continues the lookup once the leaf is there.
     let next: Box<dyn FnOnce(Result<Arc<Vec<Entry>>, String>) + Send> = {
@@ -804,7 +804,10 @@ fn read(archive: &str, at: u64, len: u64, done: Done) {
         done(Err(format!("{len} bytes is too large to read from an archive")));
         return;
     }
-    let end = at.saturating_add(len) - 1;
+    let Some(end) = at.checked_add(len).and_then(|e| e.checked_sub(1)) else {
+        done(Err("byte range overflows archive offset".into()));
+        return;
+    };
     let url = format!("{archive}{}{at}-{end}", crate::cache::RANGE);
     if is_local(archive) {
         if let Err(e) = check_local(archive) {
@@ -2075,5 +2078,15 @@ pub(crate) mod tests {
             let _ = get(&format!("pmtiles:0/0/0@{}", t.display()));
         }
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn overflowing_byte_range_returns_error() {
+        let _turn = crate::cache::turn();
+        crate::cache::set_fetcher(|url, _done| panic!("unexpected fetch for overflowing range: {url}"));
+        let (tx, rx) = std::sync::mpsc::channel();
+        read("https://example.invalid/a.pmtiles", u64::MAX, 16, Box::new(move |r| tx.send(r).unwrap()));
+        let err = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap().unwrap_err();
+        assert!(err.contains("overflows"), "{err}");
     }
 }

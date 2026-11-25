@@ -195,12 +195,15 @@ impl Values<'_> {
         let packed = bits(self.data, self.at, self.width);
         self.at += u64::from(self.width);
         // Missing: every bit set (one less, the secondary missing value) in the value, or in the
-        // reference of a group of no bits.
+        // reference of a group of no bits. When both widths are 0 there are no bits to carry a
+        // missing sentinel, so the group is a constant value.
         if p.missing > 0 {
             let (v, width) = if self.width == 0 { (self.reference, p.ref_bits) } else { (packed, self.width) };
-            let ones = (1u64 << width) - 1;
-            if v == ones || (p.missing == 2 && v + 1 == ones) {
-                return None;
+            if width > 0 {
+                let ones = (1u64 << width) - 1;
+                if v == ones || (p.missing == 2 && v + 1 == ones) {
+                    return None;
+                }
             }
         }
         // At most 33 bits, so the sums below are far from `i64`'s range.

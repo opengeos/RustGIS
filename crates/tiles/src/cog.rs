@@ -547,7 +547,10 @@ fn read(url: &str, at: u64, len: u64, ceiling: crate::address::Reach, done: Done
         done(Err(format!("{len} bytes is too large to read from a GeoTIFF")));
         return;
     }
-    let end = at.saturating_add(len) - 1;
+    let Some(end) = at.checked_add(len).and_then(|e| e.checked_sub(1)) else {
+        done(Err("byte range overflows GeoTIFF offset".into()));
+        return;
+    };
     if is_local_file(url) {
         if let Err(e) = local_read_allowed(url, ceiling) {
             done(Err(e));
@@ -2785,5 +2788,15 @@ mod tests {
         assert_eq!(fresh.bands[0][1], 1.0, "pixel (1, 0) of the file, not the stale tile");
         forget_local_file(&url);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn overflowing_byte_range_returns_error() {
+        let _turn = crate::cache::turn();
+        crate::cache::set_fetcher(|url, _done| panic!("unexpected fetch for overflowing range: {url}"));
+        let (tx, rx) = std::sync::mpsc::channel();
+        read("https://example.invalid/a.tif", u64::MAX, 16, crate::address::Reach::Public, Box::new(move |r| tx.send(r).unwrap()));
+        let err = rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap_err();
+        assert!(err.contains("overflows"), "{err}");
     }
 }

@@ -2132,10 +2132,19 @@ impl<'a> Eval<'a> {
                 let mut best: Option<(f64, Cow<'a, Value>)> = None;
                 for a in args {
                     let v = read(a);
-                    let Some(x) = v.as_f64() else { continue };
+                    let Some(x) = number(&v) else { continue };
                     let better = match &best {
                         None => true,
-                        Some((b, _)) => (f == Func::Min && x < *b) || (f == Func::Max && x > *b),
+                        Some((b, bv)) => {
+                            let ord = match (&*v, &**bv) {
+                                (Value::Int(i), Value::Int(j)) => i.cmp(j),
+                                (Value::Int(_), _) | (_, Value::Int(_)) => {
+                                    v.partial_cmp(bv).unwrap_or_else(|| x.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+                                }
+                                _ => x.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal),
+                            };
+                            (f == Func::Min && ord.is_lt()) || (f == Func::Max && ord.is_gt())
+                        }
                     };
                     if better {
                         best = Some((x, v));

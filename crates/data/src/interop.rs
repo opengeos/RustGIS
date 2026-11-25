@@ -520,22 +520,24 @@ impl WktParser {
     }
 }
 
-/// A [`to_wkt_csv`] cell's text before quoting: text starting like a formula is prefixed with `'`
-/// so spreadsheets show it rather than run it.
-pub(crate) fn wkt_csv_text(s: &str) -> String {
-    if s.starts_with(['=', '+', '-', '@']) && s.parse::<f64>().is_err() { format!("'{s}") } else { s.to_string() }
-}
-
 /// CSV with a `wkt` geometry column and every attribute; cancellable between features.
 pub fn to_wkt_csv(ds: &Dataset) -> crate::Result<String> {
+    to_wkt_csv_reporting(ds).map(|(csv, _)| csv)
+}
+
+/// As [`to_wkt_csv`], also returning how many field names were prefixed with an apostrophe to
+/// guard against spreadsheet formula evaluation.
+pub fn to_wkt_csv_reporting(ds: &Dataset) -> crate::Result<(String, usize)> {
     let q = |s: &str| {
-        let s = wkt_csv_text(s);
-        if s.contains([',', '"', '\n', '\r']) { format!("\"{}\"", s.replace('"', "\"\"")) } else { s }
+        if s.contains([',', '"', '\n', '\r']) { format!("\"{}\"", s.replace('"', "\"\"")) } else { s.to_string() }
     };
+    let mut guarded_headers = 0usize;
     let mut out = String::from("wkt");
     for f in &ds.fields {
         out.push(',');
-        out.push_str(&q(&f.name));
+        let name = crate::io::csv_header(&f.name);
+        guarded_headers += usize::from(name != f.name);
+        out.push_str(&q(&name));
     }
     out.push('\n');
     for f in &ds.features {
@@ -543,11 +545,11 @@ pub fn to_wkt_csv(ds: &Dataset) -> crate::Result<String> {
         out.push_str(&q(&f.geometry.as_ref().map(wkt).unwrap_or_default()));
         for v in &f.attrs {
             out.push(',');
-            out.push_str(&q(&v.to_file_text()));
+            out.push_str(&q(&crate::io::csv_cell(v)));
         }
         out.push('\n');
     }
-    Ok(out)
+    Ok((out, guarded_headers))
 }
 
 #[cfg(test)]
@@ -608,5 +610,84 @@ mod tests {
         assert!(to_gpx(&numbered, Some(0)).unwrap().contains("<name>0.1234567891</name>"));
         let c = to_wkt_csv(&ds).unwrap();
         assert!(c.contains("POINT (1 2),,0.1234567891\n") && c.contains(",B,0.000000001\n"), "{c}");
+    }
+
+    #[test]
+    fn wkt_csv_formula_guard_matches_csv() {
+        for guarded in ["=SUM(A1)", "@cmd", "\t=1", "\r+1", "+Inf", "-NaN", "+0123", "-007", "+1234567890123456", "-1234567890123456"] {
+            assert_eq!(crate::io::csv_cell(&Value::Text(guarded.into())), format!("'{guarded}"), "{guarded:?}");
+        }
+        for plain in ["-12.5", "+42", "-0.5", "Paris"] {
+            assert_eq!(crate::io::csv_cell(&Value::Text(plain.into())), plain, "{plain:?}");
+        }
+        // Formula-like headers (`=1+1`, `=HYPERLINK(...)`, `+0123`) are apostrophe-guarded on
+        // export in both WKT CSV and plain CSV, reported via `export_losses_notes`, and read back
+        // with the guard intact; 16-digit negative integers stay unguarded and round-trip as
+        // Integer; formula-like text cells are guarded on export and unguarded on read.
+        let mut ds = Dataset::new(
+            "rt",
+            GeometryType::Point,
+            vec![
+                Field::new("=1+1", FieldType::Text),
+                Field::new("=HYPERLINK(\"https://example.com\",\"x\")", FieldType::Text),
+                Field::new("+0123", FieldType::Text),
+                Field::new("big_id", FieldType::Integer),
+            ],
+        );
+        ds.push(
+            Some(Geometry::Point(Coord::new(1.0, 2.0))),
+            vec![Value::Text("\t=1".into()), Value::Text("ok".into()), Value::Text("+0123".into()), Value::Int(-1_234_567_890_123_456)],
+        );
+        let (csv, guarded_headers) = to_wkt_csv_reporting(&ds).unwrap();
+        assert_eq!(guarded_headers, 3);
+        let header_line = csv.lines().next().unwrap_or("");
+        assert_eq!(header_line, "wkt,'=1+1,\"'=HYPERLINK(\"\"https://example.com\"\",\"\"x\"\")\",'+0123,big_id");
+        assert!(csv.contains("'\t=1,ok,'+0123,-1234567890123456\n"), "text guarded, integer unguarded: {csv}");
+        // Plain CSV writer has header-guard parity too.
+        let plain_csv = crate::io::to_csv(&ds).unwrap();
+        assert_eq!(
+            plain_csv.lines().next().unwrap_or(""),
+            "longitude,latitude,'=1+1,\"'=HYPERLINK(\"\"https://example.com\"\",\"\"x\"\")\",'+0123,big_id"
+        );
+        // Both WKT CSV and plain CSV report the guarded field names (including that they read back
+        // with the apostrophe prefix) and guarded text values.
+        for ext in ["wkt", "csv"] {
+            let notes = crate::io::export_losses_notes(&ds, ext, None, "rt.csv").unwrap();
+            assert!(
+                notes.iter().any(|n| {
+                    n.contains("CSV prefixed 3 field names with an apostrophe for spreadsheet protection")
+                        && n.ends_with("; they read back with that prefix")
+                }),
+                "{ext}: {notes:?}"
+            );
+            assert!(
+                notes.iter().any(|n| n.contains("CSV prefixed 2 text values with an apostrophe for spreadsheet protection")),
+                "{ext}: {notes:?}"
+            );
+        }
+        // Clean dataset produces zero guard notices.
+        let mut clean = Dataset::new("clean", GeometryType::Point, vec![Field::new("name", FieldType::Text)]);
+        clean.push(Some(Geometry::Point(Coord::new(1.0, 2.0))), vec![Value::Text("Paris".into())]);
+        assert_eq!(to_wkt_csv_reporting(&clean).unwrap().1, 0);
+        assert!(crate::io::export_losses_notes(&clean, "wkt", None, "clean.csv").unwrap().is_empty());
+        assert!(crate::io::export_losses_notes(&clean, "csv", None, "clean.csv").unwrap().is_empty());
+
+        // Round-trip: guarded field names come back with their reported apostrophe prefix;
+        // integer column stays Integer; text cells unguard back to their original values.
+        let (back, _) = crate::io::read_csv(&csv, "rt").unwrap();
+        let names: Vec<&str> = back.fields.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, ["'=1+1", "'=HYPERLINK(\"https://example.com\",\"x\")", "'+0123", "big_id"]);
+        assert_eq!(back.fields[3].ty, FieldType::Integer);
+        assert_eq!(back.features[0].attrs[0], Value::Text("\t=1".into()));
+        assert_eq!(back.features[0].attrs[2], Value::Text("+0123".into()));
+        assert_eq!(back.features[0].attrs[3], Value::Int(-1_234_567_890_123_456));
+
+        // External CSVs whose headers literally start with an apostrophe keep their exact names
+        // and still match explicit `CsvOptions.wkt`.
+        let external = "'=geom,'-foo\nPOINT (1 2),bar\n";
+        let opts = crate::io::CsvOptions { wkt: Some("'=geom".into()), ..Default::default() };
+        let (ext, _) = crate::io::read_csv_with(external, "ext", &opts).unwrap();
+        assert_eq!(ext.fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["'-foo"]);
+        assert_eq!(ext.features[0].geometry, Some(Geometry::Point(Coord::new(1.0, 2.0))));
     }
 }

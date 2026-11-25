@@ -906,3 +906,38 @@ fn errors_say_why_they_are_null() {
     }
     assert_eq!(why("sqrt(0)", 0), (Value::Float(0.0), None));
 }
+
+#[test]
+fn min_and_max_report_non_number_faults_and_keep_i64_precision() {
+    let mut odd = Dataset::new(
+        "odd",
+        GeometryType::None,
+        vec![
+            Field::new("x", FieldType::Double),
+            Field::new("label", FieldType::Text),
+            Field::new("n", FieldType::Integer),
+            Field::new("a", FieldType::Integer),
+            Field::new("b", FieldType::Integer),
+        ],
+    );
+    odd.push(
+        None,
+        vec![
+            Value::Float(f64::NAN),
+            Value::Text("abc".into()),
+            Value::Null,
+            Value::Int(9_007_199_254_740_992),
+            Value::Int(9_007_199_254_740_993),
+        ],
+    );
+    let run = |text: &str| {
+        let e = parse(text, &odd).unwrap_or_else(|e| panic!("{text}: {e}"));
+        value_or_fault(&e, &odd, 0, &Env::default())
+    };
+    assert_eq!(run("min(label, n)"), (Value::Null, Some(Fault::Text)));
+    assert_eq!(run("max(x, n)"), (Value::Null, Some(Fault::NotANumber)));
+    assert_eq!(run("min(n, 5)"), (Value::Int(5), None));
+    assert_eq!(run("max(a, b)"), (Value::Int(9_007_199_254_740_993), None));
+    assert_eq!(run("min(b, a)"), (Value::Int(9_007_199_254_740_992), None));
+    assert_eq!(run("min('2', '10')"), (Value::Text("2".into()), None));
+}

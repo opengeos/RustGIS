@@ -495,6 +495,24 @@ fn damaged<T>(what: &str) -> Result<T> {
     Err(DataError::Format(format!("spreadsheet: the .xls file is damaged ({what})")))
 }
 
+/// Grows `bounds` (`r0, r1, c0, c1`) to include `(r, c)` and refuses spans past [`MAX_CELLS`].
+fn grow_sheet_bounds(bounds: &mut Option<(u32, u32, u32, u32)>, (r, c): (u32, u32), sheet: &str) -> Result<()> {
+    let (r0, r1, c0, c1) = bounds.map_or((r, r, c, c), |(r0, r1, c0, c1)| (r0.min(r), r1.max(r), c0.min(c), c1.max(c)));
+    *bounds = Some((r0, r1, c0, c1));
+    let rows = u64::from(r1 - r0) + 1;
+    let cols = u64::from(c1 - c0) + 1;
+    if rows.saturating_mul(cols) > MAX_CELLS as u64 {
+        return Err(DataError::Format(format!(
+            "sheet '{sheet}' is too large (cells from row {} to {}, column {} to {})",
+            u64::from(r0) + 1,
+            u64::from(r1) + 1,
+            column_letter(c0 as usize),
+            column_letter(c1 as usize)
+        )));
+    }
+    Ok(())
+}
+
 /// Refuses a sheet whose cells span more than [`MAX_CELLS`] before calamine lays it out as a dense
 /// grid (one cell at `XFD1048576` would ask for 17 billion): an `.xlsx` or `.xlsb` sheet's cells
 /// are read one at a time for their extent first. Every `.xls` sheet's BIFF records and cell
@@ -502,33 +520,18 @@ fn damaged<T>(what: &str) -> Result<T> {
 /// extents are checked by [`check_expansion`] before its eagerly loaded sheets are allocated.
 fn check_size(wb: &mut Sheets<Cursor<&[u8]>>, sheet: &str) -> Result<()> {
     let mut b: Option<(u32, u32, u32, u32)> = None;
-    let mut grow = |(r, c): (u32, u32)| -> Result<()> {
-        let (r0, r1, c0, c1) = b.map_or((r, r, c, c), |(r0, r1, c0, c1)| (r0.min(r), r1.max(r), c0.min(c), c1.max(c)));
-        b = Some((r0, r1, c0, c1));
-        let cells = ((r1 - r0) as usize + 1).saturating_mul((c1 - c0) as usize + 1);
-        if cells > MAX_CELLS {
-            return Err(DataError::Format(format!(
-                "sheet '{sheet}' is too large (cells from row {} to {}, column {} to {})",
-                r0 + 1,
-                r1 + 1,
-                column_letter(c0 as usize),
-                column_letter(c1 as usize)
-            )));
-        }
-        Ok(())
-    };
     let bad = |e: String| DataError::Format(format!("sheet '{sheet}': {e}"));
     match wb {
         Sheets::Xlsx(x) => {
             let mut cells = x.worksheet_cells_reader(sheet).map_err(|e| bad(e.to_string()))?;
             while let Some(c) = cells.next_cell().map_err(|e| bad(e.to_string()))? {
-                grow(c.get_position())?;
+                grow_sheet_bounds(&mut b, c.get_position(), sheet)?;
             }
         }
         Sheets::Xlsb(x) => {
             let mut cells = x.worksheet_cells_reader(sheet).map_err(|e| bad(e.to_string()))?;
             while let Some(c) = cells.next_cell().map_err(|e| bad(e.to_string()))? {
-                grow(c.get_position())?;
+                grow_sheet_bounds(&mut b, c.get_position(), sheet)?;
             }
         }
         Sheets::Xls(_) | Sheets::Ods(_) => {}
@@ -1590,5 +1593,17 @@ mod tests {
         let (ds, _) = read(&book, "t", None, &CsvOptions::default()).unwrap();
         let names: Vec<&str> = ds.fields.iter().map(|f| f.name.as_str()).collect();
         assert_eq!(names, ["name", "D"]);
+    }
+
+    #[test]
+    fn sheet_bounds_never_overflow_u32_max() {
+        let mut bounds = None;
+        grow_sheet_bounds(&mut bounds, (0, 0), "S").unwrap();
+        let err = grow_sheet_bounds(&mut bounds, (u32::MAX, 0), "S").unwrap_err().to_string();
+        assert!(err.contains("row 1 to 4294967296"), "{err}");
+
+        let mut col_bounds = None;
+        grow_sheet_bounds(&mut col_bounds, (0, 0), "S").unwrap();
+        assert!(grow_sheet_bounds(&mut col_bounds, (0, u32::MAX), "S").is_err());
     }
 }

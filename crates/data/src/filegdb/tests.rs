@@ -956,3 +956,73 @@ fn filegdb_temporal_fields_keep_days_offsets_and_null_notices() {
         }
     }
 }
+
+#[test]
+fn duplicate_row_offsets_are_refused() {
+    let (t, mut x) = table(0, &[F::Oid, F::Text("name")], &[vec![V::Text(Some("a"))], vec![V::Text(Some("b"))]]);
+    // Row index entries start at byte 16 with width 4; copy row 0's offset into row 1's slot.
+    let first_offset: [u8; 4] = x[16..20].try_into().unwrap();
+    x[20..24].copy_from_slice(&first_offset);
+    let err = row_offsets(&x).unwrap_err().to_string();
+    assert!(err.contains("duplicate row offset"), "{err}");
+    assert!(read_table("dup", &t, &x, None).is_err());
+}
+
+#[test]
+fn non_finite_coordinates_are_rejected() {
+    let tiny_scale = GeomDef { wkt: String::new(), x0: 0.0, y0: 0.0, xy_scale: 1e-308, z0: 0.0, z_scale: 1.0 };
+    // Point (code 1): vx = 2, vy = 2 -> (1.0 / 1e-308) is finite; vx = 1000 -> 999 / 1e-308 = inf.
+    let mut pt = varuint(1);
+    pt.extend(varuint(1000));
+    pt.extend(varuint(2));
+    assert!(decode_geometry(&pt, &tiny_scale, &mut 100).is_err());
+
+    // Polyline (code 3): 2 points, 1 part, bbox(4 varuints), delta (1000, 0) overflows to inf.
+    let mut line = varuint(3);
+    line.extend(varuint(2));
+    line.extend(varuint(1));
+    for _ in 0..4 {
+        line.extend(varuint(0));
+    }
+    line.extend(varint(1000));
+    line.extend(varint(0));
+    line.extend(varint(0));
+    line.extend(varint(0));
+    assert!(decode_geometry(&line, &tiny_scale, &mut 100).is_err());
+
+    // End-to-end through `read_table`: lossy input emits a DroppedGeometry notice; clean input emits none.
+    let (mut t, x) = table(1, &[F::Oid, F::Shape { z: false, wkt: "" }], &[vec![V::Blob(pt.clone())]]);
+    let scale_bytes = 1000.0f64.to_le_bytes();
+    let pos = t.windows(8).position(|w| w == scale_bytes).expect("xy_scale in shape field header");
+    t[pos..pos + 8].copy_from_slice(&1e-308f64.to_le_bytes());
+    let (lossy_ds, lossy_report) = read_table("nonfinite", &t, &x, None).unwrap().unwrap();
+    assert_eq!(lossy_ds.features.len(), 1);
+    assert!(lossy_ds.features[0].geometry.is_none());
+    assert_eq!(lossy_report.skipped, 1);
+    assert!(
+        lossy_report.messages.iter().any(|m| {
+            m.loss == Some(crate::loss::LossCode::DroppedGeometry)
+                && m.as_str() == "1 feature had an unreadable or non-finite geometry and is kept without geometry"
+        }),
+        "{lossy_report:?}"
+    );
+
+    let (clean_t, clean_x) = table(1, &[F::Oid, F::Shape { z: false, wkt: "" }], &[vec![V::Blob(pt)]]);
+    let (clean_ds, clean_report) = read_table("clean", &clean_t, &clean_x, None).unwrap().unwrap();
+    assert_eq!(clean_ds.features.len(), 1);
+    assert!(clean_ds.features[0].geometry.is_some());
+    assert_eq!(clean_report.skipped, 0);
+    assert!(!clean_report.messages.iter().any(|m| m.loss == Some(crate::loss::LossCode::DroppedGeometry)), "{clean_report:?}");
+}
+
+#[test]
+fn multipatch_inner_rings_respect_ring_budget() {
+    let ring = vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 0.0]];
+    let parts = vec![ring; 6];
+    // 1 outer ring (kind 2) followed by 5 inner rings (kind 3).
+    let kinds = [2, 3, 3, 3, 3, 3];
+    let (got, truncated) = faces_limited(&parts, &kinds, 3);
+    assert!(truncated, "inner rings past the ring budget must set truncated");
+    let total_rings: usize = got.iter().map(Vec::len).sum();
+    assert_eq!(total_rings, 3);
+}

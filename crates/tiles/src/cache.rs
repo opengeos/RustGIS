@@ -1559,6 +1559,11 @@ fn decode_with(
 /// a fragment, so it never reaches the server, which gets a `Range` header instead.
 pub const RANGE: &str = "#rustgis-range=";
 
+/// Length of an inclusive byte range `a..=b`, or `None` when `a > b` or `b - a + 1` overflows `u64`.
+pub fn range_len(a: u64, b: u64) -> Option<u64> {
+    b.checked_sub(a)?.checked_add(1)
+}
+
 /// Splits an address into the address to fetch and the byte range it asks for, if any.
 pub fn split_range(url: &str) -> (&str, Option<(u64, u64)>) {
     match url.rsplit_once(RANGE) {
@@ -3648,7 +3653,8 @@ mod native {
             if let Some(local) = url.strip_prefix(LOCAL) {
                 let (path, range) = super::split_range(local);
                 let (a, b) = range.ok_or("a local read without a range")?;
-                return crate::pmtiles::read_file(path, a, b - a + 1)
+                let len = super::range_len(a, b).ok_or("a local read with an overflowing range")?;
+                return crate::pmtiles::read_file(path, a, len)
                     .map(|bytes| Fetched { bytes, origin: Origin::named(url) })
                     .map_err(Failure::from);
             }
@@ -3656,6 +3662,11 @@ mod native {
             let max = limit.unwrap_or(MAX_BYTES);
             let (url, mut tail) = super::split_tail(url);
             let (url, mut range) = super::split_range(url);
+            if let Some((a, b)) = range
+                && super::range_len(a, b).is_none()
+            {
+                return Err("byte range length overflows".into());
+            }
             // The last bytes asked for, while the file's length is asked for instead (see below).
             let mut measuring: Option<u64> = None;
             // Explicit service logins outrank implicit S3 endpoint signing.
@@ -3856,10 +3867,11 @@ mod native {
                 return Err(format!("larger than {max} bytes").into());
             }
             if let Some((a, b)) = range.filter(|_| whole) {
-                if buf.len() as u64 > b - a + 1 {
+                let len = super::range_len(a, b).ok_or("byte range length overflows")?;
+                if buf.len() as u64 > len {
                     return Err(rustgis_data::diagnostics::message_with_address(url, super::NO_RANGES).into());
                 }
-                buf.truncate(usize::try_from(b - a + 1).unwrap_or(usize::MAX));
+                buf.truncate(usize::try_from(len).unwrap_or(usize::MAX));
             }
             Ok(Fetched { bytes: buf, origin })
         })();
@@ -8032,5 +8044,21 @@ Connection: close
         let tile = crate::template::expand(template, crate::template::TileId { z: 0, x: 0, y: 0 }, 256, false, &[]);
         assert_eq!(ceiling_for(&tile), crate::address::Reach::Public);
         assert!(matches!(get_tile(&tile, Want::Image), State::Failed(_)));
+    }
+
+    #[test]
+    fn byte_range_overflow_is_rejected() {
+        assert_eq!(range_len(5, 5), Some(1));
+        assert_eq!(range_len(10, 5), None);
+        assert_eq!(range_len(0, u64::MAX), None);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _turn = turn();
+            let (tx, rx) = std::sync::mpsc::channel();
+            let url = format!("https://example.invalid/data.bin{RANGE}0-{}", u64::MAX);
+            native::fetch_reached(url, crate::address::Reach::Public, Box::new(move |r| tx.send(r).unwrap()), &[]);
+            let err = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap().unwrap_err();
+            assert!(err.contains("overflows"), "{err}");
+        }
     }
 }

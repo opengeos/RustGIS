@@ -905,39 +905,67 @@ pub fn resolve(base: &str, href: &str) -> Option<String> {
     Some(crate::logins::inherit(base, &resolved))
 }
 
+/// Whether `s` begins with an RFC 3986 scheme followed by `://`.
+fn has_scheme(s: &str) -> bool {
+    let Some((scheme, _)) = s.split_once("://") else { return false };
+    let mut bytes = scheme.bytes();
+    bytes.next().is_some_and(|b| b.is_ascii_alphabetic()) && bytes.all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'-' | b'.'))
+}
+
 fn resolve_plain(base: &str, href: &str) -> Option<String> {
     let href = href.trim();
     if href.is_empty() || href.len() > MAX_TEXT || href.chars().any(char::is_control) {
         return None;
     }
-    if href.contains("://") {
+    if has_scheme(href) {
         return Some(href.to_string());
     }
     let (scheme, rest) = base.split_once("://")?;
-    let host_end = rest.find('/').unwrap_or(rest.len());
+    let host_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
     let origin = format!("{scheme}://{}", rest.get(..host_end)?);
     if let Some(abs) = href.strip_prefix("//") {
         return Some(format!("{scheme}://{abs}"));
     }
-    if href.starts_with('/') {
-        return Some(format!("{origin}{href}"));
-    }
-    // Relative to the base's folder, with `./` and `../` worked out.
-    let path = rest.get(host_end..).unwrap_or("").split(['?', '#']).next().unwrap_or("");
-    let mut parts: Vec<&str> = path.split('/').filter(|p| !p.is_empty()).collect();
-    if !path.ends_with('/') {
-        parts.pop();
-    }
-    for seg in href.split('/') {
-        match seg {
-            "." => {}
-            ".." => {
-                parts.pop();
+    let (href_path, tail) = match href.find(['?', '#']) {
+        Some(i) => (href.get(..i)?, href.get(i..)?),
+        None => (href, ""),
+    };
+    let normalize = |raw: &str| {
+        let mut out: Vec<&str> = Vec::new();
+        let segments: Vec<&str> = raw.split('/').collect();
+        let last = segments.len().saturating_sub(1);
+        for (i, seg) in segments.iter().enumerate() {
+            match *seg {
+                "." => {}
+                ".." => {
+                    if out.len() > 1 {
+                        out.pop();
+                    }
+                }
+                s => out.push(s),
             }
-            s => parts.push(s),
+            if i == last && matches!(*seg, "." | "..") {
+                out.push("");
+            }
         }
+        out.join("/")
+    };
+    if href.starts_with('/') {
+        return Some(format!("{origin}{}{tail}", normalize(href_path)));
     }
-    Some(format!("{origin}/{}", parts.join("/")))
+    let path = rest.get(host_end..).unwrap_or("").split(['?', '#']).next().unwrap_or("");
+    if href_path.is_empty() {
+        // RFC 3986 section 5.2.2: an empty reference path keeps the document path, and keeps its
+        // query only when the reference supplies none. A base fragment is never inherited.
+        let query = if href.starts_with('?') {
+            ""
+        } else {
+            rest.split('#').next().and_then(|r| r.find('?').and_then(|i| r.get(i..))).unwrap_or("")
+        };
+        return Some(format!("{origin}{path}{query}{tail}"));
+    }
+    let dir = path.rfind('/').map_or("/", |i| path.get(..=i).unwrap_or("/"));
+    Some(format!("{origin}{}{tail}", normalize(&format!("{dir}{href_path}"))))
 }
 
 impl Asset {
@@ -1647,6 +1675,19 @@ mod tests {
         assert_eq!(resolve("https://x.org/a", "//y.org/d.tif").as_deref(), Some("https://y.org/d.tif"));
         assert_eq!(resolve("https://x.org/a", "s3://b/k").as_deref(), Some("s3://b/k"));
         assert_eq!(resolve("https://x.org/a", ""), None);
+        // RFC 3986 query/fragment links, scheme detection, and authority boundary on `?` and `#`.
+        assert_eq!(resolve("https://api.example/v1/search", "?token=page2").as_deref(), Some("https://api.example/v1/search?token=page2"));
+        assert_eq!(
+            resolve("https://api.example/v1/search?limit=10", "?next=https://other.example/x").as_deref(),
+            Some("https://api.example/v1/search?next=https://other.example/x")
+        );
+        assert_eq!(
+            resolve("https://api.example/v1/search?limit=10#old", "#new").as_deref(),
+            Some("https://api.example/v1/search?limit=10#new")
+        );
+        assert_eq!(resolve("https://stac.example?f=json", "/items/1").as_deref(), Some("https://stac.example/items/1"));
+        assert_eq!(resolve("https://stac.example?f=json", "items/1").as_deref(), Some("https://stac.example/items/1"));
+        assert_eq!(resolve("https://x.org/a/b", "rel/https://not-a-scheme").as_deref(), Some("https://x.org/a/rel/https://not-a-scheme"));
     }
 
     /// JAXA Earth's codes for a failed retrieval: read whole, or the asset says they weren't.

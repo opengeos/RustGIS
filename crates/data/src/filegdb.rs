@@ -370,6 +370,7 @@ fn read_table(name: &str, t: &[u8], x: &[u8], wkid: Option<u32>) -> Result<Optio
     let mut no_footprint = 0usize;
     // Shapes decoded, a multipatch's too (its M values go even when it has no footprint).
     let mut decoded = 0usize;
+    let mut bad_geometries = 0usize;
     let mut unread_dates = Vec::new();
     let mut rounded_dates = Vec::new();
     let mut budget = MAX_TABLE_FACES;
@@ -413,7 +414,10 @@ fn read_table(name: &str, t: &[u8], x: &[u8], wkid: Option<u32>) -> Result<Optio
                     geometry = patch.footprint;
                 }
                 Ok(Decoded::Empty) => {}
-                Err(()) => report.skipped += 1,
+                Err(()) => {
+                    bad_geometries += 1;
+                    report.skipped += 1;
+                }
             }
         }
         // Kept as the file holds it, in its own system; counted when it has no place in
@@ -477,6 +481,14 @@ fn read_table(name: &str, t: &[u8], x: &[u8], wkid: Option<u32>) -> Result<Optio
         } else {
             format!("{unmerged} multipatches whose faces couldn't be merged are drawn as the outline of their points")
         });
+    }
+    if bad_geometries > 0 {
+        let what = if bad_geometries == 1 {
+            "1 feature had an unreadable or non-finite geometry and is kept without geometry".to_string()
+        } else {
+            format!("{bad_geometries} features had unreadable or non-finite geometries and are kept without geometry")
+        };
+        report.messages.push(crate::loss::Note::loss(crate::loss::LossCode::DroppedGeometry, what));
     }
     Ok(Some((ds, report)))
 }
@@ -964,6 +976,12 @@ fn row_offsets(x: &[u8]) -> Result<Vec<(u64, usize)>> {
             }
         }
     }
+    // Check for duplicate offsets in place without allocating an auxiliary hash set.
+    out.sort_unstable_by_key(|&(_, offset)| offset);
+    if out.windows(2).any(|w| matches!(w, [(_, a), (_, b)] if a == b)) {
+        return Err(bad("duplicate row offset"));
+    }
+    out.sort_unstable_by_key(|&(row, _)| row);
     Ok(out)
 }
 
@@ -1005,7 +1023,11 @@ fn decode_geometry(b: &[u8], def: &GeomDef, budget: &mut usize) -> std::result::
             if vx == 0 || vy == 0 {
                 return Ok(Decoded::Empty);
             }
-            Ok(Decoded::Geometry(Geometry::Point(Coord::new(x((vx - 1) as f64), y((vy - 1) as f64))), 0))
+            let (px, py) = (x((vx - 1) as f64), y((vy - 1) as f64));
+            if !px.is_finite() || !py.is_finite() {
+                return Err(());
+            }
+            Ok(Decoded::Geometry(Geometry::Point(Coord::new(px, py)), 0))
         }
         // Multipoints.
         8 | 18 | 20 | 28 | 53 => {
@@ -1112,7 +1134,11 @@ fn deltas(c: &mut Cur, n: usize, def: &GeomDef) -> std::result::Result<Vec<Coord
     for _ in 0..n {
         dx = dx.checked_add(c.varint().ok_or(())?).ok_or(())?;
         dy = dy.checked_add(c.varint().ok_or(())?).ok_or(())?;
-        pts.push(Coord::new(dx as f64 / def.xy_scale + def.x0, dy as f64 / def.xy_scale + def.y0));
+        let (x, y) = (dx as f64 / def.xy_scale + def.x0, dy as f64 / def.xy_scale + def.y0);
+        if !x.is_finite() || !y.is_finite() {
+            return Err(());
+        }
+        pts.push(Coord::new(x, y));
     }
     Ok(pts)
 }
@@ -1147,48 +1173,72 @@ pub(crate) fn signed_area(ring: &[Coord]) -> f64 {
 }
 
 /// A multipatch's faces, each its outer ring and then its holes: triangles from strips, fans and
-/// triangle lists, and rings. At most [`MAX_FACES`]; the flag says some were left out.
+/// triangle lists, and rings. At most [`MAX_FACES`] rings in total; the flag says some were left
+/// out.
 fn faces(parts: &[Vec<P3>], kinds: &[u64]) -> (Vec<Vec<Vec<P3>>>, bool) {
+    faces_limited(parts, kinds, MAX_FACES)
+}
+
+fn faces_limited(parts: &[Vec<P3>], kinds: &[u64], limit: usize) -> (Vec<Vec<Vec<P3>>>, bool) {
     let mut faces: Vec<Vec<Vec<P3>>> = Vec::new();
+    let mut rings = 0usize;
     let mut truncated = false;
     for (part, &kind) in parts.iter().zip(kinds) {
-        // Faces past the cap are left out, within a part too (one strip can hold millions).
-        let room = MAX_FACES.saturating_sub(faces.len());
+        // Faces and inner rings past the cap are left out, within a part too (one strip can hold millions).
+        let room = limit.saturating_sub(rings);
         let has = match kind {
             0 | 1 => part.len().saturating_sub(2),
             6 => part.len() / 3,
-            3 => 0,
             _ => 1,
         };
         if has > room {
             truncated = true;
         }
         if room == 0 {
-            break;
+            if truncated {
+                break;
+            }
+            continue;
         }
         match kind {
             // Triangle strip, fan, triangles.
-            0 => faces.extend(part.windows(3).take(room).map(|w| vec![w.to_vec()])),
+            0 => {
+                let take = part.len().saturating_sub(2).min(room);
+                faces.extend(part.windows(3).take(take).map(|w| vec![w.to_vec()]));
+                rings += take;
+            }
             1 => {
                 if let Some((first, rest)) = part.split_first() {
+                    let take = rest.len().saturating_sub(1).min(room);
                     faces.extend(
                         rest.windows(2)
                             .filter_map(|w| match w {
                                 [a, b] => Some(vec![vec![*first, *a, *b]]),
                                 _ => None,
                             })
-                            .take(room),
+                            .take(take),
                     );
+                    rings += take;
                 }
             }
-            6 => faces.extend(part.as_chunks::<3>().0.iter().take(room).map(|w| vec![w.to_vec()])),
+            6 => {
+                let take = (part.len() / 3).min(room);
+                faces.extend(part.as_chunks::<3>().0.iter().take(take).map(|w| vec![w.to_vec()]));
+                rings += take;
+            }
             // An inner ring is a hole in the face before.
-            3 => match faces.last_mut() {
-                Some(face) => face.push(part.clone()),
-                None => faces.push(vec![part.clone()]),
-            },
+            3 => {
+                match faces.last_mut() {
+                    Some(face) => face.push(part.clone()),
+                    None => faces.push(vec![part.clone()]),
+                }
+                rings += 1;
+            }
             // Outer, first and plain rings.
-            _ => faces.push(vec![part.clone()]),
+            _ => {
+                faces.push(vec![part.clone()]);
+                rings += 1;
+            }
         }
     }
     (faces, truncated)

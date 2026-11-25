@@ -586,36 +586,71 @@ fn column_list(sql: &str) -> Option<(usize, usize)> {
     None
 }
 
-/// Splits on commas outside parentheses and quotes.
+/// Splits on commas outside parentheses, quotes and SQL comments.
 fn split_top(s: &str) -> Vec<String> {
+    let cs: Vec<char> = s.chars().collect();
     let mut out = Vec::new();
     let mut cur = String::new();
     let mut depth = 0usize;
     let mut quote: Option<char> = None;
-    for c in s.chars() {
+    let mut i = 0;
+    while let Some(&c) = cs.get(i) {
         match quote {
             Some(q) => {
                 cur.push(c);
-                if c == q || (q == '[' && c == ']') {
+                let close = if q == '[' { ']' } else { q };
+                if c == close {
+                    if close != ']' && cs.get(i + 1) == Some(&close) {
+                        cur.push(close);
+                        i += 2;
+                        continue;
+                    }
                     quote = None;
                 }
+                i += 1;
             }
-            None => match c {
-                '"' | '\'' | '`' | '[' => {
-                    quote = Some(c);
+            None => {
+                if c == '-' && cs.get(i + 1) == Some(&'-') {
+                    while let Some(&d) = cs.get(i) {
+                        cur.push(d);
+                        i += 1;
+                        if d == '\n' {
+                            break;
+                        }
+                    }
+                } else if c == '/' && cs.get(i + 1) == Some(&'*') {
                     cur.push(c);
+                    cur.push('*');
+                    i += 2;
+                    while let Some(&d) = cs.get(i) {
+                        cur.push(d);
+                        i += 1;
+                        if d == '*' && cs.get(i) == Some(&'/') {
+                            cur.push('/');
+                            i += 1;
+                            break;
+                        }
+                    }
+                } else {
+                    match c {
+                        '"' | '\'' | '`' | '[' => {
+                            quote = Some(c);
+                            cur.push(c);
+                        }
+                        '(' => {
+                            depth += 1;
+                            cur.push(c);
+                        }
+                        ')' => {
+                            depth = depth.saturating_sub(1);
+                            cur.push(c);
+                        }
+                        ',' if depth == 0 => out.push(std::mem::take(&mut cur)),
+                        c => cur.push(c),
+                    }
+                    i += 1;
                 }
-                '(' => {
-                    depth += 1;
-                    cur.push(c);
-                }
-                ')' => {
-                    depth = depth.saturating_sub(1);
-                    cur.push(c);
-                }
-                ',' if depth == 0 => out.push(std::mem::take(&mut cur)),
-                c => cur.push(c),
-            },
+            }
         }
     }
     if !cur.trim().is_empty() {
@@ -727,6 +762,21 @@ mod tests {
         let p = parse_table("CREATE TABLE shallow (data BLOB, z INTEGER, x INTEGER, y INTEGER, PRIMARY KEY (z ASC, x, y)) WITHOUT ROWID")
             .unwrap();
         assert_eq!(p.stored_order.as_deref(), Some(&[1, 2, 3, 0][..]));
+    }
+
+    #[test]
+    fn create_table_with_comments_containing_commas_parens_and_quotes() {
+        let sql = "CREATE TABLE t (
+            a INTEGER, -- don't, split (here)
+            /* block, comment with 'apostrophe and (paren */
+            b TEXT DEFAULT 'don''t, split',
+            c REAL /* trailing, (comment) */
+        )";
+        let (cols, _) = parse_create_table(sql).unwrap();
+        let names: Vec<&str> = cols.iter().map(|c| c.name.as_str()).collect();
+        let decls: Vec<&str> = cols.iter().map(|c| c.decl.as_str()).collect();
+        assert_eq!(names, ["a", "b", "c"]);
+        assert_eq!(decls, ["INTEGER", "TEXT", "REAL"]);
     }
 
     #[test]

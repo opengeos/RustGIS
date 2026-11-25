@@ -1430,6 +1430,17 @@ fn complex_packing_marks_missing_values() {
 }
 
 #[test]
+fn complex_packing_zero_bit_constant_group_with_missing_management() {
+    for missing in [1, 2] {
+        let mut c = Cx::new(&[(0, 0, &[0, 0, 0])]);
+        c.ref_bits = 0;
+        c.r = 12.5;
+        c.missing = missing;
+        assert_eq!(c.values(), vec![12.5, 12.5, 12.5], "missing={missing}");
+    }
+}
+
+#[test]
 fn spatial_differencing_is_undone() {
     // 100, 103, 101, 101, 90: differences 3, −2, 0, −11, the least −11.
     let c = Cx::differenced(&[(0, 4, &[0, 14, 9]), (11, 0, &[0]), (0, 1, &[0])], &[100], -11);

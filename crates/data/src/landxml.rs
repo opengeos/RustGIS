@@ -20,7 +20,7 @@ use crate::{DataError, Dataset, Field, FieldType, Geometry, GeometryType, ReadRe
 /// LandXML file types (often plain `.xml`, read when its contents say so).
 pub const EXTENSIONS: &[&str] = &["landxml"];
 
-/// The most TIN faces read from one surface.
+/// The most TIN faces read from a LandXML file.
 const MAX_FACES: usize = 2_000_000;
 
 pub fn is_landxml_name(name: &str) -> bool {
@@ -41,6 +41,34 @@ fn elements<'a, 'i>(n: &Node<'a, 'i>, name: &'static str) -> impl Iterator<Item 
     n.descendants().filter(move |c| c.is_element() && local(c) == name)
 }
 
+/// Direct `<P>` and `<F>` descendants of `s`, stopping at any nested `<Surface>` so each surface
+/// keeps its own point-ID namespace and every node is visited once even under deep nesting.
+fn surface_nodes<'a, 'i>(s: &Node<'a, 'i>) -> Result<(Vec<Node<'a, 'i>>, Vec<Node<'a, 'i>>)> {
+    let (mut pts, mut fcs) = (Vec::new(), Vec::new());
+    let mut stack: Vec<Node<'a, 'i>> = s.children().collect();
+    stack.reverse();
+    let mut visited = 0usize;
+    while let Some(node) = stack.pop() {
+        if visited.is_multiple_of(1024) {
+            crate::progress::check()?;
+        }
+        visited += 1;
+        if !node.is_element() {
+            continue;
+        }
+        match local(&node) {
+            "Surface" => continue,
+            "P" => pts.push(node),
+            "F" => fcs.push(node),
+            _ => {}
+        }
+        let mut children: Vec<Node<'a, 'i>> = node.children().collect();
+        children.reverse();
+        stack.extend(children);
+    }
+    Ok((pts, fcs))
+}
+
 fn text_of(n: &Node) -> String {
     n.children().filter(|t| t.is_text()).filter_map(|t| t.text()).collect::<String>()
 }
@@ -58,6 +86,10 @@ fn nez(s: &str) -> Option<(Coord, Option<f64>)> {
 /// Reads a LandXML file into its layers (those with features). `crs` is the coordinate system of
 /// a file that doesn't say.
 pub fn read(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Vec<(Dataset, ReadReport)>> {
+    read_with_max_faces(file_name, bytes, crs, MAX_FACES)
+}
+
+fn read_with_max_faces(file_name: &str, bytes: &[u8], crs: Option<Crs>, max_faces: usize) -> Result<Vec<(Dataset, ReadReport)>> {
     let name = std::path::Path::new(file_name).file_stem().and_then(|s| s.to_str()).unwrap_or("landxml").to_string();
     let text = std::str::from_utf8(bytes).map_err(|_| DataError::Format(format!("{file_name} is not UTF-8 text")))?;
     let opts = ParsingOptions { allow_dtd: false, nodes_limit: crate::io::XML_NODES, ..ParsingOptions::default() };
@@ -199,10 +231,16 @@ pub fn read(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Vec<(Data
     // The surfaces cut at the face limit, said together after them.
     let mut over_limit: Vec<String> = Vec::new();
     let mut faces_left_out = 0usize;
+    let mut total_faces = 0usize;
     for s in elements(&root, "Surface") {
+        crate::progress::check()?;
         let sname = s.attribute("name").unwrap_or("").to_string();
+        let (surf_pts, surf_faces) = surface_nodes(&s)?;
         let mut pnts: HashMap<&str, (Coord, Option<f64>)> = HashMap::new();
-        for p in elements(&s, "P") {
+        for (pi, p) in surf_pts.into_iter().enumerate() {
+            if pi.is_multiple_of(1024) {
+                crate::progress::check()?;
+            }
             // A point that can't be read isn't kept. The faces that name it are left out, and
             // counted as features, so the point is said on its own without a code.
             match (p.attribute("id"), nez(&text_of(&p))) {
@@ -214,15 +252,21 @@ pub fn read(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Vec<(Data
         }
         // Invisible faces (i="1") are holes in the surface, never read, so the cap counts the
         // faces that are.
-        for (i, f) in elements(&s, "F").filter(|f| f.attribute("i") != Some("1")).enumerate() {
-            // Past the limit, a face is only counted, so the notice says how many are left out.
-            if i >= MAX_FACES {
-                if i == MAX_FACES {
+        let mut s_over_limit = false;
+        for (fi, f) in surf_faces.into_iter().filter(|f| f.attribute("i") != Some("1")).enumerate() {
+            if fi.is_multiple_of(1024) {
+                crate::progress::check()?;
+            }
+            // Past the file-wide limit, a face is only counted, so the notice says how many are left out.
+            if total_faces >= max_faces {
+                if !s_over_limit {
                     over_limit.push(sname.clone());
+                    s_over_limit = true;
                 }
                 faces_left_out += 1;
                 continue;
             }
+            total_faces += 1;
             let tri: Option<Vec<(Coord, Option<f64>)>> = text_of(&f).split_whitespace().map(|id| pnts.get(id).copied()).collect();
             match tri.as_deref() {
                 Some([a, b, c]) => {
@@ -246,7 +290,7 @@ pub fn read(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Vec<(Data
         [] => {}
         [one] => report.messages.push(crate::loss::Note::loss(
             crate::loss::LossCode::DroppedOverLimit,
-            format!("surface '{one}' has more than {MAX_FACES} faces: the {faces_left_out} past the limit are left out"),
+            format!("the file has more than {max_faces} faces: the {faces_left_out} past the limit are left out, from surface '{one}' on"),
         )),
         many => {
             let shown: Vec<String> = many.iter().take(10).map(|n| format!("'{n}'")).collect();
@@ -254,7 +298,7 @@ pub fn read(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Vec<(Data
             report.messages.push(crate::loss::Note::loss(
                 crate::loss::LossCode::DroppedOverLimit,
                 format!(
-                    "{} surfaces ({}{more}) have more than {MAX_FACES} faces: the {faces_left_out} past the limit are left out",
+                    "the file has more than {max_faces} faces: the {faces_left_out} past the limit are left out, across {} surfaces ({}{more})",
                     many.len(),
                     shown.join(", ")
                 ),
@@ -471,5 +515,96 @@ mod tests {
         for cut in (0..LANDXML.len()).step_by(97) {
             let _ = read("x.xml", LANDXML.as_bytes().get(..cut).unwrap_or_default(), None);
         }
+    }
+
+    #[test]
+    fn nested_surfaces_do_not_multiply_faces_and_cap_is_file_wide() {
+        let nested = r#"<LandXML><CoordinateSystem epsgCode="4326"/><Surfaces>
+            <Surface name="outer">
+                <Surface name="inner_a">
+                    <Definition surfType="TIN">
+                        <Pnts><P id="1">0 0 1</P><P id="2">0 1 1</P><P id="3">1 0 1</P></Pnts>
+                        <Faces><F>1 2 3</F></Faces>
+                    </Definition>
+                </Surface>
+                <Surface name="inner_b">
+                    <Definition surfType="TIN">
+                        <Pnts><P id="1">10 10 5</P><P id="2">10 11 5</P><P id="3">11 10 5</P></Pnts>
+                        <Faces><F>1 2 3</F></Faces>
+                    </Definition>
+                </Surface>
+            </Surface>
+        </Surfaces></LandXML>"#;
+        let layers = read("nested.xml", nested.as_bytes(), None).unwrap();
+        assert_eq!(layers.len(), 1);
+        assert_eq!(layers[0].0.features.len(), 2, "nested <Surface> elements must not duplicate faces");
+        assert_eq!(layers[0].0.value(0, 0), &Value::Text("inner_a".into()));
+        assert_eq!(layers[0].0.value(0, 1), &Value::Float(1.0));
+        assert_eq!(layers[0].0.value(1, 0), &Value::Text("inner_b".into()));
+        assert_eq!(layers[0].0.value(1, 1), &Value::Float(5.0));
+        assert_eq!(
+            layers[0].0.features[0].geometry,
+            Some(Geometry::Polygon(vec![vec![vec![
+                Coord::new(0.0, 0.0),
+                Coord::new(1.0, 0.0),
+                Coord::new(0.0, 1.0),
+                Coord::new(0.0, 0.0),
+            ]]]))
+        );
+        assert_eq!(
+            layers[0].0.features[1].geometry,
+            Some(Geometry::Polygon(vec![vec![vec![
+                Coord::new(10.0, 10.0),
+                Coord::new(11.0, 10.0),
+                Coord::new(10.0, 11.0),
+                Coord::new(10.0, 10.0),
+            ]]]))
+        );
+
+        let two_surfaces = r#"<LandXML><CoordinateSystem epsgCode="4326"/><Surfaces>
+            <Surface name="a"><Definition surfType="TIN">
+                <Pnts><P id="1">0 0 1</P><P id="2">0 1 1</P><P id="3">1 0 1</P></Pnts>
+                <Faces><F>1 2 3</F><F>1 2 3</F><F>1 2 3</F></Faces>
+            </Definition></Surface>
+            <Surface name="b"><Definition surfType="TIN">
+                <Pnts><P id="1">0 0 2</P><P id="2">0 1 2</P><P id="3">1 0 2</P></Pnts>
+                <Faces><F>1 2 3</F><F>1 2 3</F><F>1 2 3</F></Faces>
+            </Definition></Surface>
+        </Surfaces></LandXML>"#;
+        let layers = read_with_max_faces("two.xml", two_surfaces.as_bytes(), None, 4).unwrap();
+        assert_eq!(layers[0].0.features.len(), 4, "file-wide face cap must bound sibling surfaces");
+        assert!(layers[0].1.messages.iter().any(|m| {
+            m.loss == Some(crate::loss::LossCode::DroppedOverLimit)
+                && m.as_str() == "the file has more than 4 faces: the 2 past the limit are left out, from surface 'b' on"
+        }));
+
+        let three_surfaces = r#"<LandXML><CoordinateSystem epsgCode="4326"/><Surfaces>
+            <Surface name="a"><Definition surfType="TIN">
+                <Pnts><P id="1">0 0 1</P><P id="2">0 1 1</P><P id="3">1 0 1</P></Pnts>
+                <Faces><F>1 2 3</F><F>1 2 3</F><F>1 2 3</F></Faces>
+            </Definition></Surface>
+            <Surface name="b"><Definition surfType="TIN">
+                <Pnts><P id="1">0 0 2</P><P id="2">0 1 2</P><P id="3">1 0 2</P></Pnts>
+                <Faces><F>1 2 3</F><F>1 2 3</F></Faces>
+            </Definition></Surface>
+            <Surface name="c"><Definition surfType="TIN">
+                <Pnts><P id="1">0 0 3</P><P id="2">0 1 3</P><P id="3">1 0 3</P></Pnts>
+                <Faces><F>1 2 3</F><F>1 2 3</F></Faces>
+            </Definition></Surface>
+        </Surfaces></LandXML>"#;
+        let layers = read_with_max_faces("three.xml", three_surfaces.as_bytes(), None, 4).unwrap();
+        assert_eq!(layers[0].0.features.len(), 4);
+        assert!(layers[0].1.messages.iter().any(|m| {
+            m.loss == Some(crate::loss::LossCode::DroppedOverLimit)
+                && m.as_str() == "the file has more than 4 faces: the 3 past the limit are left out, across 2 surfaces ('b', 'c')"
+        }));
+    }
+
+    #[test]
+    fn a_cancelled_landxml_surface_read_stops() {
+        let probe = std::sync::Arc::new(crate::progress::tests::Counted::default());
+        probe.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        let _g = crate::progress::install(Some(probe));
+        assert!(matches!(read("site.xml", LANDXML.as_bytes(), None), Err(DataError::Cancelled)));
     }
 }

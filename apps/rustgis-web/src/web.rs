@@ -749,6 +749,11 @@ async fn fetch_reached(
                 let max = limit.map(|n| n as u64).unwrap_or(64 << 20);
                 let (url, tail) = cache::split_tail(url);
                 let (url, range) = cache::split_range(url);
+                if let Some((a, b)) = range
+                    && cache::range_len(a, b).is_none()
+                {
+                    return Err("byte range length overflows".into());
+                }
                 // Share native GET routing: explicit service logins outrank implicit S3 endpoint signing.
                 let bound = url;
                 let prepared = cache::prepare_get(url)?;
