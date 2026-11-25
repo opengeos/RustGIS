@@ -476,6 +476,11 @@ fn a_wkt_that_isnt_utf8_is_said() {
         report.messages.first().map(|m| m.as_str()),
         Some("the coordinate system's WKT isn't valid UTF-8; the bytes that can't be read are replaced with U+FFFD")
     );
+    assert_eq!(report.messages[0].loss, Some(crate::loss::LossCode::ChangedEncoding));
+    // On a page with no geometry, nothing is placed in the system: said, without a code.
+    let rows = answer(&[message(8, &message(5, wkt)), transform(false, 1.0, 0.0, 0.0), feature(&[])]);
+    let (_, report) = read(&rows, "t").unwrap();
+    assert_eq!(report.messages.first().map(|m| m.loss), Some(None), "{:?}", report.messages);
     // Unused when a code RustGIS knows names the system: nothing to say.
     let with_code = answer(&[
         message(8, &[number(1, 4326), message(5, wkt)].concat()),

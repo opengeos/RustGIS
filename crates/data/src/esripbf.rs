@@ -361,6 +361,9 @@ pub fn read_page_within(bytes: &[u8], name: &str, limit: usize) -> Result<Page> 
     // read in its place. If the replaced bytes break the WKT, it can't be told whether the WKT
     // would have won, so that's said too. The WKT is looked at only when it isn't UTF-8, as this
     // runs for every page.
+    // What reading the system says (its WKT's text, and what it assumes) holds only for a
+    // geometry read in it.
+    let said_before = report.messages.len();
     if !wkt_utf8
         && (code.and_then(crs_of_code).is_none()
             || esri_wkt_over_code(code, wkt.as_deref()).is_some()
@@ -371,7 +374,6 @@ pub fn read_page_within(bytes: &[u8], name: &str, limit: usize) -> Result<Page> 
             "the coordinate system's WKT isn't valid UTF-8; the bytes that can't be read are replaced with U+FFFD",
         ));
     }
-    let said_before = report.messages.len();
     let (crs, to_lonlat) = crate::filegdb::esri_crs(code, wkt.as_deref(), &mut report)?;
     // What reading the system said, which assumes a system only for a geometry read in it.
     let crs_said = said_before..report.messages.len();
@@ -433,7 +435,9 @@ pub fn read_page_within(bytes: &[u8], name: &str, limit: usize) -> Result<Page> 
     if !any_geometry && !crs_said.is_empty() {
         let said = std::mem::replace(&mut report.messages, crate::loss::Notes::new());
         for (i, mut note) in said.into_iter().enumerate() {
-            if crs_said.contains(&i) && note.loss == Some(crate::loss::LossCode::AssumedCrs) {
+            if crs_said.contains(&i)
+                && matches!(note.loss, Some(crate::loss::LossCode::AssumedCrs | crate::loss::LossCode::ChangedEncoding))
+            {
                 note.loss = None;
             }
             report.messages.push(note);

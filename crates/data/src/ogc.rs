@@ -4591,14 +4591,16 @@ impl Pages {
                 ds.crs = Some(asked);
                 let asked = asked.label();
                 if std::mem::take(&mut losses.no_crs) {
-                    report
-                        .messages
-                        .push(format!("the answer names no coordinate system; coordinates are read in {asked}, the system asked for"));
+                    report.messages.push(crate::loss::Note::loss(
+                        crate::loss::LossCode::AssumedCrs,
+                        format!("the answer names no coordinate system; coordinates are read in {asked}, the system asked for"),
+                    ));
                 }
                 if let Some(code) = losses.unusable_code.take() {
-                    report
-                        .messages
-                        .push(format!("coordinate system {code} can't be used; coordinates are read in {asked}, the system asked for"));
+                    report.messages.push(crate::loss::Note::loss(
+                        crate::loss::LossCode::AssumedCrs,
+                        format!("coordinate system {code} can't be used; coordinates are read in {asked}, the system asked for"),
+                    ));
                 }
                 // One it names that RustGIS can't use (a code, a WKT): read as asked too (as a
                 // GeoJSON answer's is), and its message says so.
@@ -6368,7 +6370,8 @@ mod tests {
             report
                 .messages
                 .iter()
-                .any(|m| m.as_str() == "coordinate system 999999 can't be used; coordinates are read in EPSG:2056, the system asked for"),
+                .any(|m| m.as_str() == "coordinate system 999999 can't be used; coordinates are read in EPSG:2056, the system asked for"
+                    && m.loss == Some(crate::loss::LossCode::AssumedCrs)),
             "{:?}",
             report.messages
         );

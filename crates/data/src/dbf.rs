@@ -436,11 +436,10 @@ pub(crate) fn read_cpg(path: &std::path::Path, notes: &mut crate::loss::Notes) -
     match try_read_cpg(path) {
         Ok(bytes) => bytes,
         Err(e) => {
-            // Whether the .dbf supplies the encoding isn't known yet: said, not as assumed.
-            notes.push(crate::loss::Note::plain(format!(
-                "could not read the .cpg ({e}); using the .dbf code page, or UTF-8 if unavailable"
-            )));
-            None
+            // Why it can't be used; what the encoding falls back to, and whether that is assumed,
+            // is said with the `.dbf`'s code page in hand ([`encoding`]), as for one that can't be.
+            notes.push(crate::loss::Note::plain(format!("could not read the .cpg ({e})")));
+            Some(Vec::new())
         }
     }
 }
