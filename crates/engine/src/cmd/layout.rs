@@ -335,7 +335,9 @@ pub(crate) fn new_layout(s: &mut Session, p: &Value) -> CmdResult {
             let frame = l.add("Map Frame", (m, m + 16.0, fw, fh), frame_kind(s, &map, fw, FrameShape::Rectangle));
             let side = m + fw + 6.0;
             let sw = w - side - m;
-            l.add("Title", (m, m, w - 2.0 * m, 14.0), ElementKind::text(map.clone(), 22.0, Rgba::rgb(0x1F, 0x29, 0x37), true));
+            // The token, not the map's name as typed text: the title follows a rename of the map in
+            // the first map frame, as the layout draws it.
+            l.add("Title", (m, m, w - 2.0 * m, 14.0), ElementKind::text("{map}", 22.0, Rgba::rgb(0x1F, 0x29, 0x37), true));
             l.add(
                 "Legend",
                 (side, m + 16.0, sw, fh * 0.6),
@@ -1336,6 +1338,7 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
     // Text is measured as it is drawn: bold as bold, and the tokens the layout fills only when it
     // draws (`{date}`, `{scale}`…) as wide as a typical value of theirs.
     let (map_name, crs) = (s.map().name.clone(), s.map().projection.label());
+    let name_text = map_name.clone();
     let drawn = move |t: &str| {
         // Most text has no token: measured as it is.
         if !t.contains('{') {
@@ -1355,8 +1358,22 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
         .iter()
         .fold(t.to_string(), |t, (token, like)| t.replace(token, like))
     };
+    // `{map}` is one word as wide as the map's name, which the text's lines can't break without
+    // breaking the token. Where the name is wider than the line it is written out instead and wraps
+    // as text, which doesn't follow a rename, and is said.
+    let spelled_out = std::cell::Cell::new(false);
+    let settle = |t: &str, w: f64, name_mm: f64| {
+        let t = fill(t);
+        if t.contains("{map}") && name_mm > w.max(1.0) {
+            spelled_out.set(true);
+            t.replace("{map}", &name_text)
+        } else {
+            t
+        }
+    };
     let wrap_as = |t: &str, w: f64, pt: f64, bold: bool| {
-        crate::render::report::wrap_with(&fill(t), w.max(1.0), |x| crate::render::report::width_mm(&drawn(x), pt as f32, bold))
+        let text = settle(t, w, crate::render::report::width_mm(&name_text, pt as f32, bold));
+        crate::render::report::wrap_with(&text, w.max(1.0), |x| crate::render::report::width_mm(&drawn(x), pt as f32, bold))
     };
     let wrap = |t: &str, w: f64, pt: f64| wrap_as(t, w, pt, false);
     let pitch = crate::render::layout::line_pitch_mm;
@@ -1759,7 +1776,8 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
                         let cw = (0.3 * iw).max(45.0 * k).min(0.4 * iw);
                         let (mw, cx) = (iw - cw - gap, x0 + iw - cw);
                         let serif_wrap = |t: &str, w: f64, pt: f64, bold: bool| {
-                            crate::render::report::wrap_with(&fill(t), w.max(1.0), |x| {
+                            let text = settle(t, w, crate::render::report::serif_width_mm(&name_text, pt as f32, bold));
+                            crate::render::report::wrap_with(&text, w.max(1.0), |x| {
                                 crate::render::report::serif_width_mm(&drawn(x), pt as f32, bold)
                             })
                         };
@@ -1914,6 +1932,9 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
     let strip_h = if edges.top || edges.bottom { 2.0 * room_end } else { 0.0 };
     if fw - strip_w < fw / 2.0 || fh - strip_h < fh / 2.0 {
         warnings.push("the frame is too small to keep its graticule's labels off the map's edges: they may cover them".into());
+    }
+    if spelled_out.get() {
+        warnings.push("a text with {map} is wider than its box with the map's name in it: the name is written out there, and a rename of the map won't change it".into());
     }
     let (inner_w, inner_h) = ((fw - strip_w).max(fw / 2.0), (fh - strip_h).max(fh / 2.0));
     let (center, scale) = if whole_globe {

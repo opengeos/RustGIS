@@ -97,6 +97,9 @@ mod elevation_tiles;
 #[path = "tests/layout_files.rs"]
 mod layout_files;
 
+#[path = "tests/layout_title.rs"]
+mod layout_title;
+
 #[path = "tests/sde_connections.rs"]
 mod sde_connections;
 
