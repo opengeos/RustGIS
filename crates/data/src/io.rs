@@ -3959,6 +3959,13 @@ fn read_zip_budget(file_name: &str, bytes: &[u8], crs: Option<Crs>, budget: &mut
             read_city_member(leaf, &b, crs)
         } else if is_delimited_name(leaf) {
             read_delimited_bytes_budget(leaf, &b, &CsvOptions { crs, ..Default::default() }, budget).map(|r| vec![r])
+        } else if crate::sheets::is_sheet_name(leaf) {
+            // A workbook's first sheet, as a workbook added by itself is read.
+            let name = Path::new(leaf).file_stem().and_then(|s| s.to_str()).unwrap_or("sheet");
+            crate::sheets::read(&b, name, None, &CsvOptions { crs, ..Default::default() }).map(|r| vec![r])
+        } else if is_multi_layer_name(leaf) && !leaf.to_ascii_lowercase().ends_with(".zip") {
+            // Every layer of a KML, GPX or other file of several, as when it is added by itself.
+            read_layers(leaf, &b).map(|layers| layers.into_iter().map(|l| (l.dataset, l.report)).collect())
         } else {
             read_bytes(leaf, &b).map(|r| vec![r])
         };

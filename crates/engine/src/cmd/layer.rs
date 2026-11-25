@@ -58,7 +58,7 @@ pub fn commands() -> Vec<C> {
         C::new("layer.addEncodedPolyline", "Add Encoded Polyline", "Home › Add", add_encoded_polyline).roles(&[]).effects(crate::policy::Effects::NONE).params(
             r#"{"polyline": "encoded polyline text" | [texts] (one line each), "precision"?: 5 (Google) | 6 (OSRM, Valhalla), "name"?: text}"#,
         ),
-        C::new("layer.addDataText", "Add Data (from text)", "Home › Add", add_data_text).roles(&[]).effects(crate::policy::Effects::NONE).params(r#"{"fileName": "name.geojson|.csv|.tsv|.city.json|.gml|.dxf (CityJSON and CityGML: all their layers)", "text": string, "name"?: text, "x"?, "y"?, "wkt"?, "crs"?, "delimiter"? (as layer.addData, for delimited text; crs also for a CityJSON or CityGML model, and for a DXF), "layer"?, "paperSpace"?, "blocks"? (as layer.addData, for a DXF)}"#),
+        C::new("layer.addDataText", "Add Data (from text)", "Home › Add", add_data_text).roles(&[]).effects(crate::policy::Effects::NONE).params(r#"{"fileName": "name.geojson|.csv|.tsv|.city.json|.gml|.dxf|.kml|.gpx|.rss|.xml (LandXML, GeoRSS) (a file of several layers, such as a city model, KML or GPX: all its layers)", "text": string, "name"?: text, "x"?, "y"?, "wkt"?, "crs"?, "delimiter"? (as layer.addData, for delimited text; crs also for a CityJSON or CityGML model, and for a DXF), "layer"?, "paperSpace"?, "blocks"? (as layer.addData, for a DXF)}"#),
         C::new("layer.addSample", "Add Sample Data", "Home › Add › Add Data", add_sample).roles(&[]).effects(crate::policy::Effects::NONE).params(r#"{"name": "countries"|"cities"|"rivers"|"lakes"}"#),
         C::new("layer.remove", "Remove", "Layers", remove).roles(&[]).effects(crate::policy::Effects::NONE)
             .key("Delete")
@@ -6995,7 +6995,9 @@ pub(crate) fn add_data_text_after(s: &mut Session, p: &Value, zoom: Option<bool>
     let text = s_req(p, "text")?;
     // A city model: all its layers, in the coordinate system given or with a layer picked. A DXF
     // drawing too, which takes its coordinate system and whether its blocks are drawn from here.
+    // Every other file of several layers too (KML, GPX, GeoRSS, LandXML), as its bytes are read.
     if rustgis_data::dxf::is_dxf_name(name)
+        || rustgis_data::io::is_multi_layer_name(name)
         || rustgis_data::cityjson::is_cityjson_name(name)
         || rustgis_data::io::is_citygml(name, text.as_bytes())
         || (["crs", "layer"].iter().any(|k| ps(p, k).is_some_and(|c| !c.trim().is_empty()))
