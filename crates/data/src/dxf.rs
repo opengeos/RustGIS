@@ -1407,11 +1407,10 @@ fn emit(
             out.capped = true;
             return Ok(());
         }
-        // Every placement costs a step, drawn or not: nested arrays of empty or filtered blocks
-        // can't make the walk run on. What can't be drawn is only counted, and costs none.
-        if !lost {
-            out.steps += 1;
-        }
+        // Every placement costs a step, drawn, counted or not: nested arrays of empty, filtered or
+        // undrawable blocks can't make the walk run on (an undrawable entity is walked once per
+        // copy).
+        out.steps += 1;
         if out.steps > MAX_STEPS {
             out.overworked = true;
             return Ok(());
@@ -1942,6 +1941,23 @@ mod tests {
         let lone =
             "0 SECTION 2 ENTITIES 0 POINT 10 0 20 0 0 IMAGE 8 only_images 0 ENDSEC 0 EOF".split_whitespace().collect::<Vec<_>>().join("\n");
         assert_eq!(layers("a.dxf", lone.as_bytes()).unwrap(), ["0"]);
+    }
+
+    /// What can't be drawn still costs its walk a step on each copy, so an array of a block of
+    /// undrawable entities stops at the step limit, said, rather than running on.
+    #[test]
+    fn undrawable_entities_meet_the_step_limit() {
+        let images = "0 IMAGE ".repeat(100);
+        let text = format!(
+            "0 SECTION 2 BLOCKS 0 BLOCK 2 B {images}0 ENDBLK 0 BLOCK 2 A 0 INSERT 2 B 70 100 71 100 44 1 45 1 0 ENDBLK 0 ENDSEC \
+             0 SECTION 2 ENTITIES 0 POINT 10 0 20 0 0 INSERT 2 A 10 1 20 1 70 10 44 1 0 ENDSEC 0 EOF"
+        )
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join("\n");
+        let layers = read("a.dxf", text.as_bytes(), &Options::default()).unwrap();
+        let said = layers[0].1.messages.iter().find(|m| m.contains("place more than")).unwrap();
+        assert_eq!(said.loss, Some(crate::loss::LossCode::DroppedOverLimit));
     }
 
     /// A DXF from (code, value) pairs.
