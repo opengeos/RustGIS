@@ -1580,30 +1580,34 @@ fn a_browser_row_being_dragged_is_filled_and_its_drop_line_spans_the_list() {
     activate_world(&mut h);
     settle(&mut h);
     let t = rustgis_ui_egui::theme::Tokens::get(&h.ctx);
-    // Rects of at least this width are a row's fill or a line across the list: a name is narrower.
-    let wide = 120.0;
-    let fills = |h: &egui_kittest::Harness<'_, RustGisApp>, y: f32| {
-        drawn_shapes(h)
-            .iter()
-            .filter(|s| matches!(s, egui::Shape::Rect(r) if r.fill == t.hover && r.rect.width() >= wide && r.rect.y_range().contains(y)))
-            .count()
+    // The hover-filled rects over `y` and the accent lines across a row, as the last frame drew them.
+    // Anything under 100 pt wide is not a row's fill or a line across a list: a name is narrower.
+    let fills = |h: &egui_kittest::Harness<'_, RustGisApp>, y: f32| -> Vec<egui::Rect> {
+        let rects = drawn_shapes(h).into_iter().filter_map(|s| match s {
+            egui::Shape::Rect(r) if r.fill == t.hover && r.rect.y_range().contains(y) => Some(r.rect),
+            _ => None,
+        });
+        rects.filter(|r| r.width() >= 100.0).collect()
     };
-    let lines = |h: &egui_kittest::Harness<'_, RustGisApp>| {
-        let across = |s: &egui::Shape| match s {
-            egui::Shape::LineSegment { points, stroke } => {
-                stroke.color == t.accent && stroke.width == 2.0 && points[0].y == points[1].y && (points[0].x - points[1].x).abs() >= wide
+    let lines = |h: &egui_kittest::Harness<'_, RustGisApp>| -> Vec<(f32, f32)> {
+        let spans = drawn_shapes(h).into_iter().filter_map(|s| match s {
+            egui::Shape::LineSegment { points, stroke }
+                if stroke.color == t.accent && stroke.width == 2.0 && points[0].y == points[1].y =>
+            {
+                Some((points[0].x, points[1].x))
             }
-            _ => false,
-        };
-        drawn_shapes(h).iter().filter(|s| across(s)).count()
+            _ => None,
+        });
+        spans.filter(|(a, b)| (b - a).abs() >= 100.0).collect()
     };
     let button =
         |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
-    // `dragged` held over the upper half of `onto`'s row: `dragged` filled, one line across the list.
+    // `dragged` held over the upper half of `onto`'s row: its row is filled across the list, wider than
+    // its name, and the one line runs the row's width (2 pt in from each end, as `tab_drop` draws it).
     // Then let go (the pointer leaves) and nothing stays marked.
     let hold_and_drop = |h: &mut egui_kittest::Harness<'_, RustGisApp>, dragged: &str, onto: &str| {
         let (row, target) = (browser_row(h, dragged), browser_row(h, onto));
-        assert_eq!((fills(h, row.center().y), lines(h)), (0, 0), "nothing marked before a drag");
+        assert_eq!((fills(h, row.center().y).len(), lines(h).len()), (0, 0), "nothing marked before a drag");
         let (from, to) = (row.center(), egui::pos2(target.center().x, target.min.y + 3.0));
         h.event(egui::Event::PointerMoved(from));
         h.event(button(from, true));
@@ -1614,14 +1618,17 @@ fn a_browser_row_being_dragged_is_filled_and_its_drop_line_spans_the_list() {
         }
         h.event(egui::Event::PointerMoved(to));
         h.step();
-        assert_eq!(fills(h, row.center().y), 1, "{dragged} being dragged is filled");
-        assert_eq!(lines(h), 1, "the drop line spans the list");
+        let (filled, drawn) = (fills(h, row.center().y), lines(h));
+        assert_eq!((filled.len(), drawn.len()), (1, 1), "{dragged} being dragged is filled, with one drop line");
+        let (filled, (from_x, to_x)) = (filled[0], drawn[0]);
+        assert!(filled.width() > row.width() + 60.0, "the fill spans the list, not just the name of {dragged}");
+        assert!((from_x - (filled.min.x + 2.0)).abs() < 1.0 && (to_x - (filled.max.x - 2.0)).abs() < 1.0, "the line runs the row's width");
         h.event(button(to, false));
         settle(h);
         h.event(egui::Event::PointerMoved(egui::pos2(5.0, 5.0)));
         settle(h);
         let moved = browser_row(h, dragged);
-        assert_eq!((fills(h, moved.center().y), lines(h)), (0, 0), "nothing marked once let go");
+        assert_eq!((fills(h, moved.center().y).len(), lines(h).len()), (0, 0), "nothing marked once let go");
     };
     hold_and_drop(&mut h, "M3", "World");
     assert_eq!(map_names(&h), ["M3", "World", "M2"]);
