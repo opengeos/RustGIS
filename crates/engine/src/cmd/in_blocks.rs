@@ -66,11 +66,11 @@ pub(crate) fn chain_halo(steps: &[Value]) -> Option<u32> {
 }
 
 /// Whether command `id` with `params` works in blocks over a large file, and makes one band:
-/// Indices, and Raster Functions and the Function Editor whose functions do ([`function_halo`],
-/// [`chain_halo`]).
+/// Indices, Classification Tools, and Raster Functions and the Function Editor whose functions do
+/// ([`function_halo`], [`chain_halo`]).
 fn in_blocks(id: &str, params: &Value) -> bool {
     match id {
-        "raster.index" => true,
+        "raster.index" | "raster.classifySupervised" => true,
         "raster.function" => params.get("function").and_then(Value::as_str).and_then(function_halo).is_some(),
         "raster.functionChain" => params.get("steps").and_then(Value::as_array).is_some_and(|s| !s.is_empty() && chain_halo(s).is_some()),
         _ => false,
@@ -263,6 +263,12 @@ impl Reading {
         self.input.held()
     }
 
+    /// The file's full grid, as a read of all of it places it: from a part of one pixel.
+    pub(crate) fn grid(&self) -> Result<rustgis_data::raster::GeoTransform, String> {
+        let source = Source { input: &self.input, layer: &self.layer, path: &self.path, full: self.full, nodata: Default::default() };
+        Ok(source.block((0, 1), (0, 1))?.0.grid.0)
+    }
+
     /// Reads the blocks of columns `cols` and rows `rows` (half-open, at the full size), each of
     /// `size` columns and rows from their start, in turn, and gives each to `each` with its
     /// columns and rows: at the file's full size, holding all of them, counted as the run's
@@ -333,6 +339,11 @@ fn folder(s: &Session) -> Option<PathBuf> {
 }
 
 impl Blocks {
+    /// The input layer's file read a block at a time ([`Reading::each_block`]), as by this plan.
+    pub(crate) fn reading(&self) -> Reading {
+        Reading { input: self.input.clone(), layer: self.layer.clone(), path: self.path.clone(), full: self.full }
+    }
+
     /// The plan reading `halo` cells around each block with it, for work over a cell's
     /// neighbours: a block's cells are made from the cells around them as from the whole raster's.
     pub(crate) fn with_halo(mut self, halo: u32) -> Blocks {
