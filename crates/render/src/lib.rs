@@ -4103,6 +4103,10 @@ fn upright_markers_with(map: &mut Map, view: &View, margin: f64, env: &Env) -> V
                 // then tests the screen.) Its reach there, in the ground's units at `c`.
                 if !cull.contains(*c) {
                     let r = (reach * k.clamp(UPRIGHT_SCALE.0, UPRIGHT_SCALE.1) + 4.0) * cam.res / k;
+                    // Down the view a ground unit is only `cos(pitch)` of a screen pixel, so it reaches
+                    // further in the ground (as far as any way the view is turned: the square holds both).
+                    let lean = cam.pitch.to_radians().cos().abs().max(0.1);
+                    let r = r / lean;
                     if !Extent::new(c.x - r, c.y - r, c.x + r, c.y + r).intersects(&cull) {
                         continue;
                     }
@@ -11932,7 +11936,7 @@ mod tests {
     #[test]
     fn an_upright_marker_is_kept_wherever_its_box_meets_the_view_at_steep_pitches() {
         // A tall image (10 pt wide, ten times as tall) and a circle (60 pt across), each with the
-        // half its box reaches from its point, in units of its drawn size.
+        // half its box reaches from its point, in px at those sizes.
         let markers = [(Marker::Picture(solid_png(4, 40, [255, 0, 0, 255])), 10.0, 50.0), (Marker::Circle, 60.0, 30.0)];
         for (marker, size, half) in markers {
             for pitch in [60.0, 75.0, 82.0] {
