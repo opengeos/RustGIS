@@ -3880,7 +3880,7 @@ fn overlays(app: &mut RustGisApp, ui: &mut Ui, p: &egui::Painter, rect: Rect, t:
             .then(|| outline.as_deref())
             .flatten()
             .map(|cs| {
-                cs.iter().fold(rustgis_geom::Extent::EMPTY, |mut e, c| {
+                cs.iter().fold(Extent::EMPTY, |mut e, c| {
                     e.expand(*c);
                     e
                 })

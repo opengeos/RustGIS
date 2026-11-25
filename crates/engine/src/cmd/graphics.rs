@@ -176,9 +176,15 @@ impl Plane {
             Plane::View { flat, cos, sin } => {
                 let m = Coord::new(v.x * cos + v.y * sin, v.y * cos - v.x * sin);
                 let c = flat.inverse(m)?;
+                // Web Mercator reads every place back where it is (past 85° it is clamped as it
+                // is drawn).
+                if matches!(flat, rustgis_map::projection::Flat::Mercator) {
+                    return Some(c);
+                }
                 let again = flat.forward_checked(c)?;
-                // A millionth of its size: what a round trip moves a place, with room to spare.
-                let reach = 1e-6 * m.x.abs().max(m.y.abs()).max(1.0);
+                // A millionth of its size, and at least a millimetre: what a round trip moves a
+                // place, with room to spare.
+                let reach = (1e-6 * m.x.abs().max(m.y.abs())).max(1e-3);
                 ((again.x - m.x).abs() <= reach && (again.y - m.y).abs() <= reach).then_some(c)
             }
         }

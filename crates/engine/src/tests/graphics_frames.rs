@@ -175,3 +175,15 @@ fn a_ring_point_past_the_maps_projection_is_refused() {
     assert!(plane.back_for_tests(Coord::new(2_600_000.0, 1_200_000.0)).is_some());
     assert!(plane.back_for_tests(Coord::new(9e7, 9e7)).is_none());
 }
+
+#[test]
+fn a_circle_past_85_degrees_on_a_web_mercator_map_is_drawn_and_one_round_the_pole_on_a_polar_map() {
+    // The default map: a circle reaching past 85° is added, clamped as the map draws it.
+    let mut s = Session::new(Project::default());
+    s.run("graphics.add", &json!({"shape": "circle", "points": [[0.0, 84.0], [0.0, 84.9]], "frame": "view"})).unwrap();
+    // A polar map: a circle round the pole, its ring through 90° itself.
+    let mut s = Session::new(Project::default());
+    s.run("map.projection", &json!({"type": "EPSG:3413"})).unwrap();
+    let r = s.run("graphics.add", &json!({"shape": "circle", "points": [[-45.0, 89.0], [-45.0, 90.0]], "frame": "view"})).unwrap();
+    assert!(ring_of(&s, &r).iter().all(|c| c.y >= 87.9), "{:?}", ring_of(&s, &r));
+}
