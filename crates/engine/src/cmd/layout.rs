@@ -1360,13 +1360,15 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
     };
     // `{map}` is one word as wide as the map's name, which the text's lines can't break without
     // breaking the token. Where the name is wider than the line it is written out instead and wraps
-    // as text, which doesn't follow a rename, and is said.
-    let spelled_out = std::cell::Cell::new(false);
+    // as text, which doesn't follow a rename. The texts written out are kept, and said at the end
+    // if the layout kept one of them: a pass whose lines are dropped for a later one's says nothing.
+    let spelled_out = std::cell::RefCell::new(Vec::<String>::new());
     let settle = |t: &str, w: f64, name_mm: f64| {
         let t = fill(t);
         if t.contains("{map}") && name_mm > w.max(1.0) {
-            spelled_out.set(true);
-            t.replace("{map}", &name_text)
+            let t = t.replace("{map}", &name_text);
+            spelled_out.borrow_mut().push(t.clone());
+            t
         } else {
             t
         }
@@ -1932,9 +1934,6 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
     let strip_h = if edges.top || edges.bottom { 2.0 * room_end } else { 0.0 };
     if fw - strip_w < fw / 2.0 || fh - strip_h < fh / 2.0 {
         warnings.push("the frame is too small to keep its graticule's labels off the map's edges: they may cover them".into());
-    }
-    if spelled_out.get() {
-        warnings.push("a text with {map} is wider than its box with the map's name in it: the name is written out there, and a rename of the map won't change it".into());
     }
     let (inner_w, inner_h) = ((fw - strip_w).max(fw / 2.0), (fh - strip_h).max(fh / 2.0));
     let (center, scale) = if whole_globe {
@@ -3042,6 +3041,20 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
             Ok(()) => coverage_written = json!(path),
             Err(why) => warnings.push(format!("the coverage image isn't written: {why}")),
         }
+    }
+    // A text written out with the map's name (above) is said if the layout kept it, once every
+    // text is placed (the footer's alignment can write one out last). Compared without their line
+    // breaks, as wrapping adds them.
+    let squeeze = |t: &str| t.chars().filter(|c| !c.is_whitespace()).collect::<String>();
+    let written: Vec<String> = spelled_out.borrow().iter().map(|t| squeeze(t)).filter(|t| !t.is_empty()).collect();
+    if l.elements.iter().any(|e| match &e.kind {
+        ElementKind::Text { text, .. } => {
+            let kept = squeeze(text);
+            written.iter().any(|w| kept.contains(w.as_str()))
+        }
+        _ => false,
+    }) {
+        warnings.push("a text with {map} is wider than its box with the map's name in it: the name is written out there, and a rename of the map won't change it".into());
     }
     // Every element by name and id, for `layout.update`.
     let elements = element_list(&l);
