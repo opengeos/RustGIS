@@ -5586,7 +5586,7 @@ fn text_losses_written(ds: &Dataset, ext: &str, name_field: Option<usize>) -> Re
     let to = if matches!(ext, "kml" | "kmz" | "gpx") { Some(ds.lonlat_conversion().map_err(DataError::of_conversion)?) } else { None };
     let Some(to) = to.filter(|to| !to.is_identity()) else { return Ok(of(&ds.features)) };
     let mut losses = TextLosses::default();
-    for chunk in ds.features.chunks(4096) {
+    for chunk in ds.features.chunks(8192) {
         let mut chunk = chunk.to_vec();
         project_each_leaving_out(&mut chunk, &to, false)?;
         losses += of(&chunk);
