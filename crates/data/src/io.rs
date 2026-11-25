@@ -6523,14 +6523,14 @@ mod tests {
         let (back, _) = read_path(&dir.path().join("merc.shp"))?;
         assert_eq!(coords(&back.features[0].geometry), 4);
         assert_eq!(
-            shapefile_geometry_notes(&merc, "merc.shp", Crs::WebMercator),
+            shapefile_geometry_notes(&merc, "merc.shp", Crs::WebMercator).iter().map(crate::loss::Note::as_str).collect::<Vec<_>>(),
             ["merc.shp: 1 line part was left out of the Shapefile, with fewer than 2 drawable vertices"]
         );
         assert_eq!(write_path(&merc, &dir.path().join("merc-4326.shp"))?, 0);
         let (back, _) = read_path(&dir.path().join("merc-4326.shp"))?;
         assert_eq!(coords(&back.features[0].geometry), 2);
         assert_eq!(
-            shapefile_geometry_notes(&merc, "merc-4326.shp", Crs::LonLat),
+            shapefile_geometry_notes(&merc, "merc-4326.shp", Crs::LonLat).iter().map(crate::loss::Note::as_str).collect::<Vec<_>>(),
             [
                 "merc-4326.shp: 1 vertex with a missing or infinite coordinate was left out of the Shapefile",
                 "merc-4326.shp: 2 line parts were left out of the Shapefile, with fewer than 2 drawable vertices",
