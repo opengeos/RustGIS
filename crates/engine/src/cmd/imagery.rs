@@ -1966,10 +1966,8 @@ fn resample_whole(r: &super::workflows::Input, factor: u32, out: String) -> Resu
     // Each output pixel is the mean of the valid pixels it covers; one covering none
     // takes the result's no-data value (the raster's, else the one cells with no value
     // take).
-    let empty = resample_empty(&r);
-    let bands = r
-        .bands
-        .iter()
+    let (empty, alpha) = (resample_empty(&r), alpha_band(&r));
+    let bands = (0..r.band_count())
         .map(|b| {
             // A cell reads its k × k block; the cells are counted and cancellable.
             let cost = (k * k) as usize;
@@ -1980,20 +1978,11 @@ fn resample_whole(r: &super::workflows::Input, factor: u32, out: String) -> Resu
                 || (),
                 |_, i| {
                     let (row, col) = ((i / w as usize) as u32, (i % w as usize) as u32);
-                    let (mut sum, mut n) = (0.0f64, 0u32);
-                    for dy in 0..k {
-                        for dx in 0..k {
-                            let (x, y) = (col * k + dx, row * k + dy);
-                            if x >= r.width || y >= r.height {
-                                continue;
-                            }
-                            if let Some(v) = b.data.get((y * r.width + x) as usize).copied().filter(|v| r.is_valid(*v)) {
-                                sum += v as f64;
-                                n += 1;
-                            }
-                        }
-                    }
-                    if n > 0 { (sum / n as f64) as f32 } else { empty }
+                    let cells = (0..k)
+                        .flat_map(|dy| (0..k).map(move |dx| (col * k + dx, row * k + dy)))
+                        .filter(|(x, y)| *x < r.width && *y < r.height)
+                        .map(|(x, y)| (y * r.width + x) as usize);
+                    resample_mean(&r, b, alpha, cells, empty)
                 },
             )
         })
@@ -2180,13 +2169,12 @@ fn resample_in_blocks(
 #[cfg(not(target_arch = "wasm32"))]
 fn block_means(read: &rustgis_data::raster::PartRead, k: u32, cols: (u32, u32), rows: (u32, u32)) -> Result<Vec<Vec<f32>>, String> {
     let r = &read.raster;
-    let empty = resample_empty(r);
+    let (empty, alpha) = (resample_empty(r), alpha_band(r));
     let (ax, ay) = read.at;
     let (ox0, ox1, oy0, oy1) = (cols.0 / k, cols.1 / k, rows.0 / k, rows.1 / k);
     let ow = (ox1 - ox0) as usize;
-    r.bands
-        .iter()
-        .map(|band| {
+    (0..r.band_count())
+        .map(|b| {
             rasterops::per_index(
                 ow * (oy1 - oy0) as usize,
                 ow,
@@ -2194,21 +2182,51 @@ fn block_means(read: &rustgis_data::raster::PartRead, k: u32, cols: (u32, u32), 
                 || (),
                 |_, i| {
                     let (ox, oy) = (ox0 + (i % ow.max(1)) as u32, oy0 + (i / ow.max(1)) as u32);
-                    let (mut sum, mut n) = (0.0f64, 0u32);
-                    for dy in 0..k {
-                        for dx in 0..k {
-                            let (x, y) = (ox * k + dx - ax, oy * k + dy - ay);
-                            if let Some(v) = band.data.get((y * r.width + x) as usize).copied().filter(|v| r.is_valid(*v)) {
-                                sum += f64::from(v);
-                                n += 1;
-                            }
-                        }
-                    }
-                    if n > 0 { (sum / f64::from(n)) as f32 } else { empty }
+                    let cells = (0..k).flat_map(|dy| (0..k).map(move |dx| ((oy * k + dy - ay) * r.width + (ox * k + dx - ax)) as usize));
+                    resample_mean(r, b, alpha, cells, empty)
                 },
             )
         })
         .collect()
+}
+
+/// The band of `r` that says which of its pixels have a value: an RGB raster's fourth when it
+/// says it is alpha, grey and alpha's second.
+fn alpha_band(r: &Raster) -> Option<usize> {
+    match r.color {
+        ColorHint::Rgb { alpha: true } if r.band_count() >= 4 => Some(3),
+        ColorHint::GrayAlpha if r.band_count() >= 2 => Some(1),
+        _ => None,
+    }
+}
+
+/// One resampled pixel of band `b` of `r`, from its pixels at `cells` (indexes into a band's
+/// values): the mean of those with a value, `empty` for none. With `alpha`, which says which
+/// pixels have a value, alpha's own mean counts a pixel with none as see-through (0), and the
+/// colours before it are weighted by alpha, so a see-through pixel counts for nothing and a black
+/// one is black (the plain mean where all are see-through).
+fn resample_mean(r: &Raster, b: usize, alpha: Option<usize>, cells: impl Iterator<Item = usize> + Clone, empty: f32) -> f32 {
+    let value = |band: usize, i: usize| r.bands.get(band).and_then(|x| x.data.get(i)).copied();
+    let mean = |(sum, n): (f64, u32)| if n > 0 { (sum / f64::from(n)) as f32 } else { empty };
+    let plain =
+        || mean(cells.clone().filter_map(|i| value(b, i).filter(|v| r.is_valid(*v))).fold((0.0, 0), |(s, n), v| (s + f64::from(v), n + 1)));
+    match alpha {
+        Some(a) if b == a => mean(
+            cells
+                .clone()
+                .filter_map(|i| value(b, i).map(|v| if r.is_valid(v) { v } else { 0.0 }))
+                .fold((0.0, 0), |(s, n), v| (s + f64::from(v), n + 1)),
+        ),
+        Some(a) if b < a => {
+            let (sum, weight) =
+                cells.clone().fold((0.0f64, 0.0f64), |(s, w), i| match (value(b, i), value(a, i).filter(|v| r.is_valid(*v))) {
+                    (Some(v), Some(al)) if v.is_finite() && al > 0.0 => (s + f64::from(v) * f64::from(al), w + f64::from(al)),
+                    _ => (s, w),
+                });
+            if weight > 0.0 { (sum / weight) as f32 } else { plain() }
+        }
+        _ => plain(),
+    }
 }
 
 /// The value a resampled pixel covering no pixel of `r` with a value takes: the result's no-data
@@ -3533,4 +3551,28 @@ fn a_written_resample_with_alpha_says_its_no_data_value_goes() {
     assert!(alpha_nodata_note(&image(2, ColorHint::GrayAlpha, Some(5.0)), "out").is_some());
     assert!(alpha_nodata_note(&image(4, ColorHint::Rgb { alpha: true }, None), "out").is_none());
     assert!(alpha_nodata_note(&image(3, ColorHint::Rgb { alpha: false }, Some(0.0)), "out").is_none());
+}
+
+/// A resampled pixel of an image with alpha and a no-data value: alpha's mean counts a
+/// see-through pixel as 0, so half see-through stays half; the colours are weighted by alpha, a
+/// see-through one counting for nothing and a black one black; without alpha, the mean of the
+/// pixels with a value, as before.
+#[test]
+fn a_resampled_pixel_with_alpha_is_weighted_by_it() {
+    let gt = GeoTransform { origin_x: 10.0, origin_y: 46.0, pixel_width: 0.001, pixel_height: -0.001 };
+    let red = vec![200.0, 200.0, 0.0, 0.0];
+    let grey = vec![0.0, 100.0, 7.0, 7.0];
+    let alpha = vec![255.0, 255.0, 0.0, 0.0];
+    let r =
+        Raster::new("rgba", 4, 1, vec![red.clone(), grey, red, alpha], gt, Crs::LonLat, Some(0.0), ColorHint::Rgb { alpha: true }, "UInt8")
+            .unwrap();
+    let a = alpha_band(&r);
+    assert_eq!(a, Some(3));
+    let all = || 0..4usize;
+    assert_eq!(resample_mean(&r, 3, a, all(), -1.0), 127.5, "half see-through");
+    assert_eq!(resample_mean(&r, 0, a, all(), -1.0), 200.0, "see-through black counts for nothing");
+    assert_eq!(resample_mean(&r, 1, a, all(), -1.0), 50.0, "an opaque black is black");
+    assert_eq!(resample_mean(&r, 1, a, 2..4, -1.0), 7.0, "all see-through: the plain mean");
+    let grey = Raster::new("grey", 4, 1, vec![vec![0.0, 4.0, 8.0, 0.0]], gt, Crs::LonLat, Some(0.0), ColorHint::Gray, "UInt8").unwrap();
+    assert_eq!(resample_mean(&grey, 0, alpha_band(&grey), all(), -1.0), 6.0, "no alpha: no-data left out");
 }
