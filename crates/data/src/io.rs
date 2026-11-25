@@ -751,27 +751,37 @@ pub(crate) fn project_each_leaving_out(
         return project_pieces_leaving_out(features, to, count, threads);
     }
     let _ = threads;
-    project_one_by_one(features, to, count)
+    project_one_by_one(features, to, count, false).map(|(_, unplaced, placed)| (unplaced, placed))
 }
 
 /// [`project_each_leaving_out`] on this thread, looking at Cancel before each feature and
-/// counting it when `count` is set.
-fn project_one_by_one(
+/// counting it when `count` is set; with `until_placed`, only up to and including the first
+/// feature with a place converted (one [`Reprojection::point`] gives), or all of them when none
+/// has one. Returns how many features it converted, with what
+/// [`project_each_leaving_out`] returns for them.
+///
+/// [`Reprojection::point`]: crate::raster::Reprojection::point
+pub(crate) fn project_one_by_one(
     features: &mut [crate::Feature],
     to: &crate::raster::Reprojection,
     count: bool,
-) -> Result<(usize, rustgis_geom::Extent)> {
+    until_placed: bool,
+) -> Result<(usize, usize, rustgis_geom::Extent)> {
     let mut unplaced = 0usize;
     let mut placed = rustgis_geom::Extent::EMPTY;
-    for f in features {
+    for (k, f) in features.iter_mut().enumerate() {
         if count {
             crate::progress::step(1)?;
         } else {
             crate::progress::check()?;
         }
         unplaced += usize::from(leave_out_unplaced(f, to, &mut placed));
+        // `point` gives only finite places, each of which the box takes in.
+        if until_placed && !placed.is_empty() {
+            return Ok((k + 1, unplaced, placed));
+        }
     }
-    Ok((unplaced, placed))
+    Ok((features.len(), unplaced, placed))
 }
 
 /// The features from which [`project_each_leaving_out`] converts on several threads: about a
@@ -794,11 +804,12 @@ fn conversion_threads(n: usize) -> usize {
 /// The boxes of the pieces are joined in their order. A thread the OS refuses leaves its share to
 /// the others; one that panics passes its panic on.
 ///
-/// The features up to the first with a place go first, on this thread, so the conversion is asked
-/// first for the place one thread asks first: its advisory missing-grid check looks only at the
-/// first place it converts (terrio's `note_missing_grid`), and for a custom system with no EPSG
-/// code nothing else asks earlier, so the notice of a missing grid would otherwise depend on which
-/// thread got there first.
+/// The features up to the first with a place converted go first, in order on this thread, so the
+/// conversion meets first the place one thread meets first: its advisory missing-grid check looks
+/// only at the first place it converts (terrio's `note_missing_grid`), and for a custom system with
+/// no EPSG code nothing else asks earlier, so the notice of a missing grid would otherwise depend
+/// on which thread got there first. Features with no geometry, or only places that are missing or
+/// can't be converted, never reach that check, so they don't end this part.
 #[cfg(not(target_arch = "wasm32"))]
 fn project_pieces_leaving_out(
     features: &mut [crate::Feature],
@@ -808,18 +819,8 @@ fn project_pieces_leaving_out(
 ) -> Result<(usize, rustgis_geom::Extent)> {
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, Ordering};
-    let first = features
-        .iter()
-        .position(|f| {
-            f.geometry.as_ref().is_some_and(|g| {
-                let mut any = false;
-                g.for_each_coord(|_| any = true);
-                any
-            })
-        })
-        .map_or(features.len(), |k| k + 1);
-    let (head, features) = features.split_at_mut(first);
-    let (head_unplaced, head_placed) = project_one_by_one(head, to, count)?;
+    let (first, head_unplaced, head_placed) = project_one_by_one(features, to, count, true)?;
+    let features = features.get_mut(first..).unwrap_or_default();
     let pieces = features.len().div_ceil(PIECE_FEATURES);
     let next = Mutex::new(features.chunks_mut(PIECE_FEATURES).enumerate());
     let done: Mutex<Vec<(usize, rustgis_geom::Extent)>> = Mutex::new(vec![(0, rustgis_geom::Extent::EMPTY); pieces]);

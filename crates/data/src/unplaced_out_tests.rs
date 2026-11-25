@@ -284,3 +284,41 @@ fn an_export_takes_its_box_from_its_one_conversion_on_any_number_of_threads() {
         assert!(matches!(e, crate::DataError::Cancelled), "cancelled after {after}: {e}");
     }
 }
+
+/// The features a threaded export converts first on its own thread run up to the first with a
+/// place converted, past those that never reach the conversion's first-place check: an empty
+/// geometry, none, one only missing places and one only places that can't be converted (#2032).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_threaded_export_converts_first_up_to_the_first_place_it_can_convert() {
+    let mut ds = Dataset::new("lines", crate::GeometryType::Polyline, vec![Field::new("name", FieldType::Text)]);
+    ds.held_in = utm31();
+    ds.crs = Some(utm31());
+    ds.push(Some(Geometry::Line(vec![])), vec![Value::Text("empty".into())]);
+    ds.push(None, vec![Value::Text("none".into())]);
+    ds.push(Some(Geometry::Line(vec![vec![Coord::new(f64::NAN, f64::NAN)]])), vec![Value::Text("missing".into())]);
+    ds.push(Some(Geometry::Line(vec![vec![Coord::new(1e9, 4e6)]])), vec![Value::Text("far".into())]);
+    for i in 0..10_000u32 {
+        let x = 300_000.0 + f64::from(i % 997) * 400.0;
+        let part = vec![Coord::new(x, 4_000_000.0), Coord::new(x + 50.0, 4_000_075.0)];
+        ds.push(Some(Geometry::Line(vec![part])), vec![Value::Text(i.to_string())]);
+    }
+    let to = ds.lonlat_conversion().unwrap();
+    let mut head = ds.features.to_vec();
+    let (first, unplaced, placed) = crate::io::project_one_by_one(&mut head, &to, false, true).unwrap();
+    assert_eq!((first, unplaced), (5, 1), "up to and including the first feature with a place converted");
+    assert!(!placed.is_empty());
+    // With nothing to convert, all of them, and no box.
+    let mut none = ds.features.to_vec();
+    none.truncate(4);
+    let (first, _, placed) = crate::io::project_one_by_one(&mut none, &to, false, true).unwrap();
+    assert_eq!(first, 4);
+    assert!(placed.is_empty());
+    // On several threads, as on one.
+    let mut threaded = ds.features.to_vec();
+    let got = crate::io::project_each_leaving_out(&mut threaded, &to, false).unwrap();
+    let mut one = ds.features.to_vec();
+    let (_, n, e) = crate::io::project_one_by_one(&mut one, &to, false, false).unwrap();
+    assert_eq!(got, (n, e));
+    assert_eq!(format!("{threaded:?}"), format!("{one:?}"));
+}
