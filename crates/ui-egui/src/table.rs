@@ -1708,4 +1708,20 @@ mod tests {
             assert_eq!(app.table.stats.is_some(), !selected, "only the selected-row window closes");
         }
     }
+
+    /// Replacing the project via `open_peer_text` prunes stale column views from the previous project.
+    #[test]
+    fn peer_project_replacement_prunes_stale_table_views() {
+        let mut app = RustGisApp::with_sample();
+        prune_views(&mut app);
+        let layer = app.session.map().layers.iter().find(|l| l.name == "Countries").unwrap();
+        let mut v = ColumnView::default();
+        v.hide(&layer.dataset.fields, 0);
+        app.table.views.insert(ViewKey::Layer(layer.instance_id()), v);
+        assert_eq!(app.table.views.len(), 1);
+
+        let (text, _) = rustgis_engine::Project::default().saved_text(None).unwrap();
+        app.open_peer_text(&text).unwrap();
+        assert!(app.table.views.is_empty(), "open_peer_text must prune stale table views");
+    }
 }

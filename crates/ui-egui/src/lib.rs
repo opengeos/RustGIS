@@ -2617,7 +2617,7 @@ impl RustGisApp {
             if cmd == "ramp.add" {
                 p["file"] = json!(name);
             }
-            let r = self.run(cmd, p);
+            let r = self.run_by_user(cmd, p);
             self.map.invalidate();
             // A model file opens in ModelBuilder.
             if cmd == "model.import"
@@ -2633,7 +2633,7 @@ impl RustGisApp {
         }
         if lower.ends_with(".rgispkg") {
             let text = rustgis_engine::cmd::items::package_text(bytes)?;
-            let r = self.run("project.openText", json!({"text": text, "package": true}));
+            let r = self.run_by_user("project.openText", json!({"text": text, "package": true}));
             self.map.invalidate();
             return r;
         }
@@ -2689,10 +2689,7 @@ impl RustGisApp {
             return Err(e);
         };
         if rustgis_engine::project::is_project_file(name) {
-            let r = self.run("project.openText", json!({"text": text, "fileName": name}));
-            if r.is_ok() {
-                self.ui.web_file = Some(format!("{}.rgis", self.session.project.name));
-            }
+            let r = self.run_by_user("project.openText", json!({"text": text, "fileName": name}));
             self.map.invalidate();
             r
         } else {
@@ -3265,27 +3262,57 @@ impl RustGisApp {
     pub fn open_peer_text(&mut self, text: &str) -> Result<(), String> {
         let report = self.session.open_peer_text(rustgis_engine::Peer::Embedder, text)?;
         assistantpane::peer_replaced(self);
-        self.ui.web_file = None;
-        self.map.deleting = None;
-        // A spectral profile's points were read on the old project's rasters.
-        self.workflow.spectral.clear();
-        crate::analysispane::forget_similar(&mut self.workflow);
-        (self.workflow.result, self.workflow.error) = (None, None);
-        self.retire_cog_probes();
-        if let Some(steps) = self.ws.recording.take() {
-            self.session.notify(
-                crate::i18n::fmt(
-                    "Recording stopped: another project opened, and its {n} steps were for the previous one.",
-                    &[("n", &steps.len().to_string())],
-                ),
-                true,
-            );
-        }
+        self.reset_replaced_project();
+        self.sync_after_session_change();
         layoutview::follow_project(self);
         for notice in report.notices() {
             self.session.notify(notice, false);
         }
         Ok(())
+    }
+
+    /// Reconciles UI handles (active edit drags, annotations, pending symbology pick, table views)
+    /// with the current session after a command or peer project replacement.
+    fn sync_after_session_change(&mut self) {
+        // Nested commands (including scripts) can replace rows too; never retarget a chosen
+        // vertex or held gesture to the replacement feature at the same row.
+        crate::vertexedit::cancel_stale_drag(self);
+        annotation::sync(self);
+        crate::boxedit::cancel_stale(self);
+        crate::circleedit::cancel_stale(self);
+        // Commands can replace the project, switch maps or change the renderer while the pane
+        // is closed. A field picked for the old context must not overwrite the new renderer.
+        if self.ui.symbology_pending.as_ref().is_some_and(|pending| !pending.is_current(&self.session)) {
+            self.ui.symbology_pending = None;
+        }
+        // Fields and layers can go while the table is closed: its column views follow them.
+        table::prune_views(self);
+    }
+
+    /// Clears UI state bound to the previous project after either ordinary or peer replacement.
+    fn reset_replaced_project(&mut self) {
+        self.ui.web_file = None;
+        // A deletion asked for in the old project never reaches a namesake in the new one.
+        self.map.deleting = None;
+        self.map.cancel_sketch();
+        pluginpanel::cancel_pick(self);
+        // Nor are a spectral profile's points read on a namesake raster of the new one.
+        self.workflow.spectral.clear();
+        crate::analysispane::forget_similar(&mut self.workflow);
+        (self.workflow.result, self.workflow.error) = (None, None);
+        self.ws.task_edit = None;
+        self.ws.task_step = 0;
+        // A recording's steps name the old project's layers: it ends here, and says so.
+        if let Some(steps) = self.ws.recording.take() {
+            let n = steps.len().to_string();
+            let text =
+                crate::i18n::fmt("Recording stopped: another project opened, and its {n} steps were for the previous one.", &[("n", &n)]);
+            self.session.notify(text, true);
+        }
+        // A probe still under way is for an address added to the old project: dropped, so
+        // its layer never lands in the new one, and said, as a download landing late is. A plugin
+        // command waiting for it went with the old project's waits.
+        self.retire_cog_probes();
     }
 
     /// Reports pending header reads retired by either ordinary or peer project replacement.
@@ -3505,12 +3532,6 @@ impl RustGisApp {
             // Esc chooses Explore: a plugin's pick stops waiting for the map, as for any tool.
             pluginpanel::cancel_pick(self);
         }
-        // Nested commands (including scripts) can replace rows too; never retarget a chosen
-        // vertex or held gesture to the replacement feature at the same row.
-        crate::vertexedit::cancel_stale_drag(self);
-        annotation::sync(self);
-        crate::boxedit::cancel_stale(self);
-        crate::circleedit::cancel_stale(self);
         if let Err(e) = &r {
             self.command_failed(id, e, notice_mark);
         }
@@ -3525,37 +3546,18 @@ impl RustGisApp {
         {
             self.keep_refused(&e);
         }
-        // Commands can replace the project, switch maps or change the renderer while the pane
-        // is closed. A field picked for the old context must not overwrite the new renderer.
-        if self.ui.symbology_pending.as_ref().is_some_and(|pending| !pending.is_current(&self.session)) {
-            self.ui.symbology_pending = None;
-        }
         // A project replacing this one hasn't been saved in the browser yet (opening a file
-        // names it again).
+        // names it again, including when deferred through the save prompt).
         if r.is_ok() && matches!(id, "project.new" | "project.sample" | "project.open" | "project.openText" | "project.fromTemplate") {
-            self.ui.web_file = None;
-            // A deletion asked for in the old project never reaches a namesake in the new one.
-            self.map.deleting = None;
-            // Nor are a spectral profile's points read on a namesake raster of the new one.
-            self.workflow.spectral.clear();
-            crate::analysispane::forget_similar(&mut self.workflow);
-            (self.workflow.result, self.workflow.error) = (None, None);
-            // A recording's steps name the old project's layers: it ends here, and says so.
-            if let Some(steps) = self.ws.recording.take() {
-                let n = steps.len().to_string();
-                let text = crate::i18n::fmt(
-                    "Recording stopped: another project opened, and its {n} steps were for the previous one.",
-                    &[("n", &n)],
-                );
-                self.session.notify(text, true);
+            self.reset_replaced_project();
+            if id == "project.openText"
+                && params.get("fileName").and_then(Value::as_str).is_some_and(|name| !name.is_empty())
+                && params.get("package").and_then(Value::as_bool) != Some(true)
+            {
+                self.ui.web_file = Some(format!("{}.rgis", self.session.project.name));
             }
-            // A probe still under way is for an address added to the old project: dropped, so
-            // its layer never lands in the new one, and said, as a download landing late is. A plugin
-            // command waiting for it went with the old project's waits.
-            self.retire_cog_probes();
         }
-        // Fields and layers can go while the table is closed: its column views follow them.
-        table::prune_views(self);
+        self.sync_after_session_change();
         // Undo and redo can move vertices: an index chosen before may now name another vertex.
         // A step moved or deleted, from the pane, Command Search, the assistant or a script: the
         // step being edited (and the current one) follow it, so Save writes where it was typed.
@@ -5630,15 +5632,21 @@ impl RustGisApp {
                 }
                 dbf_notes.extend(rustgis_engine::cmd::share::read_notes(&name, &l.name, &lost));
                 // CSV holds a point a row, GPX a name for each feature and no areas; reading text back, CSV reads blanks as null and KML and GPX trim it.
-                dbf_notes.extend(io::export_losses_notes(&ds, &ext, io::name_field(&ds), &name).map_err(|e| e.to_string())?);
+                dbf_notes.extend(io::export_losses_notes_in(&ds, &ext, io::name_field(&ds), &name, crs).map_err(|e| e.to_string())?);
                 drop(ds);
-                if let Some(note) = io::left_out_note(&name, &ext, left_out) {
-                    self.session.notify(note, false);
-                }
-                if ext == "zip" && rustgis_engine::data::raster::wkt::to_wkt(crs).is_none() {
-                    self.session.notify(format!("{name}: no .prj written, as {} has no WKT form", crs.label()), false);
-                }
                 if self.download(&name, bytes) {
+                    if let Some(note) = io::left_out_note(&name, &ext, left_out) {
+                        self.session.notify(note, false);
+                    }
+                    if ext == "zip" && rustgis_engine::data::raster::wkt::to_wkt(crs).is_none() {
+                        self.session.notify(
+                            crate::i18n::fmt(
+                                "{name}: no .prj written, as {crs} has no WKT form",
+                                &[("name", &name), ("crs", &crs.label())],
+                            ),
+                            false,
+                        );
+                    }
                     rustgis_engine::cmd::share::notify_export_query(&mut self.session, &name, &layer_name, &query_report);
                     for note in notes
                         .into_iter()
@@ -9872,6 +9880,53 @@ mod download_service_tests {
         assert!(!app.session.notices.iter().any(|n| n.text.contains("254 bytes") || n.text.contains("left empty")));
     }
 
+    /// Browser layer export computes format-loss notes in the layer's export CRS and emits no
+    /// export notices (including left-out features and missing `.prj`) when the download fails.
+    #[test]
+    fn browser_export_uses_layer_crs_and_suppresses_notes_on_failed_download() {
+        use rustgis_engine::data::raster::Crs;
+        use rustgis_engine::data::{Dataset, Field, FieldType, Geometry, GeometryType, Value};
+        use rustgis_engine::geom::Coord;
+
+        let gnomonic = Crs::parse("+proj=gnom +lat_0=51 +lon_0=9 +datum=WGS84 +units=m +no_defs").unwrap();
+        assert!(rustgis_engine::data::raster::wkt::to_wkt(gnomonic).is_none());
+        let make_app = |accept: bool| {
+            let download: Box<dyn Fn(&str, Vec<u8>) -> Result<(), String>> =
+                if accept { Box::new(|_, _| Ok(())) } else { Box::new(|_, _| Err("download blocked".into())) };
+            let mut app = RustGisApp::with_sample().with_services(Services { download: Some(download), ..Default::default() });
+            let mut ds = Dataset::new("Partial", GeometryType::Point, vec![Field::new("name", FieldType::Text)]);
+            ds.push(Some(Geometry::Point(Coord::new(0.0, 0.0))), vec![Value::Text("ok".into())]);
+            ds.push(None, vec![Value::Text("no geom".into())]);
+            ds.crs = Some(gnomonic);
+            ds.held_in = gnomonic;
+            let id = app.session.map_mut().add_dataset(ds);
+            app.session.active_layer = Some(id);
+            app
+        };
+
+        // Accepted download emits both left-out and missing-.prj notices for the projected layer.
+        let mut app = make_app(true);
+        let mark = app.session.notice_mark();
+        app.run("ui.exportLayer", json!({"format": "shp"})).unwrap();
+        let notices = app.session.notices_since(mark);
+        assert!(notices.iter().any(|n| n.text.contains("left out")), "expected left-out notice, got: {notices:?}");
+        assert!(
+            notices.iter().any(|n| n.text.contains("no .prj written") && n.text.contains(&gnomonic.label())),
+            "expected missing-.prj notice, got: {notices:?}"
+        );
+
+        // Failed download must not emit left-out feature notices or missing-.prj notices.
+        let mut app = make_app(false);
+        let mark = app.session.notice_mark();
+        app.run("ui.exportLayer", json!({"format": "shp"})).unwrap();
+        let notices = app.session.notices_since(mark);
+        assert!(notices.iter().any(|n| n.error && n.text.contains("download blocked")), "got: {notices:?}");
+        assert!(
+            !notices.iter().any(|n| n.text.contains("left out") || n.text.contains("no .prj written")),
+            "failed download emitted export notices: {notices:?}"
+        );
+    }
+
     /// Export Features into an existing GeoPackage: the file is picked to open, not to save over,
     /// and the layer goes in as the table named in the dialog, beside the file's others.
     #[test]
@@ -10007,6 +10062,72 @@ mod peer_output_tests {
                 app.run("project.new", json!({})).unwrap();
             }
             assert!(app.workflow.result.is_none() && app.workflow.error.is_none(), "a replacement cannot show old row indices");
+        }
+    }
+
+    /// Replacing the project (via command or peer text) clears any active task-step edit and step index.
+    #[test]
+    fn project_replacement_clears_task_edit_and_step() {
+        for peer in [false, true] {
+            let mut app = RustGisApp::with_sample();
+            app.ws.task_edit = Some((1, "Old title".into(), "Old instructions".into()));
+            app.ws.task_step = 3;
+            if peer {
+                let (text, _) = Project::default().saved_text(None).unwrap();
+                app.open_peer_text(&text).unwrap();
+            } else {
+                app.run("project.new", json!({})).unwrap();
+            }
+            assert!(app.ws.task_edit.is_none(), "peer={peer}: task_edit must be cleared on project replace");
+            assert_eq!(app.ws.task_step, 0, "peer={peer}: task_step must reset to 0 on project replace");
+        }
+    }
+
+    /// Opening a project, package, or template via `open_bytes` when unsaved edits exist and
+    /// `save_project` is present asks the save prompt instead of silently discarding edits, and
+    /// sets `ui.web_file` once a deferred `.rgis` replacement completes.
+    #[test]
+    fn open_bytes_with_asks_to_save_unsaved_edits_before_replacing() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::Queryable;
+
+        let (other_text, _) = Project::default().saved_text(None).unwrap();
+        let pkg_bytes = rustgis_engine::data::zip::write(&[("other.rgis".into(), other_text.as_bytes().to_vec())]).unwrap();
+
+        for (file, bytes, expected_web_file) in [
+            ("other.rgis", other_text.as_bytes(), Some("other.rgis")),
+            ("other.rgispkg", pkg_bytes.as_slice(), None),
+            ("other.rgistemplate", other_text.as_bytes(), None),
+        ] {
+            let mut app = RustGisApp::with_sample();
+            app.services.open_async = Some(Box::new(|_| {}));
+            app.services.save_project = Some(Box::new(|_, _, _| Ok(())));
+            app.run("map.rename", json!({"name": "Unsaved Map"})).unwrap();
+            assert!(app.session.dirty());
+
+            let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 860.0)).with_max_steps(64).build_ui_state(
+                |ui, app: &mut RustGisApp| {
+                    let ctx = ui.ctx().clone();
+                    app.logic(&ctx);
+                    app.ui(ui);
+                },
+                app,
+            );
+            h.state_mut().open_bytes(file, bytes).unwrap();
+            assert!(saveprompt::waiting(h.state()), "{file}: expected save prompt to wait for user answer");
+            assert_eq!(h.state().session.map().name, "Unsaved Map", "{file}: unsaved edits must not be discarded yet");
+            assert!(h.state().ui.web_file.is_none(), "{file}: web_file must not be set while waiting on save prompt");
+
+            for _ in 0..3 {
+                h.step();
+            }
+            h.get_by_role_and_label(Role::Button, "Don't Save").click();
+            for _ in 0..3 {
+                h.step();
+            }
+            assert!(!saveprompt::waiting(h.state()), "{file}: replacement should complete after Don't Save");
+            assert_ne!(h.state().session.map().name, "Unsaved Map", "{file}: project should be replaced after Don't Save");
+            assert_eq!(h.state().ui.web_file.as_deref(), expected_web_file, "{file}: web_file after deferred replacement");
         }
     }
 

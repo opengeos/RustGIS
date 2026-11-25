@@ -4021,6 +4021,7 @@ fn web_save_asks_for_the_file_name() {
             log.lock().unwrap().push((name.to_string(), bytes));
             Ok(())
         })),
+        open_async: Some(Box::new(|_| {})),
         ..Default::default()
     };
     let app = RustGisApp::with_sample().with_services(services);

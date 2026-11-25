@@ -195,22 +195,22 @@ impl Dialogs {
             other => return Err(format!("unknown dialog '{other}'")),
         };
         if matches!(name, "addField" | "calculateField" | "renameLayer" | "exportLayer" | "defineProjection") && active.is_none() {
-            return Err("select a layer in the Layers pane first".into());
+            return Err(tl!("select a layer in the Layers pane first").into());
         }
         if name == "exportLayer" && active.is_some_and(|l| l.is_raster()) {
-            return Err("Export Features needs a vector layer (Data › Export Raster writes a raster)".into());
+            return Err(tl!("Export Features needs a vector layer (Data › Export Raster writes a raster)").into());
         }
         if matches!(name, "pgSave" | "pgDiscard") && !s.map().layers.iter().any(|l| l.postgis.is_some()) {
-            return Err("the map has no PostGIS layer loaded for editing (Home › Add Data › Database…, Load for editing)".into());
+            return Err(tl!("the map has no PostGIS layer loaded for editing (Home › Add Data › Database…, Load for editing)").into());
         }
         if matches!(name, "gpkgSave" | "gpkgDiscard") && !s.map().layers.iter().any(|l| l.gpkg.is_some()) {
             return Err(tl!("the map has no GeoPackage layer loaded for editing (Home › Add Data › Edit GeoPackage Table…)").into());
         }
         if name == "exportOrbit" && cfg!(target_arch = "wasm32") {
-            return Err("exporting an orbit needs the desktop app".into());
+            return Err(tl!("exporting an orbit needs the desktop app").into());
         }
         if name == "selectByAttributes" && s.map().layers.is_empty() {
-            return Err("the map has no layers".into());
+            return Err(tl!("the map has no layers").into());
         }
         *self = Dialogs { open: Some(name), mode: "new", edit: which == "pgAddLayer", reset_collapse: true, ..Dialogs::default() };
         self.layer = active.or_else(|| s.map().layers.first()).map(|l| l.name.clone()).unwrap_or_default();
@@ -1398,13 +1398,19 @@ fn add_dxf(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
     })
 }
 
-/// Adds a drawing on disk, read as Add Data reads a file (on a thread of its own when the desktop
+/// Adds a file on disk, read as Add Data reads a file (on a thread of its own when the desktop
 /// app reads it so, [`crate::readjob`]).
-pub(crate) fn add_dxf_file(app: &mut RustGisApp, p: Value) -> Result<Value, String> {
+fn add_data_file(app: &mut RustGisApp, p: Value) -> Result<Value, String> {
     #[cfg(not(target_arch = "wasm32"))]
     return crate::readjob::run(app, "layer.addData", p);
     #[cfg(target_arch = "wasm32")]
     app.run("layer.addData", p)
+}
+
+/// Adds a drawing on disk, read as Add Data reads a file (on a thread of its own when the desktop
+/// app reads it so, [`crate::readjob`]).
+pub(crate) fn add_dxf_file(app: &mut RustGisApp, p: Value) -> Result<Value, String> {
+    add_data_file(app, p)
 }
 
 /// The columns of a file picked for Add Delimited Text, split at `separator` (a code of
@@ -1588,7 +1594,7 @@ fn add_csv(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
         let r = match &file.source {
             CsvSource::Path(path) => {
                 p["path"] = json!(path);
-                app.run("layer.addData", p)
+                add_data_file(app, p)
             }
             CsvSource::Bytes(bytes) => app.open_bytes_with(&file.name, bytes, Some(p)),
         };
@@ -2386,6 +2392,25 @@ fn add_database(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
     })
 }
 
+/// Parses a non-negative whole number, allowing optional 3-digit comma grouping (`1,000`).
+fn parse_whole_number(text: &str) -> Result<u64, String> {
+    let input = text.trim();
+    let mut groups = input.split(',');
+    let first = groups.next().unwrap_or_default();
+    let grouped = first.len() != input.len();
+    if grouped
+        && (first.is_empty()
+            || first.len() > 3
+            || !first.bytes().all(|b| b.is_ascii_digit())
+            || !groups.all(|group| group.len() == 3 && group.bytes().all(|b| b.is_ascii_digit())))
+    {
+        return Err(tl!("Most rows: a whole number").to_string());
+    }
+    let n: u64 =
+        if grouped { input.replace(',', "").parse() } else { input.parse() }.map_err(|_| tl!("Most rows: a whole number").to_string())?;
+    Ok(n)
+}
+
 /// Add From Database with Load for editing: connects to the PostgreSQL database for editing
 /// (`pg.connect`) and loads the chosen table whole (`pg.addLayer`).
 fn add_for_editing(app: &mut RustGisApp, address: String) -> Result<(), String> {
@@ -2401,8 +2426,7 @@ fn add_for_editing(app: &mut RustGisApp, address: String) -> Result<(), String> 
         }
     }
     if !d.e.trim().is_empty() {
-        let n: u64 = d.e.trim().replace([',', '.'], "").parse().map_err(|_| tl!("Most rows: a whole number").to_string())?;
-        p["limit"] = json!(n);
+        p["limit"] = json!(parse_whole_number(&d.e)?);
     }
     let connect = json!({"connection": address, "password": d.b});
     app.run("pg.connect", connect)?;
@@ -2498,21 +2522,7 @@ fn gpkg_add_layer(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
             p["table"] = json!(app.dialogs.c.trim());
         }
         if !app.dialogs.e.trim().is_empty() {
-            let input = app.dialogs.e.trim();
-            let mut groups = input.split(',');
-            let first = groups.next().unwrap_or_default();
-            let grouped = first.len() != input.len();
-            if grouped
-                && (first.is_empty()
-                    || first.len() > 3
-                    || !first.bytes().all(|b| b.is_ascii_digit())
-                    || !groups.all(|group| group.len() == 3 && group.bytes().all(|b| b.is_ascii_digit())))
-            {
-                return Err(tl!("Most rows: a whole number").to_string());
-            }
-            let n: u64 = if grouped { input.replace(',', "").parse() } else { input.parse() }
-                .map_err(|_| tl!("Most rows: a whole number").to_string())?;
-            p["limit"] = json!(n);
+            p["limit"] = json!(parse_whole_number(&app.dialogs.e)?);
         }
         app.run("gpkg.addLayer", p).map(|_| ())
     })
@@ -2735,11 +2745,24 @@ fn add_tiles(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
                 p[key] = json!(v.trim());
             }
         }
-        if let Ok(z) = app.dialogs.c.trim().parse::<f64>() {
+        if let Some(z) = parse_max_zoom(&app.dialogs.c)? {
             p["maxZoom"] = json!(z);
         }
         app.run("map.addTiles", p).map(|_| ())
     })
+}
+
+/// Parses an optional finite number for Add Tile Layer's Maximum zoom field.
+fn parse_max_zoom(text: &str) -> Result<Option<f64>, String> {
+    let s = text.trim();
+    if s.is_empty() {
+        return Ok(None);
+    }
+    s.parse::<f64>()
+        .ok()
+        .filter(|z| z.is_finite())
+        .map(Some)
+        .ok_or_else(|| crate::i18n::fmt("{what} must be a number", &[("what", tl_raw!("Maximum zoom"))]))
 }
 
 /// A dialog's multi-line text box. [`buttons`] takes Enter to confirm the dialog, so only
@@ -5152,5 +5175,82 @@ mod tests {
         h.key_press(egui::Key::Escape);
         h.run_steps(4);
         assert_eq!(h.state().dialogs.open, None);
+    }
+
+    #[test]
+    fn whole_number_and_max_zoom_parsers() {
+        assert_eq!(parse_whole_number("1,000"), Ok(1000));
+        assert_eq!(parse_whole_number("1000"), Ok(1000));
+        assert!(parse_whole_number("1.5").is_err());
+        assert!(parse_whole_number("1,2").is_err());
+
+        assert_eq!(parse_max_zoom(""), Ok(None));
+        assert_eq!(parse_max_zoom("   "), Ok(None));
+        assert_eq!(parse_max_zoom("18"), Ok(Some(18.0)));
+        assert!(parse_max_zoom("abc").is_err());
+        assert!(parse_max_zoom("NaN").is_err());
+        assert!(parse_max_zoom("inf").is_err());
+    }
+
+    /// `add_for_editing` rejects decimal row limits like `"1.5"`, and Add Tile Layer rejects
+    /// non-numeric / non-finite Maximum zoom inputs instead of silently ignoring them.
+    #[test]
+    fn add_for_editing_and_add_tiles_reject_invalid_numbers() {
+        use egui_kittest::kittest::Queryable;
+
+        let mut app = RustGisApp::with_sample();
+        app.dialogs.c = "roads".into();
+        app.dialogs.e = "1.5".into();
+        let err = add_for_editing(&mut app, "postgres://localhost/db".into()).unwrap_err();
+        assert!(err.contains("whole number"), "expected whole-number error for 1.5, got: {err}");
+
+        for bad_zoom in ["abc", "NaN"] {
+            let mut app = RustGisApp::with_sample();
+            app.run("project.new", json!({})).unwrap();
+            app.run("ui.dialog", json!({"name": "addTiles"})).unwrap();
+            app.dialogs.text = "https://example.com/{z}/{x}/{y}.png".into();
+            app.dialogs.c = bad_zoom.into();
+            let mut h = app_harness(app);
+            h.run_steps(3);
+            h.get_by_label("Add").click();
+            h.run_steps(3);
+            assert!(
+                h.state().dialogs.error.as_deref().is_some_and(|e| e.contains("Maximum zoom must be a number")),
+                "{bad_zoom}: expected validation error, got {:?}",
+                h.state().dialogs.error
+            );
+            assert!(h.state().session.map().tiles.is_empty(), "{bad_zoom}: invalid maxZoom must not add tiles");
+        }
+    }
+
+    /// On the desktop with off-frame reads enabled, Add Delimited Text queues disk CSV reads
+    /// through `readjob` instead of running `layer.addData` synchronously on the UI thread.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn add_csv_path_uses_background_read_queue() {
+        use egui_kittest::kittest::Queryable;
+
+        let dir = tempfile::tempdir().unwrap();
+        let csv_path = dir.path().join("points.csv");
+        std::fs::write(&csv_path, "lon,lat,name\n10,20,Alpha\n").unwrap();
+        let path_str = csv_path.display().to_string();
+
+        let mut app = RustGisApp::with_sample();
+        app.reads_off_frame = true;
+        open_csv(&mut app, &path_str, CsvSource::Path(path_str.clone())).unwrap();
+        let mut h = app_harness(app);
+        h.run_steps(3);
+        h.get_by_label("Add").click();
+        h.run_steps(2);
+        assert!(
+            h.state().background_busy(),
+            "desktop CSV path import should queue through readjob rather than running synchronously on the UI thread"
+        );
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while crate::readjob::land(h.state_mut()) {
+            assert!(std::time::Instant::now() < end, "background CSV read never landed");
+            std::thread::yield_now();
+        }
+        assert!(h.state().session.map().layer_by_name("points").is_some());
     }
 }
