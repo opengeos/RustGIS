@@ -4151,9 +4151,10 @@ fn foggy_picture_marker(
     let (x0, y0) = ((x - w / 2.0 - 1.0).floor().max(0.0), (y - h / 2.0 - 1.0).floor().max(0.0));
     let (x1, y1) = ((x + w / 2.0 + 1.0).ceil().min(pm.width() as f32), (y + h / 2.0 + 1.0).ceil().min(pm.height() as f32));
     let (bw, bh) = ((x1 - x0).max(0.0) as u32, (y1 - y0).max(0.0) as u32);
-    // Not past `FOG_BOX_PIXELS`: a larger image far off (a symbol some thousand points wide) is
+    // Not past `FOG_BOX_PIXELS` by its own size (not by what of it is in the frame, or it would
+    // change as the view pans): a larger image far off (a symbol some thousand points wide) is
     // drawn unfaded, as before, rather than take a canvas that size for every marker of a frame.
-    if u64::from(bw) * u64::from(bh) > FOG_BOX_PIXELS {
+    if (f64::from(w) + 2.0) * (f64::from(h) + 2.0) > FOG_BOX_PIXELS as f64 {
         return picture_marker(pm, p, w, Transform::from_translate(x, y), opacity, halo, true, ppp);
     }
     // The frame is stroked once everything that can fail has not, so a fallback to the circle
@@ -4198,7 +4199,7 @@ fn markers_tilted(map: &mut Map, view: &View, pm: &mut Canvas, env: &Env) {
             let width = s.size.max(1.0) * ppp;
             let drawn = match picture::marker_aspect(p) {
                 // (A recording canvas keeps vectors, which this blend doesn't make: it draws unfaded.)
-                Some(aspect) if t > 0.0 && !pm.is_recording() => {
+                Some(aspect) if t * 255.0 >= 0.5 && !pm.is_recording() => {
                     foggy_picture_marker(pm, p, (x, y), (width, width * aspect), m.opacity, halo, (fog, t as f32), ppp)
                 }
                 _ => picture_marker(pm, p, width, Transform::from_translate(x, y), m.opacity, halo, true, ppp),
