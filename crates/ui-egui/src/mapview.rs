@@ -3874,7 +3874,27 @@ fn overlays(app: &mut RustGisApp, ui: &mut Ui, p: &egui::Painter, rect: Rect, t:
         let stroke = Stroke::new(2.0, green);
         let outline = rustgis_engine::cmd::graphics::dragged_outline(&app.session, shape, &app.map.sketch);
         let pts: Vec<Pos2> = outline.iter().flatten().filter_map(|c| lonlat_to_screen(app, rect, *c)).collect();
-        if pts.len() == outline.as_ref().map_or(0, Vec::len) && pts.len() >= 3 {
+        // A picture is drawn upright on screen between its box's north-west and south-east
+        // corners (render's picture graphics), so it previews as that, turned map or not.
+        let picture = (shape == "picture")
+            .then(|| outline.as_deref())
+            .flatten()
+            .map(|cs| {
+                cs.iter().fold(rustgis_geom::Extent::EMPTY, |mut e, c| {
+                    e.expand(*c);
+                    e
+                })
+            })
+            .filter(|e| !e.is_empty())
+            .and_then(|e| {
+                Some((
+                    lonlat_to_screen(app, rect, Coord::new(e.min_x, e.max_y))?,
+                    lonlat_to_screen(app, rect, Coord::new(e.max_x, e.min_y))?,
+                ))
+            });
+        if let Some((a, b)) = picture {
+            p.rect_stroke(Rect::from_two_pos(a, b), 0.0, stroke, egui::StrokeKind::Middle);
+        } else if shape != "picture" && pts.len() == outline.as_ref().map_or(0, Vec::len) && pts.len() >= 3 {
             p.add(egui::Shape::closed_line(pts, stroke));
         } else if let (Some(a), Some(b)) = (
             app.map.sketch.first().and_then(|c| lonlat_to_screen(app, rect, *c)),

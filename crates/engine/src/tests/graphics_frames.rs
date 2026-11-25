@@ -118,3 +118,33 @@ fn a_dragged_corner_near_a_pole_stays_where_it_was_dragged() {
     }
     assert_eq!(crate::cmd::graphics::dragged_outline(&s, "rectangle", &corners).unwrap(), ring);
 }
+
+/// The point a graphic `r` added is at, in longitude/latitude.
+fn point_of(s: &Session, layer: u64, row: u64) -> Coord {
+    match s.map().layer(layer as u32).unwrap().dataset.features[row as usize].geometry.clone() {
+        Some(Geometry::Point(c)) => c,
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn a_point_keeps_within_85_degrees_on_a_web_mercator_map_and_not_on_a_polar_one() {
+    // Web Mercator, where a pole is infinitely far: clicked at 88°, placed at 85° as the map
+    // draws it, by `"frame": "view"` as by the default.
+    let mut s = Session::new(Project::default());
+    for frame in [json!("view"), Value::Null] {
+        let r = s.run("graphics.add", &json!({"shape": "point", "points": [[10.0, 88.0]], "frame": frame})).unwrap();
+        assert_eq!(point_of(&s, r["layer"].as_u64().unwrap(), r["row"].as_u64().unwrap()), Coord::new(10.0, 85.0), "{frame}");
+    }
+    // A polar map shows the pole: a point at 88° stays there, added and placed again.
+    let mut s = Session::new(Project::default());
+    s.run("map.projection", &json!({"type": "EPSG:3413"})).unwrap();
+    let r = s.run("graphics.add", &json!({"shape": "point", "points": [[0.0, 88.0]], "frame": "view"})).unwrap();
+    let (layer, row) = (r["layer"].as_u64().unwrap(), r["row"].as_u64().unwrap());
+    assert_eq!(point_of(&s, layer, row), Coord::new(0.0, 88.0));
+    s.run("graphics.edit", &json!({"layer": layer, "row": row, "points": [[5.0, 88.5]]})).unwrap();
+    assert_eq!(point_of(&s, layer, row), Coord::new(5.0, 88.5));
+    // Below 85° nothing is clamped on either map.
+    s.run("graphics.edit", &json!({"layer": layer, "row": row, "points": [[5.0, 60.0]]})).unwrap();
+    assert_eq!(point_of(&s, layer, row), Coord::new(5.0, 60.0));
+}

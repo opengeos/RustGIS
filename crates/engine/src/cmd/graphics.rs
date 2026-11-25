@@ -84,10 +84,11 @@ fn target(s: &mut Session, p: &Value) -> Result<u32, String> {
     })
 }
 
-/// The points given, in longitude/latitude; kept within 85° of the equator for `plane`'s Web
-/// Mercator, where a pole is infinitely far, but not for the view's, which may show a pole.
+/// The points given, in longitude/latitude; kept within 85° of the equator in Web Mercator (the
+/// default plane, or a view of a Web Mercator map), where a pole is infinitely far, but not in a
+/// view of a map in another projection, which may show a pole.
 fn points(p: &Value, plane: &Plane) -> Result<Vec<Coord>, String> {
-    let lat_max = if matches!(plane, Plane::Mercator) { 85.0 } else { 90.0 };
+    let lat_max = if matches!(plane, Plane::View { flat: rustgis_map::projection::Flat::Custom(_), .. }) { 90.0 } else { 85.0 };
     let arr = p.get("points").and_then(Value::as_array).ok_or("points is required")?;
     if arr.len() > MAX_POINTS {
         return Err(format!("a graphic takes at most {MAX_POINTS} points"));
@@ -502,7 +503,9 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
             if !matches!(kind.as_str(), "point" | "text") {
                 return Err("only a point or a text graphic is placed again by its points".into());
             }
-            Some(geometry(&kind, points(p, &Plane::Mercator)?, &Plane::Mercator)?)
+            // As the map shows it: a point at 88° on a polar map stays there.
+            let plane = Plane::view(s);
+            Some(geometry(&kind, points(p, &plane)?, &plane)?)
         }
         None => None,
     };
