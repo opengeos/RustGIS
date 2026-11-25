@@ -1176,7 +1176,7 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, layout: &L
     // A click on a ruler, or on the selected element's handle (which can stick out over another
     // element), keeps the selection: where the click started, as the pointer may have moved a
     // little by the release. A press serves one click or drag, never a later one.
-    let pressed = if resp.clicked() || resp.drag_started() { app.layout.pressed.take() } else { None };
+    let pressed = if resp.clicked() || resp.secondary_clicked() || resp.drag_started() { app.layout.pressed.take() } else { None };
     if resp.clicked()
         && let Some(p) = pointer_mm
         && pressed.or(resp.interact_pointer_pos()).is_none_or(|pos| {
@@ -1192,12 +1192,12 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, layout: &L
         }
     }
     // A right-click selects what is under it, unless that is selected already, and so opens the
-    // element's menu (see `show`); on empty page it clears the selection, as a click does. On a
-    // ruler, or on the selected element's handle or rotation knob, it keeps the selection, as a
-    // click does there.
+    // element's menu (see `show`); on empty page it clears the selection, as a click does. Pressed
+    // on a ruler, or on the selected element's handle or rotation knob, it keeps the selection, as
+    // a click does there.
     if resp.secondary_clicked()
         && let Some(p) = pointer_mm
-        && resp.interact_pointer_pos().is_none_or(|pos| {
+        && pressed.or(resp.interact_pointer_pos()).is_none_or(|pos| {
             ruler_at(&app.layout, resp.rect, pos).is_none()
                 && handle_at(app, layout, page, s, pos).is_none()
                 && rotate_at(app, layout, page, s, pos).is_none()
@@ -3887,12 +3887,9 @@ mod tests {
         assert_eq!(app.layout.selected, None);
     }
 
-    /// Right-clicking an element selects it and opens its menu: Send Backward moves it down the
-    /// drawing order in one Undo step, a locked element's Delete row is greyed, and a right-click
-    /// on empty page opens no menu.
     /// A right-click on the selected element's handle, where it sticks out over another element,
     /// keeps the selection and opens the menu of the element the handle belongs to, as a click
-    /// there keeps it.
+    /// there keeps it, also when the pointer moves off the handle before the release.
     #[test]
     fn right_clicking_a_handle_keeps_the_selection() {
         use egui_kittest::kittest::Queryable;
@@ -3942,8 +3939,31 @@ mod tests {
         assert_eq!(h.state().layout.selected, Some(title), "the title stays selected");
         assert!(h.query_by_label_contains("Duplicate").is_some(), "its menu opens");
         assert!(h.query_by_label("Zoom Frame").is_none(), "the title's menu, not the frame's");
+
+        // Pressed on the handle, released a little off it (still a click): where it was pressed
+        // decides, as for a click.
+        h.event(Event::Key { key: Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+        h.run_steps(2);
+        let handle = to_screen(page, s, (e.x + e.w / 2.0, e.y + e.h));
+        let (press, release) = (handle + vec2(0.0, 10.0), handle + vec2(0.0, 15.0));
+        assert!(handle_at(h.state(), &layout, page, s, press).is_some(), "pressed on the handle");
+        assert!(handle_at(h.state(), &layout, page, s, release).is_none(), "released off it");
+        let (x, y) = super::to_mm(page, s, release);
+        assert_eq!(layout.hit(x, y), Some(frame), "on the map frame");
+        h.event(Event::PointerMoved(press));
+        h.step();
+        h.event(secondary(press, true));
+        h.step();
+        h.event(Event::PointerMoved(release));
+        h.step();
+        h.event(secondary(release, false));
+        h.run_steps(3);
+        assert_eq!(h.state().layout.selected, Some(title), "the title stays selected after the drift");
     }
 
+    /// Right-clicking an element selects it and opens its menu: Send Backward moves it down the
+    /// drawing order in one Undo step, a locked element's Delete row is greyed, and a right-click
+    /// on empty page opens no menu.
     #[test]
     fn right_clicking_an_element_opens_its_menu() {
         use egui_kittest::kittest::{NodeT, Queryable};
