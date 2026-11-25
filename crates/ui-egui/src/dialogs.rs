@@ -12,6 +12,16 @@ use std::hash::{Hash, Hasher};
 use crate::theme::{Tokens, semibold};
 use crate::{RustGisApp, i18n};
 
+/// A live map by what it is (`Map::instance_id`, whatever its place among the project's maps, so
+/// moving it is not another map) and its name, which a rename changes.
+pub(crate) type MapKey = (u64, String);
+
+/// The map in view, as a dialog, an import or a form remembers it to find it again.
+pub(crate) fn map_key(s: &Session) -> MapKey {
+    let map = s.map();
+    (map.instance_id(), map.name.clone())
+}
+
 #[derive(Default)]
 pub struct Dialogs {
     /// Project Properties: the system text last read, and what was said of it (and whether that is
@@ -20,7 +30,7 @@ pub struct Dialogs {
     /// The layer captured when Define Projection opens; changing selection must not retarget it.
     pub projection_layer: Option<u32>,
     /// Map-local layer IDs require the dialog to retain its original project and map as well.
-    pub projection_map: Option<(u64, usize, String)>,
+    pub projection_map: Option<(u64, MapKey)>,
     pub geometry: Option<crate::geometrycalc::Form>,
     /// Publication Layout Wizard: what it has asked so far (#2850).
     pub publication: Option<crate::publicationwizard::Draft>,
@@ -39,7 +49,7 @@ pub struct Dialogs {
     /// The live instance captured with the map-local ID; Undo can make that ID reusable.
     pub gpkg_instance: Option<u64>,
     /// Layer IDs are map-local; source writes must stay in the captured project and map.
-    pub gpkg_map: Option<(u64, usize, String)>,
+    pub gpkg_map: Option<(u64, MapKey)>,
     /// The source-backed layer last counted: its name for PostGIS, numeric ID for GeoPackage.
     pub counted: String,
     /// Revision after the last count command, which itself advances the session revision.
@@ -217,7 +227,7 @@ impl Dialogs {
         match name {
             "defineProjection" => {
                 self.projection_layer = active.map(|l| l.id);
-                self.projection_map = Some((s.opened, s.project.active_map, s.map().name.clone()));
+                self.projection_map = Some((s.opened, map_key(s)));
                 self.text = active.and_then(|l| l.dataset.crs).map(|c| c.definition_text()).unwrap_or_else(|| "EPSG:4326".into());
             }
             "coordinateSystem" => {
@@ -276,7 +286,7 @@ impl Dialogs {
                 let layer = active.filter(gpkg).or_else(|| s.map().layers.iter().find(gpkg));
                 self.gpkg_layer = layer.map(|l| l.id);
                 self.gpkg_instance = layer.map(|l| l.instance_id());
-                self.gpkg_map = Some((s.opened, s.project.active_map, s.map().name.clone()));
+                self.gpkg_map = Some((s.opened, map_key(s)));
             }
             // A table of addresses is what's usually geocoded: picked by its id (`flag` says the
             // choice is a table), since names can repeat.
@@ -291,11 +301,7 @@ impl Dialogs {
     }
 
     fn gpkg_owner(&self, s: &Session) -> Result<(), String> {
-        if !self
-            .gpkg_map
-            .as_ref()
-            .is_some_and(|(project, index, name)| *project == s.opened && *index == s.project.active_map && *name == s.map().name)
-        {
+        if !self.gpkg_map.as_ref().is_some_and(|(project, map)| *project == s.opened && *map == map_key(s)) {
             return Err(tl!("The active project or map changed; reopen the GeoPackage dialog for the intended layer.").into());
         }
         Ok(())
@@ -618,9 +624,12 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                     }
                 }
                 close = buttons(app, ui, "Apply", |app| {
-                    if !app.dialogs.projection_map.as_ref().is_some_and(|(project, index, name)| {
-                        *project == app.session.opened && *index == app.session.project.active_map && *name == app.session.map().name
-                    }) {
+                    if !app
+                        .dialogs
+                        .projection_map
+                        .as_ref()
+                        .is_some_and(|(project, map)| *project == app.session.opened && *map == map_key(&app.session))
+                    {
                         return Err(tl!("The active project or map changed; reopen Define Projection for the intended layer.").into());
                     }
                     let id = app.dialogs.projection_layer.ok_or(tl!("No layer selected"))?;

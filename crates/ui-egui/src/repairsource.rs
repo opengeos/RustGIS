@@ -18,7 +18,7 @@ pub enum Target {
 pub struct Form {
     target: Target,
     opened: u64,
-    map: (usize, String),
+    map: crate::dialogs::MapKey,
     /// An index is not an identity: closing on a different archive prevents accidental retargeting.
     archive: Option<(String, rustgis_engine::map::TileKind)>,
     name: String,
@@ -58,7 +58,7 @@ impl Form {
         Ok(Self {
             target,
             opened: s.opened,
-            map: (s.project.active_map, s.map().name.clone()),
+            map: crate::dialogs::map_key(s),
             archive: match target {
                 Target::Layer(_) => None,
                 Target::Tiles(index) => s.map().tiles.get(index).map(|t| (t.id.clone(), t.kind)),
@@ -139,8 +139,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
         return;
     };
     if app.session.opened != f.opened
-        || app.session.project.active_map != f.map.0
-        || app.session.map().name != f.map.1
+        || crate::dialogs::map_key(&app.session) != f.map
         || match f.target {
             Target::Layer(id) => app.session.map().layer(id).is_none(),
             Target::Tiles(index) => app.session.map().tiles.get(index).is_none_or(|t| {
