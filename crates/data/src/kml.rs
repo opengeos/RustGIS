@@ -356,8 +356,7 @@ impl GeometryLosses {
     /// Emits one counted notice per kind, only for nonzero totals.
     fn report(&self, name: &str, report: &mut ReadReport) {
         use crate::loss::LossCode::{DroppedGeometry, DroppedRing};
-        // Each is a part of a placemark's geometry left out (of one kept, or of one skipped
-        // whole, which is said on its own).
+        // Each is a part left out of a kept placemark's geometry.
         for (count, one, many, code) in [
             (self.unreadable.get(), "unreadable KML coordinate tuple", "unreadable KML coordinate tuples", DroppedGeometry),
             (self.holes, "unreadable KML polygon hole", "unreadable KML polygon holes", DroppedRing),
@@ -587,7 +586,9 @@ impl Reader {
         for g in pm.children().filter(|c| c.is_element()) {
             geometry(&g, &mut parts, 0);
         }
-        self.geometry_losses.add(&parts.losses);
+        // A placemark left out whole is said as one; only a kept one's parts left out are its
+        // geometry's loss.
+        let losses = std::mem::take(&mut parts.losses);
         let mut data = Vec::new();
         let mut seen = HashSet::new();
         let mut duplicates = 0usize;
@@ -649,6 +650,9 @@ impl Reader {
         }
         if !parts.polygons.is_empty() {
             push(Geometry::Polygon(parts.polygons), &parts.zm[2], &mut self.rows);
+        }
+        if any {
+            self.geometry_losses.add(&losses);
         }
         if !any {
             self.skipped += 1;
@@ -860,6 +864,19 @@ mod tests {
                 Some(Geometry::Line(vec![vec![Coord::new(200.0, 100.0), Coord::new(201.0, 101.0)]]))
             );
         }
+    }
+
+    /// A placemark left out whole is said once, as one: the parts of it that couldn't be read
+    /// aren't also a kept placemark's geometry loss.
+    #[test]
+    fn a_placemark_left_out_whole_is_said_once() {
+        let layers = read(
+            "a.kml",
+            br#"<kml><Placemark><LineString><coordinates>x,y 1,2</coordinates></LineString></Placemark><Placemark><Point><coordinates>1,2</coordinates></Point></Placemark></kml>"#,
+        )
+        .unwrap();
+        let said: Vec<_> = layers.iter().flat_map(|l| l.report.messages.iter().map(|m| (m.as_str(), m.loss))).collect();
+        assert_eq!(said, [("a: 1 placemarks without a geometry RustGIS draws were skipped", Some(crate::loss::LossCode::DroppedFeature))]);
     }
 
     #[test]
