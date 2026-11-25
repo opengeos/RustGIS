@@ -80,6 +80,17 @@ pub fn read(bytes: &[u8], name: &str, sheet: Option<&str>, opts: &CsvOptions) ->
             report.messages.push(crate::loss::Note::loss(crate::loss::LossCode::DroppedFeature, what));
         }
     }
+    if g.empty_phantom_rows > 0 {
+        let what = if g.empty_phantom_rows == 1 {
+            "1 row was omitted, as its only values were serial-60 dates (a day that never was), read as empty".to_string()
+        } else {
+            format!(
+                "{} rows were omitted, as their only values were serial-60 dates (a day that never was), read as empty",
+                g.empty_phantom_rows
+            )
+        };
+        report.messages.push(crate::loss::Note::loss(crate::loss::LossCode::DroppedFeature, what));
+    }
     if rounded > 0 {
         report.messages.push(crate::loss::Note::loss(
             crate::loss::LossCode::ChangedRounded,
@@ -119,6 +130,8 @@ struct Grid {
     empty_error_rows: usize,
     /// Per column that isn't one of dates, the serial-60 cells read as empty.
     phantom_dates: Vec<usize>,
+    /// Rows left out because their only values were serial-60 dates, read as empty.
+    empty_phantom_rows: usize,
 }
 
 fn grid(bytes: &[u8], sheet: Option<&str>) -> Result<Grid> {
@@ -234,11 +247,14 @@ fn grid_unguarded(mut wb: Sheets<Cursor<&[u8]>>, sheet: Option<&str>) -> Result<
             .collect::<Vec<String>>();
         (row, cells, had_error, phantom)
     });
-    let mut empty_error_rows = 0;
-    let mut keep = |(_, cells, had_error, _): &(usize, Vec<String>, bool, Vec<usize>)| {
+    let (mut empty_error_rows, mut empty_phantom_rows) = (0, 0);
+    let mut keep = |(_, cells, had_error, phantom): &(usize, Vec<String>, bool, Vec<usize>)| {
         let nonempty = cells.iter().any(|c| !c.trim().is_empty());
         if !nonempty && *had_error {
             empty_error_rows += 1;
+        } else if !nonempty && !phantom.is_empty() {
+            // A row whose only values were serial-60 dates, read as empty: left out whole.
+            empty_phantom_rows += 1;
         }
         nonempty
     };
@@ -275,7 +291,19 @@ fn grid_unguarded(mut wb: Sheets<Cursor<&[u8]>>, sheet: Option<&str>) -> Result<
         .filter(keep)
         .map(|(_, cells, _, _)| cells)
         .collect();
-    Ok(Grid { names, pick, headers, rows, dates, rounded_dates, error_cells, header_error_cells, empty_error_rows, phantom_dates })
+    Ok(Grid {
+        names,
+        pick,
+        headers,
+        rows,
+        dates,
+        rounded_dates,
+        error_cells,
+        header_error_cells,
+        empty_error_rows,
+        empty_phantom_rows,
+        phantom_dates,
+    })
 }
 
 /// Check every ZIP member before calamine opens it, without suffix or case filters. ODS
@@ -834,6 +862,8 @@ mod tests {
         let (ds, report) = read(&crate::zip::write(&entries).unwrap(), "places", None, &opts).unwrap();
         assert_eq!(ds.features.len(), 1);
         assert!(report.messages.iter().any(|m| m.contains("1 value in 'wkt' isn't a date")), "{:?}", report.messages);
+        let row = report.messages.iter().find(|m| m.contains("row was omitted")).unwrap();
+        assert_eq!(row.loss, Some(crate::loss::LossCode::DroppedFeature));
     }
 
     /// Multiple errors in one column and another column count once each; blank cells don't.
