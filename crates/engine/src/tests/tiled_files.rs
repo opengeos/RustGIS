@@ -651,9 +651,10 @@ fn raster_functions_and_resamples_run_a_block_at_a_time() {
         let want = raster(&whole, "out").data.clone().unwrap();
         let said_whole: Vec<String> = said(&whole, mark).into_iter().filter(|n| n.contains("matches no")).collect();
         assert_eq!(said_whole.is_empty(), p["function"] != "remap", "{command}: a range of the remap is empty, and said");
-        // Held, then (one band past the limit) written, a block at a time.
+        // Held, then (one band past the limit, or for a resample its three bands) written, a block
+        // at a time.
         let resample = *command == "raster.process";
-        for (past, written) in [(1_000_000, false), (900_000, !resample)] {
+        for (past, written) in [(1_000_000, false), (if resample { 300_000 } else { 900_000 }, true)] {
             let why = format!("{command} {p}, written {written}");
             let (_held, _blocks) = (HeldWhole::at(1_000_000), BlocksPast::at(past));
             let mut s = Session::new(Project::default());
@@ -661,6 +662,11 @@ fn raster_functions_and_resamples_run_a_block_at_a_time() {
             open(&mut s);
             assert!(raster(&s, "checks").tiled);
             let (before, mark) = (reads(), s.notice_mark());
+            // The Assistant asks before a run that writes a file, and only then.
+            let scope = crate::policy::Scope::assistant(8, std::sync::Arc::new(Live));
+            let asks =
+                matches!(s.review(&scope, &crate::policy::Call::command(command, p.clone())), crate::policy::Outcome::NeedsApproval(_));
+            assert_eq!(asks, written, "{why}: the Assistant asks");
             let got = s.run(command, p).unwrap();
             assert_eq!(reads(), before, "{why}: the file isn't read whole");
             let rl = raster(&s, "out");
@@ -670,12 +676,25 @@ fn raster_functions_and_resamples_run_a_block_at_a_time() {
             } else {
                 rl.data.as_deref().unwrap().clone()
             };
+            // A resample's file holds its means as floats.
+            let kind = if resample && written { "Float32" } else { want.data_type.as_str() };
             assert_eq!(
-                (got_raster.width, got_raster.height, got_raster.transform, got_raster.nodata, got_raster.data_type.as_str()),
-                (want.width, want.height, want.transform, want.nodata, want.data_type.as_str()),
+                (
+                    got_raster.width,
+                    got_raster.height,
+                    got_raster.transform,
+                    got_raster.nodata,
+                    got_raster.data_type.as_str(),
+                    &got_raster.color
+                ),
+                (want.width, want.height, want.transform, want.nodata, kind, &want.color),
                 "{why}"
             );
             assert_eq!(got_raster.bands.len(), want.bands.len(), "{why}: its bands");
+            // A written resample of bytes is drawn on their 0 to 255, as the held one is.
+            if resample && written {
+                assert_eq!(raster(&s, "out").style.stretch, rustgis_map::Stretch::Custom { min: 0.0, max: 255.0, bands: None }, "{why}");
+            }
             for (g, w) in got_raster.bands.iter().zip(&want.bands) {
                 assert!(g.data == w.data, "{why}: band {} is the whole raster's", w.name);
                 assert_eq!(g.name, w.name, "{why}");
