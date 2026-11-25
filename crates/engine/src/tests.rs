@@ -12568,6 +12568,24 @@ fn layout_scale_bars_take_their_details() {
     .unwrap();
     s.run("layout.update", &json!({"element": bar, "textSize": 100})).unwrap();
     assert_eq!(details(&s, bar).6, *LAYOUT_TEXT_SIZE.end());
+    // Divisions and divisions before zero are at most ten together: refused past it, as given
+    // together or against what the bar has (it has two before zero), and nothing changes.
+    let before = details(&s, bar);
+    for bad in [json!({"divisions": 10, "divisionsBeforeZero": 2}), json!({"divisions": 9})] {
+        let mut p = bad.clone();
+        p["element"] = json!(bar);
+        let err = s.run("layout.update", &p).unwrap_err().to_string();
+        assert!(err.contains("at most 10 together"), "{bad}: {err}");
+        assert_eq!(details(&s, bar), before, "{bad}");
+        assert!(matches!(find(&s, "scaleBar").kind, ElementKind::ScaleBar { divisions: 4, .. }), "{bad}");
+    }
+    let count = s.project.layouts[0].elements.len();
+    assert!(s.run("layout.addElement", &json!({"kind": "scaleBar", "divisions": 10, "divisionsBeforeZero": 2})).is_err());
+    assert_eq!(s.project.layouts[0].elements.len(), count);
+    // Ten in all is taken, and so is a lower count against the same bar.
+    s.run("layout.update", &json!({"element": bar, "divisions": 8, "divisionsBeforeZero": 2})).unwrap();
+    assert!(matches!(find(&s, "scaleBar").kind, ElementKind::ScaleBar { divisions: 8, divisions_before_zero: 2, .. }));
+    s.run("layout.update", &json!({"element": bar, "divisions": 4})).unwrap();
     // A bad value changes nothing, not even the good values given with it.
     let before = details(&s, bar);
     for bad in [

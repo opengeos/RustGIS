@@ -2085,7 +2085,11 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                         let mut n = *divisions as u64;
                         let drag = Dragged::lend(ui, drag_key("divisions"), &mut n);
                         let r = ui
-                            .add(egui::DragValue::new(&mut n).update_while_editing(false).range(1..=MAX_SCALE_DIVISIONS as u64))
+                            .add(
+                                egui::DragValue::new(&mut n)
+                                    .update_while_editing(false)
+                                    .range(1..=MAX_SCALE_DIVISIONS.saturating_sub(*divisions_before_zero).max(1) as u64),
+                            )
                             .labelled_by(input_label.id);
                         if drag.settled(ui, &r, &mut n) && n as usize != *divisions {
                             update(app, json!({"divisions": n}));
@@ -2098,7 +2102,12 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                         // Each division split into parts, and divisions left of zero.
                         for (label, key, current, max) in [
                             (tl!("Subdivisions"), "subdivisions", *subdivisions, MAX_SCALE_SUBDIVISIONS),
-                            (tl!("Divisions before zero"), "divisionsBeforeZero", *divisions_before_zero, MAX_SCALE_BEFORE_ZERO),
+                            (
+                                tl!("Divisions before zero"),
+                                "divisionsBeforeZero",
+                                *divisions_before_zero,
+                                MAX_SCALE_BEFORE_ZERO.min(MAX_SCALE_DIVISIONS.saturating_sub(*divisions)),
+                            ),
                         ] {
                             let input_label = ui.label(label);
                             let mut n = current as u64;

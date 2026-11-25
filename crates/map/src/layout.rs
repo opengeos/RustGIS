@@ -2966,6 +2966,8 @@ impl Layout {
                     // One part is the whole division: saved as none, it asks for no details.
                     *subdivisions = if *subdivisions == 1 { 0 } else { (*subdivisions).min(MAX_SCALE_SUBDIVISIONS) };
                     *divisions_before_zero = (*divisions_before_zero).min(MAX_SCALE_BEFORE_ZERO);
+                    // The two together are drawn as at most ten: the ones before zero give way.
+                    *divisions_before_zero = (*divisions_before_zero).min(MAX_SCALE_DIVISIONS.saturating_sub(*divisions));
                     // A file's invalid count (negative, fractional) is read as a marker: back to automatic.
                     *decimals = match *decimals {
                         Some(SCALE_DECIMALS_INVALID) => None,
@@ -4797,7 +4799,8 @@ mod tests {
             {{"id":7,"name":"g","x":0,"y":0,"w":10,"h":10,"kind":{{"ScaleBar":{{"frame":1,"decimals":2.5}}}}}},
             {{"id":8,"name":"h","x":0,"y":0,"w":10,"h":10,"kind":{{"ScaleBar":{{"frame":1,"decimals":" Auto "}}}}}},
             {{"id":9,"name":"i","x":0,"y":0,"w":10,"h":10,"kind":{{"ScaleBar":{{"frame":1,"decimals":"two"}}}}}},
-            {{"id":10,"name":"j","x":0,"y":0,"w":10,"h":10,"kind":{{"ScaleBar":{{"frame":1,"decimals":[2]}}}}}}]}}"#,
+            {{"id":10,"name":"j","x":0,"y":0,"w":10,"h":10,"kind":{{"ScaleBar":{{"frame":1,"decimals":[2]}}}}}},
+            {{"id":11,"name":"k","x":0,"y":0,"w":10,"h":10,"kind":{{"ScaleBar":{{"frame":1,"divisions":10,"divisions_before_zero":2}}}}}}]}}"#,
             "x".repeat(150)
         );
         let mut l: Layout = serde_json::from_str(&text).unwrap();
@@ -4832,7 +4835,11 @@ mod tests {
         for id in [8, 9, 10] {
             assert_eq!(got(id), (0, 0, None, SCALE_BAR_TEXT_PT, String::new()), "{id}");
         }
-        assert_eq!((repairs.elements_adjusted, repairs.elements_cut), (7, 1));
+        // Ten divisions with two before zero are more than the ten a bar draws: the ones before zero
+        // give way, and it is said.
+        assert_eq!(got(11), (0, 0, None, SCALE_BAR_TEXT_PT, String::new()));
+        assert!(matches!(l.element(11).map(|e| &e.kind), Some(ElementKind::ScaleBar { divisions: 10, .. })));
+        assert_eq!((repairs.elements_adjusted, repairs.elements_cut), (8, 1));
         for v in ScaleLabelPosition::ALL {
             assert_eq!(ScaleLabelPosition::from_name(&format!(" {} ", v.code().to_uppercase())), Some(v));
         }

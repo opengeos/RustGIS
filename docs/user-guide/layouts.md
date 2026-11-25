@@ -295,7 +295,7 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
   drawn at another scale, and an export reports it as cut off, as it does a text. A locked scale bar
   refuses a new text size, `null` included. It also takes the details printed maps commonly use: **Subdivisions** (0 to 10: the first
   division after zero cut into unlabelled parts), **Divisions before zero** (0 to 2, counted toward the ten in all, labelled with
-  negatives), **Label position** (above or below the bar), a **Unit label** (the unit's name as
+  negatives; it and **Divisions** are at most ten together, and more is refused), **Label position** (above or below the bar), a **Unit label** (the unit's name as
   printed: its abbreviation unless set; untick **Show unit label** for none) and its **Unit label
   position** (after the labels, after the bar, or on a line of its own above or below),
   **Decimals** (Automatic, or 0 to 3 fixed with the thousands set apart; Automatic gives each label
