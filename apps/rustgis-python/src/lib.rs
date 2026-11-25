@@ -221,10 +221,8 @@ impl Engine {
                     .unwrap_or_default();
                 let (ds, report) = found.load_all_reported().map_err(|e| format!("{}: {e}", found.name))?;
                 let name = found.name.clone();
-                match report.skipped {
-                    0 => {}
-                    1 => session.warn(format!("{name}: 1 row couldn't be read and was left out")),
-                    n => session.warn(format!("{name}: {n} rows couldn't be read and were left out")),
+                if report.skipped > 0 {
+                    session.say(rustgis_engine::cmd::whole::unread_note(&name, report.skipped));
                 }
                 // A Z/M loss this export says from its read; one said only when the layer opened
                 // isn't said here again, so the export's own note says it.
