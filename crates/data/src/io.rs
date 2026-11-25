@@ -3822,7 +3822,7 @@ pub fn read_zip(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadRepor
     read_zip_in(file_name, bytes, None)
 }
 
-/// Reads a ZIP, optionally overriding the source CRS of its Shapefiles and delimited text.
+/// Reads a ZIP, optionally overriding the source CRS of its Shapefiles, delimited text and LandXML.
 /// Other formats retain their own coordinate systems; a CityJSON model takes it only when it names none RustGIS
 /// knows. The override is applied before reading any shapes. Cancellation is checked between
 /// archive members and records; inflating one member cannot be interrupted mid-decompression.
@@ -3978,6 +3978,13 @@ fn read_zip_layers_budget(file_name: &str, bytes: &[u8], crs: Option<Crs>, budge
             let name = Path::new(leaf).file_stem().and_then(|s| s.to_str()).unwrap_or("sheet");
             crate::sheets::read(&b, name, None, &CsvOptions { crs, ..Default::default() })
                 .and_then(|r| charge_retained(&r.0, leaf, budget).map(|()| plain(vec![r])))
+        } else if let Some(crs) = crs.filter(|_| {
+            crate::landxml::is_landxml_name(leaf)
+                || (ext_of(&n) == "xml"
+                    && crate::landxml::looks_like_landxml(&String::from_utf8_lossy(b.get(..b.len().min(4096)).unwrap_or(&b))))
+        }) {
+            // A LandXML file in the system given, as when it is added by itself with one.
+            crate::landxml::read(leaf, &b, Some(crs)).map(plain)
         } else if is_multi_layer_name(leaf) && !leaf.to_ascii_lowercase().ends_with(".zip") {
             // Every layer of a KML, GPX or other file of several, with its styles, as when it is
             // added by itself.
@@ -9023,6 +9030,22 @@ mod tests {
         let clean = read_zip_budget("books.zip", &zip, None, &mut (cost * 2)).unwrap();
         assert_eq!(clean.len(), 2);
         assert!(clean.iter().all(|(_, report)| report.messages.is_empty()));
+    }
+
+    /// A zipped LandXML file is read in the system the zip is given, as it is by itself.
+    #[test]
+    fn a_zipped_landxml_file_takes_the_zips_system() {
+        let xml = br#"<?xml version="1.0"?><LandXML xmlns="http://www.landxml.org/schema/LandXML-1.2" version="1.2"><CgPoints><CgPoint name="a">4649776 500000</CgPoint></CgPoints></LandXML>"#;
+        let zip = crate::zip::write(&[("site.xml".into(), xml.to_vec())]).unwrap();
+        let crs = Crs::from_epsg(32633);
+        let given = read_zip_in("site.zip", &zip, crs).unwrap();
+        let alone = crate::landxml::read("site.xml", xml, crs).unwrap();
+        assert_eq!(given.len(), alone.len());
+        assert_eq!(given[0].0.held_in, alone[0].0.held_in);
+        assert_eq!(given[0].0.features, alone[0].0.features);
+        assert!(!given[0].1.messages.iter().any(|m| m.contains("\"crs\"")), "{:?}", given[0].1.messages);
+        let none = read_zip_in("site.zip", &zip, None).unwrap();
+        assert!(none[0].1.messages.iter().any(|m| m.contains("\"crs\"")), "{:?}", none[0].1.messages);
     }
 
     /// A zipped KML gives every layer with its styles, as the same file added by itself does.
