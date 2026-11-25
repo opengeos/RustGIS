@@ -1335,6 +1335,9 @@ impl<'a, W: Write + Seek> TileStream<'a, W> {
     /// row of tiles they complete is written, and its overviews' rows made. More rows than the
     /// image has are an error, as is a stream of several bands.
     pub fn put(&mut self, rows: &[f32]) -> Result<()> {
+        if self.bands() != 1 {
+            return Err(err(format!("a stream of {} bands is given them all at once (put_bands)", self.bands())));
+        }
         self.put_level(0, &[rows])
     }
 
@@ -1425,7 +1428,7 @@ impl<'a, W: Write + Seek> TileStream<'a, W> {
                     let col = tx * t + x;
                     for (b, band) in rows.iter().enumerate() {
                         let v = if col < w { band.get(y * w + col).copied().unwrap_or(given) } else { given };
-                        let v = holding.of(b, v);
+                        let v = holding.of(b, v, i == 0);
                         if bytes {
                             raw.push(v.round().clamp(0.0, 255.0) as u8);
                         } else {
@@ -1462,10 +1465,12 @@ impl<'a, W: Write + Seek> TileStream<'a, W> {
                 .enumerate()
                 .map(|(b, r)| match alpha {
                     _ if self.classes => pick_rows(r, w, given),
-                    Some((a, ar)) if b < a => average_by_alpha(r, ar, w, given),
+                    Some((a, ar)) if b < a => average_by_alpha(r, ar, w, given, if i == 0 { given } else { f32::NAN }),
                     // A see-through pixel's alpha is 0, which an overview's averages in.
                     Some((a, _)) if b == a => {
-                        let seen: Vec<f32> = r.iter().map(|v| if v.is_nan() || *v == given { 0.0 } else { *v }).collect();
+                        // Only the full image's alpha can be given without a value: an overview's
+                        // is a mean of alphas, whatever it comes to.
+                        let seen: Vec<f32> = r.iter().map(|v| if v.is_nan() || (i == 0 && *v == given) { 0.0 } else { *v }).collect();
                         average_rows(&seen, w, f32::NAN)
                     }
                     _ => average_rows(r, w, given),
@@ -1510,7 +1515,7 @@ impl<'a, W: Write + Seek> TileStream<'a, W> {
         // on a float's scale, no-data as the file says it.
         let mut data = data;
         for (b, band) in data.iter_mut().enumerate() {
-            band.iter_mut().for_each(|v| *v = holding.of(b, *v));
+            band.iter_mut().for_each(|v| *v = holding.of(b, *v, level == 0));
         }
         let (data, kind): (Vec<Vec<f32>>, _) = match self.bytes {
             true => (data.into_iter().map(|b| b.into_iter().map(|v| v.round().clamp(0.0, 255.0)).collect()).collect(), "UInt8"),
@@ -1565,13 +1570,14 @@ struct Holding {
 }
 
 impl Holding {
-    /// Band `b`'s value `v` as the file holds it.
-    fn of(&self, b: usize, v: f32) -> f32 {
+    /// Band `b`'s value `v` as the file holds it, of the full image when `full`: an overview's
+    /// alpha is a mean of alphas, a pixel with none already 0, whatever value it comes to.
+    fn of(&self, b: usize, v: f32, full: bool) -> f32 {
         let none = v.is_nan() || v == self.given;
         match self.alpha {
             None if none => self.nodata,
             None => v,
-            Some((a, _)) if b == a && none => 0.0,
+            Some((a, _)) if b == a && (v.is_nan() || (full && none)) => 0.0,
             Some((a, opaque)) if b == a => v / opaque,
             Some((a, _)) if b < a => v,
             Some(_) if none => f32::NAN,
@@ -1581,13 +1587,13 @@ impl Holding {
 }
 
 /// `rows` of `w` pixels of a colour band made half the size each way as [`average_rows`] makes
-/// them, each pixel weighted by `alpha`'s (the same rows of the alpha band; one with none counts
-/// for nothing), so see-through pixels don't darken an overview's colours; the plain mean where
-/// all four are see-through.
-fn average_by_alpha(rows: &[f32], alpha: &[f32], w: usize, nodata: f32) -> Vec<f32> {
+/// them, each pixel weighted by `alpha`'s (the same rows of the alpha band, `alpha_none` marking
+/// one with none, which counts for nothing), so see-through pixels don't darken an overview's
+/// colours; the plain mean where all four are see-through.
+fn average_by_alpha(rows: &[f32], alpha: &[f32], w: usize, nodata: f32, alpha_none: f32) -> Vec<f32> {
     let h = rows.len() / w.max(1);
     let (hw, hh) = (w.div_ceil(2), h.div_ceil(2));
-    let valid = |v: f32| v.is_finite() && v != nodata;
+    let valid = |v: f32| v.is_finite() && v != alpha_none;
     let plain = average_rows(rows, w, nodata);
     let mut out = Vec::with_capacity(hw * hh);
     for y in 0..hh {
@@ -1886,6 +1892,21 @@ mod tests {
         let red_corner = ((50.0 * 128.0 + 50.0 * 255.0 * 2.0) / (128.0 + 255.0 * 3.0)) as f32;
         assert_eq!((one(3, 0, 0), one(0, 0, 0), one(3, 2, 0)), (corner, red_corner, 1.0));
         assert_eq!((one(0, 1, 1), one(3, 1, 1)), (200.0, 0.5), "see-through pixels darken nothing and halve alpha");
+        // An overview's alpha is a mean of alphas, kept whatever it comes to: one of 64 and 192 is
+        // 128, the template's no-data value here, and still half see-through.
+        let mut rgba = utm(1, 1, vec![vec![0.0]; 4], ColorHint::Rgb { alpha: true }, "UInt8", Some(128.0));
+        rgba.bands.iter_mut().for_each(|b| b.name = String::new());
+        let mut out = Cursor::new(Vec::new());
+        let mut stream = TileStream::new(&rgba, w, h, Samples::Floats, &mut out).unwrap().keeping(1 << 20);
+        let checker: Vec<f32> = (0..px).map(|i| if (i % w as usize + i / w as usize).is_multiple_of(2) { 64.0 } else { 192.0 }).collect();
+        let colour = vec![50.0f32; px];
+        stream.put_bands(&[&colour, &colour, &colour, &checker]).unwrap();
+        let (_, kept) = stream.finish().unwrap();
+        let bytes = out.into_inner();
+        let level = geotiff::read_limited(geotiff::reader(Cursor::new(&bytes)).unwrap(), "o", 300 * 300 * 4, None).unwrap();
+        assert_eq!(level.width, 300);
+        assert!(level.bands[3].data.iter().all(|a| *a == 128.0 / 255.0), "the file's overview");
+        assert!(kept.unwrap().bands[3].data.iter().all(|a| *a == 128.0 / 255.0), "the overview kept");
         // More bands than a reader decodes a tile of are refused; the plan counts the overview
         // kept, the coarsest level when none fits.
         let many = utm(1, 1, vec![vec![0.0]; TileStream::<Cursor<Vec<u8>>>::most_bands() + 1], ColorHint::Gray, "Float32", None);

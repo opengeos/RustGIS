@@ -2587,8 +2587,9 @@ fn edge_pixels_on(r: &Raster, gt: &GeoTransform, bounds: Extent, e: &Extent) -> 
 
 /// Where the strips of rows a training read takes begin, and how many rows each holds, for a
 /// window whose first row is `start` in a file whose tiles have `tile` rows (`None`: a block's):
-/// from the start of the row of tiles the window begins in, a row of tiles at a time, so each is
-/// decoded once, where `fits` says the computer can give a strip that tall (the part read and its
+/// from the start of the row of tiles the window begins in, whole rows of tiles at a time (as many
+/// as make a block's rows, for tiles or strips shorter than that), so each is decoded once, where
+/// `fits` says the computer can give a strip that tall (the part read and its
 /// tiles as decoded, about twice the strip); half as many, and again, where it can't. A strip of
 /// fewer rows than a tile decodes its row of tiles once for each strip in it: a window as wide as
 /// the mosaic of #2761 (83517 columns, 3 bands) needs 513 MB at once for strips of 512 rows. The
@@ -2596,7 +2597,9 @@ fn edge_pixels_on(r: &Raster, gt: &GeoTransform, bounds: Extent, e: &Extent) -> 
 #[cfg(not(target_arch = "wasm32"))]
 fn training_strips(start: u32, tile: Option<u32>, fits: impl Fn(u32) -> bool) -> (u32, u32) {
     let tile = tile.filter(|t| *t > 0).unwrap_or(super::in_blocks::BLOCK.1);
-    let mut strip = tile;
+    // Rows of tiles at least a block's rows, so a file in strips of a row or a few isn't read a
+    // strip at a time.
+    let mut strip = tile.saturating_mul((super::in_blocks::BLOCK.1 / tile).max(1));
     while strip > 1 && !fits(strip) {
         strip /= 2;
     }
@@ -3470,7 +3473,9 @@ fn a_resample_reads_blocks_of_whole_tiles() {
 #[test]
 fn training_strips_follow_the_files_tiles() {
     assert_eq!(training_strips(1500, Some(1024), |_| true), (1024, 1024));
-    assert_eq!(training_strips(1500, Some(256), |_| true), (1280, 256));
+    assert_eq!(training_strips(1500, Some(256), |_| true), (1280, 512));
+    // A file in strips of one row is read a block's rows at a time, not a row.
+    assert_eq!(training_strips(1500, Some(1), |_| true), (1500, super::in_blocks::BLOCK.1));
     assert_eq!(training_strips(1500, Some(1024), |rows| rows <= 300), (1024, 256));
     let block = super::in_blocks::BLOCK.1;
     assert_eq!(training_strips(1500, None, |_| true), (1500 / block * block, block));
