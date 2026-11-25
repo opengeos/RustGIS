@@ -293,7 +293,7 @@ pub fn read_layers(file_name: &str, bytes: &[u8]) -> Result<Vec<LayerRead>> {
     let plain =
         |v: Vec<(Dataset, ReadReport)>| v.into_iter().map(|(dataset, report)| LayerRead { dataset, report, styles: Vec::new() }).collect();
     let mut out: Vec<LayerRead> = match ext.as_str() {
-        "zip" => plain(read_zip(file_name, bytes)?),
+        "zip" => read_zip_layers(file_name, bytes, None)?,
         "kml" | "kmz" => crate::kml::read(file_name, bytes)?
             .into_iter()
             .map(|l| LayerRead { dataset: l.dataset, report: l.report, styles: l.styles })
@@ -3830,8 +3830,19 @@ pub fn read_zip_in(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Ve
     read_zip_budget(file_name, bytes, crs, &mut csv_memory_budget())
 }
 
-/// Delimited members share one allowance, including gzip members whose text is nested in ZIP.
+/// [`read_zip_in`] with each layer's KML styles, for adding the layers drawn as their files say.
+pub fn read_zip_layers(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Vec<LayerRead>> {
+    read_zip_layers_budget(file_name, bytes, crs, &mut csv_memory_budget())
+}
+
+/// [`read_zip_layers_budget`] without the styles.
 fn read_zip_budget(file_name: &str, bytes: &[u8], crs: Option<Crs>, budget: &mut usize) -> Result<Vec<(Dataset, ReadReport)>> {
+    Ok(read_zip_layers_budget(file_name, bytes, crs, budget)?.into_iter().map(|l| (l.dataset, l.report)).collect())
+}
+
+/// Delimited, dBASE and workbook members share one allowance, including gzip members whose text
+/// is nested in ZIP.
+fn read_zip_layers_budget(file_name: &str, bytes: &[u8], crs: Option<Crs>, budget: &mut usize) -> Result<Vec<LayerRead>> {
     let max = max_bytes();
     if bytes.len() as u64 > max {
         return Err(DataError::Format(file_size_error(file_name, max)));
@@ -3891,9 +3902,9 @@ fn read_zip_budget(file_name: &str, bytes: &[u8], crs: Option<Crs>, budget: &mut
             continue;
         };
         match read_shapefile_parts(ShapefileParts { shp, shx, dbf, prj, cpg }, &name, crs) {
-            Ok(mut read) => {
-                read.0.source = Some(format!("{file_name}/{n}"));
-                out.push(read);
+            Ok((mut dataset, report)) => {
+                dataset.source = Some(format!("{file_name}/{n}"));
+                out.push(LayerRead { dataset, report, styles: Vec::new() });
             }
             Err(DataError::Cancelled) => return Err(DataError::Cancelled),
             Err(e) => skipped.push(format!("{n} ({e})")),
@@ -3913,9 +3924,9 @@ fn read_zip_budget(file_name: &str, bytes: &[u8], crs: Option<Crs>, budget: &mut
         let mif = take(&mut entries, &base, "mif").map(|(_, b)| b).unwrap_or_default();
         let mid = take(&mut entries, &base, "mid").map(|(_, b)| b);
         match crate::mapinfo::read_bytes(&mif, mid.as_deref(), &name) {
-            Ok(mut read) => {
-                read.0.source = Some(format!("{file_name}/{n}"));
-                out.push(read);
+            Ok((mut dataset, report)) => {
+                dataset.source = Some(format!("{file_name}/{n}"));
+                out.push(LayerRead { dataset, report, styles: Vec::new() });
             }
             Err(DataError::Cancelled) => return Err(DataError::Cancelled),
             Err(e) => skipped.push(format!("{n} ({e})")),
@@ -3950,34 +3961,39 @@ fn read_zip_budget(file_name: &str, bytes: &[u8], crs: Option<Crs>, budget: &mut
             continue;
         }
         let leaf = n.rsplit('/').next().unwrap_or(&n);
+        let plain = |reads: Vec<(Dataset, ReadReport)>| {
+            reads.into_iter().map(|(dataset, report)| LayerRead { dataset, report, styles: Vec::new() }).collect::<Vec<_>>()
+        };
         // A city model has many layers.
         let read = if ext_of(&n) == "dbf" {
             let cpg = take(&mut entries, &stem(&n), "cpg").map(|(_, b)| b);
             let name = Path::new(leaf).file_stem().and_then(|s| s.to_str()).unwrap_or("table");
-            read_dbf(b, cpg.as_deref(), name, budget).map(|r| vec![r])
+            read_dbf(b, cpg.as_deref(), name, budget).map(|r| plain(vec![r]))
         } else if is_city_model(leaf, &b) {
-            read_city_member(leaf, &b, crs)
+            read_city_member(leaf, &b, crs).map(plain)
         } else if is_delimited_name(leaf) {
-            read_delimited_bytes_budget(leaf, &b, &CsvOptions { crs, ..Default::default() }, budget).map(|r| vec![r])
+            read_delimited_bytes_budget(leaf, &b, &CsvOptions { crs, ..Default::default() }, budget).map(|r| plain(vec![r]))
         } else if crate::sheets::is_sheet_name(leaf) {
-            // A workbook's first sheet, as a workbook added by itself is read.
+            // A workbook's first sheet, as a workbook added by itself is read, within the allowance.
             let name = Path::new(leaf).file_stem().and_then(|s| s.to_str()).unwrap_or("sheet");
-            crate::sheets::read(&b, name, None, &CsvOptions { crs, ..Default::default() }).map(|r| vec![r])
+            crate::sheets::read(&b, name, None, &CsvOptions { crs, ..Default::default() })
+                .and_then(|r| charge_retained(&r.0, leaf, budget).map(|()| plain(vec![r])))
         } else if is_multi_layer_name(leaf) && !leaf.to_ascii_lowercase().ends_with(".zip") {
-            // Every layer of a KML, GPX or other file of several, as when it is added by itself.
-            read_layers(leaf, &b).map(|layers| layers.into_iter().map(|l| (l.dataset, l.report)).collect())
+            // Every layer of a KML, GPX or other file of several, with its styles, as when it is
+            // added by itself.
+            read_layers(leaf, &b)
         } else {
-            read_bytes(leaf, &b).map(|r| vec![r])
+            read_bytes(leaf, &b).map(|r| plain(vec![r]))
         };
         match read {
             Ok(layers) => {
-                for (mut ds, report) in layers {
+                for mut layer in layers {
                     if out.len() >= MAX_ZIP_LAYERS {
-                        skipped.push(format!("{n}: {} (past the {MAX_ZIP_LAYERS}-layer limit)", ds.name));
+                        skipped.push(format!("{n}: {} (past the {MAX_ZIP_LAYERS}-layer limit)", layer.dataset.name));
                         continue;
                     }
-                    ds.source = Some(format!("{file_name}/{n}"));
-                    out.push((ds, report));
+                    layer.dataset.source = Some(format!("{file_name}/{n}"));
+                    out.push(layer);
                 }
             }
             // A run cancelled while a member was read stops the archive, not just that member.
@@ -4007,12 +4023,37 @@ fn read_zip_budget(file_name: &str, bytes: &[u8], crs: Option<Crs>, budget: &mut
         };
         return Err(DataError::Format(format!("{file_name}: no supported layers or tables in the archive could be read{why}{hint}")));
     }
-    if let Some((_, report)) = out.first_mut()
+    if let Some(first) = out.first_mut()
         && !skipped.is_empty()
     {
-        report.messages.push(format!("{file_name}: skipped {}", skipped.join("; ")));
+        first.report.messages.push(format!("{file_name}: skipped {}", skipped.join("; ")));
     }
     Ok(out)
+}
+
+/// Takes what a table read whole keeps (each row and its values, text twice for the copies made
+/// on the way in, as dBASE members are charged) out of a zip's shared `budget`, refusing the
+/// member `name` when it doesn't fit. Its read peaked within the reader's own per-file limit.
+fn charge_retained(ds: &Dataset, name: &str, budget: &mut usize) -> Result<()> {
+    let cost = ds.features.iter().fold(0usize, |sum, f| {
+        let row = f.attrs.iter().fold(
+            std::mem::size_of::<crate::Feature>().saturating_add(f.attrs.capacity().saturating_mul(std::mem::size_of::<Value>())),
+            |row, value| {
+                row.saturating_add(match value {
+                    Value::Text(s) => s.capacity(),
+                    _ => 0,
+                })
+            },
+        );
+        sum.saturating_add(row.saturating_mul(2))
+    });
+    let allowance = *budget;
+    *budget = budget.checked_sub(cost).ok_or_else(|| {
+        DataError::Format(format!(
+            "{name}: the sheet's retained table exceeds the {allowance}-byte remaining memory budget; import a smaller file"
+        ))
+    })?;
+    Ok(())
 }
 
 /// The same schema, decoder and numeric declarations for loose tables and Shapefile attributes.
@@ -8961,6 +9002,41 @@ mod tests {
             let clean = read_zip_budget("tables.zip", &zip, None, &mut (cost * 2)).unwrap();
             assert_eq!(clean.len(), 2);
             assert!(clean.iter().all(|(_, report)| report.messages.is_empty()));
+        }
+    }
+
+    /// Workbook members draw on the same allowance: two that each fit don't both fit in it.
+    #[test]
+    fn zip_workbook_members_share_retained_budget() {
+        let book = crate::sheets::xlsx(&[("Sheet1", &[&["id", "n"], &["A", "1"]])]);
+        let one = crate::zip::write(&[("a.xlsx".into(), book.clone())]).unwrap();
+        let alone = read_zip_budget("books.zip", &one, None, &mut { usize::MAX }).unwrap();
+        assert_eq!(alone.len(), 1);
+        let mut left = 1 << 20;
+        charge_retained(&alone[0].0, "a.xlsx", &mut left).unwrap();
+        let cost = (1 << 20) - left;
+        assert!(cost > 0);
+        let zip = crate::zip::write(&[("a.xlsx".into(), book.clone()), ("b.xlsx".into(), book)]).unwrap();
+        let limited = read_zip_budget("books.zip", &zip, None, &mut { cost }).unwrap();
+        assert_eq!(limited.len(), 1);
+        assert!(limited[0].1.messages.iter().any(|m| m.contains("b.xlsx") && m.contains("memory budget")), "{:?}", limited[0].1.messages);
+        let clean = read_zip_budget("books.zip", &zip, None, &mut (cost * 2)).unwrap();
+        assert_eq!(clean.len(), 2);
+        assert!(clean.iter().all(|(_, report)| report.messages.is_empty()));
+    }
+
+    /// A zipped KML gives every layer with its styles, as the same file added by itself does.
+    #[test]
+    fn a_zipped_kml_keeps_its_layers_and_styles() {
+        let doc = br##"<?xml version="1.0"?><kml xmlns="http://www.opengis.net/kml/2.2"><Document><Style id="red"><LineStyle><color>ff0000ff</color><width>3</width></LineStyle></Style><Placemark><styleUrl>#red</styleUrl><Point><coordinates>1,2</coordinates></Point></Placemark><Placemark><styleUrl>#red</styleUrl><LineString><coordinates>0,0 1,1</coordinates></LineString></Placemark></Document></kml>"##;
+        let alone = read_layers("a.kml", doc).unwrap();
+        assert_eq!(alone.len(), 2);
+        assert!(alone.iter().all(|l| !l.styles.is_empty()));
+        let zipped = read_layers("a.zip", &crate::zip::write(&[("a.kml".into(), doc.to_vec())]).unwrap()).unwrap();
+        assert_eq!(zipped.len(), alone.len());
+        for (z, a) in zipped.iter().zip(&alone) {
+            assert_eq!(z.dataset.features, a.dataset.features);
+            assert_eq!(format!("{:?}", z.styles), format!("{:?}", a.styles));
         }
     }
 
