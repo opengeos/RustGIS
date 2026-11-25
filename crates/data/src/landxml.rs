@@ -117,8 +117,8 @@ pub fn read(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Vec<(Data
         named.get(n.attribute("pntRef")?).copied()
     };
     // The points along a CoordGeom: each Line, Curve or Spiral's start (and end).
-    // `skipped` counts the point references (a Start or End) that can't be read.
-    let path = |cg: &Node, skipped: &mut usize| -> Vec<Coord> {
+    // `unread` counts the point references (a Start or End) that can't be read.
+    let path = |cg: &Node, unread: &mut usize| -> Vec<Coord> {
         let mut pts: Vec<Coord> = Vec::new();
         for seg in cg.children().filter(|c| c.is_element() && matches!(local(c), "Line" | "Curve" | "Spiral" | "IrregularLine")) {
             // A curve's PI (where its tangents meet) is off the curve: its chord runs Start to End.
@@ -127,7 +127,7 @@ pub fn read(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Vec<(Data
                     match pt(&n) {
                         Some(c) if pts.last() != Some(&c) => pts.push(c),
                         Some(_) => {}
-                        None => *skipped += 1,
+                        None => *unread += 1,
                     }
                 }
             }
@@ -198,6 +198,7 @@ pub fn read(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Vec<(Data
     let mut surface_points = 0usize;
     // The surfaces cut at the face limit, said together after them.
     let mut over_limit: Vec<String> = Vec::new();
+    let mut faces_left_out = 0usize;
     for s in elements(&root, "Surface") {
         let sname = s.attribute("name").unwrap_or("").to_string();
         let mut pnts: HashMap<&str, (Coord, Option<f64>)> = HashMap::new();
@@ -214,9 +215,13 @@ pub fn read(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Vec<(Data
         // Invisible faces (i="1") are holes in the surface, never read, so the cap counts the
         // faces that are.
         for (i, f) in elements(&s, "F").filter(|f| f.attribute("i") != Some("1")).enumerate() {
+            // Past the limit, a face is only counted, so the notice says how many are left out.
             if i >= MAX_FACES {
-                over_limit.push(sname.clone());
-                break;
+                if i == MAX_FACES {
+                    over_limit.push(sname.clone());
+                }
+                faces_left_out += 1;
+                continue;
             }
             let tri: Option<Vec<(Coord, Option<f64>)>> = text_of(&f).split_whitespace().map(|id| pnts.get(id).copied()).collect();
             match tri.as_deref() {
@@ -241,7 +246,7 @@ pub fn read(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Vec<(Data
         [] => {}
         [one] => report.messages.push(crate::loss::Note::loss(
             crate::loss::LossCode::DroppedOverLimit,
-            format!("surface '{one}' has more than {MAX_FACES} faces: the rest are left out"),
+            format!("surface '{one}' has more than {MAX_FACES} faces: the {faces_left_out} past the limit are left out"),
         )),
         many => {
             let shown: Vec<String> = many.iter().take(10).map(|n| format!("'{n}'")).collect();
@@ -249,7 +254,7 @@ pub fn read(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Vec<(Data
             report.messages.push(crate::loss::Note::loss(
                 crate::loss::LossCode::DroppedOverLimit,
                 format!(
-                    "{} surfaces ({}{more}) have more than {MAX_FACES} faces: the rest of each are left out",
+                    "{} surfaces ({}{more}) have more than {MAX_FACES} faces: the {faces_left_out} past the limit are left out",
                     many.len(),
                     shown.join(", ")
                 ),
