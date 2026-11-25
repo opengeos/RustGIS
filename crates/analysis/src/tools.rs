@@ -1857,6 +1857,13 @@ fn part(g: &Geometry, mask: &MultiPolygon<f64>, inside: bool) -> Option<Geometry
     }
 }
 
+/// A multipolygon in the run's plane as a [`Geometry`] of the same coordinates, not taken back
+/// to the layer's, so [`crate::validity::check`] looks at the rings the overlay would.
+fn in_plane(mp: &MultiPolygon<f64>) -> Geometry {
+    let ring = |r: &geo::LineString<f64>| r.0.iter().map(|c| Coord::new(c.x, c.y)).collect();
+    Geometry::Polygon(mp.0.iter().map(|p| std::iter::once(p.exterior()).chain(p.interiors()).map(ring).collect()).collect())
+}
+
 /// Clip's part and whether its total polygon area is less than one millionth of the input's:
 /// a possible boundary sliver, kept unchanged. Measure both in the overlay plane while they
 /// are already projected, once per feature, without projecting the result back again to measure
@@ -2324,14 +2331,16 @@ fn clip_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>, cache_bytes: Opti
                         });
                         match place {
                             // Kept as it is only if it is one valid shape (no ring crossing itself or
-                            // another, a hole inside its polygon, its interior in one piece): the
-                            // overlay would have rewritten anything else. Looked at once; a feature of
-                            // more than [`KEEP_WHOLE_COORDS`] coordinates, which the check would need
-                            // about 100 bytes each for, goes to the overlay.
+                            // another, a hole inside its polygon, its interior in one piece) in the
+                            // run's plane, where the overlay works: it would have rewritten anything
+                            // else, and a ring simple in longitude/latitude can cross itself once
+                            // projected. Looked at once; a feature of more than [`KEEP_WHOLE_COORDS`]
+                            // coordinates, which the check would need about 100 bytes each for, goes
+                            // to the overlay.
                             Place::Inside
                                 if *valid.get_or_insert_with(|| {
                                     shape.coord_count() <= KEEP_WHOLE_COORDS
-                                        && crate::validity::check(Some(&shape), crate::validity::MAX_WORK).problems.is_empty()
+                                        && crate::validity::check(Some(&in_plane(&whole)), crate::validity::MAX_WORK).problems.is_empty()
                                 }) =>
                             {
                                 cache.big = None;
@@ -13674,6 +13683,31 @@ mod tests {
         let Some(Geometry::Polygon(wound)) = by_row(7) else { panic!("not a polygon") };
         let ccw = to_multipolygon(&Geometry::Polygon(wound)).unwrap();
         assert!(ccw.0[0].exterior().0.windows(2).map(|w| w[0].x * w[1].y - w[1].x * w[0].y).sum::<f64>() > 0.0);
+    }
+
+    /// A ring that doesn't cross itself in longitude/latitude but does in the plane the overlay
+    /// works in (Mercator stretches the north more) isn't kept as it is inside a mask: it goes
+    /// to the overlay, as it did before features clear of the edges were kept whole.
+    #[test]
+    fn clip_overlays_a_ring_that_crosses_itself_only_once_projected() {
+        let ring = Geometry::Polygon(vec![vec![vec![
+            Coord::new(0.0, 0.0),
+            Coord::new(10.0, 80.0),
+            Coord::new(0.0, 80.0),
+            Coord::new(9.0, 73.0),
+            Coord::new(0.0, 0.0),
+        ]]]);
+        assert!(crate::validity::check(Some(&ring), crate::validity::MAX_WORK).problems.is_empty());
+        let mut masks = Dataset::new("masks", GeometryType::Polygon, vec![]);
+        masks.push(Some(sq(-20.0, -20.0, 104.0)), vec![]);
+        let mut features = Dataset::new("features", GeometryType::Polygon, vec![]);
+        features.push(Some(ring.clone()), vec![]);
+        let m = Map(HashMap::from([("masks".into(), masks), ("features".into(), features)]));
+        let out = layer(crate::run("clip", &m, &serde_json::json!({"input":"features", "clip":"masks"})).unwrap());
+        let Some(Some(Geometry::Polygon(got))) = out.features.first().map(|f| f.geometry.clone()) else { panic!("no polygon") };
+        let Geometry::Polygon(was) = ring else { panic!("not a polygon") };
+        // The overlay splits it where it crosses: more than the one ring of five vertices.
+        assert_ne!(got.iter().flatten().map(Vec::len).collect::<Vec<_>>(), was.iter().flatten().map(Vec::len).collect::<Vec<_>>());
     }
 
     /// A feature is `Inside` or `Outside` a mask only when no edge of it is within reach of the
