@@ -4156,14 +4156,14 @@ fn foggy_picture_marker(
     if u64::from(bw) * u64::from(bh) > FOG_BOX_PIXELS {
         return picture_marker(pm, p, w, Transform::from_translate(x, y), opacity, halo, true, ppp);
     }
-    if halo.is_some() && !picture_marker(pm, p, w, Transform::from_translate(x, y), opacity, halo, false, ppp) {
-        return false;
-    }
+    // The frame is stroked once everything that can fail has not, so a fallback to the circle
+    // doesn't stroke it twice.
+    let frame = |pm: &mut Canvas| halo.is_none() || picture_marker(pm, p, w, Transform::from_translate(x, y), opacity, halo, false, ppp);
     if bw == 0 || bh == 0 {
-        return true;
+        return frame(pm);
     }
     let Some(mut own) = pm.sub(bw, bh) else { return false };
-    if !picture_marker(&mut own, p, w, Transform::from_translate(x - x0, y - y0), opacity, None, true, ppp) {
+    if !picture_marker(&mut own, p, w, Transform::from_translate(x - x0, y - y0), opacity, None, true, ppp) || !frame(pm) {
         return false;
     }
     // The fog over what the image drew, not over its box: each colour goes `t` of the way to it.
