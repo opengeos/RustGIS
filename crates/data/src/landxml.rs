@@ -208,6 +208,8 @@ pub fn read(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Vec<(Data
         GeometryType::Polygon,
         vec![Field::new("surface", FieldType::Text), Field::new("elevation", FieldType::Double)],
     );
+    // The surfaces cut at the face limit, said together after them.
+    let mut over_limit: Vec<String> = Vec::new();
     for s in elements(&root, "Surface") {
         let sname = s.attribute("name").unwrap_or("").to_string();
         let mut pnts: HashMap<&str, (Coord, Option<f64>)> = HashMap::new();
@@ -222,10 +224,7 @@ pub fn read(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Vec<(Data
         // faces that are.
         for (i, f) in elements(&s, "F").filter(|f| f.attribute("i") != Some("1")).enumerate() {
             if i >= MAX_FACES {
-                report.messages.push(crate::loss::Note::loss(
-                    crate::loss::LossCode::DroppedOverLimit,
-                    format!("surface '{sname}' has more than {MAX_FACES} faces: the rest are left out"),
-                ));
+                over_limit.push(sname.clone());
                 break;
             }
             let tri: Option<Vec<(Coord, Option<f64>)>> = text_of(&f).split_whitespace().map(|id| pnts.get(id).copied()).collect();
@@ -243,6 +242,25 @@ pub fn read(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Vec<(Data
         }
     }
 
+    match over_limit.as_slice() {
+        [] => {}
+        [one] => report.messages.push(crate::loss::Note::loss(
+            crate::loss::LossCode::DroppedOverLimit,
+            format!("surface '{one}' has more than {MAX_FACES} faces: the rest are left out"),
+        )),
+        many => {
+            let shown: Vec<String> = many.iter().take(10).map(|n| format!("'{n}'")).collect();
+            let more = if many.len() > 10 { format!(" and {} more", many.len() - 10) } else { String::new() };
+            report.messages.push(crate::loss::Note::loss(
+                crate::loss::LossCode::DroppedOverLimit,
+                format!(
+                    "{} surfaces ({}{more}) have more than {MAX_FACES} faces: the rest of each are left out",
+                    many.len(),
+                    shown.join(", ")
+                ),
+            ));
+        }
+    }
     if missing_parcels > 0 {
         let (parcels, verb) = if missing_parcels == 1 { ("parcel", "was") } else { ("parcels", "were") };
         report.messages.push(crate::loss::Note::loss(
