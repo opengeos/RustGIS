@@ -465,6 +465,8 @@ pub fn read_page_within(bytes: &[u8], name: &str, limit: usize) -> Result<Page> 
         // Assumed, so said: an answer that names no coordinate system.
         no_crs: any_geometry && code.is_none() && wkt.is_none(),
         unread_code: any_geometry && unread_code,
+        // A page without geometry places nothing in the code it names, so says nothing of it,
+        // unlike a WKT it can't read, which is said (plainly) as what the answer holds.
         unusable_code: unusable_code.filter(|_| any_geometry),
         other_unusable: 0,
         unreadable: tally.unreadable,
