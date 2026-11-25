@@ -117,23 +117,32 @@ pub fn read(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Vec<(Data
         named.get(n.attribute("pntRef")?).copied()
     };
     // The points along a CoordGeom: each Line, Curve or Spiral's start (and end).
-    // `skipped` counts the vertices that can't be read, each once: a point one segment ends at
-    // and the next starts at, named by the same `pntRef`, is one vertex.
+    // `skipped` counts the vertices that can't be read, each once: the point one segment ends at
+    // is the one the next starts at (however each writes it), and a `pntRef` named again is the
+    // same point.
     let path = |cg: &Node, skipped: &mut usize| -> Vec<Coord> {
         let mut pts: Vec<Coord> = Vec::new();
         let mut missing: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        let mut end_missing = false;
         for seg in cg.children().filter(|c| c.is_element() && matches!(local(c), "Line" | "Curve" | "Spiral" | "IrregularLine")) {
             // A curve's PI (where its tangents meet) is off the curve: its chord runs Start to End.
             for k in ["Start", "End"] {
-                if let Some(n) = seg.children().find(|c| c.is_element() && local(c) == k) {
-                    match pt(&n) {
-                        Some(c) if pts.last() != Some(&c) => pts.push(c),
-                        Some(_) => {}
-                        None => match n.attribute("pntRef") {
-                            Some(name) if !missing.insert(name) => {}
-                            _ => *skipped += 1,
-                        },
-                    }
+                let Some(n) = seg.children().find(|c| c.is_element() && local(c) == k) else {
+                    continue;
+                };
+                let read = pt(&n);
+                let junction = k == "Start" && end_missing;
+                match read {
+                    Some(c) if pts.last() != Some(&c) => pts.push(c),
+                    Some(_) => {}
+                    None => match n.attribute("pntRef") {
+                        Some(name) if !missing.insert(name) => {}
+                        _ if junction => {}
+                        _ => *skipped += 1,
+                    },
+                }
+                if k == "End" {
+                    end_missing = read.is_none();
                 }
             }
         }
@@ -378,6 +387,12 @@ mod tests {
   <Line><Start>1 1</Start><End>0 1</End></Line>
 </CoordGeom></Parcel></Parcels></LandXML>"#;
         let layers = read("j.xml", junction.as_bytes(), None).unwrap();
+        let said: Vec<_> = layers[0].1.messages.texts().filter(|m| m.contains("vertex") || m.contains("vertices")).collect();
+        assert_eq!(said, ["1 LandXML vertex couldn't be read and was left out of its shape"]);
+        // So is one written inline, unreadable, at both ends of the junction.
+        let inline =
+            junction.replace(r#"<End pntRef="missing"/>"#, "<End>x y</End>").replace(r#"<Start pntRef="missing"/>"#, "<Start>x y</Start>");
+        let layers = read("i.xml", inline.as_bytes(), None).unwrap();
         let said: Vec<_> = layers[0].1.messages.texts().filter(|m| m.contains("vertex") || m.contains("vertices")).collect();
         assert_eq!(said, ["1 LandXML vertex couldn't be read and was left out of its shape"]);
     }
