@@ -139,6 +139,9 @@ pub struct Losses {
     pub with_zm: usize,
     /// Places that convert to beyond longitude/latitude (the answer's system may not fit them).
     pub beyond: usize,
+    /// The coordinate system code an answer with features with a geometry names and RustGIS
+    /// can't use, without a WKT (read as longitude/latitude).
+    pub unusable_code: Option<u32>,
 }
 
 impl Losses {
@@ -152,6 +155,7 @@ impl Losses {
         self.unprojected = self.unprojected.saturating_add(other.unprojected);
         self.with_zm = self.with_zm.saturating_add(other.with_zm);
         self.beyond = self.beyond.saturating_add(other.beyond);
+        self.unusable_code = self.unusable_code.or(other.unusable_code);
     }
 
     /// What they say, one message per kind (as [`read`] says them).
@@ -163,17 +167,33 @@ impl Losses {
                 "the answer names no coordinate system; coordinates are read as longitude/latitude",
             ));
         }
+        // Said only when a geometry was read in it: assumed, then.
+        if let Some(code) = self.unusable_code {
+            out.push(crate::loss::Note::loss(
+                crate::loss::LossCode::AssumedCrs,
+                format!("coordinate system {code} can't be used; coordinates are read as longitude/latitude"),
+            ));
+        }
         if self.unreadable > 0 {
-            out.push(format!("{} values don't fit their field's type and are left empty", self.unreadable));
+            out.push(crate::loss::Note::loss(
+                crate::loss::LossCode::DroppedValue,
+                format!("{} values don't fit their field's type and are left empty", self.unreadable),
+            ));
         }
         if self.not_utf8 > 0 {
-            out.push(format!(
-                "{} values, field names or aliases aren't valid UTF-8; the bytes that can't be read are replaced with U+FFFD",
-                self.not_utf8
+            out.push(crate::loss::Note::loss(
+                crate::loss::LossCode::ChangedEncoding,
+                format!(
+                    "{} values, field names or aliases aren't valid UTF-8; the bytes that can't be read are replaced with U+FFFD",
+                    self.not_utf8
+                ),
             ));
         }
         if self.flat_rings > 0 {
-            out.push(format!("{} polygon rings have no area and are left out", self.flat_rings));
+            out.push(crate::loss::Note::loss(
+                crate::loss::LossCode::DroppedRing,
+                format!("{} polygon rings have no area and are left out", self.flat_rings),
+            ));
         }
         if self.unprojected > 0 {
             out.push(format!(
@@ -319,10 +339,16 @@ pub fn read_page_within(bytes: &[u8], name: &str, limit: usize) -> Result<Page> 
         fields.push(Field { name, ty: read_as.field_type(), alias });
     }
     if repeated > 0 {
-        report.messages.push(format!("{repeated} fields repeat an earlier field's name and are left out"));
+        report.messages.push(crate::loss::Note::loss(
+            crate::loss::LossCode::DroppedValue,
+            format!("{repeated} fields repeat an earlier field's name and are left out"),
+        ));
     }
     if not_read > 0 {
-        report.messages.push(format!("{not_read} fields hold geometries, blobs or rasters, which aren't read, and are left out"));
+        report.messages.push(crate::loss::Note::loss(
+            crate::loss::LossCode::DroppedValue,
+            format!("{not_read} fields hold geometries, blobs or rasters, which aren't read, and are left out"),
+        ));
     }
     if unknown > 0 {
         report.messages.push(format!("{unknown} fields have a type RustGIS doesn't know; their values are read as text"));
@@ -354,13 +380,15 @@ pub fn read_page_within(bytes: &[u8], name: &str, limit: usize) -> Result<Page> 
             .messages
             .get(said_before..)
             .is_some_and(|m| m.iter().any(|m| m.ends_with("; coordinates are read as longitude/latitude")));
+    // Said with the page's losses, once it is known that a geometry was read in it.
+    let mut unusable_code = None;
     if crs.is_none()
         && wkt.is_none()
         && let Some(code) = code
         && crate::filegdb::crs_of_code(code) != Some(crate::raster::Crs::LonLat)
     {
         unread_code = true;
-        report.messages.push(format!("coordinate system {code} can't be used; coordinates are read as longitude/latitude"));
+        unusable_code = Some(code);
     }
 
     let layer_type = match shape_kind {
@@ -402,6 +430,7 @@ pub fn read_page_within(bytes: &[u8], name: &str, limit: usize) -> Result<Page> 
         // Assumed, so said: an answer that names no coordinate system.
         no_crs: any_geometry && code.is_none() && wkt.is_none(),
         unread_code: any_geometry && unread_code,
+        unusable_code: unusable_code.filter(|_| any_geometry),
         unreadable: tally.unreadable,
         not_utf8: tally.not_utf8,
         flat_rings: tally.flat_rings,

@@ -148,7 +148,10 @@ pub(crate) fn encoding(cpg: Option<&[u8]>, ldid: u8, notes: &mut crate::loss::No
         if let Some(encoding) = DbfEncoding::from_name(label) {
             return encoding;
         }
-        notes.push("Shapefile: unsupported or empty .cpg; using the .dbf code page, or UTF-8 if unavailable");
+        notes.push(crate::loss::Note::loss(
+            crate::loss::LossCode::AssumedEncoding,
+            "Shapefile: unsupported or empty .cpg; using the .dbf code page, or UTF-8 if unavailable",
+        ));
     }
     // No language driver: UTF-8, as it always was, without a note.
     if ldid == 0 {
@@ -162,7 +165,10 @@ pub(crate) fn encoding(cpg: Option<&[u8]>, ldid: u8, notes: &mut crate::loss::No
         Some(name) => format!(" (code page {p}, {name})"),
         None => format!(" (code page {p})"),
     });
-    notes.push(format!("Shapefile: unsupported .dbf code page 0x{ldid:02X}{named}; using UTF-8"));
+    notes.push(crate::loss::Note::loss(
+        crate::loss::LossCode::AssumedEncoding,
+        format!("Shapefile: unsupported .dbf code page 0x{ldid:02X}{named}; using UTF-8"),
+    ));
     DbfEncoding::Utf8
 }
 
@@ -422,7 +428,10 @@ pub(crate) fn read_cpg(path: &std::path::Path, notes: &mut crate::loss::Notes) -
     match try_read_cpg(path) {
         Ok(bytes) => bytes,
         Err(e) => {
-            notes.push(format!("could not read the .cpg ({e}); using the .dbf code page, or UTF-8 if unavailable"));
+            notes.push(crate::loss::Note::loss(
+                crate::loss::LossCode::AssumedEncoding,
+                format!("could not read the .cpg ({e}); using the .dbf code page, or UTF-8 if unavailable"),
+            ));
             None
         }
     }
@@ -585,10 +594,15 @@ mod tests {
     fn a_page_rustgis_cant_decode_is_named_in_the_note() {
         let mut notes = crate::loss::Notes::new();
         assert!(matches!(encoding(None, 0x6C, &mut notes), DbfEncoding::Utf8));
-        assert_eq!(notes, ["Shapefile: unsupported .dbf code page 0x6C (code page 863, DOS French Canadian); using UTF-8"]);
+        assert_eq!(
+            notes.texts().collect::<Vec<_>>(),
+            ["Shapefile: unsupported .dbf code page 0x6C (code page 863, DOS French Canadian); using UTF-8"]
+        );
+        assert_eq!(notes[0].loss, Some(crate::loss::LossCode::AssumedEncoding));
         let mut notes = crate::loss::Notes::new();
         encoding(None, 0xFF, &mut notes);
-        assert_eq!(notes, ["Shapefile: unsupported .dbf code page 0xFF; using UTF-8"]);
+        assert_eq!(notes.texts().collect::<Vec<_>>(), ["Shapefile: unsupported .dbf code page 0xFF; using UTF-8"]);
+        assert_eq!(notes[0].loss, Some(crate::loss::LossCode::AssumedEncoding));
     }
 
     /// Text is read as UTF-8 unless another encoding is named, with none named, with UTF-8 named

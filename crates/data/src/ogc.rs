@@ -4595,6 +4595,11 @@ impl Pages {
                         .messages
                         .push(format!("the answer names no coordinate system; coordinates are read in {asked}, the system asked for"));
                 }
+                if let Some(code) = losses.unusable_code.take() {
+                    report
+                        .messages
+                        .push(format!("coordinate system {code} can't be used; coordinates are read in {asked}, the system asked for"));
+                }
                 // One it names that RustGIS can't use (a code, a WKT): read as asked too (as a
                 // GeoJSON answer's is), and its message says so.
                 for mut note in std::mem::replace(&mut report.messages, crate::loss::Notes::new()) {
@@ -7127,7 +7132,7 @@ mod tests {
             pages = match pages.join_page(page) {
                 Step::Fetch(p) => *p,
                 Step::Decoded(_, report, None) => {
-                    assert_eq!(report.messages, ["5 polygon rings have no area and are left out"]);
+                    assert_eq!(report.messages.texts().collect::<Vec<_>>(), ["5 polygon rings have no area and are left out"]);
                     break;
                 }
                 other => panic!("{other:?}"),

@@ -629,6 +629,13 @@ const UNSUPPORTED_LDIDS: &[(u8, &str)] = &[
 /// Three records make a limit-one read genuinely sampled; names and values use the same bytes.
 /// `notes` is what a read of the whole file says. A source read in place says those of opening
 /// when it opens, and the count of values (`places: …`) with them once it is read whole.
+/// An encoding RustGIS falls back to (a `.cpg` or code page it can't use) is said as assumed.
+fn encoding_assumed(notes: &rustgis_data::loss::Notes) {
+    for note in notes.iter().filter(|n| n.contains("; using ")) {
+        assert_eq!(note.loss, Some(rustgis_data::loss::LossCode::AssumedEncoding), "{note:?}");
+    }
+}
+
 fn check_ldid_readers(ldid: u8, text: &[u8], expected: &str, cpg: Option<&[u8]>, notes: &[&str]) {
     let files = named_parts(text, text, ldid, cpg, 3);
     let check = |ds: &Dataset, rows: usize| {
@@ -644,6 +651,7 @@ fn check_ldid_readers(ldid: u8, text: &[u8], expected: &str, cpg: Option<&[u8]>,
     check(&layers[0].0, 3);
     assert_eq!(layers[0].1.skipped, 0);
     assert_eq!(texts(&layers[0].1.messages), notes, "LDID {ldid:02X} ZIP notes");
+    encoding_assumed(&layers[0].1.messages);
     #[cfg(not(target_arch = "wasm32"))]
     {
         use rustgis_data::source::{FeatureSource, Request};
@@ -656,10 +664,12 @@ fn check_ldid_readers(ldid: u8, text: &[u8], expected: &str, cpg: Option<&[u8]>,
         check(&ds, 3);
         assert_eq!(report.skipped, 0);
         assert_eq!(texts(&report.messages), notes, "LDID {ldid:02X} loose-file notes");
+        encoding_assumed(&report.messages);
         let src = open_shp(&path, "places").unwrap();
         assert_eq!(src.info().fields[0].name, expected, "LDID {ldid:02X} streamed field name");
         let opening: Vec<&str> = notes.iter().copied().filter(|n| !n.starts_with("places: ")).collect();
         assert_eq!(texts(&src.info().notes), opening, "LDID {ldid:02X} streamed notes");
+        encoding_assumed(&src.info().notes);
         let whole: Vec<String> =
             notes.iter().map(|n| if n.starts_with("places: ") { n.to_string() } else { format!("places: {n}") }).collect();
         assert_eq!(texts(&rustgis_data::source::materialize(&src).unwrap().1.messages), whole, "LDID {ldid:02X} whole read in place");

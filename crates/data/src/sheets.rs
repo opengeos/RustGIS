@@ -205,10 +205,13 @@ fn grid_unguarded(mut wb: Sheets<Cursor<&[u8]>>, sheet: Option<&str>) -> Result<
     // Serial 60 is the 1900 system's 1900-02-29, a day that never was. A column of dates reads it
     // as one that isn't a date (null, and counted); in a column of other things it is read as
     // empty and counted here, as it would not be text of a day.
+    // Counted for the rows below the heading, each a value read as empty: kept, or left out as
+    // empty when it was all the row held.
     let mut phantom_dates = vec![0usize; w];
     let mut error_cells = vec![0usize; w];
     let mut rows = range.rows().enumerate().map(|(row, r)| {
         let mut had_error = false;
+        let mut phantom: Vec<usize> = Vec::new();
         let cells = r
             .iter()
             .enumerate()
@@ -221,18 +224,16 @@ fn grid_unguarded(mut wb: Sheets<Cursor<&[u8]>>, sheet: Option<&str>) -> Result<
                     String::new()
                 }
                 (Data::DateTime(t), Some(None)) if is_phantom_day(t) => {
-                    if let Some(n) = phantom_dates.get_mut(k) {
-                        *n += 1;
-                    }
+                    phantom.push(k);
                     String::new()
                 }
                 _ => cell(d),
             })
             .collect::<Vec<String>>();
-        (row, cells, had_error)
+        (row, cells, had_error, phantom)
     });
     let mut empty_error_rows = 0;
-    let mut keep = |(_, cells, had_error): &(usize, Vec<String>, bool)| {
+    let mut keep = |(_, cells, had_error, _): &(usize, Vec<String>, bool, Vec<usize>)| {
         let nonempty = cells.iter().any(|c| !c.trim().is_empty());
         if !nonempty && *had_error {
             empty_error_rows += 1;
@@ -240,7 +241,7 @@ fn grid_unguarded(mut wb: Sheets<Cursor<&[u8]>>, sheet: Option<&str>) -> Result<
         nonempty
     };
     // The first row with anything in it names the columns.
-    let (header_row, headers, _) = rows.by_ref().find(&mut keep).unwrap_or_default();
+    let (header_row, headers, _, _) = rows.by_ref().find(&mut keep).unwrap_or_default();
     if headers.is_empty() {
         return Err(DataError::Format(format!("sheet '{pick}' is empty")));
     }
@@ -261,7 +262,17 @@ fn grid_unguarded(mut wb: Sheets<Cursor<&[u8]>>, sheet: Option<&str>) -> Result<
             if h.trim().is_empty() { column_letter(first_col + i) } else { h.trim().to_string() }
         })
         .collect();
-    let rows = rows.filter(keep).map(|(_, cells, _)| cells).collect();
+    let rows = rows
+        .inspect(|(_, _, _, phantom)| {
+            for k in phantom {
+                if let Some(n) = phantom_dates.get_mut(*k) {
+                    *n += 1;
+                }
+            }
+        })
+        .filter(keep)
+        .map(|(_, cells, _, _)| cells)
+        .collect();
     Ok(Grid { names, pick, headers, rows, dates, rounded_dates, error_cells, header_error_cells, empty_error_rows, phantom_dates })
 }
 
@@ -805,8 +816,20 @@ mod tests {
             "{:?}",
             report.messages
         );
+        let said = report.messages.iter().find(|m| m.contains("isn't a date")).unwrap();
+        assert_eq!(said.loss, Some(crate::loss::LossCode::DroppedValue));
         let (_, report) = book("POINT (3 4)");
         assert!(!report.messages.iter().any(|m| m.contains("isn't a date")), "{:?}", report.messages);
+        // A row whose only value is serial 60 in the WKT column is left out as empty, and its value
+        // read as empty is said.
+        let phantom = r#"<c s="0"><v>60</v></c>"#;
+        let empty = xlsx(&[("Places", &[&["name", "wkt"], &["a", "POINT (1 2)"], &["", phantom]])]);
+        let mut entries = crate::zip::read(&empty).unwrap();
+        entries.push(("xl/styles.xml".into(), br#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><cellXfs count="1"><xf numFmtId="14"/></cellXfs></styleSheet>"#.to_vec()));
+        let opts = CsvOptions { wkt: Some("wkt".into()), ..CsvOptions::default() };
+        let (ds, report) = read(&crate::zip::write(&entries).unwrap(), "places", None, &opts).unwrap();
+        assert_eq!(ds.features.len(), 1);
+        assert!(report.messages.iter().any(|m| m.contains("1 value in 'wkt' isn't a date")), "{:?}", report.messages);
     }
 
     /// Multiple errors in one column and another column count once each; blank cells don't.
