@@ -3468,6 +3468,8 @@ fn a_scripts_error_says_where_it_stopped() {
         }
     }
     // An edit to a layer read in place.
+    // `streamed` is declared after `path`, so it drops first and releases the file before it is removed
+    // (a file still open can't be removed on Windows): keep this order.
     let path = RemoveOnDrop(grid_fgb("script-stopped-at", 4));
     let mut streamed = with_streamed(&path.0);
     let script = "edit.enable {\"on\": true}\nedit.addFeature {\"layer\": \"Streamed\", \"geometry\": {\"type\": \"Point\", \"coordinates\": [1, 2]}}";
