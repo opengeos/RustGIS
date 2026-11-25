@@ -144,7 +144,8 @@ fn shown(c: &Class) -> String {
 /// `l` as a layer of this map of this project: another map, or another project, may reuse its id.
 /// A map goes by what it is (`Map::instance_id`) and its name, as Define Projection's does: moving
 /// it keeps its typed text, a map deleted before it doesn't hand its state to the next one, and a
-/// copy keeps its layer ids and is another map.
+/// copy keeps its layer ids and is another map. Renaming the map starts its layers' state afresh,
+/// as it always did.
 pub(crate) fn layer_key(app: &RustGisApp, l: &Layer) -> egui::Id {
     let map = app.session.map();
     egui::Id::unique((app.session.opened, map.instance_id(), map.name.as_str(), l.id))

@@ -3482,6 +3482,22 @@ fn calculation_preview(rows: &[rustgis_engine::cmd::edit::CalculationPreview]) -
 mod tests {
     use super::*;
 
+    /// The GeoPackage prompt belongs to the map it opened on, wherever that map goes among the maps;
+    /// another map or project refuses it (#2959).
+    #[test]
+    fn the_gpkg_prompt_follows_its_map_when_the_map_moves() {
+        let mut app = RustGisApp::with_sample();
+        let first = app.session.map().name.clone();
+        let dialogs = Dialogs { gpkg_map: Some((app.session.opened, map_key(&app.session))), ..Dialogs::default() };
+        assert!(dialogs.gpkg_owner(&app.session).is_ok());
+        app.run("map.new", json!({"name": "Second"})).unwrap();
+        assert!(dialogs.gpkg_owner(&app.session).is_err(), "another map is in view");
+        app.run("map.activate", json!({"name": first})).unwrap();
+        app.run("map.move", json!({"name": first, "to": 1})).unwrap();
+        assert_eq!(app.session.project.active_map, 1, "the map in view moved to the end");
+        assert!(dialogs.gpkg_owner(&app.session).is_ok(), "the same map, moved");
+    }
+
     #[test]
     fn narrow_desktop_dialog_remembers_its_dragged_position() {
         use egui::accesskit::Role;

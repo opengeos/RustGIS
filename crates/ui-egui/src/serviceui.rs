@@ -682,6 +682,38 @@ fn noted(app: &mut RustGisApp, landed: &Landed, note: Option<String>) {
 mod tests {
     use super::*;
 
+    /// An import in flight goes on when its map moves among the maps, and is given up when another
+    /// map is in view (#2959).
+    #[test]
+    fn an_import_in_flight_goes_on_when_its_map_moves() {
+        let mut app = RustGisApp::with_sample();
+        let first = app.session.map().name.clone();
+        let token = app.session.download_started();
+        app.ui.service_import = Some(Import {
+            params: json!({}),
+            refresh: false,
+            connection: None,
+            token,
+            map: crate::dialogs::map_key(&app.session),
+            slot: Slot::default(),
+            document: Some("https://example.test/capabilities".into()),
+            current: None,
+            remaining: VecDeque::new(),
+            responses: Vec::new(),
+            bytes: 0,
+        });
+        let ctx = egui::Context::default();
+        app.run("map.new", json!({"name": "Second"})).unwrap();
+        app.run("map.activate", json!({"name": first})).unwrap();
+        app.run("map.move", json!({"name": first, "to": 1})).unwrap();
+        assert_eq!(app.session.project.active_map, 1, "the map in view moved to the end");
+        poll(&mut app, &ctx);
+        assert!(app.ui.service_import.is_some() && app.session.download_is_pending(token), "the same map, moved");
+        app.run("map.activate", json!({"name": "Second"})).unwrap();
+        poll(&mut app, &ctx);
+        assert!(app.ui.service_import.is_none() && !app.session.download_is_pending(token), "another map is in view");
+    }
+
     /// The map an import started on is told by what it is, not by its place among the maps: the same
     /// map moved is the same, another map (even a copy under its place) isn't (#2959).
     #[test]
