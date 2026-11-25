@@ -491,17 +491,25 @@ fn symbol(s: &Value, g: GeometryType, picture: Option<Rgba>, pictures: &mut Pict
                 // Sized by its width, as a picture marker is: its height follows the image's own
                 // proportion, which a service draws its symbol at. Without a width above 0, its
                 // height stands in as its width, said, since an image that isn't square is then
-                // drawn that wide, not that tall; with neither, RustGIS's size does.
+                // drawn that wide, not that tall; with neither (a height of 0 is none), RustGIS's
+                // size does. A height of 0 beside a width is said: ArcGIS draws nothing of it.
                 Ok(p) => {
                     let wide = s.get("width").and_then(Value::as_f64).is_some_and(|w| w.is_finite() && w > 0.0);
-                    if !wide {
-                        notes.add(if s.get("height").is_some_and(|h| !h.is_null()) {
-                            "picture markers with no width, drawn with their height as their width"
-                        } else {
-                            "picture markers with no size, drawn at RustGIS's"
-                        });
-                    }
-                    let size = size(s.get(if wide { "width" } else { "height" }), base.size, notes);
+                    let height = s.get("height").filter(|h| !h.is_null());
+                    let flat = height.and_then(Value::as_f64).is_some_and(|h| h <= 0.0);
+                    let sized_by = if wide {
+                        if flat {
+                            notes.add("picture markers of no height, drawn as tall as their image is");
+                        }
+                        s.get("width")
+                    } else if height.is_some() && !flat {
+                        notes.add("picture markers with no width, drawn with their height as their width");
+                        height
+                    } else {
+                        notes.add("picture markers with no size, drawn at RustGIS's");
+                        None
+                    };
+                    let size = size(sized_by, base.size, notes);
                     return Some((Symbol { fill, size, marker: Marker::Picture(p), ..base }, None));
                 }
                 Err(why) => notes.add(why),
@@ -780,6 +788,34 @@ mod tests {
         let (l, notes) = styled(GeometryType::Point, info);
         assert!(matches!(l.renderer, Renderer::Single(Symbol { marker: Marker::Picture(_), .. })));
         assert_eq!(notes.text(), "markers' angles and offsets, left out");
+    }
+
+    /// A picture marker with a height of 0 isn't drawn at 0 (not shown) under a note saying it is
+    /// drawn as wide as its height: a height of 0 is no height.
+    #[test]
+    fn a_picture_marker_of_no_height_is_said_so() {
+        let image = "iVBORw0KGgoSIMPLE=";
+        let styled_pms = |width: Value, height: Value| {
+            let info = json!({"renderer": {"type": "simple", "symbol": {"type": "esriPMS", "imageData": image, "width": width, "height": height}}});
+            let (l, notes) = styled(GeometryType::Point, info);
+            let Renderer::Single(s) = l.renderer else { panic!("a single symbol") };
+            (s, notes.text())
+        };
+        let Renderer::Single(base) = layer(GeometryType::Point).renderer else { panic!("a single symbol") };
+        // With no width above 0 either, it has no size: RustGIS's.
+        for (width, height) in [(json!(null), json!(0)), (json!(0), json!(0)), (json!(0), json!(-4))] {
+            let (s, text) = styled_pms(width.clone(), height.clone());
+            assert_eq!(s.size, base.size, "width {width}, height {height}");
+            assert_eq!(text, "picture markers with no size, drawn at RustGIS's", "width {width}, height {height}");
+        }
+        // With a width, it is drawn by it, and the height's 0 said.
+        let (s, text) = styled_pms(json!(15), json!(0));
+        assert_eq!(s.size, 15.0);
+        assert_eq!(text, "picture markers of no height, drawn as tall as their image is");
+        // A height above 0 says nothing of the kind.
+        let (s, text) = styled_pms(json!(15), json!(18));
+        assert_eq!(s.size, 15.0);
+        assert!(text.is_empty(), "{text}");
     }
 
     #[test]

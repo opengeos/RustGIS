@@ -1473,6 +1473,60 @@ fn raster_image_markers_draw_their_image_read_once_from_the_style_folder() {
     assert_eq!(notes, [("see-through raster image markers, drawn opaque", 1)]);
 }
 
+/// A `file:` address is the file it names, read as a tile archive's address is (decoded, from the
+/// folder when relative); with a host it is a network share.
+#[test]
+fn raster_image_markers_read_a_file_address_as_the_file_it_names() {
+    use crate::symbology::Picture;
+    let asked = std::cell::RefCell::new(Vec::new());
+    let mut read = |source: &str| {
+        asked.borrow_mut().push(source.to_string());
+        Ok(("QUJD".to_string(), 1.0))
+    };
+    let cases = [
+        ("file:///data/my%20pin.png", "/data/my pin.png"),
+        ("file:///C:/data/a.png", "C:/data/a.png"),
+        ("file://C:/data/a.png", "C:/data/a.png"),
+        ("file:./pins/a.png", "/styles/pins/a.png"),
+    ];
+    for (file, path) in cases {
+        asked.borrow_mut().clear();
+        let mut report = Report::default();
+        let s = super::read_style(&marker_qml("1", &raster_marker(file, "")), "Pins", "/styles", &mut read, &mut report).unwrap();
+        let Some(Renderer::Single(sym)) = &s.renderer else { panic!("{file}") };
+        assert_eq!(sym.marker, Marker::Picture(Picture::new("QUJD")), "{file}");
+        assert_eq!(*asked.borrow(), [path], "{file}");
+        assert!(report.notes.is_empty(), "{file}: {:?}", report.notes);
+    }
+}
+
+/// A raster image marker whose image a field or an expression gives has no image of its own to
+/// read; the note says that, not that it has none.
+#[test]
+fn a_raster_image_from_an_expression_is_noted_as_one_not_as_no_image() {
+    let by_expression = r#"<layer class="RasterMarker" enabled="1"><Option type="Map"><Option name="imageFile" value=""/><Option name="size" value="4"/></Option>
+        <data_defined_properties><Option type="Map"><Option name="name" value="" type="QString"/><Option name="properties" type="Map">
+        <Option name="name" type="Map"><Option name="active" value="true" type="bool"/><Option name="expression" value="'pin_' || &quot;kind&quot; || '.png'" type="QString"/>
+        <Option name="type" value="3" type="int"/></Option></Option></Option></data_defined_properties></layer>"#;
+    let mut read = |_: &str| Ok(("QUJD".to_string(), 1.0));
+    let mut report = Report::default();
+    let s = super::read_style(&marker_qml("1", by_expression), "Pins", "", &mut read, &mut report).unwrap();
+    let Some(Renderer::Single(sym)) = &s.renderer else { panic!() };
+    assert_eq!(sym.marker, Marker::Circle);
+    let notes: Vec<&str> = report.notes.iter().map(|n| n.text.as_str()).collect();
+    assert!(
+        notes.contains(
+            &"raster image markers whose image comes from a field or an expression, which RustGIS doesn't evaluate, drawn as circles"
+        ),
+        "{notes:?}"
+    );
+    assert!(!notes.iter().any(|n| n.contains("no image")), "{notes:?}");
+    // With no expression, an empty image is still no image.
+    let mut report = Report::default();
+    super::read_style(&marker_qml("1", &raster_marker("", "")), "Pins", "", &mut read, &mut report).unwrap();
+    assert_eq!(report.notes.iter().map(|n| n.text.as_str()).collect::<Vec<_>>(), ["raster image markers with no image, drawn as circles"]);
+}
+
 #[test]
 fn raster_image_markers_that_cant_be_drawn_are_circles_saying_why() {
     // Each kind of image the reader isn't asked for, or can't give, with what the note says.
@@ -1498,6 +1552,7 @@ fn raster_image_markers_that_cant_be_drawn_are_circles_saying_why() {
         ),
         ("\\\\host\\share\\a.png", "raster image markers whose image is on a network share, which RustGIS doesn't open, drawn as circles"),
         ("//host/share/a.png", "raster image markers whose image is on a network share, which RustGIS doesn't open, drawn as circles"),
+        ("file://host/share/a.png", "raster image markers whose image is on a network share, which RustGIS doesn't open, drawn as circles"),
         ("/data/gone.png", "raster image markers whose image file doesn't open, drawn as circles"),
     ];
     for (file, note) in cases {

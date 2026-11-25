@@ -595,13 +595,19 @@ fn file_url_path(url: &str) -> Option<&str> {
     Some(if drive { path.get(1..).unwrap_or(path) } else { path })
 }
 
+/// A `file:` address's path (see [`file_url_path`]) decoded as any address's parts are; `None` for any
+/// other address and for one with a host.
+pub(super) fn file_address_path(url: &str) -> Option<String> {
+    file_url_path(url).map(rustgis_data::address::percent_decode)
+}
+
 /// A tile archive's path: a `file://` address (`file:../x` when relative) as its path, a relative
 /// one from the project's folder; a web address as it is.
 fn archive_path(url: &str, dir: &str) -> String {
     let url = url.trim();
-    match file_url_path(url) {
+    match file_address_path(url) {
         // (Its parts are encoded as in any address.)
-        Some(path) => absolute(&rustgis_data::address::percent_decode(path), dir),
+        Some(path) => absolute(&path, dir),
         None if url.contains("://") => url.to_string(),
         None => absolute(url, dir),
     }
