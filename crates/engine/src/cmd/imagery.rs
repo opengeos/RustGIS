@@ -2019,6 +2019,20 @@ fn resample_whole(r: &super::workflows::Input, factor: u32, out: String) -> Resu
     super::workflows::made_then(out, None, Some(then))
 }
 
+/// What a resample `out` of `source` written to a file says it leaves out: with alpha, the file
+/// says which pixels have a value by alpha, not by the no-data value `source` has, which a held
+/// resample keeps (`cogwrite::TileStream`).
+#[cfg(not(target_arch = "wasm32"))]
+fn alpha_nodata_note(source: &Raster, out: &str) -> Option<String> {
+    let alpha = match source.color {
+        ColorHint::Rgb { alpha } => alpha && source.band_count() >= 4,
+        ColorHint::GrayAlpha => source.band_count() >= 2,
+        _ => false,
+    };
+    let d = source.nodata.filter(|_| alpha)?;
+    Some(format!("{out}: its no-data value {d} isn't written to its file: alpha says which of its pixels have a value"))
+}
+
 /// What a resample of `r` (layer `layer`) says it leaves out: a palette's colour table, whose
 /// indexes it averages as grey values (a mean of indexes is no colour of the table).
 fn resample_palette_note(r: &Raster, layer: &str) -> Option<String> {
@@ -2147,10 +2161,12 @@ fn resample_in_blocks(
         Ok((overview, rounded))
     })?;
     let made = format!("resampled by {k} from {} at its full {fw} × {fh}", reading.layer());
-    let mut made = super::in_blocks::file_layer(out, &dest, staged, overview, &made, note(rounded))?;
+    let mut notes = note(rounded);
+    let source = reading.held();
+    notes.extend(alpha_nodata_note(source, &out));
+    let mut made = super::in_blocks::file_layer(out, &dest, staged, overview, &made, notes)?;
     // A byte colour image's resample is drawn on its 0 to 255, as one held is, not stretched as
     // the floats its file holds would be.
-    let source = reading.held();
     if source.data_type == "UInt8" && matches!(source.color, ColorHint::Rgb { .. }) && source.band_count() >= 3 {
         made.layer_mut().style.stretch = rustgis_map::Stretch::Custom { min: 0.0, max: 255.0, bands: None };
     }
@@ -3501,4 +3517,20 @@ fn training_strips_follow_the_files_tiles() {
     let block = super::in_blocks::BLOCK.1;
     assert_eq!(training_strips(1500, None, |_| true), (1500 / block * block, block));
     assert_eq!(training_strips(7, Some(1024), |_| false), (0, 1));
+}
+
+/// A resample written to a file of an image with alpha and a no-data value says the value isn't
+/// written, as alpha says which pixels have one; nothing for an image without alpha or no-data.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_written_resample_with_alpha_says_its_no_data_value_goes() {
+    let gt = GeoTransform { origin_x: 10.0, origin_y: 46.0, pixel_width: 0.001, pixel_height: -0.001 };
+    let image = |bands: usize, color: ColorHint, nodata: Option<f64>| {
+        Raster::new("image", 2, 2, vec![vec![1.0; 4]; bands], gt, Crs::LonLat, nodata, color, "UInt8").unwrap()
+    };
+    let note = alpha_nodata_note(&image(4, ColorHint::Rgb { alpha: true }, Some(0.0)), "out");
+    assert!(note.is_some_and(|n| n.contains("no-data value 0 isn't written")));
+    assert!(alpha_nodata_note(&image(2, ColorHint::GrayAlpha, Some(5.0)), "out").is_some());
+    assert!(alpha_nodata_note(&image(4, ColorHint::Rgb { alpha: true }, None), "out").is_none());
+    assert!(alpha_nodata_note(&image(3, ColorHint::Rgb { alpha: false }, Some(0.0)), "out").is_none());
 }

@@ -1175,6 +1175,11 @@ impl<'a, W: Write + Seek> TileStream<'a, W> {
         if bytes && n > 1 {
             return Err(err("a hillshade has one band"));
         }
+        // A class overview picks a pixel band by band, which for several bands could pick one
+        // pixel's colour and another's alpha.
+        if samples == Samples::Classes && n > 1 {
+            return Err(err("classes are written one band at a time"));
+        }
         if n > Self::most_bands() {
             return Err(err(format!(
                 "its {n} bands make tiles of {} MB, more than a reader takes: at most {} bands are written a row of tiles at a time",
@@ -1597,7 +1602,6 @@ fn average_by_alpha(rows: &[f32], alpha: &[f32], w: usize, nodata: f32, alpha_no
     let h = rows.len() / w.max(1);
     let (hw, hh) = (w.div_ceil(2), h.div_ceil(2));
     let valid = |v: f32| v.is_finite() && v != alpha_none;
-    let plain = average_rows(rows, w, nodata);
     let mut out = Vec::with_capacity(hw * hh);
     for y in 0..hh {
         for x in 0..hw {
@@ -1616,8 +1620,25 @@ fn average_by_alpha(rows: &[f32], alpha: &[f32], w: usize, nodata: f32, alpha_no
                     weight += f64::from(a);
                 }
             }
-            let fallback = plain.get(y * hw + x).copied().unwrap_or(nodata);
-            out.push(if weight > 0.0 { (sum / weight) as f32 } else { fallback });
+            if weight > 0.0 {
+                out.push((sum / weight) as f32);
+                continue;
+            }
+            // All four see-through: the plain mean of those with a value, as [`average_rows`].
+            let (mut plain, mut n) = (0.0f64, 0u32);
+            for (dy, dx) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
+                let (yy, xx) = (2 * y + dy, 2 * x + dx);
+                if yy < h
+                    && xx < w
+                    && let Some(&v) = rows.get(yy * w + xx)
+                    && v.is_finite()
+                    && v != nodata
+                {
+                    plain += f64::from(v);
+                    n += 1;
+                }
+            }
+            out.push(if n > 0 { (plain / f64::from(n)) as f32 } else { nodata });
         }
     }
     out

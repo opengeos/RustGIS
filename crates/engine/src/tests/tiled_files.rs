@@ -693,8 +693,10 @@ fn raster_functions_and_resamples_run_a_block_at_a_time() {
                 "{why}"
             );
             assert_eq!(got_raster.bands.len(), want.bands.len(), "{why}: its bands");
-            // A written resample of bytes is drawn on their 0 to 255, as the held one is.
+            // A written resample of bytes is drawn on their 0 to 255, as the held one is, and of an
+            // image without alpha says nothing of a no-data value.
             if resample && written {
+                assert!(!said(&s, mark).iter().any(|n| n.contains("isn't written to its file")), "{why}");
                 assert_eq!(raster(&s, "out").style.stretch, rustgis_map::Stretch::Custom { min: 0.0, max: 255.0, bands: None }, "{why}");
             }
             for (g, w) in got_raster.bands.iter().zip(&want.bands) {
