@@ -739,17 +739,18 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
     painter.rect_filled(area, 0.0, if t.dark { Color32::from_gray(38) } else { Color32::from_rgb(0xD9, 0xDD, 0xE3) });
     let (page, s) = page_rect(&app.layout, area, &layout);
     interact(app, ui, &resp, &layout, li, page, s);
-    // The properties or a drag may have just changed the layout: draw the page as it is now,
-    // or the texture would be keyed to the new revision but show the old layout (#325).
-    let Some(layout) = shown_layout(app, li) else { return };
-    let (page, s) = page_rect(&app.layout, area, &layout);
     // The right-click menu of the selected element: a right-click on empty page cleared the
-    // selection, so none opens there, nor while a drawing tool is picked.
+    // selection, so none opens there, nor while a drawing tool is picked. Before the page is
+    // drawn, as its rows change the layout.
     if app.layout.tool.is_none()
         && let Some(id) = app.layout.selected.filter(|&id| layout.element(id).is_some())
     {
         resp.context_menu(|ui| element_menu(app, ui, &layout, li, id));
     }
+    // The properties, a drag or the menu may have just changed the layout: draw the page as it is
+    // now, or the texture would be keyed to the new revision but show the old layout (#325).
+    let Some(layout) = shown_layout(app, li) else { return };
+    let (page, s) = page_rect(&app.layout, area, &layout);
 
     // Render the page at screen resolution when it changes.
     let ppp = ui.ctx().pixels_per_point();
@@ -1191,9 +1192,16 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, layout: &L
         }
     }
     // A right-click selects what is under it, unless that is selected already, and so opens the
-    // element's menu (see `show`); on empty page it clears the selection, as a click does.
+    // element's menu (see `show`); on empty page it clears the selection, as a click does. On a
+    // ruler, or on the selected element's handle or rotation knob, it keeps the selection, as a
+    // click does there.
     if resp.secondary_clicked()
         && let Some(p) = pointer_mm
+        && resp.interact_pointer_pos().is_none_or(|pos| {
+            ruler_at(&app.layout, resp.rect, pos).is_none()
+                && handle_at(app, layout, page, s, pos).is_none()
+                && rotate_at(app, layout, page, s, pos).is_none()
+        })
     {
         let hit = layout.hit(p.0, p.1);
         if hit != app.layout.selected {
@@ -3882,6 +3890,60 @@ mod tests {
     /// Right-clicking an element selects it and opens its menu: Send Backward moves it down the
     /// drawing order in one Undo step, a locked element's Delete row is greyed, and a right-click
     /// on empty page opens no menu.
+    /// A right-click on the selected element's handle, where it sticks out over another element,
+    /// keeps the selection and opens the menu of the element the handle belongs to, as a click
+    /// there keeps it.
+    #[test]
+    fn right_clicking_a_handle_keeps_the_selection() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = RustGisApp::with_sample();
+        app.run("layout.new", json!({"name": "Handles"})).unwrap();
+        let li = app.session.active_layout.unwrap();
+        let start = app.session.project.layouts[li].clone();
+        let title = start.elements.iter().find(|e| e.name == "Title").unwrap().id;
+        let frame = start.first_frame().unwrap();
+        let top = start.element(frame).unwrap().y;
+        let h_mm = start.element(title).unwrap().h;
+        // The title's lower edge on the frame's upper one, so its lower handles stick out over the map.
+        app.run("layout.update", json!({"layout": li, "element": title, "y": top - h_mm})).unwrap();
+        app.layout.selected = Some(title);
+        let layout = app.session.project.layouts[li].clone();
+        let area = Rc::new(Cell::new(Rect::NOTHING));
+        let shown = area.clone();
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1000.0, 760.0)).build_ui_state(
+            move |ui, app: &mut RustGisApp| {
+                if !fonts {
+                    crate::theme::install_fonts(ui.ctx(), &[], None);
+                    fonts = true;
+                    return;
+                }
+                shown.set(ui.available_rect_before_wrap());
+                super::show(app, ui);
+            },
+            app,
+        );
+        h.run_steps(3);
+        let (page, s) = page_rect(&h.state().layout, area.get(), &layout);
+        let e = layout.element(title).unwrap();
+        // Just below the lower middle handle: on the map frame, off the title, within the handle's reach.
+        let at = to_screen(page, s, (e.x + e.w / 2.0, e.y + e.h)) + vec2(0.0, 4.0);
+        let (x, y) = super::to_mm(page, s, at);
+        assert_eq!(layout.hit(x, y), Some(frame), "the point is on the map frame");
+        assert!(handle_at(h.state(), &layout, page, s, at).is_some(), "and on the title's handle");
+        let secondary =
+            |pos: Pos2, pressed| Event::PointerButton { pos, button: PointerButton::Secondary, pressed, modifiers: Modifiers::NONE };
+        h.event(Event::PointerMoved(at));
+        h.step();
+        h.event(secondary(at, true));
+        h.step();
+        h.event(secondary(at, false));
+        h.run_steps(3);
+        assert_eq!(h.state().layout.selected, Some(title), "the title stays selected");
+        assert!(h.query_by_label_contains("Duplicate").is_some(), "its menu opens");
+        assert!(h.query_by_label("Zoom Frame").is_none(), "the title's menu, not the frame's");
+    }
+
     #[test]
     fn right_clicking_an_element_opens_its_menu() {
         use egui_kittest::kittest::{NodeT, Queryable};
@@ -3934,7 +3996,15 @@ mod tests {
         assert!(h.query_by_label("Zoom Frame").is_none(), "Zoom Frame is for a map frame");
         assert!(!h.get_by_label_contains("Delete Element").accesskit_node().is_disabled());
         h.get_by_label("Send Backward").click();
-        h.run_steps(3);
+        h.step();
+        // The page is drawn, in the frame the row changed the layout, from the layout as it is
+        // now: a snapshot taken before would be keyed to the new revision but show the old order.
+        assert_eq!(
+            h.state().layout.shown.as_ref().map(|(_, rev, _)| *rev),
+            Some(h.state().session.revision),
+            "the page drawn after the menu's change is the changed layout"
+        );
+        h.run_steps(2);
         assert_eq!(order(&h), before - 1, "Send Backward moved it one step down");
         assert!(h.query_by_label("Send Backward").is_none(), "choosing a row closes the menu");
         h.state_mut().run("edit.undo", json!({})).unwrap();
