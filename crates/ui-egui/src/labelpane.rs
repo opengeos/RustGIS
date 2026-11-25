@@ -1450,8 +1450,11 @@ mod tests {
         app.run("map.move", json!({"name": first, "to": 1})).unwrap();
         assert_eq!(app.session.project.active_map, 1, "the map in view moved to the end");
         assert_eq!(key(&app), before, "the same map, moved");
+        let original = app.session.map().instance_id();
         app.run("map.duplicate", json!({"name": first})).unwrap();
-        assert_ne!(key(&app), before, "a copy keeps the layer ids and is another map");
+        // The copy is named "<map> copy", which the key tells apart anyway: it is the identity that
+        // `map.duplicate` renews, and the key is built from it.
+        assert_ne!(app.session.map().instance_id(), original, "a copy keeps the layer ids and is another map");
     }
 
     fn with_cities() -> RustGisApp {
