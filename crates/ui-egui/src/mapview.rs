@@ -3876,9 +3876,9 @@ fn overlays(app: &mut RustGisApp, ui: &mut Ui, p: &egui::Painter, rect: Rect, t:
         let pts: Vec<Pos2> = outline.iter().flatten().filter_map(|c| lonlat_to_screen(app, rect, *c)).collect();
         // A picture is drawn upright on screen between its box's north-west and south-east
         // corners (render's picture graphics), so it previews as that, turned map or not.
-        let picture = (shape == "picture")
-            .then(|| outline.as_deref())
-            .flatten()
+        let picture = outline
+            .as_deref()
+            .filter(|_| shape == "picture")
             .map(|cs| {
                 cs.iter().fold(Extent::EMPTY, |mut e, c| {
                     e.expand(*c);
