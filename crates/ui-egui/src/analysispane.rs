@@ -3124,18 +3124,21 @@ mod tests {
         script_ran(&mut app, crate::Landed::NotRun("cancelled".into()));
         assert_eq!(at(&app), None);
         // JSON that doesn't read, after two lines; a click on the error goes to its column.
-        let e = stopped(&mut app, "# move\nmap.zoomFull\nlayer.rename {\"layer\": }");
-        assert_eq!(at(&app), Some((3, Some(24))), "{e}");
+        let (first, second, column) = ("# move\n", "map.zoomFull\n", 24);
+        let e = stopped(&mut app, &format!("{first}{second}layer.rename {{\"layer\": }}"));
+        assert_eq!(at(&app), Some((3, Some(column))), "{e}");
+        // The cursor goes to the error: the characters of the two lines before it, and its column.
+        let error_at = first.chars().count() + second.chars().count() + (column - 1);
         let mut h = egui_kittest::Harness::builder()
             .with_size(vec2(900.0, 800.0))
             .build_ui_state(|ui, app: &mut RustGisApp| script_pane(app, ui, &Tokens::light()), app);
         h.run();
         let box_id = egui::Id::unique("script_text");
         let cursor = |h: &egui_kittest::Harness<'_, RustGisApp>| crate::widgets::cursor_range(&h.ctx, box_id).map(|r| r.primary.index.0);
-        assert_ne!(cursor(&h), Some(7 + 13 + 23));
+        assert_ne!(cursor(&h), Some(error_at));
         h.get_by_label(&e).click();
         h.run();
-        assert_eq!(cursor(&h), Some(7 + 13 + 23), "line 3, column 24");
+        assert_eq!(cursor(&h), Some(error_at), "line 3, column {column}");
         assert!(h.ctx.memory(|m| m.has_focus(box_id)));
         // From the keyboard: the error takes the focus (Tab), and Enter goes there too.
         crate::widgets::set_cursor_range(&h.ctx, box_id, egui::text::CCursorRange::one(egui::text::CCursor::new(0)));
@@ -3144,7 +3147,7 @@ mod tests {
         assert_eq!(cursor(&h), Some(0), "moved away first");
         h.key_press(egui::Key::Enter);
         h.run();
-        assert_eq!(cursor(&h), Some(7 + 13 + 23), "by the keyboard");
+        assert_eq!(cursor(&h), Some(error_at), "by the keyboard");
         // Edited since: the error no longer goes anywhere.
         h.state_mut().workflow.script.insert(0, '\n');
         h.run();
