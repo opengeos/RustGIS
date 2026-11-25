@@ -48,9 +48,10 @@ pub(crate) fn function_halo(function: &str) -> Option<u32> {
 
 /// The cells around a block a chain of raster functions (`steps`) reads with it: what each step
 /// reads, added, as each works on the one before. `None` when a step doesn't work in blocks; when
-/// it remaps after a step over neighbours, which would meet the margin's cells, made from too few
-/// neighbours, and say what they met; or when a slope in percent, whose cells past Float32's
-/// range are counted where they're kept, isn't its last step.
+/// it remaps or thresholds after a step over neighbours, as its ranges would then be tested on
+/// a block's margin too, whose cells are made from fewer neighbours than in the whole raster; or
+/// when a slope in percent, whose cells past Float32's range are counted where they're kept,
+/// isn't its last step.
 pub(crate) fn chain_halo(steps: &[Value]) -> Option<u32> {
     let function = |st: &Value| st.get("function").and_then(Value::as_str).unwrap_or_default().to_string();
     let after = steps.iter().skip_while(|st| function_halo(&function(st)) == Some(0));

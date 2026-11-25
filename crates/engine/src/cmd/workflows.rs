@@ -1810,7 +1810,10 @@ impl BlockRemaps {
         self.empty = Some(match self.empty.take() {
             None => r.empty,
             Some(mut e) => {
-                e.retain(|x| r.empty.contains(x));
+                // Looked up by their bits, so a remap of many ranges isn't compared range by range.
+                let key = |(name, lo, hi): &(String, f64, f64)| (name.clone(), lo.to_bits(), hi.to_bits());
+                let here: std::collections::HashSet<_> = r.empty.iter().map(key).collect();
+                e.retain(|x| here.contains(&key(x)));
                 e
             }
         });
