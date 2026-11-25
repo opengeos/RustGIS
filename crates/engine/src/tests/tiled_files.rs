@@ -548,7 +548,7 @@ fn indices_over_a_file_too_large_to_read_whole_run_a_block_at_a_time() {
         let control = rustgis_analysis::control::Control::cancelled_at_look(n);
         let (id, made) = run(&mut s, &ndvi, &control);
         match made {
-            Err(e) => assert!(e.contains("cancelled"), "check {n}: {e}"),
+            Err(e) => assert!(e.starts_with("Indices was cancelled"), "check {n}: {e}"),
             Ok(m) => {
                 assert!(control.looked() < n, "check {n} of {}: not cancelled", control.looked());
                 drop(m);

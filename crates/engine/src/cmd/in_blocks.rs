@@ -146,7 +146,8 @@ impl Blocks {
     /// read and made in turn, counted as the run's progress, Cancel looked at between them. A
     /// result too large to hold is written a row of tiles at a time beside its place in the
     /// results folder, and put there as the layer is added, which reads it in place; a run
-    /// cancelled, failed or never added leaves nothing behind, a folder it made included while
+    /// cancelled, failed or never added leaves no file behind, nor the results folder when it made
+    /// it (not the folders around it, the project's own when it is saved) while
     /// nothing else is in it (one another run wrote into too can stay, empty, once both their
     /// results are gone).
     pub(crate) fn run(self, cells: impl Fn(&Raster) -> Result<Vec<f32>, String>) -> Result<Made, String> {
@@ -223,7 +224,8 @@ impl Blocks {
                         }
                         stream.as_mut().map_or(Ok(()), |s: &mut cogwrite::TileStream<_>| s.put(rows).map_err(|e| e.to_string()))
                     })
-                    .map_err(rustgis_data::DataError::Format)?;
+                    // A Cancel stays one, as on the path that holds its result.
+                    .map_err(rustgis_data::DataError::of_conversion)?;
                 let (info, overview) =
                     stream.ok_or_else(|| rustgis_data::DataError::Format(format!("{layer}: it has no pixels")))?.finish()?;
                 Ok::<_, rustgis_data::DataError>((info, overview, rounded))
@@ -328,7 +330,7 @@ impl Source<'_> {
             for bx in 0..across {
                 let (c0, c1) = (bx * BLOCK_COLUMNS, ((bx + 1) * BLOCK_COLUMNS).min(fw));
                 // The block's own steps don't count: the run counts blocks.
-                // Counted as held until its values are placed.
+                // The block's count in what is held lasts until its values are copied into the row.
                 let ((read, _count), values) = rustgis_analysis::control::uncounted(|| -> Result<_, String> {
                     let read = self.block((c0, c1), (r0, r1))?;
                     let values = cells(&read.0.raster)?;

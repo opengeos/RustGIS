@@ -1225,7 +1225,9 @@ impl<'a, W: Write + Seek> TileStream<'a, W> {
             }
             (w, h) = (w.div_ceil(2), h.div_ceil(2));
         }
-        // Each level a half the size of the one before: twice a row each at most, halving.
+        // Rows waiting at each level after the first: at most a row of tiles of that level and the
+        // half-size rows just made for it, each level half as wide as the one before, so two
+        // full-width rows hold them all.
         let levels = row.saturating_mul(2);
         let tables = tiles.saturating_mul(64);
         let compressing = (crate::threads::max() as u64).saturating_mul(u64::from(TILE) * u64::from(TILE) * 4 * (2 + AHEAD as u64));
