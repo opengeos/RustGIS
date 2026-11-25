@@ -27,7 +27,7 @@ pub fn commands() -> Vec<C> {
         }).roles(&[]).effects(crate::policy::Effects::NONE)
         .params(r#"{"name"?: string}"#),
         C::new("graphics.add", "Add Graphic", "Edit › Graphics", add).roles(&[]).effects(crate::policy::Effects::NONE).params(
-            r##"{"shape": "point"|"text"|"line"|"curve"|"freehand"|"polygon"|"lasso"|"rectangle"|"circle"|"ellipse"|"picture", "points": [[lon, lat], …] (rectangle, ellipse, picture: two corners; circle: centre and a point on the edge), "layer"?: graphics layer, "text"?: string (dynamic tokens: {map} {scale} {date} {time} {crs} {layers} {center}), "fill"?: "#RRGGBBAA", "outline"?: "#RRGGBBAA", "width"?: number, "size"?: number, "fontSize"?: number, "bold"?: bool, "italic"?: bool, "align"?: "left"|"center"|"right" (a text's lines in their block, which stays centred on its point), "letterSpacing"?: points, -5 to 50, "image"?: base64 PNG/JPEG, "path"?: picture file}"##,
+            r##"{"shape": "point"|"text"|"line"|"curve"|"freehand"|"polygon"|"lasso"|"rectangle"|"circle"|"ellipse"|"picture", "points": [[lon, lat], …] (rectangle, ellipse, picture: two corners; circle: centre and a point on the edge), "layer"?: graphics layer, "text"?: string (dynamic tokens: {map} {scale} {date} {time} {crs} {layers} {center}), "fill"?: "#RRGGBBAA", "outline"?: "#RRGGBBAA", "width"?: number, "size"?: number, "fontSize"?: number, "bold"?: bool, "italic"?: bool, "align"?: "left"|"center"|"right" (a text's lines in their block, which stays centred on its point), "letterSpacing"?: points, -5 to 50, "image"?: base64 PNG/JPEG, "path"?: picture file, "frame"?: "mercator" (default: a rectangle a box of longitudes and latitudes, a circle, ellipse or curve round in Web Mercator)|"view" (built in the map's own coordinates as the view faces, as a drag on the map previews it; a picture stays a box of longitudes and latitudes)}"##,
         ),
         C::new("graphics.style", "Graphic Style", "Edit › Graphics", style).roles(&[]).effects(crate::policy::Effects::NONE)
             .when(super::need_selection)
@@ -84,7 +84,10 @@ fn target(s: &mut Session, p: &Value) -> Result<u32, String> {
     })
 }
 
-fn points(p: &Value) -> Result<Vec<Coord>, String> {
+/// The points given, in longitude/latitude; kept within 85° of the equator for `plane`'s Web
+/// Mercator, where a pole is infinitely far, but not for the view's, which may show a pole.
+fn points(p: &Value, plane: &Plane) -> Result<Vec<Coord>, String> {
+    let lat_max = if matches!(plane, Plane::Mercator) { 85.0 } else { 90.0 };
     let arr = p.get("points").and_then(Value::as_array).ok_or("points is required")?;
     if arr.len() > MAX_POINTS {
         return Err(format!("a graphic takes at most {MAX_POINTS} points"));
@@ -94,7 +97,7 @@ fn points(p: &Value) -> Result<Vec<Coord>, String> {
             let x = v.get(0).and_then(Value::as_f64).filter(|x| x.is_finite() && x.abs() <= 540.0);
             let y = v.get(1).and_then(Value::as_f64).filter(|y| y.is_finite() && y.abs() <= 90.0);
             match (x, y) {
-                (Some(x), Some(y)) => Ok(Coord::new(x, y.clamp(-85.0, 85.0))),
+                (Some(x), Some(y)) => Ok(Coord::new(x, y.clamp(-lat_max, lat_max))),
                 _ => Err("each point is [lon, lat]".to_string()),
             }
         })
@@ -121,9 +124,68 @@ fn ring(mut pts: Vec<Coord>) -> Vec<Coord> {
     pts
 }
 
-/// A smooth curve through the points (Catmull-Rom).
-fn curve(pts: &[Coord]) -> Vec<Coord> {
-    let m: Vec<Coord> = pts.iter().map(|c| lonlat_to_merc(*c)).collect();
+/// The plane a graphic's rectangle, circle, ellipse or curve is built in. Web Mercator facing
+/// north is what a command builds in unless told otherwise, as every release did; the view's
+/// (`"frame": "view"`) is the map's own coordinates turned to the camera's bearing, the plane a
+/// shape dragged on the map is previewed in, so what is drawn is what was dragged on any map: on
+/// one in UTM a rectangle has the view's square corners, not a box of longitudes and latitudes,
+/// and a circle is round there, not round in Web Mercator.
+pub enum Plane {
+    Mercator,
+    View { flat: rustgis_map::projection::Flat, cos: f64, sin: f64 },
+}
+
+impl Plane {
+    /// The plane `"frame"` names: absent or `"mercator"`, Web Mercator; `"view"`, the map's view.
+    fn of(s: &Session, p: &Value) -> Result<Self, String> {
+        match p.get("frame") {
+            None | Some(Value::Null) => Ok(Plane::Mercator),
+            Some(Value::String(f)) if f == "mercator" => Ok(Plane::Mercator),
+            Some(Value::String(f)) if f == "view" => Ok(Plane::view(s)),
+            Some(other) => Err(format!("frame {other} is neither \"view\" nor \"mercator\"")),
+        }
+    }
+
+    /// The map's view: its own coordinates, x to the right and y up as the camera faces.
+    pub fn view(s: &Session) -> Self {
+        let map = s.map();
+        let b = map.camera.bearing;
+        // Exactly 1 and 0 facing north, as the camera turns it.
+        let (sin, cos) = if b == 0.0 || !b.is_finite() { (0.0, 1.0) } else { b.to_radians().sin_cos() };
+        Plane::View { flat: map.flat(), cos, sin }
+    }
+
+    /// A place in longitude/latitude in the plane; `None` where the map doesn't show it.
+    fn to(&self, c: Coord) -> Option<Coord> {
+        match self {
+            Plane::Mercator => Some(lonlat_to_merc(c)),
+            Plane::View { flat, cos, sin } => {
+                let m = flat.forward_checked(c)?;
+                Some(Coord::new(m.x * cos - m.y * sin, m.x * sin + m.y * cos))
+            }
+        }
+    }
+
+    /// A place in the plane in longitude/latitude; `None` past the map's projection.
+    fn back(&self, v: Coord) -> Option<Coord> {
+        match self {
+            Plane::Mercator => Some(merc_to_lonlat(v)),
+            Plane::View { flat, cos, sin } => flat.inverse(Coord::new(v.x * cos + v.y * sin, v.y * cos - v.x * sin)),
+        }
+    }
+
+    fn all_to(&self, pts: &[Coord], shape: &str) -> Result<Vec<Coord>, String> {
+        pts.iter().map(|c| self.to(*c).ok_or_else(|| format!("a point of the {shape} isn't on the map"))).collect()
+    }
+
+    fn all_back(&self, pts: impl IntoIterator<Item = Coord>, shape: &str) -> Result<Vec<Coord>, String> {
+        pts.into_iter().map(|v| self.back(v).ok_or_else(|| format!("the {shape} reaches past the map's projection"))).collect()
+    }
+}
+
+/// A smooth curve through the points (Catmull-Rom), in the plane.
+fn curve(pts: &[Coord], plane: &Plane) -> Result<Vec<Coord>, String> {
+    let m = plane.all_to(pts, "curve")?;
     let n = m.len();
     let at = |i: isize| m.get(i.clamp(0, n as isize - 1) as usize).copied().unwrap_or_default();
     let mut out = Vec::new();
@@ -141,25 +203,35 @@ fn curve(pts: &[Coord]) -> Vec<Coord> {
     if let Some(l) = m.last() {
         out.push(*l);
     }
-    out.into_iter().map(merc_to_lonlat).collect()
+    plane.all_back(out, "curve")
 }
 
-/// An ellipse inscribed in the box between two corners, drawn round on the flat map.
-fn ellipse(a: Coord, b: Coord) -> Vec<Coord> {
-    let (a, b) = (lonlat_to_merc(a), lonlat_to_merc(b));
+/// An ellipse inscribed in the box between two corners in the plane, drawn round there.
+fn ellipse(a: Coord, b: Coord, plane: &Plane, shape: &str) -> Result<Vec<Coord>, String> {
     let (cx, cy) = ((a.x + b.x) / 2.0, (a.y + b.y) / 2.0);
     let (rx, ry) = ((a.x - b.x).abs() / 2.0, (a.y - b.y).abs() / 2.0);
-    ring(
-        (0..72)
-            .map(|i| {
-                let t = i as f64 / 72.0 * std::f64::consts::TAU;
-                merc_to_lonlat(Coord::new(cx + rx * t.cos(), cy + ry * t.sin()))
-            })
-            .collect(),
-    )
+    let around = (0..72).map(|i| {
+        let t = i as f64 / 72.0 * std::f64::consts::TAU;
+        Coord::new(cx + rx * t.cos(), cy + ry * t.sin())
+    });
+    Ok(ring(plane.all_back(around, shape)?))
 }
 
-fn geometry(shape: &str, pts: Vec<Coord>) -> Result<Geometry, String> {
+/// Two corners in the plane, refused when they share a side.
+fn corners(pts: &[Coord], plane: &Plane, shape: &str) -> Result<(Coord, Coord), String> {
+    let (a, b) = ends(pts, shape)?;
+    let (a, b) = (plane.to(a), plane.to(b));
+    let (a, b) = a.zip(b).ok_or_else(|| format!("a corner of the {shape} isn't on the map"))?;
+    if a.x == b.x || a.y == b.y {
+        return Err(format!("a{} {shape} needs two different corners", if shape == "ellipse" { "n" } else { "" }));
+    }
+    Ok((a, b))
+}
+
+/// The shape a graphic of `shape` through `pts` (longitude/latitude) takes, built in `plane`.
+/// A picture is a box of longitudes and latitudes in every plane: it is drawn upright on the
+/// map over its box there.
+pub fn geometry(shape: &str, pts: Vec<Coord>, plane: &Plane) -> Result<Geometry, String> {
     Ok(match shape {
         "point" | "text" => Geometry::Point(*pts.first().ok_or("a point needs a location")?),
         "line" | "freehand" => {
@@ -168,11 +240,17 @@ fn geometry(shape: &str, pts: Vec<Coord>) -> Result<Geometry, String> {
         }
         "curve" => {
             need(&pts, 2, shape)?;
-            Geometry::Line(vec![curve(&pts)])
+            Geometry::Line(vec![curve(&pts, plane)?])
         }
         "polygon" | "lasso" => {
             need(&pts, 3, shape)?;
             Geometry::Polygon(vec![vec![ring(pts)]])
+        }
+        "rectangle" if matches!(plane, Plane::View { .. }) => {
+            let (a, b) = corners(&pts, plane, shape)?;
+            let (x0, x1, y0, y1) = (a.x.min(b.x), a.x.max(b.x), a.y.min(b.y), a.y.max(b.y));
+            let around = [Coord::new(x0, y0), Coord::new(x1, y0), Coord::new(x1, y1), Coord::new(x0, y1)];
+            Geometry::Polygon(vec![vec![ring(plane.all_back(around, shape)?)]])
         }
         "rectangle" | "picture" => {
             let (a, b) = ends(&pts, shape)?;
@@ -190,25 +268,28 @@ fn geometry(shape: &str, pts: Vec<Coord>) -> Result<Geometry, String> {
         }
         "circle" => {
             let (c, e) = ends(&pts, shape)?;
-            let (c, e) = (lonlat_to_merc(c), lonlat_to_merc(e));
+            let (c, e) = plane.to(c).zip(plane.to(e)).ok_or("the circle's centre or edge isn't on the map")?;
             let r = ((e.x - c.x).powi(2) + (e.y - c.y).powi(2)).sqrt();
             if r <= 0.0 {
                 return Err("a circle needs a radius".into());
             }
-            Geometry::Polygon(vec![vec![ellipse(
-                merc_to_lonlat(Coord::new(c.x - r, c.y - r)),
-                merc_to_lonlat(Coord::new(c.x + r, c.y + r)),
-            )]])
+            Geometry::Polygon(vec![vec![ellipse(Coord::new(c.x - r, c.y - r), Coord::new(c.x + r, c.y + r), plane, shape)?]])
         }
         "ellipse" => {
-            let (a, b) = ends(&pts, shape)?;
-            if a.x == b.x || a.y == b.y {
-                return Err("an ellipse needs two different corners".into());
-            }
-            Geometry::Polygon(vec![vec![ellipse(a, b)]])
+            let (a, b) = corners(&pts, plane, shape)?;
+            Geometry::Polygon(vec![vec![ellipse(a, b, plane, shape)?]])
         }
         other => return Err(format!("unknown shape '{other}'")),
     })
+}
+
+/// The outline a shape dragged between `pts` takes on the map (`"frame": "view"`), in
+/// longitude/latitude: what the drag previews, so the preview is the graphic it adds.
+pub fn dragged_outline(s: &Session, shape: &str, pts: &[Coord]) -> Option<Vec<Coord>> {
+    match geometry(shape, pts.to_vec(), &Plane::view(s)).ok()? {
+        Geometry::Polygon(p) => p.into_iter().next()?.into_iter().next(),
+        _ => None,
+    }
 }
 
 /// The italic, alignment and letter spacing a command gives a text (#535): `None` where not given.
@@ -345,7 +426,8 @@ fn add(s: &mut Session, p: &Value) -> CmdResult {
     if !graphics::SHAPES.contains(&shape.as_str()) {
         return Err(format!("unknown shape '{shape}'"));
     }
-    let g = geometry(&shape, points(p)?)?;
+    let plane = Plane::of(s, p)?;
+    let g = geometry(&shape, points(p, &plane)?, &plane)?;
     let text = ps(p, "text").map(|t| super::within("text", "a graphic's text", t, 2000)).transpose()?;
     if shape == "text" && text.as_deref().is_none_or(|t| t.trim().is_empty()) {
         return Err("text is required".into());
@@ -420,7 +502,7 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
             if !matches!(kind.as_str(), "point" | "text") {
                 return Err("only a point or a text graphic is placed again by its points".into());
             }
-            Some(geometry(&kind, points(p)?)?)
+            Some(geometry(&kind, points(p, &Plane::Mercator)?, &Plane::Mercator)?)
         }
         None => None,
     };
