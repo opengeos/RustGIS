@@ -214,8 +214,8 @@ fn free() -> impl Strategy<Value = Overlay> {
 }
 
 /// A feature of A: a free shape, one of B's features as it is, or one of B's rectangles as it is,
-/// just inside it, or half its size (wholly inside a cell, or in a hole, where the cell's extent
-/// meets it but the cell doesn't).
+/// just inside it, half its size (wholly inside a cell, or in a hole, where the cell's extent
+/// meets it but the cell doesn't), or a fifth larger (into the cells around it).
 fn input_shape(b: &Overlay) -> BoxedStrategy<Shape> {
     let same = prop::sample::select(b.shapes.clone());
     if b.rects.is_empty() {
@@ -284,11 +284,11 @@ fn run(layers: &Layers, tool: &str, params: Json) -> Result<Areas, TestCaseError
     let r = rustgis_analysis::run(tool, layers, &params).map_err(|e| TestCaseError::fail(format!("{tool} {params}: {e}")))?;
     let mut out = Areas::new();
     match r.output {
-        Output::Layer(ds) => by_key(&ds, "key", (ds.field_index("key_2").is_some()).then_some("key_2"), &mut out),
+        Output::Layer(ds) => by_key(&ds, "key", ds.field_index("key_2").is_some().then_some("key_2"), &mut out),
         Output::Layers(layers) => {
             for l in layers {
-                let OutputLayer::Vector(ds) = l else { return Err(TestCaseError::fail(format!("{tool}: a raster"))) };
-                let Some(b) = ds.name.rsplit('_').next() else { continue };
+                let OutputLayer::Vector(ds) = l else { return Err(TestCaseError::fail(format!("{tool}: a raster or table"))) };
+                let b = ds.name.rsplit('_').next().unwrap_or_default();
                 for row in 0..ds.features.len() {
                     *out.entry((text(&ds, row, "key"), b.to_string())).or_default() += area(ds.features.geometry(row));
                 }
@@ -329,8 +329,10 @@ fn identities(b: &Overlay, a: &[Shape]) -> Result<(Vec<String>, bool), TestCaseE
 
     let mut failed = Vec::new();
     let mut check = |what: String, x: f64, y: f64| {
-        if (x - y).abs() > tol {
-            failed.push(format!("{what}: {x:.1} m² vs {y:.1} m² (off {:.3e} of the inputs)", (x - y).abs() / total));
+        // A difference that isn't a number fails too.
+        let off = (x - y).abs();
+        if off.is_nan() || off > tol {
+            failed.push(format!("{what}: {x:.1} m² vs {y:.1} m² (off {:.3e} of the inputs)", off / total));
         }
     };
     let none = |k: &str| k.is_empty();
@@ -363,7 +365,20 @@ fn identities(b: &Overlay, a: &[Shape]) -> Result<(Vec<String>, bool), TestCaseE
     // Nothing else: no row whose keys aren't of the layers, and Symmetrical Difference keeps no
     // part both cover.
     let known = |k: &str| k.is_empty() || ka.iter().chain(&kb).any(|(x, _)| x == k);
-    for (name, areas) in [("Intersect", &intersect), ("Identity", &identity), ("Union", &union), ("Split", &split), ("Update", &update)] {
+    let made = [
+        ("Clip", &clip),
+        ("Erase", &erase),
+        ("Intersect", &intersect),
+        ("Identity", &identity),
+        ("Union", &union),
+        ("Symmetrical Difference", &symdiff),
+        ("Update", &update),
+        ("Split", &split),
+        ("Intersect of B by A", &intersect_ba),
+        ("Erase of B by A", &erase_ba),
+        ("Clip of B by A", &clip_ba),
+    ];
+    for (name, areas) in made {
         for ((x, y), v) in areas.iter() {
             if !known(x) || !known(y) {
                 failed.push(format!("{name} made a row keyed {x:?}, {y:?} ({v:.1} m²)"));
@@ -375,7 +390,8 @@ fn identities(b: &Overlay, a: &[Shape]) -> Result<(Vec<String>, bool), TestCaseE
             failed.push(format!("Symmetrical Difference kept {v:.1} m² of both {x} and {y}"));
         }
     }
-    let overlapped = intersect.iter().any(|((x, y), v)| !x.is_empty() && !y.is_empty() && *v > tol);
+    let of_layer = |keys: &[(String, f64)], k: &str| keys.iter().any(|(x, _)| x == k);
+    let overlapped = intersect.iter().any(|((x, y), v)| of_layer(&ka, x) && of_layer(&kb, y) && *v > tol);
     Ok((failed, overlapped))
 }
 
