@@ -5573,8 +5573,25 @@ pub fn export_losses_notes_in(ds: &Dataset, ext: &str, name_field: Option<usize>
         "gpx" => gpx_notes(ds, name_field, target),
         _ => Vec::new(),
     };
-    notes.extend(TextLosses::of(&ds.features, &ds.fields, ds.geometry_type, ext, name_field).notes(&ds.fields, target));
+    notes.extend(text_losses_written(ds, ext, name_field)?.notes(&ds.fields, target));
     Ok(notes.into())
+}
+
+/// [`TextLosses`] of `ds` as written to a file with extension `ext`. KML and GPX hold
+/// longitude/latitude, so a layer held in another system has its places checked where the writer
+/// puts them: a chunk of features converted at a time (no copy of the layer), one with a place
+/// that can't be given there without its geometry, as it is written.
+fn text_losses_written(ds: &Dataset, ext: &str, name_field: Option<usize>) -> Result<TextLosses> {
+    let of = |features: &[crate::Feature]| TextLosses::of(features, &ds.fields, ds.geometry_type, ext, name_field);
+    let to = if matches!(ext, "kml" | "kmz" | "gpx") { Some(ds.lonlat_conversion().map_err(DataError::of_conversion)?) } else { None };
+    let Some(to) = to.filter(|to| !to.is_identity()) else { return Ok(of(&ds.features)) };
+    let mut losses = TextLosses::default();
+    for chunk in ds.features.chunks(4096) {
+        let mut chunk = chunk.to_vec();
+        project_each_leaving_out(&mut chunk, &to, false)?;
+        losses += of(&chunk);
+    }
+    Ok(losses)
 }
 
 /// KML fields whose name is blank once trimmed, with values in the placemarks written: each is
@@ -8382,6 +8399,14 @@ mod tests {
         }
         ds.push(Some(Geometry::Point(Coord::new(3.0, 4.0))), vec![Value::Int(3), Value::Text("present".into())]);
         assert!(export_losses_notes(&ds, "kml", None, "parcels.kml").unwrap().is_empty());
+        // Held in a projected system, its places are checked in the longitude/latitude the file
+        // holds: none is out of range there, so none is said not to read back.
+        let mut held = ds.clone();
+        held.hold_in(Crs::Epsg(32631)).unwrap();
+        for ext in ["kml", "gpx"] {
+            let notes = export_losses_notes(&held, ext, None, &format!("parcels.{ext}")).unwrap();
+            assert!(notes.iter().all(|n| n.loss != Some(crate::loss::LossCode::DroppedFeature)), "{ext}: {notes:?}");
+        }
     }
 
     /// A point layer's fields named like coordinates keep their values when its CSV is read back:
