@@ -1479,7 +1479,9 @@ pub(crate) fn held_places(s: &Session, id: u32, originals: &[&Geometry], edited:
     // Only what an edited place still lacks is held from here on.
     held.want_only(edited);
     let system = l.dataset.coord_crs();
-    let Ok(to_own) = rustgis_data::raster::Crs::LonLat.to(system) else { return held };
+    // Through the map's system when the layer is shown through it: the route its stored places
+    // are read by, so a place snapped to one lands within the box looked in.
+    let Ok(to_own) = l.dataset.shown_from_lonlat() else { return held };
     // The places not held yet, each in the layer's coordinates, and the box they are in there,
     // padded by what a round trip moves a place: a stored place reading as one lies within it.
     let mut within = rustgis_geom::Extent::EMPTY;
@@ -1874,8 +1876,8 @@ fn split_own(s: &mut Session, id: u32, grid: OwnGrid, at: Coord) -> CmdResult {
     let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
     let (mut changes, mut unmeasured) = (Vec::new(), 0usize);
     for r in l.selection.clone() {
-        let Some(f) = l.dataset.features.get(r).cloned() else { continue };
-        let Some(Geometry::Line(parts)) = &f.geometry else { continue };
+        let Some(Geometry::Line(parts)) = l.dataset.features.geometry(r) else { continue };
+        let parts = parts.clone();
         let mut best: Option<(f64, usize, usize, Coord)> = None;
         for (pi, part) in parts.iter().enumerate() {
             for (si, w) in part.windows(2).enumerate() {
@@ -1917,11 +1919,10 @@ fn split_own(s: &mut Session, id: u32, grid: OwnGrid, at: Coord) -> CmdResult {
         a_parts.push(first);
         let mut b_parts = vec![second];
         b_parts.extend(parts.iter().skip(pi + 1).cloned());
-        if let Some(feat) = l.dataset.features.get_mut(r) {
-            feat.geometry = Some(Geometry::Line(a_parts));
-            changes.push(Change { before: Some(f.clone()), row: Some(r) });
-        }
+        let Some(f) = l.dataset.features.get(r).cloned() else { continue };
+        l.dataset.features.set_geometry(r, Some(Geometry::Line(a_parts)));
         l.dataset.push(Some(Geometry::Line(b_parts)), f.attrs.clone());
+        changes.push(Change { before: Some(f), row: Some(r) });
         changes.push(Change { before: None, row: Some(l.dataset.features.len() - 1) });
     }
     if changes.is_empty() {

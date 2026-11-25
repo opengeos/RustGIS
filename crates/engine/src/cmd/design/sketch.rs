@@ -73,7 +73,7 @@ fn cut_polygon_with(s: &mut Session, id: u32, line: &[Coord], own: Option<super:
             // The plane is the layer's only while the cut is worked out.
             let cut = {
                 let _plane = rustgis_analysis::convert::install(rustgis_analysis::convert::run_plane_for(grid.crs));
-                f.geometry.as_ref().map(|g| sketch_edit::cut_polygon(g, line, &mut work)).transpose()?.flatten()
+                l.dataset.features.geometry(r).map(|g| sketch_edit::cut_polygon(g, line, &mut work)).transpose()?.flatten()
             };
             match cut {
                 Some(pieces) => {
