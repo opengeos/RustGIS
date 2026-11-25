@@ -54,23 +54,28 @@ pub(super) fn cut_polygon(s: &mut Session, p: &Value) -> CmdResult {
     let own = s.map().layer(id).and_then(super::OwnGrid::of);
     if let Some(grid) = own {
         let line = super::line_in_own(s, id, grid, &line)?;
-        let _plane = rustgis_analysis::convert::install(rustgis_analysis::convert::run_plane_for(grid.crs));
-        return cut_polygon_with(s, id, &line, true);
+        return cut_polygon_with(s, id, &line, Some(grid));
     }
-    cut_polygon_with(s, id, &line, false)
+    cut_polygon_with(s, id, &line, None)
 }
 
-/// [`cut_polygon`] with `line` in longitude/latitude, or (`own`) in the layer's own coordinates
-/// with the run's plane installed.
-fn cut_polygon_with(s: &mut Session, id: u32, line: &[Coord], own: bool) -> CmdResult {
+/// [`cut_polygon`] with `line` in longitude/latitude, or, given the layer's `own` grid, in its
+/// own coordinates, cut in its plane.
+fn cut_polygon_with(s: &mut Session, id: u32, line: &[Coord], own: Option<super::OwnGrid>) -> CmdResult {
     let l = s.map().layer(id).ok_or("no such layer")?;
     let mut cut_up = Vec::new();
     let (mut missed, mut work, mut unplaced) = (0, 0, 0);
-    let to = l.dataset.shown_conversion()?;
+    // Only a cut in longitude/latitude converts the polygons.
+    let to = if own.is_none() { Some(l.dataset.shown_conversion()?) } else { None };
     for &r in &l.selection {
         let Some(f) = l.dataset.features.get(r) else { continue };
-        if own {
-            match f.geometry.as_ref().map(|g| sketch_edit::cut_polygon(g, line, &mut work)).transpose()?.flatten() {
+        if let Some(grid) = own {
+            // The plane is the layer's only while the cut is worked out.
+            let cut = {
+                let _plane = rustgis_analysis::convert::install(rustgis_analysis::convert::run_plane_for(grid.crs));
+                f.geometry.as_ref().map(|g| sketch_edit::cut_polygon(g, line, &mut work)).transpose()?.flatten()
+            };
+            match cut {
                 Some(pieces) => {
                     for g in &pieces {
                         super::super::edit::validate(g)?;
@@ -84,7 +89,7 @@ fn cut_polygon_with(s: &mut Session, id: u32, line: &[Coord], own: bool) -> CmdR
         // Cut in longitude/latitude, from the layer's own coordinates; the pieces go back in them.
         // A polygon with a place that can't be given there isn't cut; it is counted and said.
         let lonlat = match f.geometry.as_ref() {
-            Some(g) => match rustgis_data::Dataset::converted_to_lonlat(&to, g) {
+            Some(g) => match to.as_ref().and_then(|to| rustgis_data::Dataset::converted_to_lonlat(to, g)) {
                 Some(g) => Some(g),
                 None => {
                     unplaced += 1;
@@ -107,7 +112,7 @@ fn cut_polygon_with(s: &mut Session, id: u32, line: &[Coord], own: bool) -> CmdR
     // once for every piece.
     // Worked out in the layer's own coordinates, the pieces are written as they are.
     let mut cuts = Vec::new();
-    if own {
+    if own.is_some() {
         cuts = cut_up.into_iter().map(|(r, f, pieces)| (r, f.clone(), pieces)).collect();
     } else {
         let originals: Vec<&Geometry> = cut_up.iter().filter_map(|(_, f, _)| f.geometry.as_ref()).collect();
@@ -199,8 +204,8 @@ pub(super) fn reshape(s: &mut Session, p: &Value) -> CmdResult {
 
 /// The path along a feature's edge from `from` to `to`: a given feature's (`layer`, `row`), or
 /// else the nearest line or polygon edge passing within the tolerance of both points (in `layer`
-/// when it is given). Returns how far (Web Mercator metres) each point was from the edge it was
-/// moved onto.
+/// when it is given). Returns how far each point was from the edge it was moved onto: in Web
+/// Mercator metres, or metres of a projected layer's own grid ([`traced`]).
 pub(super) fn trace(s: &mut Session, p: &Value) -> CmdResult {
     let (from, to) = (point(p, "from")?, point(p, "to")?);
     let (id, row, part) = match p.get("row") {
@@ -269,7 +274,8 @@ fn traced(s: &Session, id: u32, row: usize, from: Coord, to: Coord, part: Option
     let Geometry::Line(mut parts) = l.dataset.feature_to_lonlat(feature.id(), &back)?.into_owned() else {
         return Err("the traced path has no place in longitude/latitude".into());
     };
-    Ok(sketch_edit::Traced { path: parts.pop().unwrap_or_default(), ..traced })
+    let path = parts.pop().ok_or("the traced path has no place in longitude/latitude")?;
+    Ok(sketch_edit::Traced { path, ..traced })
 }
 
 /// The drawn line or polygon feature with a ring or part passing nearest both points, each within

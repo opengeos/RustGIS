@@ -80,9 +80,10 @@ fn dist(a: Coord, b: Coord) -> f64 {
     (a.x - b.x).hypot(a.y - b.y)
 }
 
-/// The input as metres, refusing coordinates that don't project (a pole, NaN).
-/// Longitudes beyond ±360° (as `edit.vertex` takes, for features unwrapped across the
-/// antimeridian) aren't coordinates on the Earth.
+/// The input as metres ([`to_m`]), refusing coordinates that don't project (a pole, NaN). In
+/// longitude/latitude, longitudes beyond ±360° (as `edit.vertex` takes, for features unwrapped
+/// across the antimeridian) aren't coordinates on the Earth; in a projected system's own plane
+/// any finite coordinate is one.
 fn project(path: &[Coord]) -> Result<Vec<Pt>, String> {
     let pts: Vec<Pt> = path.iter().map(|c| Pt::of(*c)).collect();
     if pts.iter().all(|p| p.m.is_finite() && (own() || (p.ll.x.abs() <= 360.0 && p.ll.y.abs() <= 90.0))) {
@@ -109,7 +110,7 @@ fn area2(ring: &[Pt]) -> f64 {
     ring.windows(2).filter_map(|w| Some((w.first()?.m, w.get(1)?.m))).map(|(a, b)| a.x * b.y - b.x * a.y).sum()
 }
 
-/// [`area2`] of a ring in longitude/latitude.
+/// [`area2`] of a ring in its coordinates (longitude/latitude, or a projected system's own).
 fn area2_ll(ring: &[Coord]) -> f64 {
     area2(&ring.iter().map(|c| Pt::of(*c)).collect::<Vec<_>>())
 }

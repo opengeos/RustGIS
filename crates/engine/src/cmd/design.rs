@@ -681,7 +681,7 @@ pub fn commands() -> Vec<C> {
             .when(need_editable_selection)
             .params(r#"{"line": GeoJSON LineString (lon/lat) drawn across the selected line or polygon's boundary}"#),
         C::new("edit.trace", "Trace Edge Path", "Edit › Features", sketch::trace).roles(&[]).effects(crate::policy::Effects::NONE).view().params(
-            r#"{"from": [lon, lat], "to": [lon, lat], "layer"?, "row"?: number (else the nearest edge within the tolerance), "tolerancePx"?: number (default: the snapping tolerance)}"#,
+            r#"{"from": [lon, lat], "to": [lon, lat], "layer"?, "row"?: number (else the nearest edge within the tolerance), "tolerancePx"?: number (default: the snapping tolerance)} (fromOffM and toOffM in Web Mercator metres, or metres of the grid of a layer held in a projected system)"#,
         ),
         C::new("edit.traverse", "Traverse", "Edit › Features › Modify", traverse).roles(&[]).effects(crate::policy::Effects::NONE).when(need_editable).params(
             r#"{"layer"?, "start": [lon, lat], "units"?: "Meters" (default)|"Feet"|"Kilometers"|"Miles", "legs": [{"distance": number, "bearing": degrees from north}]} (closed in a polygon layer, open in a line layer)"#,
@@ -1509,7 +1509,7 @@ pub(crate) fn held_places(s: &Session, id: u32, originals: &[&Geometry], edited:
     held
 }
 
-/// A line drawn on the map (in longitude/latitude) in the coordinates of layer `id`, held in
+/// A line drawn (or a point clicked) on the map, in longitude/latitude, in the coordinates of layer `id`, held in
 /// `grid`'s system, for an edit worked out there (#2032 C2f-7): a point snapped to a stored place
 /// of a layer in that system is that place, as stored ([`held_places`]); any other is converted.
 pub(super) fn line_in_own(s: &Session, id: u32, grid: OwnGrid, line: &[Coord]) -> Result<Vec<Coord>, String> {
@@ -1885,7 +1885,10 @@ fn split_own(s: &mut Session, id: u32, grid: OwnGrid, at: Coord) -> CmdResult {
                 let t = if len2 > 0.0 { (((at.x - a.x) * dx + (at.y - a.y) * dy) / len2).clamp(0.0, 1.0) } else { 0.0 };
                 let q = Coord::new(a.x + t * dx, a.y + t * dy);
                 let d = (q.x - at.x).hypot(q.y - at.y);
-                if d.is_finite() && best.is_none_or(|b| d < b.0) {
+                // A segment too long to measure (its distance not a number) is passed over.
+                if !d.is_finite() {
+                    unmeasured += 1;
+                } else if best.is_none_or(|b| d < b.0) {
                     best = Some((d, pi, si, q));
                 }
             }

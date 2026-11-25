@@ -13,12 +13,17 @@ const UTM: Crs = Crs::Epsg(32632);
 
 /// A dataset `name` of `kind` with `geoms` given in UTM 32N, held there.
 fn held(name: &str, kind: GeometryType, geoms: Vec<Geometry>) -> Dataset {
+    held_in(name, kind, geoms, UTM)
+}
+
+/// [`held`] in `crs`: the coordinates given are stored as they are, in it.
+fn held_in(name: &str, kind: GeometryType, geoms: Vec<Geometry>, crs: Crs) -> Dataset {
     let mut ds = Dataset::new(name, kind, vec![Field::new("name", FieldType::Text)]);
     for (i, g) in geoms.into_iter().enumerate() {
         ds.push(Some(g), vec![Value::Text(format!("{name} {i}"))]);
     }
-    ds.held_in = UTM;
-    ds.crs = Some(UTM);
+    ds.held_in = crs;
+    ds.crs = Some(crs);
     ds
 }
 
@@ -157,6 +162,46 @@ fn a_merge_unions_the_layers_own_shapes_as_stored() {
     let Some(Geometry::Polygon(p)) = &l.dataset.features[0].geometry else { panic!() };
     assert_eq!(p.len(), 1, "{p:?}");
     assert!(stored(&s).iter().all(|c| before.contains(c)), "{:?}", stored(&s));
+}
+
+#[test]
+fn a_merge_meets_the_layers_own_sides_where_the_shapes_cross() {
+    // A triangle reaching out of the square's east side: merged, the two points where its sides
+    // cross the square's east side are new, on that side as it runs straight in UTM.
+    let triangle = Geometry::Polygon(vec![vec![vec![
+        Coord::new(X + 10_000.0, Y + 10_000.0),
+        Coord::new(X + 30_000.0, Y + 4_000.0),
+        Coord::new(X + 30_000.0, Y + 16_000.0),
+        Coord::new(X + 10_000.0, Y + 10_000.0),
+    ]]]);
+    let mut s = session(held("Parcels", GeometryType::Polygon, vec![square(X, Y, SIDE), triangle]));
+    let before = stored(&s);
+    s.run("edit.merge", &json!({})).unwrap();
+    let made: Vec<Coord> = stored(&s).into_iter().filter(|c| !before.contains(c)).collect();
+    assert!(!made.is_empty());
+    for c in made {
+        assert!((c.x - (X + SIDE)).abs() < 1e-6, "{c:?} is off the square's east side");
+    }
+}
+
+#[test]
+fn a_split_in_a_layer_in_feet_is_on_its_own_segment() {
+    // New York Long Island (US survey feet): a line split a few miles along, at the point asked.
+    const NY: Crs = Crs::Epsg(2263);
+    let (x, y) = (1_000_000.0, 200_000.0);
+    let road = Geometry::Line(vec![vec![Coord::new(x, y), Coord::new(x + 60_000.0, y + 30_000.0)]]);
+    let mut s = session(held_in("Roads", GeometryType::Polyline, vec![road], NY));
+    let at = NY.to(Crs::LonLat).unwrap().point(Coord::new(x + 20_000.0, y + 10_000.0)).unwrap();
+    s.run("edit.split", &json!({"lon": at.x, "lat": at.y})).unwrap();
+    assert_eq!(s.map().layers[0].dataset.features.len(), 2);
+    let made: Vec<Coord> =
+        stored(&s).into_iter().filter(|c| *c != Coord::new(x, y) && *c != Coord::new(x + 60_000.0, y + 30_000.0)).collect();
+    assert!(!made.is_empty());
+    for c in made {
+        // On the line (y = x / 2 from its start), at the point asked for.
+        assert!(((c.y - y) - (c.x - x) / 2.0).abs() < 1e-6, "{c:?}");
+        assert!((c.x - (x + 20_000.0)).abs() < 1e-3, "{c:?}");
+    }
 }
 
 #[test]
