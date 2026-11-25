@@ -4433,7 +4433,10 @@ fn native_file_dates_preserve_zone_policy_and_fractional_seconds() {
     assert_eq!(back.features[0].attrs[1], ds.features[0].attrs[1]);
     assert_eq!(back.features[0].attrs[2].to_string(), "2026-03-05T12:30:00.123456Z");
     assert_eq!(back.features[1].attrs[3], Value::Text("2026-01-01T00:00:00Z".into()));
-    let note = parquet::values_note(&ds, "out.parquet").unwrap().text;
+    let note = parquet::values_note(&ds, "out.parquet").unwrap();
+    // No value is unfit, but the offsets left out are lost.
+    assert_eq!(note.loss, Some(crate::loss::LossCode::DroppedValue));
+    let note = note.text;
     assert!(note.contains("2 date-times were written in UTC") && note.contains("2 date-times were written as ISO text"), "{note}");
     // A replayable source feed chooses the same schema as an in-memory export.
     let input = fgb::write(&ds).unwrap();
@@ -4444,10 +4447,10 @@ fn native_file_dates_preserve_zone_policy_and_fractional_seconds() {
     assert_eq!(summary.written, 2);
     // Without a label of their own: the export adds its path once.
     assert_eq!(
-        summary.date_messages,
+        summary.date_messages.iter().map(|n| (n.text.as_str(), n.loss)).collect::<Vec<_>>(),
         [
-            "2 date-times were written in UTC without their original offsets, in 'instant'",
-            "2 date-times were written as ISO text because their column mixes zoned and unzoned values, in 'mixed'"
+            ("2 date-times were written in UTC without their original offsets, in 'instant'", Some(crate::loss::LossCode::DroppedValue)),
+            ("2 date-times were written as ISO text because their column mixes zoned and unzoned values, in 'mixed'", None)
         ]
     );
     let (streamed, _) = crate::io::read_path(&path).unwrap();

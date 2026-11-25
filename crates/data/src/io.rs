@@ -7876,8 +7876,6 @@ mod tests {
         assert_eq!(write_bytes(&ds, "gpx").unwrap().1, 2);
     }
 
-    /// A text layer for [`TextLosses`]: point features with `rows` of text values, and one without
-    /// geometry holding blanks and padded text, which KML, GPX and Shapefile don't write.
     /// Each writer's notice of what a file can't hold carries the code of its loss, and the
     /// notices that say nothing was lost carry none.
     #[test]
@@ -7912,6 +7910,8 @@ mod tests {
         assert_eq!(gpx(&area), [Some(DroppedRing)]);
     }
 
+    /// A text layer for [`TextLosses`]: point features with `rows` of text values, and one without
+    /// geometry holding blanks and padded text, which KML, GPX and Shapefile don't write.
     fn text_layer(names: &[&str], rows: &[&[Option<&str>]]) -> Dataset {
         let fields = names.iter().map(|n| Field::new(*n, FieldType::Text)).collect();
         let mut ds = Dataset::new("t", GeometryType::Point, fields);

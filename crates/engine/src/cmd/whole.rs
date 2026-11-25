@@ -163,8 +163,8 @@ pub(crate) fn load_into(l: &mut Layer) -> Result<Unread, String> {
     Ok(Unread::of(name, unread))
 }
 
-/// The notice for `unread` rows of `layer`'s source that couldn't be read, left out: as said, with
-/// its code ([`unread_notice`] is its text, for an error that names it).
+/// The notice, with its code, that `unread` rows of `layer`'s source couldn't be read and are left
+/// out. [`unread_notice`] gives the same text for an error that names it.
 pub fn unread_note(layer: &str, unread: usize) -> rustgis_data::loss::Note {
     rustgis_data::loss::Note::loss(rustgis_data::loss::LossCode::DroppedFeature, unread_notice(layer, unread))
 }
