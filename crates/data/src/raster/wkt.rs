@@ -301,8 +301,13 @@ pub fn read_wkt_over_code(text: &str, code: u32) -> Option<Result<(Crs, Option<S
         }
     };
     let files_shift = towgs84(geogcs(&root).and_then(|g| g.child("DATUM")));
-    // A shift that can't be read is said, so the text is read (by the code) to say it.
-    if !unusable_towgs84(&root) && (files_shift.is_none() || Crs::from_epsg(code).is_some_and(|by_code| places_as(text, by_code))) {
+    // A shift that can't be read is said, so the text is read (by the code) to say it; so is one
+    // set aside ([`by_code_note`]), and a system read from its parameters is read from them.
+    let as_code = match Crs::from_epsg(code) {
+        Some(by_code) => matches!(by_code_note(text, files_shift.as_deref(), code, by_code), Some(None)),
+        None => files_shift.is_none(),
+    };
+    if !unusable_towgs84(&root) && as_code {
         return None;
     }
     Some(read_tree(&root, Some(code), text))
@@ -497,18 +502,12 @@ fn read_root(root: &Node, code: Option<u32>, text: &str) -> Result<(Crs, Option<
     // transformation of its EPSG code, as in PROJ and GDAL. The code is used only when the two
     // place points alike.
     let files_shift = towgs84(geogcs(root).and_then(|g| g.child("DATUM")));
-    // Without a shift, a code is read as itself, except Web Mercator: GDAL 1's EPSG:900913 without
-    // its `PROJ4` extension is Mercator on the WGS 84 ellipsoid, as PROJ reads it, not on Web
-    // Mercator's sphere.
-    if (files_shift.is_none() && by_code != Crs::WebMercator) || places_as(text, by_code) {
+    if let Some(said) = by_code_note(text, files_shift.as_deref(), code, by_code) {
         let note = projection_note(root, by_code).map(str::to_owned);
-        // A shift the file gives on a datum whose code has none (WGS 84's) is none for PROJ
-        // either, so the file's is set aside: said, as the file asks for it.
-        let set_aside = files_shift.is_some_and(|s| s.iter().any(|v| *v != 0.0)) && code_with_shift(by_code).is_none();
-        if set_aside {
-            let said = format!("the file's own shift to WGS 84 is set aside, as EPSG:{code} has none, as in PROJ");
-            return Ok((by_code, Some(note.map_or(said.clone(), |n| format!("{n}; {said}")))));
-        }
+        let note = match (note, said) {
+            (Some(n), Some(said)) => Some(format!("{n}; {said}")),
+            (n, said) => n.or(said),
+        };
         return Ok((by_code, note));
     }
     // A system that can't be read from its parameters is still read by its EPSG code, with the
@@ -523,6 +522,29 @@ fn read_root(root: &Node, code: Option<u32>, text: &str) -> Result<(Crs, Option<
         }
         read => read,
     }
+}
+
+/// GDAL 1's code for Web Mercator, which its text gives otherwise ([`by_code_note`]).
+const GDAL1_GOOGLE: u32 = 900_913;
+
+/// Whether a WKT1 system naming EPSG `code` (`by_code`), whose datum gives `files_shift`, is read
+/// by that code: `None` when it is read from its own parameters instead, else what is said of
+/// the file's shift (`Some(None)`: nothing).
+///
+/// Without a shift, a code is read as itself, except GDAL 1's EPSG:900913: without its `PROJ4`
+/// extension its text is Mercator on the WGS 84 ellipsoid, as PROJ reads it, not on Web
+/// Mercator's sphere ([`places_as`] tells them apart). EPSG:3857 is read as itself: its own text
+/// is Web Mercator for PROJ by its name, with or without the extension. A shift the file gives on a datum whose
+/// code has none (WGS 84's) is none for PROJ either, so the file's is set aside, which is said.
+fn by_code_note(text: &str, files_shift: Option<&[f64]>, code: u32, by_code: Crs) -> Option<Option<String>> {
+    if files_shift.is_none() && code != GDAL1_GOOGLE {
+        return Some(None);
+    }
+    if !places_as(text, by_code) {
+        return None;
+    }
+    let set_aside = files_shift.is_some_and(|s| s.iter().any(|v| *v != 0.0)) && code_with_shift(by_code).is_none();
+    Some(set_aside.then(|| format!("the file's own shift to WGS 84 is set aside, as EPSG:{code} has none, as in PROJ")))
 }
 
 /// Whether WKT `text`, as terrio-crs reads it, places points as `crs` does: within a centimetre
@@ -4907,6 +4929,10 @@ pub(crate) mod tests {
         let (crs, note) = read_wkt(&towgs84("TOWGS84[1,2,3]")).unwrap();
         assert_eq!(crs, Crs::Epsg(32631));
         assert_eq!(note.as_deref(), Some("the file's own shift to WGS 84 is set aside, as EPSG:32631 has none, as in PROJ"));
+        // The same where the code comes beside the text (a GeoPackage's, say).
+        let beside = read_wkt_over_code(&towgs84("TOWGS84[1,2,3]"), 32631).unwrap().unwrap();
+        assert_eq!(beside, (crs, note));
+        assert_eq!(read_wkt_over_code(&towgs84("TOWGS84[0,0,0]"), 32631), None);
         let ll = Crs::Epsg(32631).transformer().unwrap().to_lonlat(Coord::new(500_000.0, 5_000_000.0)).unwrap();
         assert!((ll.x - 3.0).abs() < 1e-9 && (ll.y - 45.153_477_2).abs() < 1e-7, "{ll:?}");
     }
@@ -5150,6 +5176,16 @@ pub(crate) mod tests {
         // zero or none), not Web Mercator's sphere (45°N).
         let unshifted = without_proj4_extension(google).unwrap().replace(",TOWGS84[0,0,0,0,0,0,0]", "");
         assert!(!unshifted.contains("TOWGS84") && !unshifted.contains("EXTENSION"), "{unshifted}");
+        // The same where the code comes beside the text.
+        let beside = read_wkt_over_code(&unshifted, 900913).unwrap().unwrap().0;
+        assert_eq!(Ok(beside), crs_from_wkt(&unshifted));
+        // EPSG:3857's own text, named Pseudo-Mercator, stays Web Mercator without its extension
+        // too, as PROJ 9.9.0 reads it (`CRS.from_wkt(text).to_epsg()` is 3857, 60°E 45°N above).
+        let pseudo = r#"PROJCS["WGS 84 / Pseudo-Mercator",GEOGCS["WGS 84",DATUM["WGS_1984",SPHEROID["WGS 84",6378137,298.257223563,AUTHORITY["EPSG","7030"]],AUTHORITY["EPSG","6326"]],PRIMEM["Greenwich",0,AUTHORITY["EPSG","8901"]],UNIT["degree",0.0174532925199433,AUTHORITY["EPSG","9122"]],AUTHORITY["EPSG","4326"]],PROJECTION["Mercator_1SP"],PARAMETER["central_meridian",0],PARAMETER["scale_factor",1],PARAMETER["false_easting",0],PARAMETER["false_northing",0],UNIT["metre",1,AUTHORITY["EPSG","9001"]],AXIS["Easting",EAST],AXIS["Northing",NORTH],AUTHORITY["EPSG","3857"]]"#;
+        assert_eq!(read_wkt(pseudo), Ok((Crs::WebMercator, None)));
+        // Beside its code it is read either way as Web Mercator, without a note.
+        let beside = read_wkt_over_code(pseudo, 3857).unwrap_or(Ok((Crs::WebMercator, None)));
+        assert_eq!(beside, Ok((Crs::WebMercator, None)));
         for text in [without_proj4_extension(google).unwrap(), shifted, unshifted] {
             assert_ne!(crs_from_wkt(&text), Ok(Crs::WebMercator), "{text}");
             let ll = crs_from_wkt(&text)
