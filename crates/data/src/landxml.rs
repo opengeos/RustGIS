@@ -126,25 +126,32 @@ pub fn read(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Vec<(Data
         let mut end_missing = false;
         for seg in cg.children().filter(|c| c.is_element() && matches!(local(c), "Line" | "Curve" | "Spiral" | "IrregularLine")) {
             // A curve's PI (where its tangents meet) is off the curve: its chord runs Start to End.
+            // Whether this segment's end can't be read: a segment without one shares no point
+            // with the next.
+            let mut this_end_missing = false;
             for k in ["Start", "End"] {
                 let Some(n) = seg.children().find(|c| c.is_element() && local(c) == k) else {
                     continue;
                 };
                 let read = pt(&n);
+                // An unreadable start written inline, after an unreadable end, is that end's
+                // point; one named by `pntRef` is that point only when the name is the same,
+                // which `missing` already holds.
                 let junction = k == "Start" && end_missing;
                 match read {
                     Some(c) if pts.last() != Some(&c) => pts.push(c),
                     Some(_) => {}
                     None => match n.attribute("pntRef") {
                         Some(name) if !missing.insert(name) => {}
-                        _ if junction => {}
+                        None if junction => {}
                         _ => *skipped += 1,
                     },
                 }
                 if k == "End" {
-                    end_missing = read.is_none();
+                    this_end_missing = read.is_none();
                 }
             }
+            end_missing = this_end_missing;
         }
         pts
     };
@@ -208,16 +215,21 @@ pub fn read(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Vec<(Data
         GeometryType::Polygon,
         vec![Field::new("surface", FieldType::Text), Field::new("elevation", FieldType::Double)],
     );
+    // Surface points that can't be read (`P` without an id or coordinates).
+    let mut surface_points = 0usize;
     // The surfaces cut at the face limit, said together after them.
     let mut over_limit: Vec<String> = Vec::new();
     for s in elements(&root, "Surface") {
         let sname = s.attribute("name").unwrap_or("").to_string();
         let mut pnts: HashMap<&str, (Coord, Option<f64>)> = HashMap::new();
         for p in elements(&s, "P") {
-            // A point that can't be read isn't kept: the faces that name it are left out, and
-            // counted, and a point no face names loses nothing.
-            if let (Some(id), Some(v)) = (p.attribute("id"), nez(&text_of(&p))) {
-                pnts.insert(id, v);
+            // A point that can't be read isn't kept. The faces that name it are left out, and
+            // counted as features, so the point is said on its own without a code.
+            match (p.attribute("id"), nez(&text_of(&p))) {
+                (Some(id), Some(v)) => {
+                    pnts.insert(id, v);
+                }
+                _ => surface_points += 1,
             }
         }
         // Invisible faces (i="1") are holes in the surface, never read, so the cap counts the
@@ -242,6 +254,10 @@ pub fn read(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<Vec<(Data
         }
     }
 
+    if surface_points > 0 {
+        let what = if surface_points == 1 { "surface point couldn't be read and was" } else { "surface points couldn't be read and were" };
+        report.messages.push(format!("{surface_points} LandXML {what} left out"));
+    }
     match over_limit.as_slice() {
         [] => {}
         [one] => report.messages.push(crate::loss::Note::loss(
@@ -369,6 +385,18 @@ mod tests {
 </Pnts><Faces><F>1 2 3</F><F>1 3 4</F><F i="1">1 2 4</F><F>1 2 9</F></Faces></Definition></Surface></Surfaces>
 </LandXML>"#;
 
+    /// A surface point that can't be read is said, without a code: the faces that name it are
+    /// counted as the features left out.
+    #[test]
+    fn an_unreadable_surface_point_is_said() {
+        let xml = r#"<LandXML><Surfaces><Surface name="g"><Definition surfType="TIN"><Pnts>
+  <P id="1">0 0 1</P><P id="2">0 1 1</P><P id="3">1 0 1</P><P id="4">x y</P>
+</Pnts><Faces><F>1 2 3</F></Faces></Definition></Surface></Surfaces></LandXML>"#;
+        let layers = read("s.xml", xml.as_bytes(), None).unwrap();
+        let said: Vec<_> = layers[0].1.messages.iter().filter(|m| m.contains("surface point")).map(|m| (m.as_str(), m.loss)).collect();
+        assert_eq!(said, [("1 LandXML surface point couldn't be read and was left out", None)]);
+    }
+
     /// An alignment without its CoordGeom has no shape: it is left out, and said with the
     /// features left out.
     #[test]
@@ -407,7 +435,23 @@ mod tests {
         let layers = read("j.xml", junction.as_bytes(), None).unwrap();
         let said: Vec<_> = layers[0].1.messages.texts().filter(|m| m.contains("vertex") || m.contains("vertices")).collect();
         assert_eq!(said, ["1 LandXML vertex couldn't be read and was left out of its shape"]);
-        // So is one written inline, unreadable, at both ends of the junction.
+        // Two different points by name, both missing at one junction, are two vertices.
+        let two = junction.replace(r#"<Start pntRef="missing"/>"#, r#"<Start pntRef="other"/>"#);
+        let layers = read("t.xml", two.as_bytes(), None).unwrap();
+        let said: Vec<_> = layers[0].1.messages.texts().filter(|m| m.contains("vertex") || m.contains("vertices")).collect();
+        assert_eq!(said, ["2 LandXML vertices couldn't be read and were left out of their shapes"]);
+        // After a segment without an End, an unreadable inline Start is its own vertex.
+        let no_end = r#"<LandXML><Parcels><Parcel name="kept"><CoordGeom>
+  <Line><Start>0 0</Start><End>1 0</End></Line>
+  <Line><Start>1 0</Start><End>x y</End></Line>
+  <Line><Start>2 0</Start></Line>
+  <Line><Start>x y</Start><End>1 1</End></Line>
+  <Line><Start>1 1</Start><End>0 1</End></Line>
+</CoordGeom></Parcel></Parcels></LandXML>"#;
+        let layers = read("n.xml", no_end.as_bytes(), None).unwrap();
+        let said: Vec<_> = layers[0].1.messages.texts().filter(|m| m.contains("vertex") || m.contains("vertices")).collect();
+        assert_eq!(said, ["2 LandXML vertices couldn't be read and were left out of their shapes"]);
+        // One written inline, unreadable, at both ends of the junction is one.
         let inline =
             junction.replace(r#"<End pntRef="missing"/>"#, "<End>x y</End>").replace(r#"<Start pntRef="missing"/>"#, "<Start>x y</Start>");
         let layers = read("i.xml", inline.as_bytes(), None).unwrap();
