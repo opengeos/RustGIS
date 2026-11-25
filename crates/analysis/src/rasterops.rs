@@ -824,6 +824,12 @@ pub fn idw(
 /// How near a cell must be to a point, as a squared distance, to take its value outright.
 const IDW_EXACT_D2: f64 = 1e-24;
 
+/// The least that the sum of the weights of a pass at a power of 2, and that sum times the largest
+/// |value|, may be for its result to stand: the terms that underflowed, each below
+/// `f64::MIN_POSITIVE`, then move it by less than 10⁻⁹⁹ of the largest value, even from as many
+/// points as a run takes.
+const IDW_SAFE_SCALE: f64 = 1e-200;
+
 /// The separate sums a cell's pass over every point keeps: a fixed number, so that a cell's sums
 /// are added in the same order on any thread, and enough for the compiler to add them in vectors.
 const IDW_LANES: usize = 8;
@@ -834,6 +840,8 @@ struct IdwColumns {
     x: Vec<f64>,
     y: Vec<f64>,
     v: Vec<f64>,
+    /// The largest |value|.
+    largest: f64,
 }
 
 impl IdwColumns {
@@ -842,6 +850,7 @@ impl IdwColumns {
             x: points.iter().map(|(p, _)| p.x).collect(),
             y: points.iter().map(|(p, _)| p.y).collect(),
             v: points.iter().map(|(_, v)| *v).collect(),
+            largest: points.iter().fold(0.0, |m, (_, v)| larger(m, v.abs())),
         }
     }
 
@@ -849,13 +858,17 @@ impl IdwColumns {
     /// [`IDW_EXACT_D2`] of it, else the mean of every point's value weighted by 1/dᵖ.
     ///
     /// At a power of 2 that is one pass, with w = 1/d², at most 1e24 once no point is within
-    /// [`IDW_EXACT_D2`]. At any other power, or should the sums overflow (from huge values) or the
-    /// weights vanish (at distances near f64's limit), a first pass finds the nearest point and a
-    /// second weighs each by (dₙ²/d²)^(p/2): the same ratios, which can't overflow for a high power.
+    /// [`IDW_EXACT_D2`]. At any other power, or should the sums overflow (from huge values) or
+    /// their terms underflow (from tiny values or distances near f64's limit, below
+    /// [`IDW_SAFE_SCALE`]), a first pass finds the nearest point and a second weighs each by
+    /// (dₙ²/d²)^(p/2): the same ratios, which keep the nearest point's weight at 1 and can't
+    /// overflow for a high power.
     fn at(&self, c: Coord, kx: f64, power: f64) -> f64 {
         let nearest = if power == 2.0 {
             let (num, den, nearest) = self.sums(c, kx, |d2| 1.0 / d2);
-            if nearest >= IDW_EXACT_D2 && num.is_finite() && den.is_finite() && den > 0.0 {
+            // With every value 0 the sum is exactly 0, whatever underflowed.
+            let scaled = den >= IDW_SAFE_SCALE && (self.largest == 0.0 || den * self.largest >= IDW_SAFE_SCALE);
+            if nearest >= IDW_EXACT_D2 && num.is_finite() && den.is_finite() && scaled {
                 return num / den;
             }
             nearest
@@ -918,6 +931,12 @@ impl IdwColumns {
     }
 }
 
+/// The larger of `a` and `b`, or `a` when `b` is not a number.
+#[inline(always)]
+fn larger(a: f64, b: f64) -> f64 {
+    if b > a { b } else { a }
+}
+
 /// The smaller of `a` and `b`, or `a` when `b` is not a number: as `f64::min` for the distances
 /// here (`a` is never NaN), in a form that goes in vector instructions.
 #[inline(always)]
@@ -968,10 +987,10 @@ fn idw_on(
     let geographic = crs.is_geographic();
     let exact = if squared { IDW_EXACT_D2 } else { 1e-12 };
     // With every point weighed, each cell takes one pass over them as columns, with no buffer.
-    let all = k == points.len();
+    let every_point = k == points.len();
     // Each row on its own, on several threads when the work is large (#1252); a thread's
     // distances for the nearest few go into its own buffer.
-    let scratch_bytes = if all { 0 } else { points.len().saturating_mul(std::mem::size_of::<(f64, f64)>()) };
+    let scratch_bytes = if every_point { 0 } else { points.len().saturating_mul(std::mem::size_of::<(f64, f64)>()) };
     // Every cell weighs every point: as many times the work as there are threads (#1291).
     let work = w.saturating_mul(h).saturating_mul(points.len());
     let threads = threads.unwrap_or_else(|| crate::parallel::threads_for_rows(h, work, scratch_bytes));
@@ -983,13 +1002,13 @@ fn idw_on(
             crate::parallel::UNCAPPED_HINT
         ));
     }
-    let every = all.then(|| IdwColumns::new(points));
+    let every = every_point.then(|| IdwColumns::new(points));
     let mut data = new_band(w, h, NODATA)?;
     crate::control::begin(h);
     crate::parallel::for_each_row(
         data.chunks_mut(w),
         threads,
-        || (Vec::with_capacity(if all { 0 } else { points.len() }), crate::control::Pace::default()),
+        || (Vec::with_capacity(if every_point { 0 } else { points.len() }), crate::control::Pace::default()),
         |(near, pace): &mut (Vec<(f64, f64)>, crate::control::Pace), row, out: &mut [f32]| {
             // East-west degrees shrink with latitude, which only changes by row; a projected
             // system's units don't.
@@ -2669,6 +2688,15 @@ mod tests {
         let want = (100.0 * far / (1.0 + far)) as f32;
         let got = g.bands[0].data[0];
         assert!((got - want).abs() <= want * 1e-5, "{got} vs {want}");
+    }
+
+    /// From every point at a power of 2, points so far that each 1/d² · v underflows to nothing
+    /// still give their surface: a constant one stays that constant.
+    #[test]
+    fn idw_from_every_point_keeps_values_whose_weighted_terms_underflow() {
+        let pts = [(Coord::new(-1e150, 0.0), 1e-30), (Coord::new(1e150, 0.0), 1e-30)];
+        let g = idw(&pts, &Extent::new(-0.5, -0.5, 0.5, 0.5), 1.0, 2.0, 0, "idw", Crs::Epsg(3857)).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(g.bands[0].data[0], 1e-30_f32);
     }
 
     /// Rows made on several threads give the same surface, bit for bit, as one thread (#1252),
