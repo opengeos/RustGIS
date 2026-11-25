@@ -223,3 +223,50 @@ fn a_streamed_shapefile_keeps_what_a_whole_read_keeps() {
     let view = crate::source::FeatureSource::read(&src, &crate::source::Request { extent: Some(paris), limit: 10, own: None }).unwrap();
     assert_eq!(view.features.len(), 1);
 }
+
+/// An export converts each place once and takes the layer's box from that conversion (#2032):
+/// the box is [`Dataset::lonlat_extent`]'s exactly, a feature left out for a place it can't give
+/// still counting its others, and a layer large enough for several threads is written as one
+/// thread writes it, its threads stopping on Cancel.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn an_export_takes_its_box_from_its_one_conversion_on_any_number_of_threads() {
+    use crate::progress::tests::Counted;
+    let mut ds = lines(false);
+    for i in 0..30_000u32 {
+        let x = 300_000.0 + f64::from(i % 997) * 400.0;
+        let y = 4_000_000.0 + f64::from(i / 997) * 30_000.0;
+        let mut part = vec![Coord::new(x, y), Coord::new(x + 50.0, y + 75.0)];
+        match i % 1000 {
+            // A place with no longitude/latitude: the feature is left out, its other place kept in the box.
+            7 => part.push(Coord::new(1e9, y)),
+            // A missing place, kept as it is.
+            11 => part.push(Coord::new(f64::NAN, f64::NAN)),
+            _ => {}
+        }
+        ds.push(Some(Geometry::Line(vec![part])), vec![Value::Text(i.to_string())]);
+    }
+    let to = ds.lonlat_conversion().unwrap();
+    let mut threaded = ds.features.to_vec();
+    let (unplaced, placed) = crate::io::project_each_leaving_out(&mut threaded, &to, true).unwrap();
+    assert_eq!(unplaced, 30, "one feature in a thousand has a place it can't give");
+    assert_eq!(placed, ds.lonlat_extent(), "the box lonlat_extent gives, from the one conversion");
+    // The one-thread path, a piece too small for threads at a time, gives the same bit for bit.
+    let mut one = ds.features.to_vec();
+    let mut by_one = (0, rustgis_geom::Extent::EMPTY);
+    for piece in one.chunks_mut(1000) {
+        let (n, e) = crate::io::project_each_leaving_out(piece, &to, false).unwrap();
+        by_one = (by_one.0 + n, by_one.1.union(&e));
+    }
+    assert_eq!(by_one, (unplaced, placed));
+    assert_eq!(format!("{threaded:?}"), format!("{one:?}"));
+    // Cancel reaches the threads: the run stops after the pieces under way, short of the end.
+    let probe = Counted::cancelling_after(1);
+    let _g = crate::progress::install(Some(probe.clone()));
+    crate::progress::begin(ds.features.len());
+    let mut cancelled = ds.features.to_vec();
+    let e = crate::io::project_each_leaving_out(&mut cancelled, &to, true).unwrap_err();
+    assert!(matches!(e, crate::DataError::Cancelled), "{e}");
+    let done = probe.done.load(std::sync::atomic::Ordering::Relaxed);
+    assert!(done < ds.features.len() as u64, "stopped short of the end: {done}");
+}
