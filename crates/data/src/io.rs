@@ -5653,6 +5653,8 @@ pub fn gpx_notes(ds: &Dataset, name_field: Option<usize>, target: &str) -> Vec<c
         .map(|(k, f)| (drawn().all(|g| g.attrs.get(k).is_none_or(Value::is_null)), f.name.as_str()))
         .collect();
     fields.sort_by_key(|(empty, _)| *empty);
+    // Values are lost only from fields that had some; fields empty everywhere lose nothing.
+    let lost_values = fields.iter().any(|(empty, _)| !empty);
     let fields: Vec<&str> = fields.into_iter().map(|(_, name)| name).collect();
     let (mut polygons, mut holes, mut multipoints) = (0, 0, 0);
     for g in drawn().filter_map(|f| f.geometry.as_ref()) {
@@ -5670,10 +5672,12 @@ pub fn gpx_notes(ds: &Dataset, name_field: Option<usize>, target: &str) -> Vec<c
         let names: Vec<_> = fields.iter().take(5).map(|s| format!("'{}'", dbf_notice_name(s))).collect();
         let more = if fields.len() > 5 { format!(" and {} more", fields.len() - 5) } else { String::new() };
         let what = if fields.len() == 1 { "1 field wasn't" } else { "fields weren't" };
-        notes.push(crate::loss::Note::loss(
-            crate::loss::LossCode::DroppedValue,
-            format!("{target}: GPX holds a name for each feature, so {what} written: {}{more}", names.join(", ")),
-        ));
+        let text = format!("{target}: GPX holds a name for each feature, so {what} written: {}{more}", names.join(", "));
+        notes.push(if lost_values {
+            crate::loss::Note::loss(crate::loss::LossCode::DroppedValue, text)
+        } else {
+            crate::loss::Note::plain(text)
+        });
     }
     if polygons > 0 {
         let what = if polygons == 1 { "1 polygon was".to_string() } else { format!("{polygons} polygons were") };
@@ -5682,10 +5686,13 @@ pub fn gpx_notes(ds: &Dataset, name_field: Option<usize>, target: &str) -> Vec<c
             1 => ", and 1 hole left out".to_string(),
             n => format!(", and {n} holes left out"),
         };
-        notes.push(crate::loss::Note::loss(
-            crate::loss::LossCode::DroppedGeometry,
-            format!("{target}: GPX has no areas, so {what} written as tracks along their outer edges{left}"),
-        ));
+        // Written as their outlines; what is lost are the holes, when there are any.
+        let text = format!("{target}: GPX has no areas, so {what} written as tracks along their outer edges{left}");
+        notes.push(if holes > 0 {
+            crate::loss::Note::loss(crate::loss::LossCode::DroppedRing, text)
+        } else {
+            crate::loss::Note::plain(text)
+        });
     }
     if multipoints > 0 {
         let what = if multipoints == 1 { "1 multipoint was".to_string() } else { format!("{multipoints} multipoints were") };
@@ -7871,6 +7878,40 @@ mod tests {
 
     /// A text layer for [`TextLosses`]: point features with `rows` of text values, and one without
     /// geometry holding blanks and padded text, which KML, GPX and Shapefile don't write.
+    /// Each writer's notice of what a file can't hold carries the code of its loss, and the
+    /// notices that say nothing was lost carry none.
+    #[test]
+    fn export_notices_carry_their_loss_codes() {
+        use crate::loss::LossCode::*;
+        let date = |name: &str| Field::new(name, FieldType::DateTime);
+        let code = |n: Option<crate::loss::Note>| n.and_then(|n| n.loss);
+        assert_eq!(code(fine_dates_note(&[date("at")], &[2], "t.gpkg")), Some(ChangedRounded));
+        assert_eq!(code(utc_dates_note(&[date("at")], &[2], "t.gpkg")), Some(DroppedValue));
+        assert_eq!(code(text_in_dates_note(&[date("at")], &[2], "t.gpkg")), Some(DroppedValue));
+        assert_eq!(code(left_out_note("t.shp", "shp", 3)), Some(DroppedFeature));
+        assert_eq!(code(left_out_note("t.kml", "kml", 3)), Some(DroppedFeature));
+        assert_eq!(code(csv_system_note("t.csv", GeometryType::Point, Crs::WebMercator)), Some(DroppedCrsName));
+        let long = [Field::new("population_2020", FieldType::Integer)];
+        assert_eq!(code(shapefile_names_note(&long, "t.shp")), Some(ChangedFieldName));
+        let cased = [Field::new("Name", FieldType::Text), Field::new("name", FieldType::Text)];
+        assert_eq!(code(geopackage_names_note(&cased, "t.gpkg")), Some(ChangedFieldName));
+        assert_eq!(code(crate::unplaced_note("t", "lines", 1)), Some(DroppedGeometry));
+        // GPX: fields with values aren't written, a lost value; fields empty everywhere aren't
+        // either, and lose nothing. Polygons go as their outlines, losing only their holes.
+        let mut ds = text_layer(&["name", "note"], &[&[Some("a"), Some("kept")]]);
+        let gpx = |ds: &Dataset| gpx_notes(ds, name_field(ds), "t").into_iter().map(|n| n.loss).collect::<Vec<_>>();
+        assert_eq!(gpx(&ds), [Some(DroppedValue)]);
+        ds.features[0].attrs[1] = Value::Null;
+        assert_eq!(gpx(&ds), [None]);
+        let mut area = Dataset::new("a", GeometryType::Polygon, vec![]);
+        let ring = vec![Coord::new(0.0, 0.0), Coord::new(4.0, 0.0), Coord::new(4.0, 4.0), Coord::new(0.0, 0.0)];
+        let hole = vec![Coord::new(1.0, 1.0), Coord::new(2.0, 1.0), Coord::new(2.0, 2.0), Coord::new(1.0, 1.0)];
+        area.push(Some(Geometry::Polygon(vec![vec![ring.clone()]])), vec![]);
+        assert_eq!(gpx(&area), [None]);
+        area.push(Some(Geometry::Polygon(vec![vec![ring, hole]])), vec![]);
+        assert_eq!(gpx(&area), [Some(DroppedRing)]);
+    }
+
     fn text_layer(names: &[&str], rows: &[&[Option<&str>]]) -> Dataset {
         let fields = names.iter().map(|n| Field::new(*n, FieldType::Text)).collect();
         let mut ds = Dataset::new("t", GeometryType::Point, fields);

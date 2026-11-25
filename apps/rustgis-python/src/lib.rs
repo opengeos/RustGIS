@@ -249,7 +249,7 @@ impl Engine {
                 // a feature with a place that can't be given there is in it without its geometry.
                 let (lonlat, unplaced) = ds.in_lonlat_leaving_out()?;
                 if let Some(note) = rustgis_engine::data::unplaced_note(&format!("{name} as GeoJSON"), &ds.name, unplaced) {
-                    session.notify(note, false);
+                    session.say(note);
                 }
                 return Ok(rustgis_engine::data::io::to_geojson(&lonlat).to_string());
             }
@@ -267,7 +267,7 @@ impl Engine {
                     session.say(note);
                 }
                 if let Some(note) = unplaced {
-                    session.notify(note, false);
+                    session.say(note);
                 }
                 return Ok(text);
             }
@@ -302,7 +302,7 @@ impl Engine {
                 session.say(note);
             }
             if let Some(note) = rustgis_engine::data::unplaced_note(&format!("{} as GeoJSON", ds.name), &ds.name, unplaced) {
-                session.notify(note, false);
+                session.say(note);
             }
             Ok::<String, String>(text)
         });

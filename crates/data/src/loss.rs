@@ -102,7 +102,7 @@ loss_codes! {
     ChangedFieldName => (
         "changed.field-name",
         Changed,
-        "Use field names the format holds (at most 10 bytes and unique ignoring case for a Shapefile), or a format without the limit, such as GeoPackage."
+        "Use field names the format holds: at most 10 bytes and unique ignoring case for a Shapefile, unique ignoring case for a GeoPackage."
     ),
     ChangedCut => (
         "changed.cut",
@@ -118,7 +118,7 @@ loss_codes! {
     ChangedRounded => (
         "changed.rounded",
         Changed,
-        "Keep the source file where finer values matter, or write to a format that holds them (times finer than a microsecond, or numbers past a dBase field's precision)."
+        "Keep the source file where finer values matter, or write to a format that holds them (times finer than the format keeps, or numbers past a dBase field's precision)."
     ),
     ChangedPosition => (
         "changed.position",

@@ -812,14 +812,20 @@ fn write_layer(l: &rustgis_map::Layer, path: &str, asked: Option<Crs>, project: 
     said.extend(rustgis_data::io::left_out_note(path, &ext, left_out));
     said.extend(format_notes);
     if skipped > 0 {
-        said.push(format!("{path}: {skipped} rows couldn't be read and were left out"));
+        said.push(rustgis_data::loss::Note::loss(
+            rustgis_data::loss::LossCode::DroppedFeature,
+            format!("{path}: {skipped} rows couldn't be read and were left out"),
+        ));
     }
     said.extend(notes);
     said.extend(dbf_notes);
     said.extend(unfit);
     said.extend(dates);
     if shapefile && rustgis_data::raster::wkt::to_wkt(crs).is_none() {
-        said.push(format!("{path}: no .prj written, as {} has no WKT form", crs.label()));
+        said.push(rustgis_data::loss::Note::loss(
+            rustgis_data::loss::LossCode::DroppedCrsName,
+            format!("{path}: no .prj written, as {} has no WKT form", crs.label()),
+        ));
     }
     said.push(format!("Exported {path}"));
     let answer = json!({"path": path, "features": written, "leftOut": left_out, "crs": crs.label()});
@@ -902,7 +908,8 @@ pub(crate) fn query_export_note(
 pub(crate) fn notify_null_numbers(s: &mut Session, path: &str, count: usize) {
     if let Some(note) = null_numbers_note(path, count) {
         let mark = s.notice_mark();
-        s.notify_text(note, false);
+        // Each such value is lost from the file.
+        s.notify_loss(rustgis_data::loss::LossCode::DroppedValue, note);
         s.retain_written_notices(mark);
     }
 }

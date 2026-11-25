@@ -323,7 +323,11 @@ fn save_edits(s: &mut Session, p: &Value) -> CmdResult {
             false,
         );
         if !saved.skipped_fields.is_empty() {
-            s.notify(format!("{name}: {table} has no column for {}, so it wasn't saved", saved.skipped_fields.join(", ")), false);
+            // Their values aren't in the table: lost from the save.
+            s.say(rustgis_data::loss::Note::loss(
+                rustgis_data::loss::LossCode::DroppedValue,
+                format!("{name}: {table} has no column for {}, so it wasn't saved", saved.skipped_fields.join(", ")),
+            ));
         }
         if let Some(note) = rustgis_data::io::fine_dates_note(&fields, &fine_dates, &super::saved_target(&name, table)) {
             s.say(note);
