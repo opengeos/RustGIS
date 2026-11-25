@@ -4044,6 +4044,8 @@ fn upright_markers_with(map: &mut Map, view: &View, margin: f64, env: &Env) -> V
     let mut order: Vec<usize> = (0..map.layers.len()).rev().collect();
     order.sort_by_key(|i| map.layers.get(*i).map_or(0, |l| l.priority));
     let (cam, h) = (view.camera, view.height);
+    // The pitch's cosine as the camera clamps it: down the view a ground unit is `lean * k * k` px.
+    let lean = cam.pitch.clamp(0.0, rustgis_map::camera::MAX_PITCH).to_radians().cos();
     let ground = terrain::Ground::of(map, &view.camera);
     let mut out = Vec::new();
     for li in order {
@@ -4100,12 +4102,15 @@ fn upright_markers_with(map: &mut Map, view: &View, margin: f64, env: &Env) -> V
                 let Some(k) = cam.depth_scale(*c, h) else { continue };
                 // Kept while any of the marker is near the view, not only the point it stands on:
                 // an image is centred on it and a large shape reaches round it. (`markers_tilted`
-                // then tests the screen.) Its reach there, in the ground's units at `c`.
+                // then tests the screen.) Not past the view's reach, where `place` draws none and
+                // the reach below would cover the whole view.
                 if !cull.contains(*c) {
-                    // Screen px to ground units, for the further way the box reaches: across the view a
-                    // ground unit is `k` px, down it `lean * k * k` (the perspective's slope, `lean`
-                    // the pitch's cosine as the camera clamps it). The square holds both ways.
-                    let lean = cam.pitch.clamp(0.0, rustgis_map::camera::MAX_PITCH).to_radians().cos();
+                    if k * rustgis_map::camera::FAR < 1.0 {
+                        continue;
+                    }
+                    // Screen px to ground units, for the further way the box reaches: across the view
+                    // a ground unit is `k` px, down it `lean * k * k` (the perspective's slope). The
+                    // square holds both ways.
                     let r = (reach * k.clamp(UPRIGHT_SCALE.0, UPRIGHT_SCALE.1) + 4.0) * cam.res / k.min(lean * k * k);
                     if !Extent::new(c.x - r, c.y - r, c.x + r, c.y + r).intersects(&cull) {
                         continue;
@@ -4199,7 +4204,7 @@ fn markers_tilted(map: &mut Map, view: &View, pm: &mut Canvas, env: &Env) {
             let width = s.size.max(1.0) * ppp;
             let drawn = match picture::marker_aspect(p) {
                 // (A recording canvas keeps vectors, which this blend doesn't make: it draws unfaded.)
-                // (A fade of less than half a level changes no pixel: not worth the canvas.)
+                // (A fade of less than half a colour level changes no pixel: not worth the canvas.)
                 Some(aspect) if t * 255.0 >= 0.5 && !pm.is_recording() => {
                     foggy_picture_marker(pm, p, (x, y), (width, width * aspect), m.opacity, halo, (fog, t as f32), ppp)
                 }
@@ -11931,6 +11936,19 @@ mod tests {
         assert_eq!(rows(square, 10.0, 175.0), 0, "all of it under the edge: nothing");
         assert!(rows(Marker::Circle, 100.0, 175.0) > 20, "a large shape whose centre is past the margin and whose edge is in the view");
         assert_eq!(rows(Marker::Circle, 10.0, 175.0), 0, "a small one all under the edge: nothing");
+    }
+
+    /// A marker past the view's reach (the sky band, where `place` draws none) isn't kept for its
+    /// size, however large: the GPU path draws every marker the list holds.
+    #[test]
+    fn an_upright_marker_past_the_views_reach_is_not_kept_for_its_size() {
+        let camera = Camera { center: Coord::new(0.0, 0.0), res: 1000.0, bearing: 0.0, pitch: 82.0 };
+        let view = View { width: 200.0, height: 200.0, pixels_per_point: 1.0, camera, sky: false };
+        for marker in [Marker::Picture(solid_png(4, 40, [255, 0, 0, 255])), Marker::Circle] {
+            // 15,000 px up the view from its centre: past its reach, 16 times the camera's distance.
+            let (_, mut m) = upright_frame(&view, Coord::new(0.0, 15_000.0 * 1000.0), marker, 2000.0, 0.0, false);
+            assert!(upright_markers(&mut m, &view, 0.0).is_empty(), "{marker:?}");
+        }
     }
 
     /// At 60, 75 and 82 degrees an upright marker is drawn wherever its box meets the view, down
