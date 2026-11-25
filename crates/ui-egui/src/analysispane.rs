@@ -3124,8 +3124,10 @@ mod tests {
         script_ran(&mut app, crate::Landed::NotRun("cancelled".into()));
         assert_eq!(at(&app), None);
         // JSON that doesn't read, after two lines; a click on the error goes to its column.
-        let (first, second, column) = ("# move\n", "map.zoomFull\n", 24);
-        let e = stopped(&mut app, &format!("{first}{second}layer.rename {{\"layer\": }}"));
+        let (first, second, third) = ("# move\n", "map.zoomFull\n", r#"layer.rename {"layer": }"#);
+        // The JSON stops reading at the closing brace, the line's last character.
+        let column = third.chars().count();
+        let e = stopped(&mut app, &format!("{first}{second}{third}"));
         assert_eq!(at(&app), Some((3, Some(column))), "{e}");
         // The cursor goes to the error: the characters of the two lines before it, and its column.
         let error_at = first.chars().count() + second.chars().count() + (column - 1);
