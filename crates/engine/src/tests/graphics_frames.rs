@@ -177,13 +177,38 @@ fn a_ring_point_past_the_maps_projection_is_refused() {
 }
 
 #[test]
-fn a_circle_past_85_degrees_on_a_web_mercator_map_is_drawn_and_one_round_the_pole_on_a_polar_map() {
-    // The default map: a circle reaching past 85° is added, clamped as the map draws it.
+fn a_circle_near_85_degrees_on_a_web_mercator_map_is_drawn_and_one_round_the_pole_on_a_polar_map() {
+    // The default map: a circle near 85° is added whole, within the 85° its points are kept in.
     let mut s = Session::new(Project::default());
-    s.run("graphics.add", &json!({"shape": "circle", "points": [[0.0, 84.0], [0.0, 84.9]], "frame": "view"})).unwrap();
+    let r = s.run("graphics.add", &json!({"shape": "circle", "points": [[0.0, 84.0], [0.0, 84.9]], "frame": "view"})).unwrap();
+    let ring = ring_of(&s, &r);
+    assert_eq!(ring.len(), 73, "{ring:?}");
+    assert!(ring.iter().all(|c| c.is_finite() && c.y > 82.0 && c.y <= 85.0), "{ring:?}");
     // A polar map: a circle round the pole, its ring through 90° itself.
     let mut s = Session::new(Project::default());
     s.run("map.projection", &json!({"type": "EPSG:3413"})).unwrap();
     let r = s.run("graphics.add", &json!({"shape": "circle", "points": [[-45.0, 89.0], [-45.0, 90.0]], "frame": "view"})).unwrap();
     assert!(ring_of(&s, &r).iter().all(|c| c.y >= 87.9), "{:?}", ring_of(&s, &r));
+}
+
+#[test]
+fn a_drag_previews_and_adds_within_85_degrees_on_a_web_mercator_map_and_says_so() {
+    // A corner dragged to 85.04° previews, and is added, at 85°, and the command says so; one
+    // dragged below 85° moves nowhere and says nothing.
+    let mut s = Session::new(Project::default());
+    let corners = [Coord::new(0.0, 84.9), Coord::new(1.0, 85.04)];
+    let outline = crate::cmd::graphics::dragged_outline(&s, "rectangle", &corners).unwrap();
+    let mark = s.notice_mark();
+    let r = s.run("graphics.add", &json!({"shape": "rectangle", "points": [[0.0, 84.9], [1.0, 85.04]], "frame": "view"})).unwrap();
+    assert_eq!(outline, ring_of(&s, &r));
+    assert!(outline.iter().all(|c| c.y <= 85.0) && outline.iter().any(|c| c.y == 85.0), "{outline:?}");
+    let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+    assert!(said.iter().any(|t| t.contains("placed at 85°")), "{said:?}");
+    let mark = s.notice_mark();
+    let below = [Coord::new(0.0, 80.0), Coord::new(1.0, 84.5)];
+    let outline = crate::cmd::graphics::dragged_outline(&s, "rectangle", &below).unwrap();
+    let r = s.run("graphics.add", &json!({"shape": "rectangle", "points": [[0.0, 80.0], [1.0, 84.5]], "frame": "view"})).unwrap();
+    assert_eq!(outline, ring_of(&s, &r));
+    assert!(outline.iter().any(|c| (c.y - 84.5).abs() < 1e-9), "{outline:?}");
+    assert!(s.notices_since(mark).iter().all(|n| !n.text.contains("85°")));
 }

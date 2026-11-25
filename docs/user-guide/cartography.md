@@ -946,7 +946,7 @@ dragged. A dragged Rectangle, Circle or Ellipse is built in the map's own coordi
 faces, so the graphic is the outline the drag previews on any map: on a map in UTM or Swiss LV95,
 or turned, a rectangle keeps the view's square corners and a circle is round there; on a map that
 shows a pole, a graphic clicked or dragged past 85° stays there (a Web Mercator map, which can't
-show a pole, keeps it at 85°). A shape reaching past what the map's projection shows is refused,
+show a pole, keeps it at 85° and says so). A shape reaching past what the map's projection shows is refused,
 not drawn folded. A Curve is smoothed in the
 same plane. A picture's rectangle stays a box of longitudes and latitudes, drawn upright. A
 `graphics.add` command builds them in Web Mercator facing north, as before, unless it gives

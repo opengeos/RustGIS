@@ -84,25 +84,56 @@ fn target(s: &mut Session, p: &Value) -> Result<u32, String> {
     })
 }
 
-/// The points given, in longitude/latitude; kept within 85° of the equator in Web Mercator (the
-/// default plane, or a view of a Web Mercator map), where a pole is infinitely far, but not in a
-/// view of a map in another projection, which may show a pole.
-fn points(p: &Value, plane: &Plane) -> Result<Vec<Coord>, String> {
-    let lat_max = if matches!(plane, Plane::View { flat: rustgis_map::projection::Flat::Custom(_), .. }) { 90.0 } else { 85.0 };
+impl Plane {
+    /// The latitude a graphic's points are kept within: 85° in Web Mercator (the default plane,
+    /// or a view of a Web Mercator map), where a pole is infinitely far; 90° in a view of a map
+    /// in another projection, which may show a pole.
+    fn lat_max(&self) -> f64 {
+        if matches!(self, Plane::View { flat: rustgis_map::projection::Flat::Custom(_), .. }) { 90.0 } else { 85.0 }
+    }
+
+    /// `pts` kept within [`Plane::lat_max`], and how many were moved to it.
+    fn clamped(&self, pts: impl IntoIterator<Item = Coord>) -> (Vec<Coord>, usize) {
+        let m = self.lat_max();
+        let mut moved = 0;
+        let pts = pts
+            .into_iter()
+            .map(|c| {
+                let y = c.y.clamp(-m, m);
+                moved += usize::from(y != c.y);
+                Coord::new(c.x, y)
+            })
+            .collect();
+        (pts, moved)
+    }
+}
+
+/// The points given, in longitude/latitude, kept within `plane`'s latitude
+/// ([`Plane::clamped`]), and how many were moved to it.
+fn points(p: &Value, plane: &Plane) -> Result<(Vec<Coord>, usize), String> {
     let arr = p.get("points").and_then(Value::as_array).ok_or("points is required")?;
     if arr.len() > MAX_POINTS {
         return Err(format!("a graphic takes at most {MAX_POINTS} points"));
     }
-    arr.iter()
+    let given = arr
+        .iter()
         .map(|v| {
             let x = v.get(0).and_then(Value::as_f64).filter(|x| x.is_finite() && x.abs() <= 540.0);
             let y = v.get(1).and_then(Value::as_f64).filter(|y| y.is_finite() && y.abs() <= 90.0);
             match (x, y) {
-                (Some(x), Some(y)) => Ok(Coord::new(x, y.clamp(-lat_max, lat_max))),
+                (Some(x), Some(y)) => Ok(Coord::new(x, y)),
                 _ => Err("each point is [lon, lat]".to_string()),
             }
         })
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(plane.clamped(given))
+}
+
+/// Says that `n` points of a graphic were placed at 85°, where a Web Mercator map stops.
+fn say_clamped(s: &mut Session, n: usize) {
+    if n > 0 {
+        s.notify(format!("{n} point(s) of the graphic past 85° latitude were placed at 85°: a Web Mercator map can't show a pole"), false);
+    }
 }
 
 fn need(pts: &[Coord], n: usize, shape: &str) -> Result<(), String> {
@@ -307,7 +338,10 @@ pub fn geometry(shape: &str, pts: Vec<Coord>, plane: &Plane) -> Result<Geometry,
 /// The outline a shape dragged between `pts` takes on the map (`"frame": "view"`), in
 /// longitude/latitude: what the drag previews, so the preview is the graphic it adds.
 pub fn dragged_outline(s: &Session, shape: &str, pts: &[Coord]) -> Option<Vec<Coord>> {
-    match geometry(shape, pts.to_vec(), &Plane::view(s)).ok()? {
+    // Kept within the latitude the graphic will be added within, so the outline is the one added.
+    let plane = Plane::view(s);
+    let (pts, _) = plane.clamped(pts.iter().copied());
+    match geometry(shape, pts, &plane).ok()? {
         Geometry::Polygon(p) => p.into_iter().next()?.into_iter().next(),
         _ => None,
     }
@@ -448,7 +482,8 @@ fn add(s: &mut Session, p: &Value) -> CmdResult {
         return Err(format!("unknown shape '{shape}'"));
     }
     let plane = Plane::of(s, p)?;
-    let g = geometry(&shape, points(p, &plane)?, &plane)?;
+    let (pts, clamped) = points(p, &plane)?;
+    let g = geometry(&shape, pts, &plane)?;
     let text = ps(p, "text").map(|t| super::within("text", "a graphic's text", t, 2000)).transpose()?;
     if shape == "text" && text.as_deref().is_none_or(|t| t.trim().is_empty()) {
         return Err("text is required".into());
@@ -490,6 +525,7 @@ fn add(s: &mut Session, p: &Value) -> CmdResult {
         }
     }
     l.touch_geometry();
+    say_clamped(s, clamped);
     Ok(json!({"layer": id, "row": row, "shape": shape}))
 }
 
@@ -525,11 +561,12 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
             }
             // As the map shows it: a point at 88° on a polar map stays there.
             let plane = Plane::view(s);
-            Some(geometry(&kind, points(p, &plane)?, &plane)?)
+            let (pts, clamped) = points(p, &plane)?;
+            Some((geometry(&kind, pts, &plane)?, clamped))
         }
         None => None,
     };
-    if let Some(g) = placed {
+    if let Some((g, clamped)) = placed {
         let held = super::design::held_places(s, id, &[], &[&g]);
         let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
         // Placed in longitude/latitude, written in the layer's own coordinates.
@@ -538,6 +575,7 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
             ft.geometry = Some(g);
         }
         l.touch_geometry();
+        say_clamped(s, clamped);
         // A null is no style, as `restyle` reads it: placed with only nulls, it is just placed.
         let styled = ["text", "fill", "outline", "width", "size", "fontSize", "bold", "italic", "align", "letterSpacing"]
             .iter()
