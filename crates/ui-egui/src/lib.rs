@@ -5633,7 +5633,7 @@ impl RustGisApp {
                 dbf_notes.extend(io::export_losses_notes(&ds, &ext, io::name_field(&ds), &name).map_err(|e| e.to_string())?);
                 drop(ds);
                 if let Some(note) = io::left_out_note(&name, &ext, left_out) {
-                    self.session.notify(note, false);
+                    self.session.say(note);
                 }
                 if ext == "zip" && rustgis_engine::data::raster::wkt::to_wkt(crs).is_none() {
                     self.session.notify(format!("{name}: no .prj written, as {} has no WKT form", crs.label()), false);

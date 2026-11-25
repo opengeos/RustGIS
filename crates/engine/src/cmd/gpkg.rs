@@ -326,7 +326,7 @@ fn save_edits(s: &mut Session, p: &Value) -> CmdResult {
             s.notify(format!("{name}: {table} has no column for {}, so it wasn't saved", saved.skipped_fields.join(", ")), false);
         }
         if let Some(note) = rustgis_data::io::fine_dates_note(&fields, &fine_dates, &super::saved_target(&name, table)) {
-            s.notify(note, false);
+            s.say(note);
         }
         if let Some(note) = rustgis_data::source::unread_dates_note(&fields, &unread_dates) {
             s.say(note.map_text(|note| format!("{}: {note}, when read back after the save", super::saved_target(&name, table))));
@@ -335,7 +335,7 @@ fn save_edits(s: &mut Session, p: &Value) -> CmdResult {
             s.say(note.map_text(|note| format!("{}: {note}, when read back after the save", super::saved_target(&name, table))));
         }
         if let Some(note) = rustgis_data::io::utc_dates_note(&fields, &utc_dates, &super::saved_target(&name, table)) {
-            s.notify(note, false);
+            s.say(note);
         }
         s.retain_written_notices(written);
         Ok(json!({"saved": true, "inserted": saved.inserted.len(), "updated": saved.updated, "deleted": saved.deleted,

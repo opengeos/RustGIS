@@ -1789,7 +1789,7 @@ fn unfit(ty: FieldType, value: &Value) -> bool {
 /// The notice for values a GeoParquet export wrote as null because their column's type couldn't
 /// hold them, given the count per field (as `write_features` returns); `None` when there are
 /// none. Names the first five fields.
-pub fn unfit_note(fields: &[Field], counts: &[usize], target: &str) -> Option<String> {
+pub fn unfit_note(fields: &[Field], counts: &[usize], target: &str) -> Option<crate::loss::Note> {
     let total = counts.iter().fold(0usize, |a, n| a.saturating_add(*n));
     if total == 0 {
         return None;
@@ -1804,12 +1804,15 @@ pub fn unfit_note(fields: &[Field], counts: &[usize], target: &str) -> Option<St
         format!("{total} values couldn't be written as their columns' types and were")
     };
     let target: String = target.chars().map(crate::io::dbf_notice_char).collect();
-    Some(format!("{target}: {what} written as null, in {}{more}", list.join(", ")))
+    Some(crate::loss::Note::loss(
+        crate::loss::LossCode::DroppedValue,
+        format!("{target}: {what} written as null, in {}{more}", list.join(", ")),
+    ))
 }
 
 /// Export notices for the whole of `ds`: unfit values and timestamp representation changes.
 /// Cancellation omits notices; the following writer's check returns the cancellation error.
-pub fn values_note(ds: &crate::Dataset, target: &str) -> Option<String> {
+pub fn values_note(ds: &crate::Dataset, target: &str) -> Option<crate::loss::Note> {
     let mut counts = vec![0usize; ds.fields.len()];
     let mut layout = DateLayout::default();
     for chunk in ds.features.chunks(BATCH) {
@@ -1824,9 +1827,19 @@ pub fn values_note(ds: &crate::Dataset, target: &str) -> Option<String> {
             }
         }
     }
-    let mut notes: Vec<String> = unfit_note(&ds.fields, &counts, target).into_iter().collect();
-    notes.extend(layout.notes(&ds.fields, target));
-    if notes.is_empty() { None } else { Some(notes.join("; ")) }
+    // One notice: the values written as null (a value lost, so its code), then how date-times
+    // are written.
+    let unfit = unfit_note(&ds.fields, &counts, target);
+    let loss = unfit.as_ref().and_then(|n| n.loss);
+    let mut said: Vec<String> = unfit.map(|n| n.text).into_iter().collect();
+    said.extend(layout.notes(&ds.fields, target));
+    (!said.is_empty()).then(|| {
+        let text = said.join("; ");
+        match loss {
+            Some(code) => crate::loss::Note::loss(code, text),
+            None => crate::loss::Note::plain(text),
+        }
+    })
 }
 
 /// Writes GeoParquet to `out`: the features `feed` hands to the function it is given, a run at

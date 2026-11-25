@@ -99,6 +99,16 @@ loss_codes! {
         "Read less at once, such as by filtering or clipping the source first."
     ),
     ChangedTruncated => ("changed.truncated", Changed, "Use a decimal field to keep the fractional part."),
+    ChangedFieldName => (
+        "changed.field-name",
+        Changed,
+        "Use field names the format holds (at most 10 bytes and unique ignoring case for a Shapefile), or a format without the limit, such as GeoPackage."
+    ),
+    ChangedCut => (
+        "changed.cut",
+        Changed,
+        "Shorten the text to what the format holds (254 bytes for a Shapefile; nothing past a NUL character), or write to a format without the limit, such as GeoPackage."
+    ),
     ChangedBody => ("changed.body", Changed, "Export in the layer's own coordinate system, which keeps its body."),
     ChangedEncoding => (
         "changed.encoding",
@@ -108,7 +118,7 @@ loss_codes! {
     ChangedRounded => (
         "changed.rounded",
         Changed,
-        "Keep the source file where times finer than a microsecond matter."
+        "Keep the source file where finer values matter, or write to a format that holds them (times finer than a microsecond, or numbers past a dBase field's precision)."
     ),
     ChangedPosition => (
         "changed.position",
