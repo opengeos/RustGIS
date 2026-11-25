@@ -3246,6 +3246,10 @@ mod tests {
         set(&mut h, CCursorRange { primary: CCursor::new(all), secondary: CCursor::new(0), h_pos: None });
         let lines = script.matches('\n').count() + 1;
         assert!(h.query_by_label(&format!("Ln {lines}, Col {} ({all} selected)", last_line + 1)).is_some(), "everything");
+        // A script loaded from a Windows file: the count is the cursor's, so the line break is two.
+        h.state_mut().workflow.script = "a\r\nb".into();
+        set(&mut h, CCursorRange { primary: CCursor::new(4), secondary: CCursor::new(0), h_pos: None });
+        assert!(h.query_by_label("Ln 2, Col 2 (4 selected)").is_some(), "a CRLF line break counts two");
     }
 
     /// Details… opens the last run in a window of its own, each line folded: a result the pane cuts
