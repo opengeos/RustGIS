@@ -453,6 +453,20 @@ fn lengths_in_several_fields_keep_their_order() {
     assert!(report.messages.is_empty(), "{:?}", report.messages);
 }
 
+/// A WKT RustGIS can't read is assumed to be longitude/latitude only for an answer with a
+/// geometry read in it: one without places nothing there.
+#[test]
+fn an_unreadable_wkt_is_assumed_only_with_a_geometry() {
+    let wkt: &[u8] = b"PROJCS[\"nonsense\"]";
+    let assumed = |features: &[u8]| {
+        let bytes = answer(&[message(8, &message(5, wkt)), transform(false, 1.0, 0.0, 0.0), features.to_vec()]);
+        let (_, report) = read(&bytes, "t").unwrap();
+        report.messages.iter().filter(|m| m.contains("read as longitude/latitude")).map(|m| m.loss).collect::<Vec<_>>()
+    };
+    assert_eq!(assumed(&feature(&[geometry(&[], &[1, 2])])), [Some(crate::loss::LossCode::AssumedCrs)]);
+    assert_eq!(assumed(&feature(&[])), [None]);
+}
+
 #[test]
 fn a_wkt_that_isnt_utf8_is_said() {
     let wkt = b"GEOGCS[\"GCS_WGS_1984\xff\",DATUM[\"D_WGS_1984\",SPHEROID[\"WGS_1984\",6378137.0,298.257223563]],PRIMEM[\"Greenwich\",0.0],UNIT[\"Degree\",0.0174532925199433]]";

@@ -76,7 +76,8 @@ pub fn read(bytes: &[u8], name: &str, sheet: Option<&str>, opts: &CsvOptions) ->
             };
             message.push_str(&format!("; {what}"));
         }
-        report.messages.push(message);
+        // Each error cell's value is read as empty: a value lost.
+        report.messages.push(crate::loss::Note::loss(crate::loss::LossCode::DroppedValue, message));
     }
     if rounded > 0 {
         report.messages.push(crate::loss::Note::loss(
@@ -812,7 +813,9 @@ mod tests {
         assert_eq!(ds.features.len(), 2);
         assert_eq!(ds.features.iter().filter(|f| f.geometry.is_none()).count(), 1);
         assert!(
-            report.messages.says("1 value in 'wkt' isn't a date and was read as empty, so its row has no geometry"),
+            report.messages.says(
+                "1 value in 'wkt' isn't a date and was read as empty, so its row has no geometry, or is left out if it held nothing else"
+            ),
             "{:?}",
             report.messages
         );
@@ -838,7 +841,8 @@ mod tests {
         let error = r#"<c t="e"><v>#DIV/0!</v></c>"#;
         let book = xlsx(&[("S", &[&["id", "note", "other"], &["7", error, "kept"], &["8", error, error], &["9", "", ""]])]);
         let (ds, report) = read(&book, "book", None, &CsvOptions::default()).unwrap();
-        assert_eq!(report.messages, ["3 spreadsheet error cells were read as empty, in 'note', 'other'"]);
+        assert_eq!(report.messages.texts().collect::<Vec<_>>(), ["3 spreadsheet error cells were read as empty, in 'note', 'other'"]);
+        assert_eq!(report.messages[0].loss, Some(crate::loss::LossCode::DroppedValue));
         assert_eq!(report.skipped, 0);
         let attrs: Vec<_> = ds.features.iter().map(|f| f.attrs.clone()).collect();
         use crate::Value::{Int, Null, Text};
@@ -859,7 +863,7 @@ mod tests {
             } else {
                 vec!["1 spreadsheet error cell was read as empty, in 'B'; 1 erroneous heading was named by its column letter, 'B'"]
             };
-            assert_eq!(report.messages, expected);
+            assert_eq!(report.messages.texts().collect::<Vec<_>>(), expected);
         }
     }
 
@@ -879,7 +883,7 @@ mod tests {
             } else {
                 vec!["2 spreadsheet error cells were read as empty, in 'id', 'note'; 1 otherwise empty row with error cells was omitted"]
             };
-            assert_eq!(report.messages, expected);
+            assert_eq!(report.messages.texts().collect::<Vec<_>>(), expected);
         }
     }
 

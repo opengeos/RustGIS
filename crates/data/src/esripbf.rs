@@ -373,6 +373,8 @@ pub fn read_page_within(bytes: &[u8], name: &str, limit: usize) -> Result<Page> 
     }
     let said_before = report.messages.len();
     let (crs, to_lonlat) = crate::filegdb::esri_crs(code, wkt.as_deref(), &mut report)?;
+    // What reading the system said, which assumes a system only for a geometry read in it.
+    let crs_said = said_before..report.messages.len();
     // A WKT that couldn't be read (or converted) is read as longitude/latitude, and said so;
     // a geographic one gives no system and says nothing.
     let mut unread_code = crs.is_none()
@@ -425,6 +427,17 @@ pub fn read_page_within(bytes: &[u8], name: &str, limit: usize) -> Result<Page> 
     // Held as the answer gives its coordinates, in its own system, when RustGIS converts it.
     if let Some(c) = crs.filter(|_| to_lonlat.is_some()) {
         ds.held_in = c;
+    }
+    // An answer without a geometry places nothing in the system it couldn't read: said, not as
+    // assumed.
+    if !any_geometry && !crs_said.is_empty() {
+        let said = std::mem::replace(&mut report.messages, crate::loss::Notes::new());
+        for (i, mut note) in said.into_iter().enumerate() {
+            if crs_said.contains(&i) && note.loss == Some(crate::loss::LossCode::AssumedCrs) {
+                note.loss = None;
+            }
+            report.messages.push(note);
+        }
     }
     let losses = Losses {
         // Assumed, so said: an answer that names no coordinate system.

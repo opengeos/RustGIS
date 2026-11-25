@@ -2928,11 +2928,11 @@ pub(crate) fn read_rows(
             0 => {}
             1 => report.messages.push(crate::loss::Note::loss(
                 crate::loss::LossCode::DroppedValue,
-                format!("1 value in '{column}' isn't a date and was read as empty, so its row has no geometry"),
+                format!("1 value in '{column}' isn't a date and was read as empty, so its row has no geometry, or is left out if it held nothing else"),
             )),
             n => report.messages.push(crate::loss::Note::loss(
                 crate::loss::LossCode::DroppedValue,
-                format!("{n} values in '{column}' aren't dates and were read as empty, so their rows have no geometry"),
+                format!("{n} values in '{column}' aren't dates and were read as empty, so their rows have no geometry, or are left out if they held nothing else"),
             )),
         }
     }

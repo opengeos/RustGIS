@@ -91,7 +91,7 @@ fn is_binary(bytes: &[u8]) -> bool {
 /// The text of a drawing and what had to be assumed to read it: UTF-8 (AutoCAD 2007 and later),
 /// else the ANSI code page its header names ([`code_page`], the `$DWGCODEPAGE` of older drawings),
 /// else Latin-1.
-fn decode(bytes: &[u8]) -> (Cow<'_, str>, Option<String>) {
+fn decode(bytes: &[u8]) -> (Cow<'_, str>, Option<crate::loss::Note>) {
     if let Ok(s) = std::str::from_utf8(bytes) {
         return (Cow::Borrowed(s), None);
     }
@@ -103,14 +103,21 @@ fn decode(bytes: &[u8]) -> (Cow<'_, str>, Option<String>) {
             ),
             None => "the drawing's text isn't UTF-8 and it names no code page ($DWGCODEPAGE): it is read as Latin-1, so non-ASCII text (such as layer names) may be wrong".to_string(),
         };
-        return (Cow::Owned(bytes.iter().map(|&b| char::from(b)).collect()), Some(said));
+        // Read in an encoding it doesn't name: assumed.
+        return (
+            Cow::Owned(bytes.iter().map(|&b| char::from(b)).collect()),
+            Some(crate::loss::Note::loss(crate::loss::LossCode::AssumedEncoding, said)),
+        );
     };
     let (text, _) = encoding.decode_without_bom_handling(bytes);
     let lost = text.matches('\u{fffd}').count();
     let said = (lost > 0).then(|| {
-        format!(
-            "{lost} characters of the drawing's text couldn't be read as {} (its code page): they are drawn as a replacement character",
-            encoding.name()
+        crate::loss::Note::loss(
+            crate::loss::LossCode::ChangedEncoding,
+            format!(
+                "{lost} characters of the drawing's text couldn't be read as {} (its code page): they are drawn as a replacement character",
+                encoding.name()
+            ),
         )
     });
     (text, said)
@@ -1395,13 +1402,16 @@ fn emit(
         if out.vertex_capped {
             return Ok(());
         }
-        if out.count >= MAX_FEATURES {
+        let lost = matches!(e.shape, Shape::Lost(_));
+        if out.count >= MAX_FEATURES && !lost {
             out.capped = true;
             return Ok(());
         }
         // Every placement costs a step, drawn or not: nested arrays of empty or filtered blocks
-        // can't make the walk run on.
-        out.steps += 1;
+        // can't make the walk run on. What can't be drawn is only counted, and costs none.
+        if !lost {
+            out.steps += 1;
+        }
         if out.steps > MAX_STEPS {
             out.overworked = true;
             return Ok(());
@@ -1670,8 +1680,9 @@ pub fn read(file_name: &str, bytes: &[u8], opts: &Options) -> Result<Vec<(Datase
     if let Some(why) = encoding_note {
         report.messages.push(why);
     }
+    // The rest of the file, past what isn't a group code, is left out.
     if let Some(why) = cut_short {
-        report.messages.push(why);
+        report.messages.push(crate::loss::Note::loss(crate::loss::LossCode::DroppedFeature, why));
     }
     if opts.crs.is_none() {
         report.messages.push(crate::loss::Note::loss(
@@ -1707,9 +1718,10 @@ pub fn read(file_name: &str, bytes: &[u8], opts: &Options) -> Result<Vec<(Datase
         ));
     }
     if out.trimmed {
-        report
-            .messages
-            .push(format!("block arrays were cut short: at most {MAX_ARRAY} copies each, {MAX_PATH_COPIES} along a nesting path"));
+        report.messages.push(crate::loss::Note::loss(
+            crate::loss::LossCode::DroppedOverLimit,
+            format!("block arrays were cut short: at most {MAX_ARRAY} copies each, {MAX_PATH_COPIES} along a nesting path"),
+        ));
     }
     if out.overworked {
         report.messages.push(crate::loss::Note::loss(
@@ -1876,11 +1888,12 @@ pub fn layers(file_name: &str, bytes: &[u8]) -> Result<Vec<String>> {
     for (key, (name, _, _)) in &d.layers {
         add(name, key);
     }
-    for e in &d.entities {
+    // What can't be drawn names no layer to pick.
+    for e in d.entities.iter().filter(|e| !matches!(e.shape, Shape::Lost(_))) {
         add(&e.layer, &e.layer_key);
     }
     for (_, ents) in d.blocks.values() {
-        for e in ents.iter().filter(|e| e.layer != "0") {
+        for e in ents.iter().filter(|e| e.layer != "0" && !matches!(e.shape, Shape::Lost(_))) {
             add(&e.layer, &e.layer_key);
         }
     }
@@ -1892,7 +1905,6 @@ pub fn layers(file_name: &str, bytes: &[u8]) -> Result<Vec<String>> {
 mod tests {
     use super::*;
 
-    /// A DXF from (code, value) pairs.
     /// An entity RustGIS doesn't draw, or can't read, is counted where it would have been drawn:
     /// not at all in a block the drawing never places, and once for each placement of one it does.
     #[test]
@@ -1919,8 +1931,20 @@ mod tests {
             said(&drawing("0 INSERT 2 B 10 5 20 5 0 INSERT 2 B 10 9 20 9")),
             [("entities RustGIS doesn't draw were left out: 2 IMAGE".to_string(), Some(crate::loss::LossCode::DroppedFeature))]
         );
+        // Blocks left out, or a layer not asked for: their contents aren't drawn, so nothing of
+        // them is lost.
+        let placed = drawing("0 INSERT 2 B 8 x 10 5 20 5");
+        for opts in [Options { blocks: false, ..Options::default() }, Options { layer: Some("0"), ..Options::default() }] {
+            let layers = read("a.dxf", placed.as_bytes(), &opts).unwrap();
+            assert!(!layers.iter().flat_map(|(_, r)| r.messages.iter()).any(|m| m.contains("doesn't draw")), "{opts:?}");
+        }
+        // What can't be drawn names no layer of its own to pick.
+        let lone =
+            "0 SECTION 2 ENTITIES 0 POINT 10 0 20 0 0 IMAGE 8 only_images 0 ENDSEC 0 EOF".split_whitespace().collect::<Vec<_>>().join("\n");
+        assert_eq!(layers("a.dxf", lone.as_bytes()).unwrap(), ["0"]);
     }
 
+    /// A DXF from (code, value) pairs.
     fn dxf(pairs: &[(i32, &str)]) -> Vec<u8> {
         pairs.iter().map(|(c, v)| format!("{c:>3}\n{v}\n")).collect::<String>().into_bytes()
     }
@@ -1973,6 +1997,7 @@ mod tests {
                 let layers = read("a.dxf", &bytes, &Options { crs: Some(Crs::LonLat), ..Options::default() }).unwrap();
                 assert_eq!(layers[0].0.features[0].geometry, Some(Geometry::Line(vec![vec![Coord::new(0., 0.), Coord::new(2., 2.)]])));
                 assert_eq!(layers[0].1.messages.texts().collect::<Vec<_>>(), ["1 vertex without Y was left out of spline paths"]);
+                assert_eq!(layers[0].1.messages[0].loss, Some(crate::loss::LossCode::DroppedGeometry));
                 assert_eq!(layers[0].1.skipped, 0);
             }
         }
@@ -2037,6 +2062,7 @@ mod tests {
                 layers[0].1.messages.texts().collect::<Vec<_>>(),
                 [format!("{count} short HATCH boundary {subject} left out of polygons")]
             );
+            assert_eq!(layers[0].1.messages[0].loss, Some(crate::loss::LossCode::DroppedRing));
             assert_eq!(layers[0].1.skipped, 0);
         }
     }
@@ -2146,6 +2172,7 @@ mod tests {
                 layers[0].1.messages.texts().collect::<Vec<_>>(),
                 ["1 entities couldn't be read or placed (missing blocks, blocks nested too deep or in a cycle) and were left out"]
             );
+            assert_eq!(layers[0].1.messages[0].loss, Some(crate::loss::LossCode::DroppedFeature));
         }
         // Losses follow the two surviving block copies; the paper-space and filtered copy stay quiet.
         let text = "0 SECTION 2 BLOCKS 0 BLOCK 2 B 0 SPLINE 71 3 11 0 21 0 11 1 11 2 21 2 0 ENDBLK 0 ENDSEC
