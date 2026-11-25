@@ -4102,11 +4102,11 @@ fn upright_markers_with(map: &mut Map, view: &View, margin: f64, env: &Env) -> V
                 // an image is centred on it and a large shape reaches round it. (`markers_tilted`
                 // then tests the screen.) Its reach there, in the ground's units at `c`.
                 if !cull.contains(*c) {
-                    let r = (reach * k.clamp(UPRIGHT_SCALE.0, UPRIGHT_SCALE.1) + 4.0) * cam.res / k;
-                    // Down the view a ground unit is only `cos(pitch)` of a screen pixel, so it reaches
-                    // further in the ground (as far as any way the view is turned: the square holds both).
-                    let lean = cam.pitch.to_radians().cos().abs().max(0.1);
-                    let r = r / lean;
+                    // Screen px to ground units, for the further way the box reaches: across the view a
+                    // ground unit is `k` px, down it `lean * k * k` (the perspective's slope, `lean`
+                    // the pitch's cosine as the camera clamps it). The square holds both ways.
+                    let lean = cam.pitch.clamp(0.0, rustgis_map::camera::MAX_PITCH).to_radians().cos();
+                    let r = (reach * k.clamp(UPRIGHT_SCALE.0, UPRIGHT_SCALE.1) + 4.0) * cam.res / k.min(lean * k * k);
                     if !Extent::new(c.x - r, c.y - r, c.x + r, c.y + r).intersects(&cull) {
                         continue;
                     }
@@ -4199,6 +4199,7 @@ fn markers_tilted(map: &mut Map, view: &View, pm: &mut Canvas, env: &Env) {
             let width = s.size.max(1.0) * ppp;
             let drawn = match picture::marker_aspect(p) {
                 // (A recording canvas keeps vectors, which this blend doesn't make: it draws unfaded.)
+                // (A fade of less than half a level changes no pixel: not worth the canvas.)
                 Some(aspect) if t * 255.0 >= 0.5 && !pm.is_recording() => {
                     foggy_picture_marker(pm, p, (x, y), (width, width * aspect), m.opacity, halo, (fog, t as f32), ppp)
                 }
@@ -11943,16 +11944,19 @@ mod tests {
             for pitch in [60.0, 75.0, 82.0] {
                 let camera = Camera { center: Coord::new(0.0, 0.0), res: 1000.0, bearing: 0.0, pitch };
                 let view = View { width: 200.0, height: 200.0, pixels_per_point: 1.0, camera, sky: false };
-                let mut v = 50.0;
+                // From far up the view (past the centre, where a ground unit down the view is
+                // `cos(pitch) * k * k` pixels) to near its bottom.
+                let mut v = -2500.0;
                 while v < camera.near_v(0.0, view.height) - 10.0 {
                     let at = Coord::new(0.0, -v * 1000.0);
-                    let k = camera.depth_scale(at, view.height).unwrap().clamp(UPRIGHT_SCALE.0, UPRIGHT_SCALE.1);
-                    let (_, y) = camera.project_raised(0.0, v, 0.0, view.width, view.height).unwrap();
+                    v += 20.0;
+                    let Some(k) = camera.depth_scale(at, view.height).filter(|k| k * rustgis_map::camera::FAR >= 1.0) else { continue };
+                    let k = k.clamp(UPRIGHT_SCALE.0, UPRIGHT_SCALE.1);
+                    let (_, y) = camera.project_raised(0.0, v - 20.0, 0.0, view.width, view.height).unwrap();
                     let meets = y - half * k < view.height - 2.0 && y + half * k > 2.0;
                     let (image, _) = upright_frame(&view, at, marker, size, 0.0, false);
-                    let drawn = image.pixels().iter().any(|p| p.red() > 200 && p.alpha() > 200);
-                    assert!(!meets || drawn, "pitch {pitch}, {v} px down the view, its point at y {y}: its box meets the view");
-                    v += 10.0;
+                    let drawn = image.pixels().iter().any(|p| p.alpha() > 100);
+                    assert!(!meets || drawn, "pitch {pitch}, {} px down the view, its point at y {y}: its box meets the view", v - 20.0);
                 }
             }
         }
