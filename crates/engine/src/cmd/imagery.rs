@@ -1573,10 +1573,19 @@ pub(crate) fn supervised_work(s: &Session, p: &Value) -> Result<super::workflows
             let mut means = rasterops::ClassMeans::on_grid(reading.held(), &grid, reading.full(), ds.coord_crs(), &bands, &polygons)
                 .map_err(explain)?;
             let (cols, under) = means.window();
-            // Whole rows of the window's columns, a few at a time, in order.
-            let (bw, bh) = super::in_blocks::BLOCK;
+            // Whole rows of the window's columns, in order: a tile's rows at a time where the
+            // computer can give them (the part read and its tiles as decoded, about twice the
+            // strip), so each row of tiles is decoded once; half as many, and again, where it
+            // can't. A strip of fewer rows than a tile decodes its row of tiles once for each strip
+            // in it: a window as wide as the mosaic of #2761 (83517 columns, 3 bands) needs 513 MB
+            // at once for that.
+            let (_, bh) = super::in_blocks::BLOCK;
             let width = cols.end.saturating_sub(cols.start).max(1);
-            let strip = (u64::from(bw) * u64::from(bh) / u64::from(width)).clamp(1, u64::from(bh)) as u32;
+            let row = u64::from(width).saturating_mul(reading.held().band_count().max(1) as u64).saturating_mul(4);
+            let mut strip = bh;
+            while strip > 1 && !super::in_blocks::affordable(row.saturating_mul(u64::from(strip)).saturating_mul(2)) {
+                strip /= 2;
+            }
             reading
                 .each_block((cols.start, cols.end), (under.start, under.end), (width, strip), |_, _, read| {
                     means.add(&read.raster, read.at, &read.grid.0).map_err(String::from)

@@ -1372,7 +1372,7 @@ impl<'a> ClassMeans<'a> {
             .collect::<Result<Vec<_>, String>>()?;
         // A polygon with no cell under its box sums nothing: only the others are set aside, each
         // with its sums and, as they are made into the classes' means, its mean.
-        let under = windows.iter().filter(|(c, r)| !c.is_empty() && !r.is_empty()).count();
+        let under = windows.iter().filter(|(cols, rows)| !cols.is_empty() && !rows.is_empty()).count();
         let per = (bands.len() as u64).saturating_mul(16).saturating_add(64);
         let floor = ((256u64 << 20) / per.max(1)) as usize;
         if under > rustgis_data::memory::planned(floor, usize::MAX, per) {
@@ -1382,8 +1382,10 @@ impl<'a> ClassMeans<'a> {
                 (under as u64).saturating_mul(per) >> 20
             ));
         }
-        let sums =
-            windows.iter().map(|(c, r)| (if c.is_empty() || r.is_empty() { Vec::new() } else { vec![0.0; bands.len()] }, 0)).collect();
+        let sums = windows
+            .iter()
+            .map(|(cols, rows)| (if cols.is_empty() || rows.is_empty() { Vec::new() } else { vec![0.0; bands.len()] }, 0))
+            .collect();
         Ok(ClassMeans { zone, bands, polygons, boxes, windows, sums })
     }
 
@@ -1404,11 +1406,13 @@ impl<'a> ClassMeans<'a> {
     /// The columns and rows of the whole grid every polygon's window covers together.
     pub fn window(&self) -> (Range<u32>, Range<u32>) {
         let cover = |a: Option<Range<u32>>, b: &Range<u32>| match a {
-            _ if b.is_empty() => a,
             None => Some(b.clone()),
             Some(a) => Some(a.start.min(b.start)..a.end.max(b.end)),
         };
-        let (cols, rows) = self.windows.iter().fold((None, None), |(c, r), (wc, wr)| (cover(c, wc), cover(r, wr)));
+        // A polygon with no cell under it (beside the raster: its columns or its rows none) adds
+        // nothing, not the side it does have.
+        let held = self.windows.iter().filter(|(wc, wr)| !wc.is_empty() && !wr.is_empty());
+        let (cols, rows) = held.fold((None, None), |(c, r), (wc, wr)| (cover(c, wc), cover(r, wr)));
         (cols.unwrap_or(0..0), rows.unwrap_or(0..0))
     }
 
@@ -2527,6 +2531,10 @@ mod tests {
         let bits = |c: Vec<(String, Vec<f64>, usize)>| {
             c.into_iter().map(|(k, m, n)| (k, m.iter().map(|v| v.to_bits()).collect::<Vec<_>>(), n)).collect::<Vec<_>>()
         };
+        // A polygon beside the raster, under its rows but east of its columns, widens no window.
+        let beside = vec![lonlat[1].clone(), ("e".to_string(), ring(&[(11.0, 45.8), (11.1, 45.8), (11.1, 45.9), (11.0, 45.9)]))];
+        let window = |p: &[(String, Vec<Vec<Coord>>)]| ClassMeans::on_grid(&coarse, &gt, (w, h), Crs::LonLat, &[0, 1], p).unwrap().window();
+        assert_eq!(window(&beside), window(&beside[..1]));
         for (from, polygons) in [(Crs::LonLat, &lonlat), (mercator, &projected)] {
             let whole = bits(class_means_in(&r, from, &[0, 1], polygons).unwrap());
             assert_eq!(whole.iter().map(|c| c.0.as_str()).collect::<Vec<_>>(), ["a", "b", "z"], "{from:?}: {whole:?}");
