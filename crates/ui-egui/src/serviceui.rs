@@ -74,8 +74,8 @@ pub struct Import {
     /// The saved web-service connection to record on imported layers, not a group-plan parameter.
     connection: Option<Value>,
     token: u64,
-    /// The originating map (`dialogs::map_key`), so a deleted or replaced map cancels the import and
-    /// a moved one doesn't.
+    /// The originating map (`dialogs::map_key`), so a deleted, replaced or renamed map cancels the
+    /// import and a moved one doesn't.
     map: crate::dialogs::MapKey,
     slot: Slot<Result<Vec<u8>, String>>,
     document: Option<String>,
