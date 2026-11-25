@@ -26,11 +26,13 @@ fn ring_of(s: &Session, r: &Value) -> Vec<Coord> {
     }
 }
 
-/// `c` in the map's coordinates turned to the view: x right, y up as the camera faces.
+/// `c` as the camera places it, in map units from the view's centre: x right, y up on screen.
+/// Read through the camera's own turn ([`rustgis_map::camera::Camera::ground_px`]), not the
+/// graphics plane's, so a turn the wrong way in either shows.
 fn in_view(s: &Session, c: Coord) -> Coord {
-    let m = s.map().to_map(c).unwrap();
-    let b = s.map().camera.bearing.to_radians();
-    Coord::new(m.x * b.cos() - m.y * b.sin(), m.x * b.sin() + m.y * b.cos())
+    let cam = &s.map().camera;
+    let (u, v) = cam.ground_px(s.map().to_map(c).unwrap());
+    Coord::new(u * cam.res, -v * cam.res)
 }
 
 fn close(a: f64, b: f64, tol: f64) -> bool {
@@ -53,7 +55,7 @@ fn a_dragged_rectangle_has_the_views_corners_on_any_map() {
         // And the corners dragged between are two of its corners.
         for c in [Coord::new(8.0, 46.0), Coord::new(10.0, 47.0)] {
             let v = in_view(&s, c);
-            assert!(ring.iter().any(|r| close(r.x, v.x, 1e-9) && close(r.y, v.y, 1e-9)), "bearing {bearing}: {c:?}");
+            assert!(ring.iter().any(|r| close(r.x, v.x, 1e-7) && close(r.y, v.y, 1e-7)), "bearing {bearing}: {c:?}");
         }
     }
     // Named by no frame, it is a box of longitudes and latitudes, as before: on LV95 its sides
@@ -147,4 +149,29 @@ fn a_point_keeps_within_85_degrees_on_a_web_mercator_map_and_not_on_a_polar_one(
     // Below 85° nothing is clamped on either map.
     s.run("graphics.edit", &json!({"layer": layer, "row": row, "points": [[5.0, 60.0]]})).unwrap();
     assert_eq!(point_of(&s, layer, row), Coord::new(5.0, 60.0));
+}
+
+#[test]
+fn the_view_turns_as_the_screen_does() {
+    // Turned 90°, east is up on screen: a rectangle dragged from west to east is tall on screen
+    // and its east side is at the top.
+    let mut s = on_lv95();
+    s.run("map.setBearing", &json!({"bearing": 90.0})).unwrap();
+    let (w, e) = (in_view(&s, Coord::new(8.0, 46.5)), in_view(&s, Coord::new(10.0, 46.5)));
+    assert!(e.y - w.y > 100_000.0 && (e.x - w.x).abs() < 20_000.0, "{w:?} {e:?}");
+    let r = s.run("graphics.add", &json!({"shape": "rectangle", "points": [[8.0, 46.4], [10.0, 46.6]], "frame": "view"})).unwrap();
+    let ring: Vec<Coord> = ring_of(&s, &r).into_iter().map(|c| in_view(&s, c)).collect();
+    for w in ring.windows(2) {
+        let (dx, dy) = (w[1].x - w[0].x, w[1].y - w[0].y);
+        assert!(dx.abs() < 1e-4 || dy.abs() < 1e-4, "side {dx} {dy}");
+    }
+}
+
+#[test]
+fn a_ring_point_past_the_maps_projection_is_refused() {
+    // A plane point far past LV95's area reads back to no place the map shows there.
+    let s = on_lv95();
+    let plane = crate::cmd::graphics::Plane::view(&s);
+    assert!(plane.back_for_tests(Coord::new(2_600_000.0, 1_200_000.0)).is_some());
+    assert!(plane.back_for_tests(Coord::new(9e7, 9e7)).is_none());
 }

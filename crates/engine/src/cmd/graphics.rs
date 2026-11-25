@@ -167,12 +167,26 @@ impl Plane {
         }
     }
 
-    /// A place in the plane in longitude/latitude; `None` past the map's projection.
+    /// A place in the plane in longitude/latitude; `None` past the map's projection: where the
+    /// place read back isn't one the map shows at that same place (outside a limited projection's
+    /// area, or folded over), as [`Plane::to`] refuses it.
     fn back(&self, v: Coord) -> Option<Coord> {
         match self {
             Plane::Mercator => Some(merc_to_lonlat(v)),
-            Plane::View { flat, cos, sin } => flat.inverse(Coord::new(v.x * cos + v.y * sin, v.y * cos - v.x * sin)),
+            Plane::View { flat, cos, sin } => {
+                let m = Coord::new(v.x * cos + v.y * sin, v.y * cos - v.x * sin);
+                let c = flat.inverse(m)?;
+                let again = flat.forward_checked(c)?;
+                // A millionth of its size: what a round trip moves a place, with room to spare.
+                let reach = 1e-6 * m.x.abs().max(m.y.abs()).max(1.0);
+                ((again.x - m.x).abs() <= reach && (again.y - m.y).abs() <= reach).then_some(c)
+            }
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn back_for_tests(&self, v: Coord) -> Option<Coord> {
+        self.back(v)
     }
 
     fn all_to(&self, pts: &[Coord], shape: &str) -> Result<Vec<Coord>, String> {
