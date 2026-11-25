@@ -484,7 +484,14 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
   by the export and the layout view.
 - **Text** and **Dynamic Text**: `{date}`, `{time}`, `{scale}`, `{map}`, `{crs}`, `{page}`,
   `{pages}`, `{pageName}` and `{layout}` fill in when the page is drawn; the Format pane's
-  **Insert Dynamic Text** menu, under the text, lists each with what it shows. The text, its
+  **Insert Dynamic Text** menu, under the text, lists each with what it shows. A layer's figures
+  fill in too (#2853): `{count:Cities}` is how many features the layer has, and `{sum:Cities:pop}`,
+  `{mean:Cities:pop}`, `{min:Cities:pop}` and `{max:Cities:pop}` add up, average or pick the least
+  or greatest number of a field, read as a chart reads its values. They follow the layer's
+  definition query, take the map of the layout's first map frame (in a series, the whole layer,
+  not the page's part of it), and write the decimal comma when the layout uses one. A layer in
+  streaming counts what is loaded, as a chart does. A token with no figure (no such layer or
+  field, a field with no numbers) stays as written, and a warning names what is missing. The text, its
   size (2 to 400 points, as text graphics on the map), colour, bold, **Italic** (slanted, as water
   and ocean names are; the built-in fonts have no italic face, so the letters are slanted 12°),
   **Alignment** (left, center or right within the element) and **Letter spacing** in points

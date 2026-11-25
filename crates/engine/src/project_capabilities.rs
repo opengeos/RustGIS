@@ -1281,6 +1281,7 @@ mod tests {
             (&["label-duplicates"], "labels.placement", json!({"removeDuplicates": 20})),
             (&["tile-resampling"], "map.addTiles", json!({"resampling": "nearest"})),
             (&["layout-page-color"], "layout.page", json!({"color": "#0B1B2B"})),
+            (&["layout-text-statistics"], "layout.addElement", json!({"kind": "text", "text": "{count:Cities}"})),
             // An SVG image is a picture marker as well, in a node as in a saved command.
             (&["picture-markers", "svg-markers"], "layer.marker", json!({"image": svg})),
             (&[], "buffer", json!({"input": "Cities", "distance": 1})),
