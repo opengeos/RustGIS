@@ -617,6 +617,10 @@ fn raster_functions_and_resamples_run_a_block_at_a_time() {
             "raster.function",
             json!({"layer": "checks", "function": "remap", "band": 1, "ranges": [[0, 100, 1], [100, 300, 2], [7, 7, 3]], "name": "out"}),
         ),
+        (
+            "raster.function",
+            json!({"layer": "checks", "function": "remap", "band": 1, "ranges": [[0, 100, 1], [7, 7, 3]], "keep": true, "name": "out"}),
+        ),
         ("raster.function", json!({"layer": "checks", "function": "threshold", "band": 3, "value": 128, "name": "out"})),
         ("raster.function", json!({"layer": "checks", "function": "bandMath", "expression": "b1 * 2 - b3", "name": "out"})),
         (
@@ -659,6 +663,7 @@ fn raster_functions_and_resamples_run_a_block_at_a_time() {
                 (want.width, want.height, want.transform, want.nodata, want.data_type.as_str()),
                 "{why}"
             );
+            assert_eq!(got_raster.bands.len(), want.bands.len(), "{why}: its bands");
             for (g, w) in got_raster.bands.iter().zip(&want.bands) {
                 assert!(g.data == w.data, "{why}: band {} is the whole raster's", w.name);
                 assert_eq!(g.name, w.name, "{why}");
@@ -666,12 +671,14 @@ fn raster_functions_and_resamples_run_a_block_at_a_time() {
             // What a remap met is said as of the whole raster.
             let said_blocks: Vec<String> = said(&s, mark).into_iter().filter(|n| n.contains("matches no")).collect();
             assert_eq!(said_blocks, said_whole, "{why}");
-            // A remap's or threshold's overview held is of its classes, never an average of two.
+            // A remap's or threshold's overview held is of its classes, never an average of two; one
+            // of a remap keeping the values it doesn't match averages them, as measures.
             if written && matches!(p["function"].as_str(), Some("remap" | "threshold")) {
                 let classes: std::collections::BTreeSet<u32> = want.bands[0].data.iter().map(|v| v.to_bits()).collect();
                 let held = rl.data.as_deref().unwrap();
                 assert!(held.overview.is_some(), "{why}: an overview held");
-                assert!(held.bands[0].data.iter().all(|v| classes.contains(&v.to_bits())), "{why}: the overview holds only its classes");
+                let only = held.bands[0].data.iter().all(|v| classes.contains(&v.to_bits()));
+                assert_eq!(only, p["keep"] != true, "{why}: the overview holds only its values");
             }
             if p["function"] == "hillshade" {
                 assert_eq!(rl.style.renderer, raster(&whole, "out").style.renderer, "{why}: drawn as a hillshade");
@@ -697,6 +704,19 @@ fn raster_functions_and_resamples_run_a_block_at_a_time() {
             }
         }
     }
+    // A resample this computer can't give the memory for now reads the file as before.
+    {
+        let (_held, _blocks) = (HeldWhole::at(1_000_000), BlocksPast::at(1_000_000));
+        crate::cmd::in_blocks::AFFORDS.with(|c| c.set(Some(1 << 20)));
+        let mut s = Session::new(Project::default());
+        open(&mut s);
+        let before = reads();
+        let done = s.run("raster.process", &json!({"layer": "checks", "operation": "resample", "factor": 3, "name": "out"}));
+        crate::cmd::in_blocks::AFFORDS.with(|c| c.set(None));
+        done.unwrap();
+        assert_eq!(reads(), before + 1, "read as before");
+        assert!(!raster(&s, "out").tiled, "held, from the file read as before");
+    }
     // A chain that remaps after a step over neighbours reads the file as before, writing nothing,
     // and the Assistant isn't asked for files for it.
     struct Live;
@@ -716,4 +736,35 @@ fn raster_functions_and_resamples_run_a_block_at_a_time() {
     s.run("raster.functionChain", &p).unwrap();
     assert_eq!(reads(), before + 1, "read as before");
     assert!(!d.join("Fallback.rgis.data").exists());
+}
+
+/// A resample's pixel covering no pixel with a value takes the result's no-data value, the
+/// file's, and one covering some averages those alone, whether the file is held whole or read a
+/// block at a time.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_resampled_pixel_with_no_value_takes_the_no_data_value() {
+    let d = dir("resample-nodata");
+    const N: u32 = 600;
+    let mut band: Vec<f32> = (0..N * N).map(|i| (i % 50) as f32).collect();
+    for (x, y, v) in
+        [(0, 0, -9999.0), (1, 0, -9999.0), (0, 1, -9999.0), (1, 1, -9999.0), (2, 0, 5.0), (3, 0, -9999.0), (2, 1, -9999.0), (3, 1, 7.0)]
+    {
+        band[(y * N + x) as usize] = v;
+    }
+    let gt = GeoTransform { origin_x: 10.0, origin_y: 46.0, pixel_width: 0.001, pixel_height: -0.001 };
+    let r = Raster::new("gaps", N, N, vec![band], gt, Crs::LonLat, Some(-9999.0), ColorHint::Gray, "Float32").unwrap();
+    let path = d.join("gaps.tif");
+    rustgis_data::raster::cogwrite::write_file(&r, 0, &path).unwrap();
+    let p = json!({"layer": "gaps", "operation": "resample", "factor": 2, "name": "out"});
+    for in_blocks in [false, true] {
+        let (_held, _blocks) = (HeldWhole::at(if in_blocks { 1000 } else { 1_000_000 }), BlocksPast::at(100_000));
+        let mut s = Session::new(Project::default());
+        s.run("layer.addData", &json!({"path": path.display().to_string()})).unwrap();
+        assert_eq!(raster(&s, "gaps").tiled, in_blocks);
+        s.run("raster.process", &p).unwrap();
+        let out = raster(&s, "out").data.clone().unwrap();
+        assert_eq!((out.width, out.nodata), (N / 2, Some(-9999.0)), "in blocks {in_blocks}");
+        assert_eq!(out.bands[0].data[..2], [-9999.0, 6.0], "in blocks {in_blocks}");
+    }
 }

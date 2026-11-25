@@ -1795,16 +1795,18 @@ pub(crate) fn process_work(s: &Session, p: &Value) -> Result<super::workflows::W
             r.held().require_coordinates()?;
             let factor = uint(p, "factor").unwrap_or(2).clamp(2, 64) as u32;
             let out = name(p, format!("{}_resampled", r.held().name))?;
-            // A file too large to read whole at its full size, whose resample can be held: made
-            // from the file a block at a time (#2865). A larger resample reads the finest level of
-            // it that fits, as before, and says so.
+            // A file too large to read whole at its full size, whose resample can be held and the
+            // memory for it given now: made from the file a block at a time (#2865). Another
+            // reads the finest level of it that fits, as before, and says so.
             #[cfg(not(target_arch = "wasm32"))]
             if let Some(reading) = super::in_blocks::plan_read(&r) {
                 let (fw, fh) = reading.full();
                 let k = factor.min(fw.min(fh)).max(1);
                 let (w, h) = ((fw / k).max(1), (fh / k).max(1));
-                let samples = u64::from(w) * u64::from(h) * r.held().band_count() as u64;
-                if super::in_blocks::holds(samples) {
+                let bands = r.held().band_count();
+                let samples = u64::from(w) * u64::from(h) * bands as u64;
+                // One this computer can't give the memory for now reads the file as before.
+                if super::in_blocks::holds(samples) && super::in_blocks::affordable(resample_need(w, h, bands)) {
                     reading.refused_in_script(s)?;
                     return Ok(Box::new(move || resample_in_blocks(&reading, k, out)));
                 }
@@ -1813,7 +1815,10 @@ pub(crate) fn process_work(s: &Session, p: &Value) -> Result<super::workflows::W
                 let r = r.read()?;
                 let k = factor.min(r.width.min(r.height)).max(1);
                 let (w, h) = ((r.width / k).max(1), (r.height / k).max(1));
-                // Each output pixel is the mean of the valid pixels it covers.
+                // Each output pixel is the mean of the valid pixels it covers; one covering none
+                // takes the result's no-data value (the raster's, else the one cells with no value
+                // take).
+                let empty = r.nodata.map_or(NODATA, |d| d as f32);
                 let bands = r
                     .bands
                     .iter()
@@ -1840,7 +1845,7 @@ pub(crate) fn process_work(s: &Session, p: &Value) -> Result<super::workflows::W
                                         }
                                     }
                                 }
-                                if n > 0 { (sum / n as f64) as f32 } else { NODATA }
+                                if n > 0 { (sum / n as f64) as f32 } else { empty }
                             },
                         )
                     })
@@ -1872,17 +1877,23 @@ pub(crate) fn process_work(s: &Session, p: &Value) -> Result<super::workflows::W
 /// pixels of the `k` × `k` it covers, as a whole raster's resample makes it, its trailing columns
 /// and rows short of a full block left out. Blocks are whole multiples of `k` each way, so no
 /// output pixel spans two.
+/// What a resample `w` × `h` of `bands` bands made a block at a time holds: its bands and its
+/// file, and for several bands the copy of them interleaved that the file is made from (one band
+/// is written from itself), planned before they are set aside.
+#[cfg(not(target_arch = "wasm32"))]
+fn resample_need(w: u32, h: u32, bands: usize) -> u64 {
+    let copies = if bands > 1 { 3 } else { 2 };
+    u64::from(w).saturating_mul(u64::from(h)).saturating_mul(bands as u64).saturating_mul(4 * copies)
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn resample_in_blocks(reading: &super::in_blocks::Reading, k: u32, out: String) -> Result<super::workflows::Made, String> {
     let (fw, fh) = reading.full();
     let (w, h) = ((fw / k).max(1), (fh / k).max(1));
     let (bw, bh) = super::in_blocks::BLOCK;
     let size = ((bw / k).max(1) * k, (bh / k).max(1) * k);
-    // The result's bands and its file, and for several bands the copy of them interleaved that
-    // the file is made from (one band is written from itself), planned before they are set aside.
     let held = reading.held();
-    let copies = if held.band_count() > 1 { 3 } else { 2 };
-    let need = u64::from(w).saturating_mul(u64::from(h)).saturating_mul(held.band_count() as u64).saturating_mul(4 * copies);
+    let need = resample_need(w, h, held.band_count());
     if !super::in_blocks::affordable(need) {
         return Err(format!(
             "{}: its resample by {k}, {w} × {h}, needs {} MB at once, more than this computer can give now: clip it to a smaller area first, or resample by more",
@@ -1897,8 +1908,10 @@ fn resample_in_blocks(reading: &super::in_blocks::Reading, k: u32, out: String) 
     let rounded = reading.each_block((0, w * k), (0, h * k), size, |cols, rows, read| {
         let r = &read.raster;
         let (ax, ay) = read.at;
+        // A pixel with no value takes the result's no-data value, as a whole raster's resample.
+        let empty = r.nodata.map_or(NODATA, |d| d as f32);
         if bands.is_empty() {
-            bands = (0..r.band_count()).map(|_| rasterops::new_band(w as usize, h as usize, NODATA)).collect::<Result<_, _>>()?;
+            bands = (0..r.band_count()).map(|_| rasterops::new_band(w as usize, h as usize, empty)).collect::<Result<_, _>>()?;
             marks = vec![false; r.band_count()];
         }
         marks.iter_mut().enumerate().for_each(|(b, m)| *m |= r.band_rounded(b));
@@ -1923,14 +1936,14 @@ fn resample_in_blocks(reading: &super::in_blocks::Reading, k: u32, out: String) 
                             }
                         }
                     }
-                    if n > 0 { (sum / f64::from(n)) as f32 } else { NODATA }
+                    if n > 0 { (sum / f64::from(n)) as f32 } else { empty }
                 },
             )?;
             for (row, line) in means.chunks(ow.max(1)).enumerate() {
                 let at = (oy0 as usize + row) * w as usize + ox0 as usize;
-                if let Some(d) = dst.get_mut(at..at + line.len()) {
-                    d.copy_from_slice(line);
-                }
+                let d =
+                    dst.get_mut(at..at + line.len()).ok_or_else(|| format!("{}: a block's means don't fit the result", reading.layer()))?;
+                d.copy_from_slice(line);
             }
         }
         if first.is_none() {

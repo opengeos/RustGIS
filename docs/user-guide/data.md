@@ -1694,8 +1694,8 @@ tiles at a time at the file's full resolution. A result of up to 120 million pix
 held, as any other; a larger one is written to a tiled GeoTIFF in the project's results folder
 beside it (`Survey.rgis.data` for `Survey.rgis`), or in RustGIS's own folder for a project not
 saved yet, and the new layer reads it in place; a notice says where it is. **Process**'s resample
-is made from the file a block at a time when its result fits. A chain that remaps after a step
-over neighbours, or has a slope in percent before its last step, the other commands, and a
+is made from the file a block at a time when its result fits. A chain that remaps or thresholds
+after a step over neighbours, or has a slope in percent before its last step, the other commands, and a
 larger resample read the finest level of the file they can hold, and say which.
 
 The web app opens a picked or dropped file of up to 256 MB whole. A larger GeoTIFF is read a part

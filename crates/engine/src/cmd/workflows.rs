@@ -1733,14 +1733,19 @@ fn derive_function(r: &Raster, name: &str, p: &Value, pixels: Vec<f32>) -> Resul
 }
 
 /// What a raster function step `p` makes, as a raster made a block at a time holds it: its band's
-/// name, a hillshade's bytes, a remap's or threshold's classes, and a percent slope's cells past
-/// Float32's range counted.
+/// name, a hillshade's bytes, a threshold's classes and a remap's (not one that keeps the cells it
+/// doesn't match, which keep their measures), and a percent slope's cells past Float32's range
+/// counted.
 #[cfg(not(target_arch = "wasm32"))]
 fn function_shape(p: &Value) -> super::in_blocks::Shape {
     super::in_blocks::Shape {
         band: function_band(p),
         bytes: is_hillshade(p),
-        classes: matches!(ps(p, "function"), Some("remap" | "threshold")),
+        classes: match ps(p, "function") {
+            Some("threshold") => true,
+            Some("remap") => !b(p, "keep").unwrap_or(false),
+            _ => false,
+        },
         overflow: (ps(p, "function") == Some("slope") && ps(p, "units") == Some("percent")).then_some(rasterops::PERCENT_OVERFLOW),
     }
 }

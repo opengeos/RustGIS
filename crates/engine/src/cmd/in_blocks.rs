@@ -1,7 +1,8 @@
 //! A raster made a block at a time from a large raster file read in place (#2865). A command that
-//! works cell by cell, or over a cell's neighbours (an index, a raster function), reads its input a block of tiles at a time, at the file's full size, where
-//! reading it whole would read the finest level of it that fits; one over its neighbours reads
-//! each block with a margin of the cells around it. A result that fits
+//! works cell by cell, or over a cell's neighbours (an index, a raster function), reads its input
+//! a block of tiles at a time, at the file's full size, where reading it whole would read the
+//! finest level of it that fits; one over its neighbours reads each block with a margin of the
+//! cells around it. A result that fits
 //! is held and saved with the project as any other; one too large to hold is written a row of
 //! tiles at a time to a tiled GeoTIFF in the project's results folder
 //! ([`rustgis_data::raster::cogwrite::TileStream`]), which its layer then reads in place, as a
@@ -209,8 +210,19 @@ pub(crate) fn plan_read(input: &Input) -> Option<Reading> {
 /// that isn't known, within the floor's worth of samples.
 pub(crate) fn affordable(need: u64) -> bool {
     use rustgis_data::memory;
+    #[cfg(test)]
+    if let Some(max) = AFFORDS.with(std::cell::Cell::get) {
+        return need <= max;
+    }
     let budget = memory::share(memory::physical(), memory::held(), memory::available());
     need <= budget.unwrap_or((rustgis_data::raster::SAMPLES_FLOOR as u64).saturating_mul(4))
+}
+
+#[cfg(test)]
+thread_local! {
+    /// What [`affordable`] lets a run plan for on this thread, under test: a computer short of
+    /// memory, which no test can make.
+    pub(crate) static AFFORDS: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
 }
 
 /// A large file read in place, read a block at a time by a command that makes its own result
@@ -262,7 +274,7 @@ impl Reading {
         size: (u32, u32),
         mut each: impl FnMut((u32, u32), (u32, u32), &rustgis_data::raster::PartRead) -> Result<(), String>,
     ) -> Result<u64, String> {
-        let source = Source { input: &self.input, layer: &self.layer, path: &self.path, full: self.full };
+        let source = Source { input: &self.input, layer: &self.layer, path: &self.path, full: self.full, nodata: Default::default() };
         let (bw, bh) = (size.0.max(1), size.1.max(1));
         let (across, down) = (cols.1.saturating_sub(cols.0).div_ceil(bw), rows.1.saturating_sub(rows.0).div_ceil(bh));
         rustgis_data::progress::begin((across as usize).saturating_mul(down as usize));
@@ -381,7 +393,7 @@ impl Blocks {
             ));
         }
         let _held = rustgis_data::memory::Holding::of(need);
-        let blocks = Source { input: &input, layer: &layer, path: &path, full };
+        let blocks = Source { input: &input, layer: &layer, path: &path, full, nodata: Default::default() };
         // The kept cells whose values pass a float's range (none for most functions): counted in
         // the rows made, which hold no margin, so a margin's cell, made from too few neighbours,
         // isn't counted.
@@ -517,6 +529,8 @@ struct Source<'a> {
     layer: &'a str,
     path: &'a str,
     full: (u32, u32),
+    /// The no-data value its first block was read with, which every other one must have.
+    nodata: std::cell::Cell<Option<Option<u64>>>,
 }
 
 impl Source<'_> {
@@ -532,6 +546,16 @@ impl Source<'_> {
             format!("{}: its file can't be read in blocks: it isn't the file the layer was read from any more (Reload Data)", self.layer)
         })?;
         let r = &read.raster;
+        // One no-data value for every block of a run: a sidecar beside the file changed while it
+        // runs would give later blocks another.
+        let nodata = r.nodata.map(f64::to_bits);
+        match self.nodata.get() {
+            Some(first) if first != nodata => {
+                return Err(format!("{}: its no-data value changed while it was read (Reload Data)", self.layer));
+            }
+            Some(_) => {}
+            None => self.nodata.set(Some(nodata)),
+        }
         let (ax, ay) = read.at;
         if r.overview.is_some() || ax > cols.0 || ay > rows.0 || ax + r.width < cols.1 || ay + r.height < rows.1 {
             return Err(format!("{}: a block of its file couldn't be read at its full size", self.layer));
@@ -582,9 +606,10 @@ impl Source<'_> {
                     let src = (y - ay) as usize * pw + (c0 - ax) as usize;
                     let dst = (y - r0) as usize * fw as usize + c0 as usize;
                     let n = (c1 - c0) as usize;
-                    if let (Some(s), Some(d)) = (values.get(src..src + n), rows.get_mut(dst..dst + n)) {
-                        d.copy_from_slice(s);
-                    }
+                    let (Some(s), Some(d)) = (values.get(src..src + n), rows.get_mut(dst..dst + n)) else {
+                        return Err(format!("{}: a block's values don't fit its place in the result", self.layer));
+                    };
+                    d.copy_from_slice(s);
                 }
                 rustgis_data::progress::step(1).map_err(|e| e.to_string())?;
             }
