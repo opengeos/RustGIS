@@ -8638,7 +8638,7 @@ fn zonal_stats_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>) -> Result<
         // A polygon that couldn't be read has lost its statistics; a feature with no polygon, or
         // none with an area, has none to lose.
         if !feature_valid {
-            if matches!(&f.geometry, Some(Geometry::Polygon(polys)) if crate::rasterops::has_a_ring(polys)) {
+            if matches!(poly_ds.features.geometry(r_idx), Some(Geometry::Polygon(polys)) if crate::rasterops::has_a_ring(polys)) {
                 skipped_features += 1;
             } else {
                 without_polygon += 1;
