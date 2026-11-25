@@ -433,7 +433,8 @@ fn to_json<T: serde::Serialize>(v: &T) -> Result<Vec<u8>, String> {
 }
 
 /// A task's file: the task, with `requires` listing what its steps need when they need anything
-/// (as a model's file does), so an older RustGIS refuses what it would run without (#2818).
+/// (as a model's file does). A RustGIS that checks `requires` (#2867 on) refuses what it would run
+/// without; one that doesn't ignores the key, as it does for any task file today (#2818).
 fn task_json(t: &Task) -> Result<Vec<u8>, String> {
     // A struct, not a `serde_json::Value`, which would sort the task's keys.
     #[derive(serde::Serialize)]

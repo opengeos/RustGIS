@@ -251,7 +251,7 @@ fn step(command: &str, params: Value) -> Value {
 
 #[test]
 fn a_saved_task_that_needs_nothing_is_written_as_before() {
-    let steps = json!([step("map.zoomIn", json!({}))]);
+    let steps = json!([step("map.zoomIn", json!({"scale": 1.5, "label": "Zoom é"}))]);
     let (text, _) = saved_text(steps.clone());
     let task = crate::project::Task { name: "Lesson".into(), description: String::new(), steps: serde_json::from_value(steps).unwrap() };
     assert_eq!(text, serde_json::to_string(&task).unwrap(), "same bytes, keys in the task's own order");
