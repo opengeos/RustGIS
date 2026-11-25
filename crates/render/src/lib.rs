@@ -15040,14 +15040,17 @@ mod tests {
         let pages: Vec<&String> = objects.iter().map(|o| &o.0).filter(|dict| dict.contains("/Type /Page ")).collect();
         assert_eq!(pages.len(), 2, "two pages");
         let named = format!("/X{} {} 0 R", image[0], image[0]);
-        for page in &pages {
-            // `/Resources 7 0 R`: the dictionary is an object of its own.
-            let id: usize = page.split("/Resources ").nth(1).and_then(|s| s.split(' ').next()).and_then(|n| n.parse().ok()).unwrap();
-            assert!(objects[id - 1].0.contains(&named), "each page lists it in its resources: {}", objects[id - 1].0);
-        }
         let placed = format!("/X{} Do\n", image[0]);
-        let drawn = objects.iter().filter(|o| String::from_utf8_lossy(&o.1).contains(&placed)).count();
-        assert_eq!(drawn, 2, "and draws it, one content stream a page");
+        // The object a page's dictionary names after `key` (`/Resources 7 0 R`: an object of its own).
+        let object = |page: &str, key: &str| -> usize {
+            page.split(key).nth(1).and_then(|s| s.split(' ').next()).and_then(|n| n.parse().ok()).unwrap()
+        };
+        for page in &pages {
+            let resources = &objects[object(page, "/Resources ") - 1];
+            assert!(resources.0.contains(&named), "each page lists it in its resources: {}", resources.0);
+            let contents = &objects[object(page, "/Contents ") - 1];
+            assert!(String::from_utf8_lossy(&contents.1).contains(&placed), "and its own content draws it: {page}");
+        }
     }
 
     #[test]
