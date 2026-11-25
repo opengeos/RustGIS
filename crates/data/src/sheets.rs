@@ -248,15 +248,9 @@ fn grid_unguarded(mut wb: Sheets<Cursor<&[u8]>>, sheet: Option<&str>) -> Result<
         (row, cells, had_error, phantom)
     });
     let (mut empty_error_rows, mut empty_phantom_rows) = (0, 0);
-    let mut keep = |(_, cells, had_error, _): &(usize, Vec<String>, bool, Vec<usize>)| {
-        let nonempty = cells.iter().any(|c| !c.trim().is_empty());
-        if !nonempty && *had_error {
-            empty_error_rows += 1;
-        }
-        nonempty
-    };
+    let keep = |(_, cells, _, _): &(usize, Vec<String>, bool, Vec<usize>)| cells.iter().any(|c| !c.trim().is_empty());
     // The first row with anything in it names the columns.
-    let (header_row, headers, _, _) = rows.by_ref().find(&mut keep).unwrap_or_default();
+    let (header_row, headers, _, _) = rows.by_ref().find(keep).unwrap_or_default();
     if headers.is_empty() {
         return Err(DataError::Format(format!("sheet '{pick}' is empty")));
     }
@@ -279,10 +273,14 @@ fn grid_unguarded(mut wb: Sheets<Cursor<&[u8]>>, sheet: Option<&str>) -> Result<
         .collect();
     let rows = rows
         .inspect(|(_, cells, had_error, phantom)| {
-            // A data row whose only values were serial-60 dates, read as empty: left out whole
-            // (one with error cells too is said with those).
-            if !had_error && !phantom.is_empty() && cells.iter().all(|c| c.trim().is_empty()) {
-                empty_phantom_rows += 1;
+            // A data row left out whole, below the heading: one whose only values were error
+            // cells, or serial-60 dates, read as empty (one with both is said with the errors).
+            if cells.iter().all(|c| c.trim().is_empty()) {
+                if *had_error {
+                    empty_error_rows += 1;
+                } else if !phantom.is_empty() {
+                    empty_phantom_rows += 1;
+                }
             }
             for k in phantom {
                 if let Some(n) = phantom_dates.get_mut(*k) {
@@ -873,6 +871,14 @@ mod tests {
         let (ds, report) = read(&crate::zip::write(&entries).unwrap(), "places", None, &opts).unwrap();
         assert_eq!(ds.features.len(), 1);
         assert!(!report.messages.iter().any(|m| m.contains("omitted") || m.contains("isn't a date")), "{:?}", report.messages);
+        // Nor is one there with an error cell besides: no row of the data is left out.
+        let error = r#"<c t="e"><v>#DIV/0!</v></c>"#;
+        let mixed = xlsx(&[("Places", &[&[error, phantom], &["name", "wkt"], &["a", "POINT (1 2)"]])]);
+        let mut entries = crate::zip::read(&mixed).unwrap();
+        entries.push(("xl/styles.xml".into(), br#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><cellXfs count="1"><xf numFmtId="14"/></cellXfs></styleSheet>"#.to_vec()));
+        let (ds, report) = read(&crate::zip::write(&entries).unwrap(), "places", None, &opts).unwrap();
+        assert_eq!(ds.features.len(), 1);
+        assert!(!report.messages.iter().any(|m| m.contains("omitted")), "{:?}", report.messages);
     }
 
     /// Multiple errors in one column and another column count once each; blank cells don't.
