@@ -4887,10 +4887,15 @@ pub(crate) mod tests {
         let utm = format!(r#"{},AUTHORITY["EPSG","32631"]]"#, ESRI_32631.strip_suffix(']').unwrap());
         let towgs84 = |t: &str| utm.replace("298.257223563]]", &format!("298.257223563],{t}]"));
         assert_eq!(crs_from_wkt(&towgs84("TOWGS84[0,0,0]")), Ok(Crs::Epsg(32631)));
-        // Nor with another: a shift on WGS 84 itself is none. PROJ 9.9.0 (pyproj 3.8.0 built on
-        // it) reads this text as a bound CRS and transforms it to EPSG:4326 without the shift,
-        // putting 500 000 m E, 5 000 000 m N at 3°E 45.1534772°N, as EPSG:32631 does.
-        assert_eq!(crs_from_wkt(&towgs84("TOWGS84[1,2,3]")), Ok(Crs::Epsg(32631)));
+        // Nor with another: a shift on WGS 84 itself is none. PROJ 9.9.0 reads this text as a
+        // bound CRS and transforms it to EPSG:4326 without the shift (conda-forge PROJ 9.9.0 with
+        // pyproj 3.8.0 built on it, network off: `Transformer.from_crs(CRS.from_wkt(text),
+        // "EPSG:4326", always_xy=True).transform(500000, 5000000)` is 3°E 45.1534772°N), as
+        // EPSG:32631 does.
+        let shifted = crs_from_wkt(&towgs84("TOWGS84[1,2,3]"));
+        assert_eq!(shifted, Ok(Crs::Epsg(32631)));
+        let ll = Crs::Epsg(32631).transformer().unwrap().to_lonlat(Coord::new(500_000.0, 5_000_000.0)).unwrap();
+        assert!((ll.x - 3.0).abs() < 1e-9 && (ll.y - 45.153_477_2).abs() < 1e-7, "{ll:?}");
     }
 
     /// Another body's system with an EPSG code (the Earth's) is read from its parameters, not as
@@ -5126,8 +5131,10 @@ pub(crate) mod tests {
         let shifted = without_proj4_extension(&shifted).unwrap();
         assert!(matches!(crs_from_wkt(&shifted), Ok(Crs::Custom(_))), "{:?}", crs_from_wkt(&shifted));
         // Without the extension it is Mercator on the WGS 84 ellipsoid, as PROJ 9.9.0 reads it
-        // (pyproj 3.8.0 built on it: 6 679 169.4476 m E, 5 621 521.4862 m N at 60°E
-        // 45.1923152°N), not Web Mercator's sphere (45°N), whatever its shift.
+        // (conda-forge PROJ 9.9.0 with pyproj 3.8.0 built on it, network off:
+        // `Transformer.from_crs(CRS.from_wkt(text), "EPSG:4326", always_xy=True)` puts
+        // 6 679 169.4476 m E, 5 621 521.4862 m N at 60°E 45.1923152°N, with or without the
+        // shift), not Web Mercator's sphere (45°N).
         for text in [without_proj4_extension(google).unwrap(), shifted] {
             let ll = crs_from_wkt(&text)
                 .unwrap()
