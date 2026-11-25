@@ -1032,7 +1032,12 @@ pub fn write_bytes_in(ds: &Dataset, ext: &str, crs: Crs) -> Result<(Vec<u8>, usi
 /// can't hold is written without its geometry ([`project_leaving_out`]), and the notes say how
 /// many ([`unplaced_export_note`]). Also gives the dataset's [`Dataset::lonlat_extent`], as
 /// [`write_path_placed`] does, so a download converts each place once too.
-pub fn write_bytes_noted(ds: &Dataset, ext: &str, crs: Crs, name: &str) -> Result<(Vec<u8>, usize, Vec<crate::loss::Note>, rustgis_geom::Extent)> {
+pub fn write_bytes_noted(
+    ds: &Dataset,
+    ext: &str,
+    crs: Crs,
+    name: &str,
+) -> Result<(Vec<u8>, usize, Vec<crate::loss::Note>, rustgis_geom::Extent)> {
     let ext = ext.to_ascii_lowercase();
     if crs != Crs::LonLat {
         if !holds_a_system(&ext) {
@@ -1138,7 +1143,12 @@ pub fn write_path_in(ds: &Dataset, path: &Path, crs: Crs) -> Result<usize> {
 /// couldn't remove once the new ones landed, [`kept_backups_note`]). A feature with a place `crs`
 /// can't hold is written without its geometry, and the notes say how many
 /// ([`unplaced_export_note`]).
-pub fn write_path_to(ds: &Dataset, path: &Path, crs: Crs, gpkg: &GpkgTable) -> Result<(usize, Option<GpkgWritten>, Vec<crate::loss::Note>)> {
+pub fn write_path_to(
+    ds: &Dataset,
+    path: &Path,
+    crs: Crs,
+    gpkg: &GpkgTable,
+) -> Result<(usize, Option<GpkgWritten>, Vec<crate::loss::Note>)> {
     write_path_as(ds, path, crs, gpkg, true).map(|(left_out, table, notes, _)| (left_out, table, notes))
 }
 
