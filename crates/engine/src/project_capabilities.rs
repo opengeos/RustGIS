@@ -222,9 +222,16 @@ fn command_uses_text_statistics(id: &str, params: &Value) -> bool {
     match id {
         "layout.addElement" | "layout.update" => params.get("text").is_some_and(holds),
         // The texts a publication layout is made of, which keep the tokens as they are written.
-        "layout.publication" => ["title", "subtitle", "note", "sources", "reference", "author", "headings"]
-            .iter()
-            .any(|key| params.get(*key).is_some_and(holds)),
+        "layout.publication" => {
+            // A title, subtitle, note or author is its list joined with a space, as `publication`
+            // reads it; each source, reference and heading is a line of its own.
+            let joined = |v: &Value| match v {
+                Value::Array(texts) => holds(&Value::String(texts.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" "))),
+                other => holds(other),
+            };
+            ["title", "subtitle", "note", "author"].iter().any(|key| params.get(*key).is_some_and(joined))
+                || ["sources", "reference", "headings"].iter().any(|key| params.get(*key).is_some_and(holds))
+        }
         "layout.import" => imported_layout_uses(params, &["{count:", "{sum:", "{mean:", "{min:", "{max:"], text_statistics),
         "script.run" => params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, command_uses_text_statistics)),
         _ => false,
@@ -2598,6 +2605,11 @@ mod tests {
             ("layout.publication", json!({"extent": [-1, -1, 1, 1], "sources": ["Data", "{mean:Sites:visits}"]}), true),
             ("layout.publication", json!({"extent": [-1, -1, 1, 1], "author": "{max:Sites:visits}"}), true),
             ("layout.publication", json!({"extent": [-1, -1, 1, 1], "title": "{scale} {projection}", "sources": "Data"}), false),
+            // A title, subtitle, note or author given as a list is joined with a space, so a token may
+            // be split across its entries; a list of sources, a reference or headings isn't.
+            ("layout.publication", json!({"extent": [-1, -1, 1, 1], "title": ["{count:New", "York}"]}), true),
+            ("layout.publication", json!({"extent": [-1, -1, 1, 1], "note": ["Data", "{sum:Sites:visits}"]}), true),
+            ("layout.publication", json!({"extent": [-1, -1, 1, 1], "sources": ["{count:New", "York}"]}), false),
             ("layout.import", json!({"text": layout}), true),
         ] {
             let script = format!("{id} {params}");
