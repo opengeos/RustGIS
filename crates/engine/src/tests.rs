@@ -8,6 +8,8 @@ mod formats_out;
 #[cfg(not(target_arch = "wasm32"))]
 #[path = "tests/held_databases.rs"]
 mod held_databases;
+#[path = "tests/own_grid_edits.rs"]
+mod own_grid_edits;
 #[cfg(not(target_arch = "wasm32"))]
 #[path = "tests/scene_losses.rs"]
 mod scene_losses;
@@ -2707,7 +2709,7 @@ fn svg_image_markers_that_dont_draw_are_said_with_why() {
         ),
         (
             MarkerRefusal::SvgUnknownRadius,
-            "Image markers in \"Cities\", \"Rivers\" are SVGs with a radius whose size RustGIS can't know (in em or ex, or in % of a size in em, ex or %), and are drawn as circles",
+            "Image markers in \"Cities\", \"Rivers\" are SVGs with a radius whose size RustGIS can't know (in em or ex, or in % of a size in em or ex, or of a nested size in % over 100%), and are drawn as circles",
         ),
         (MarkerRefusal::SvgTooSmall, "Image markers in \"Cities\", \"Rivers\" are SVGs too small to draw and are drawn as circles"),
         (MarkerRefusal::SvgNotUtf8, "Image markers in \"Cities\", \"Rivers\" are SVGs that aren't UTF-8 text and are drawn as circles"),
@@ -6395,7 +6397,7 @@ fn a_file_inside_a_geodatabase_adds_the_geodatabase() {
     let gdb = dir.join("roads.gdb");
     let table = gdb.join("a00000001.gdbtable").display().to_string();
     let mut s = Session::new(Project::default());
-    if rustgis_data::source::gdal::available() {
+    if rustgis_data::source::gdal::test_runs().unwrap() {
         let geojson = dir.join("cities.geojson");
         std::fs::write(
             &geojson,
@@ -23375,7 +23377,7 @@ fn any_command_editing_a_streamed_layer_is_undone() {
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn gdal_formats_open_when_gdal_is_installed() {
-    if !rustgis_data::source::gdal::available() {
+    if !rustgis_data::source::gdal::test_runs().unwrap() {
         return;
     }
     let dir = std::env::temp_dir().join(format!("rustgis-engine-gdal-{}", std::process::id()));
@@ -23472,7 +23474,7 @@ fn kml_and_gpx_add_as_layers() {
 fn duckdb_queries_and_databases() {
     let mut s = Session::new(Project::default());
     let query = "SELECT 'a' AS name, ST_Point(7, 45) AS geom UNION ALL SELECT 'b', ST_GeomFromText('LINESTRING(7 45, 8 46)')";
-    if !rustgis_data::source::duckdb::available() {
+    if !rustgis_data::source::duckdb::test_runs().unwrap() {
         let e = s.run("layer.addSql", &json!({"sql": query})).unwrap_err();
         assert!(e.contains("need DuckDB"), "{e}");
         let e = s.run("layer.addData", &json!({"path": "/nowhere/x.duckdb"})).unwrap_err();
@@ -23724,7 +23726,7 @@ fn split_sources_keep_their_points_on_top() {
 #[test]
 fn postgres_databases() {
     let Ok(conn) = std::env::var("RUSTGIS_TEST_POSTGRES") else { return };
-    if !rustgis_data::source::duckdb::available() {
+    if !rustgis_data::source::duckdb::test_runs().unwrap() {
         return;
     }
     let mut s = Session::new(Project::default());
@@ -23833,6 +23835,61 @@ fn identify_reports_vector_tile_features() {
     let r = s.run("identify", &at).unwrap();
     assert_eq!((&r["tileLayer"], &r["attributes"]["name"]), (&json!("parks"), &json!("Central")), "{r}");
     let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A vector tile archive draws shapes, not pictures: once it's read, `map.setTiles` refuses a
+/// resampling it would ignore; one that can't be read says so, and a local picture archive takes
+/// it as it's added (#2804).
+#[test]
+fn a_vector_archive_refuses_resampling() {
+    use crate::render::rustgis_tiles::{mvt, pmtiles};
+    let road =
+        mvt::Feature { id: None, kind: mvt::GeomKind::LineString, geometry: vec![vec![[0.0, 2048.0], [4096.0, 2048.0]]], props: vec![] };
+    let tile = mvt::encode(&mvt::Tile { layers: vec![mvt::Layer { name: "roads".into(), extent: 4096, features: vec![road] }] });
+    let new = pmtiles::NewArchive {
+        tile_type: pmtiles::TileType::Mvt,
+        gzipped_tiles: false,
+        bounds: [-180.0, -85.0, 180.0, 85.0],
+        metadata: json!({"vector_layers": [{"id": "roads"}]}),
+    };
+    let dir = std::env::temp_dir().join(format!("rustgis-vector-resampling-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("roads.pmtiles");
+    std::fs::write(&path, pmtiles::write(vec![(0, 0, 0, tile)], &new).unwrap()).unwrap();
+    let mut s = Session::new(Project::default());
+    s.run("layer.addData", &json!({"path": path.display().to_string()})).unwrap();
+    // The archive's header arrives in the background.
+    for _ in 0..500 {
+        if s.run("map.tiles", &json!({})).unwrap()[0].get("sourceLayers").is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10)); // test-wait: the archive's header is read on another thread
+    }
+    let err = s.run("map.setTiles", &json!({"index": 0, "resampling": "nearest"})).unwrap_err();
+    assert!(err.contains("picture tiles"), "{err}");
+    assert_eq!(s.map().tiles[0].resampling, rustgis_map::raster::Resampling::Bilinear);
+    // One that can't be read says so.
+    let missing = dir.join("missing.pmtiles").display().to_string();
+    let err = s.run("map.addTiles", &json!({"url": missing, "kind": "pmtiles", "resampling": "nearest"})).unwrap_err();
+    assert!(err.contains("couldn't be read"), "{err}");
+    // A local archive of pictures takes it as it's added: its header is read first.
+    let png = {
+        let mut out = std::io::Cursor::new(Vec::new());
+        image::RgbaImage::from_pixel(4, 4, image::Rgba([90, 120, 60, 255])).write_to(&mut out, image::ImageFormat::Png).unwrap();
+        out.into_inner()
+    };
+    let pictures = pmtiles::NewArchive {
+        tile_type: pmtiles::TileType::Png,
+        gzipped_tiles: false,
+        bounds: [-180.0, -85.0, 180.0, 85.0],
+        metadata: json!({}),
+    };
+    let imagery = dir.join("imagery.pmtiles");
+    std::fs::write(&imagery, pmtiles::write(vec![(0, 0, 0, png)], &pictures).unwrap()).unwrap();
+    let url = imagery.display().to_string();
+    s.run("map.addTiles", &json!({"url": url, "kind": "pmtiles", "resampling": "nearest"})).unwrap();
+    assert_eq!(s.map().tiles[0].resampling, rustgis_map::raster::Resampling::Nearest);
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A vector archive's source layers are listed by `map.tiles`; one switched off with
@@ -24756,7 +24813,7 @@ fn jpeg2000_from_a_web_address() {
     assert_eq!(named("https://x.org/api/tile?f=jp2", jp2_box).unwrap(), "tile.jp2");
     assert_eq!(named("https://x.org/", &codestream).unwrap(), "data.j2k");
     assert!(named("https://x.org/api/tile", br#"<VRTDataset></VRTDataset>"#).unwrap_err().contains("not a data format"));
-    if !rustgis_data::raster::gdal::available() {
+    if !rustgis_data::raster::gdal::test_runs().unwrap() {
         let jp2 = serve(jp2_box, 4);
         for path in ["TCI.jp2", "api/tile"] {
             let e = s.run("layer.addUrl", &json!({"url": format!("{jp2}/{path}")})).unwrap_err();
@@ -25335,7 +25392,10 @@ fn spreadsheets_feeds_landxml_and_polylines() {
 #[test]
 fn gdal_rasters_reopen_with_their_choices() {
     // Found as the app finds it (the PATH, or RUSTGIS_GDAL_BIN).
-    let Some(translate) = rustgis_data::source::gdal::program("gdal_translate") else { return };
+    if !rustgis_data::raster::gdal::test_runs().unwrap() {
+        return;
+    }
+    let translate = rustgis_data::source::gdal::program("gdal_translate").unwrap();
     let dir = std::env::temp_dir().join(format!("rustgis-gdal-reopen-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -31281,7 +31341,7 @@ fn geocoding_skips_addresses_too_long_for_the_server() {
 fn sql_workspace_rows_and_schema() {
     let mut s = Session::new(Project::default());
     assert!(s.run("sql.query", &json!({})).is_err());
-    if !rustgis_data::source::duckdb::available() {
+    if !rustgis_data::source::duckdb::test_runs().unwrap() {
         assert!(s.run("sql.query", &json!({"sql": "SELECT 1"})).unwrap_err().contains("need DuckDB"));
         return;
     }
@@ -44755,6 +44815,101 @@ fn layout_charts_face_each_other() {
     }
 }
 
+/// A line round a chart's bars (#2487 part 4b): set when the chart is added or updated, each key
+/// not given keeping the outline's (or the one it is first given), a width past 5 points held to
+/// it and said, kept when its layer changes, undone in one step, taken away by null or a width of
+/// 0 (none written then), refused when bad (changing nothing) and for other kinds, and a null
+/// refused on a locked chart like any change.
+#[test]
+fn layout_charts_draw_a_line_round_their_bars() {
+    use rustgis_data::{Dataset, Field, FieldType, GeometryType, Value};
+    use rustgis_map::Rgba;
+    use rustgis_map::layout::{ChartOutline, ElementKind};
+    let mut s = Session::new(sample::world_project());
+    for name in ["Places", "Towns"] {
+        let mut ds =
+            Dataset::new(name, GeometryType::Point, vec![Field::new("name", FieldType::Text), Field::new("people", FieldType::Double)]);
+        ds.push(None, vec![Value::Text("P".into()), Value::Float(10.0)]);
+        s.map_mut().add_dataset(ds);
+    }
+    s.run("layout.new", &json!({"name": "Charts"})).unwrap();
+    let r = s.run("layout.addElement", &json!({"kind": "chart", "layer": "Places", "field": "people", "barOutline": {}})).unwrap();
+    let chart = r["element"].as_u64().unwrap() as u32;
+    let outline = |s: &Session| match s.project.layouts[0].element(chart).map(|e| &e.kind) {
+        Some(ElementKind::Chart { bar_outline, .. }) => *bar_outline,
+        _ => panic!("a chart"),
+    };
+    let dark = Rgba::rgb(0x22, 0x22, 0x22);
+    assert_eq!(outline(&s), Some(ChartOutline { color: dark, width: 0.5 }), "first given in dark grey, half a point");
+    // The keys not given keep the outline's.
+    s.run("layout.update", &json!({"element": chart, "barOutline": {"color": "#C2185B"}})).unwrap();
+    let pink = Rgba::rgb(0xC2, 0x18, 0x5B);
+    assert_eq!(outline(&s), Some(ChartOutline { color: pink, width: 0.5 }));
+    let mark = s.notice_mark();
+    s.run("layout.update", &json!({"element": chart, "barOutline": {"width": 2}})).unwrap();
+    assert_eq!(outline(&s), Some(ChartOutline { color: pink, width: 2.0 }));
+    let said = s.notices_since(mark).iter().map(|n| n.text.clone()).collect::<Vec<_>>();
+    assert!(!said.iter().any(|t| t.contains("held to")), "a width within the limits is not held: {said:?}");
+    // Past 5 points it is held to them, and said.
+    let mark = s.notice_mark();
+    s.run("layout.update", &json!({"element": chart, "barOutline": {"width": 9}})).unwrap();
+    assert_eq!(outline(&s).map(|o| o.width), Some(5.0));
+    let said = s.notices_since(mark).iter().map(|n| n.text.clone()).collect::<Vec<_>>();
+    assert!(said.iter().any(|t| t.contains("barOutline width 9 held to 5")), "{said:?}");
+    // Given as text, as forms send numbers, the same.
+    let mark = s.notice_mark();
+    s.run("layout.update", &json!({"element": chart, "barOutline": {"width": "8"}})).unwrap();
+    assert_eq!(outline(&s).map(|o| o.width), Some(5.0));
+    let said = s.notices_since(mark).iter().map(|n| n.text.clone()).collect::<Vec<_>>();
+    assert!(said.iter().any(|t| t.contains("barOutline width 8 held to 5")), "{said:?}");
+    // On a new layer the chart keeps it.
+    s.run("layout.update", &json!({"element": chart, "layer": "Towns"})).unwrap();
+    assert_eq!(outline(&s), Some(ChartOutline { color: pink, width: 5.0 }));
+    // Null takes it away, in one step undone, and a width of 0 too; none written then.
+    s.run("layout.update", &json!({"element": chart, "barOutline": null})).unwrap();
+    assert_eq!(outline(&s), None);
+    let saved = serde_json::to_string(&s.project.layouts[0].element(chart).unwrap().kind).unwrap();
+    assert!(!saved.contains("\"bar_outline\""), "{saved}");
+    s.run("edit.undo", &serde_json::Value::Null).unwrap();
+    assert_eq!(outline(&s), Some(ChartOutline { color: pink, width: 5.0 }));
+    s.run("layout.update", &json!({"element": chart, "barOutline": {"width": 0}})).unwrap();
+    assert_eq!(outline(&s), None);
+    s.run("layout.update", &json!({"element": chart, "barOutline": {"color": "#000000", "width": 1}})).unwrap();
+    // A locked chart takes no null either: it is a change.
+    s.run("layout.update", &json!({"element": chart, "locked": true})).unwrap();
+    assert!(s.run("layout.update", &json!({"element": chart, "barOutline": null})).is_err());
+    assert!(outline(&s).is_some());
+    s.run("layout.update", &json!({"element": chart, "locked": false})).unwrap();
+    // A bad one is refused, naming it, and nothing changes.
+    let before = outline(&s);
+    for (bad, said) in [
+        (json!(true), "barOutline is an object"),
+        (json!("#000000"), "barOutline is an object"),
+        (json!({"color": "dark"}), "color must be #RRGGBB"),
+        (json!({"width": "thick"}), "width must be a number"),
+    ] {
+        let p = json!({"element": chart, "x": 99, "barOutline": bad});
+        let err = s.run("layout.update", &p).unwrap_err();
+        assert!(err.contains(said), "{bad}: {err}");
+        let add = json!({"kind": "chart", "layer": "Places", "barOutline": bad});
+        assert!(s.run("layout.addElement", &add).is_err(), "{bad}");
+    }
+    assert_eq!(outline(&s), before);
+    assert!(s.project.layouts[0].element(chart).is_some_and(|e| e.x != 99.0));
+    // Only a chart takes it.
+    let rect =
+        s.run("layout.addElement", &json!({"kind": "rectangle", "x": 1, "y": 1, "w": 5, "h": 5})).unwrap()["element"].as_u64().unwrap();
+    assert!(s.run("layout.update", &json!({"element": rect, "barOutline": {}})).unwrap_err().contains("only charts"));
+    let p = json!({"kind": "table", "layer": "Places", "barOutline": {}});
+    assert!(s.run("layout.addElement", &p).unwrap_err().contains("only charts"));
+    // A null asks for none, which another kind has: taken as not given, as every chart key's
+    // null is and as the help says, and nothing changes.
+    let before = s.project.layouts[0].element(rect as u32).cloned();
+    s.run("layout.update", &json!({"element": rect, "barOutline": null})).unwrap();
+    assert_eq!(s.project.layouts[0].element(rect as u32).cloned(), before);
+    s.run("layout.addElement", &json!({"kind": "rectangle", "barOutline": null})).unwrap();
+}
+
 /// A stack field with more values than the key has colours gathers the rest in its Other, and
 /// the chart says how many (#2487 part 3b); one that fits says nothing.
 #[test]
@@ -52496,6 +52651,116 @@ fn calculate_field_bulk_edit_keeps_validation_archive_and_undo() {
     assert_eq!(values(&s), [V::Int(2), V::Int(2), V::Int(4)]);
 }
 
+/// Calculate Field's preview refuses a row exactly when Calculate on that row alone is refused,
+/// with its error word for word (#2837): a domain, an allowed combination and a constraint rule,
+/// checked after the calculation rules (a rule writing a field the domain then refuses), and a rule
+/// reading `@row_number`, which the preview's one-row copy reads as the layer's row. A field the
+/// calculation doesn't change isn't checked against its domain, so a layer with only such a domain
+/// refuses none.
+#[test]
+fn calculate_field_preview_refuses_what_calculate_refuses() {
+    let layer = || {
+        let mut s = Session::new(Project::default());
+        let features: Vec<Value> = [1, 2, 3]
+            .map(|n| {
+                json!({"type": "Feature", "properties": {"n": n, "m": 0, "kind": "a", "legacy": 9}, "geometry": {"type": "Point", "coordinates": [n, 0]}})
+            })
+            .to_vec();
+        let points = json!({"type": "FeatureCollection", "features": features});
+        s.run("layer.addDataText", &json!({"fileName": "calc.geojson", "text": points.to_string()})).unwrap();
+        // A value set before its domain: not checked while the calculation leaves it alone.
+        s.run("data.domain", &json!({"layer": "calc", "field": "legacy", "min": 1, "max": 5, "force": true})).unwrap();
+        s
+    };
+    // Each case: its check, the expression, and the row index (0 to 2) it refuses, if any.
+    let cases: Vec<(&str, Value, &str, Option<usize>)> = vec![
+        ("untouched domain", Value::Null, "n + 10", None),
+        ("domain", json!({"cmd": "data.domain", "p": {"layer": "calc", "field": "n", "min": 0, "max": 4}}), "n + 2", Some(2)),
+        (
+            "combination",
+            json!({"cmd": "data.contingentValues", "p": {"layer": "calc", "name": "N by kind", "fields": ["n", "kind"], "combos": [[2, "a"], [4, "a"]]}}),
+            "n + 1",
+            Some(1),
+        ),
+        (
+            "constraint",
+            json!({"cmd": "data.attributeRule", "p": {"layer": "calc", "name": "Not two", "kind": "constraint", "expression": "n <> 2"}}),
+            "n + 1",
+            Some(0),
+        ),
+        (
+            "row number",
+            json!({"cmd": "data.attributeRule", "p": {"layer": "calc", "name": "Second", "kind": "constraint", "expression": "@row_number <> 2"}}),
+            "n",
+            Some(1),
+        ),
+    ];
+    for (name, check, expression, refuses) in cases {
+        let mut s = layer();
+        if let Some(cmd) = check["cmd"].as_str() {
+            s.run(cmd, &check["p"]).unwrap();
+        }
+        let id = s.map().layer_by_name("calc").unwrap().id;
+        let l = s.map().layer(id).unwrap();
+        let n = l.dataset.field_index("n").unwrap();
+        let previewed = crate::cmd::edit::preview_calculation(expression, &l.dataset, n, &[0, 1, 2], Some(&l.design)).unwrap();
+        let refused: Vec<Option<String>> = previewed.into_iter().map(|p| p.refused).collect();
+        let ran: Vec<Option<String>> = (0..3)
+            .map(|row| {
+                let mut s = layer();
+                if let Some(cmd) = check["cmd"].as_str() {
+                    s.run(cmd, &check["p"]).unwrap();
+                }
+                s.run("select.rows", &json!({"layer": "calc", "rows": [row]})).unwrap();
+                s.run("edit.calculateField", &json!({"layer": "calc", "field": "n", "expression": expression})).err()
+            })
+            .collect();
+        assert_eq!(refused, ran, "{name}");
+        let refused_rows: Vec<usize> = (0..3).filter(|r| ran[*r].is_some()).collect();
+        assert_eq!(refused_rows, refuses.into_iter().collect::<Vec<usize>>(), "{name}: the row refused");
+    }
+    // A calculation rule writing a field whose domain then refuses it: checked after the rule.
+    let mut s = layer();
+    s.run("data.domain", &json!({"layer": "calc", "field": "m", "min": 0, "max": 25})).unwrap();
+    s.run("data.attributeRule", &json!({"layer": "calc", "name": "Tens", "kind": "calculation", "field": "m", "expression": "n * 10"}))
+        .unwrap();
+    let l = s.map().layer_by_name("calc").unwrap();
+    let n = l.dataset.field_index("n").unwrap();
+    let previewed = crate::cmd::edit::preview_calculation("n + 1", &l.dataset, n, &[0, 1], Some(&l.design)).unwrap();
+    assert_eq!(previewed[0].refused, None, "2 makes 20");
+    s.run("select.rows", &json!({"layer": "calc", "rows": [1]})).unwrap();
+    let ran = s.run("edit.calculateField", &json!({"layer": "calc", "field": "n", "expression": "n + 1"})).unwrap_err();
+    assert_eq!(previewed[1].refused.as_deref(), Some(ran.as_str()), "3 makes 30");
+    // A calculation rule reading `@row_number` reads the layer's row in the preview's copy too.
+    let ruled = || {
+        let mut s = layer();
+        s.run("data.domain", &json!({"layer": "calc", "field": "m", "min": 0, "max": 15})).unwrap();
+        s.run(
+            "data.attributeRule",
+            &json!({"layer": "calc", "name": "Place", "kind": "calculation", "field": "m", "expression": "@row_number * 10"}),
+        )
+        .unwrap();
+        s
+    };
+    let s = ruled();
+    let l = s.map().layer_by_name("calc").unwrap();
+    let n = l.dataset.field_index("n").unwrap();
+    let refused: Vec<Option<String>> = crate::cmd::edit::preview_calculation("n", &l.dataset, n, &[0, 1], Some(&l.design))
+        .unwrap()
+        .into_iter()
+        .map(|p| p.refused)
+        .collect();
+    let ran: Vec<Option<String>> = (0..2)
+        .map(|row| {
+            let mut s = ruled();
+            s.run("select.rows", &json!({"layer": "calc", "rows": [row]})).unwrap();
+            s.run("edit.calculateField", &json!({"layer": "calc", "field": "n", "expression": "n"})).err()
+        })
+        .collect();
+    assert_eq!(refused, ran, "the rule reads the row's place");
+    assert_eq!(ran.iter().map(Option::is_some).collect::<Vec<_>>(), [false, true], "row 1 makes 10, row 2 makes 20");
+}
+
 /// Calculate Field keeps a decimal result as it is in a decimal field, rather than rounding it to
 /// the six places its text shows, and says what a whole-number field cuts: a fraction, or a number
 /// past the 64-bit range (null). Results the field holds give no notice.
@@ -59781,7 +60046,7 @@ fn a_save_names_a_layer_and_its_table_once_when_they_are_the_same() {
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn a_duckdb_result_names_its_layer_in_its_date_notices() {
-    if !rustgis_data::source::duckdb::available() {
+    if !rustgis_data::source::duckdb::test_runs().unwrap() {
         eprintln!("skipped: DuckDB isn't installed");
         return;
     }

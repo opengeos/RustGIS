@@ -181,6 +181,12 @@ A label class removing duplicates (`labels.placement` with a `removeDuplicates` 
 `label-duplicates`, in a layer, a saved style or a saved `labels.placement` step: an older reader
 would place and save every label, or run the step without it.
 
+Projects and map files with a tile layer drawn nearest (`map.setTiles` with `"resampling":
+"nearest"`) require `tile-resampling`, so an older reader refuses them instead of drawing the layer
+blended and saving it again without the setting. So do projects with a saved `map.addTiles` or
+`map.setTiles` step (in a task, a model or a script) that sets it: an older reader would run the
+step without it, saying nothing.
+
 Projects with an ink on a legend, colorbar, table or chart (`color` on those elements) require
 `layout-element-ink`, so an older reader refuses them instead of drawing those elements in dark
 grey and saving them again without it. Saved `layout.addElement` and `layout.update` commands
@@ -241,6 +247,16 @@ the chart the usual way round, on its bars' own scale and labelled, and saving i
 set `"mirror": true`, a `max` above 0 or `"hideLabels": true` require it too (only a chart takes
 the keys); `false`, `null` and `"auto"` need nothing. A saved `layout.import` whose `text` has
 such a chart requires it as well.
+
+Projects with a layout chart that draws a line round its bars (`bar_outline` with a width above 0
+on a chart element) require `layout-chart-outline`, so an older reader refuses them instead of
+drawing the bars without and saving the chart again without (#2487 part 4b). In a hand-edited
+file, a width past 5 is held to 5 and one below 0 let go on read, both said as values out of
+range; a width of 0 draws none and is let go. Saved
+`layout.addElement` commands for a chart and `layout.update` commands that give a `barOutline`
+object without a width or with one above 0 require it too (only a chart takes the key); `null` and
+a width of 0 need nothing. A saved `layout.import` whose `text` has such a chart requires it as
+well.
 
 Projects with a map frame whose border isn't the default dark grey 0.8 pt line (`border_color`,
 `border_width` on a map frame, a width of 0 drawing none) require `layout-frame-border`, so an

@@ -86,6 +86,7 @@ mod pluginstart;
 mod pluginsui;
 mod popupmedia;
 mod portalsui;
+mod publicationwizard;
 #[cfg(not(target_arch = "wasm32"))]
 mod readjob;
 #[cfg(not(target_arch = "wasm32"))]
@@ -3674,6 +3675,17 @@ impl RustGisApp {
         if id.starts_with("edit.") && params.get("table").is_some_and(|t| !t.is_null()) {
             return None;
         }
+        // Coordinate entry uses only a loaded point layer; a fallback must not record the
+        // incompatible selection as an explicit target that replay would refuse.
+        if id == "edit.addPoint"
+            && !self
+                .session
+                .active_layer
+                .and_then(|id| self.session.map().layer(id))
+                .is_some_and(rustgis_engine::cmd::edit::accepts_coordinate_point)
+        {
+            return None;
+        }
         let spec = self.session.registry.get(id).filter(|c| c.mutates && params.get("layer").is_none_or(Value::is_null)).copied()?;
         if !spec.param_keys().is_some_and(|k| k.contains(&"layer")) {
             return None;
@@ -5807,6 +5819,14 @@ impl RustGisApp {
                     let id = self.session.layer_id(p)?;
                     let form = geometrycalc::Form::new(&self.session, id)?;
                     self.dialogs = dialogs::Dialogs { open: Some("calculateGeometry"), geometry: Some(form), ..Default::default() };
+                    return Ok(Value::Null);
+                }
+                if which == "publicationWizard" {
+                    // Opened again while open, it keeps what was entered.
+                    if self.dialogs.open != Some("publicationWizard") || self.dialogs.publication.is_none() {
+                        let draft = publicationwizard::Draft::new(&self.session);
+                        self.dialogs = dialogs::Dialogs { open: Some("publicationWizard"), publication: Some(draft), ..Default::default() };
+                    }
                     return Ok(Value::Null);
                 }
                 if which == "offlineConflicts" {
@@ -8418,6 +8438,7 @@ const MAX_STEP_BYTES: usize = 4 << 20;
 /// an optional `layer` that defaults to the active layer goes here, so a recorded step names it;
 /// `record_tests::every_optional_layer_is_classified` fails until it is placed here or there.
 const DEFAULTS_TO_ACTIVE_LAYER: &[&str] = &[
+    "edit.addPoint",
     "select.byAttributes",
     "stac.search",
     "select.rows",
