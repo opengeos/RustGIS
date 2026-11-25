@@ -1225,8 +1225,12 @@ fn drawing(records: &[Record]) -> Result<Drawing> {
                         if let Some((name, base, ents)) = block.take()
                             && !name.is_empty()
                         {
+                            // A block defined again replaces the earlier one, and what it couldn't
+                            // draw with it.
                             let key = name.to_ascii_lowercase();
-                            if !block_lost.is_empty() {
+                            if block_lost.is_empty() {
+                                d.block_lost.remove(&key);
+                            } else {
                                 d.block_lost.insert(key.clone(), std::mem::take(&mut block_lost));
                             }
                             d.blocks.insert(key, (base, ents));
@@ -1947,6 +1951,10 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         assert!(said(&drawing("")).is_empty(), "a block never placed loses nothing");
+        // A block defined again without them: the later definition is the one placed.
+        let redefined =
+            drawing("0 INSERT 2 B 10 5 20 5").replacen("ENDSEC", "BLOCK\n2\nB\n0\nPOINT\n10\n2\n20\n2\n0\nENDBLK\n0\nENDSEC", 1);
+        assert!(said(&redefined).is_empty(), "{:?}", said(&redefined));
         assert_eq!(
             said(&drawing("0 INSERT 2 B 10 5 20 5 0 INSERT 2 B 10 9 20 9")),
             [("entities RustGIS doesn't draw were left out: 2 IMAGE".to_string(), Some(crate::loss::LossCode::DroppedFeature))]
