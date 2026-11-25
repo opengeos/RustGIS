@@ -223,3 +223,24 @@ fn a_trace_ends_on_the_layers_own_side() {
     }
     assert!((r["fromOffM"].as_f64().unwrap() - 1.0).abs() < 1e-3, "{r}");
 }
+
+#[test]
+fn a_split_says_how_many_segments_it_couldnt_measure_and_a_clean_one_says_nothing() {
+    let split = |road: Geometry| {
+        let mut s = session(held("Roads", GeometryType::Polyline, vec![road]));
+        let at = lonlat(Coord::new(X + 8_000.0, Y + 8_000.0));
+        let mark = s.notice_mark();
+        s.run("edit.split", &json!({"lon": at[0], "lat": at[1]})).unwrap();
+        s.notices_since(mark).iter().map(|n| n.text.clone()).collect::<Vec<_>>()
+    };
+    // A segment to a vertex missing a coordinate is passed over, and said.
+    let said = split(Geometry::Line(vec![vec![
+        Coord::new(X, Y),
+        Coord::new(X + SIDE, Y + SIDE),
+        Coord::new(f64::NAN, Y + SIDE),
+        Coord::new(X + 2.0 * SIDE, Y + SIDE),
+    ]]));
+    assert!(said.iter().any(|t| t.contains("2 segment(s)") && t.contains("could not be measured")), "{said:?}");
+    let said = split(Geometry::Line(vec![vec![Coord::new(X, Y), Coord::new(X + SIDE, Y + SIDE)]]));
+    assert!(said.iter().all(|t| !t.contains("could not be measured")), "{said:?}");
+}

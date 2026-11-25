@@ -1509,12 +1509,14 @@ pub(crate) fn held_places(s: &Session, id: u32, originals: &[&Geometry], edited:
     held
 }
 
-/// A line drawn (or a point clicked) on the map, in longitude/latitude, in the coordinates of layer `id`, held in
-/// `grid`'s system, for an edit worked out there (#2032 C2f-7): a point snapped to a stored place
-/// of a layer in that system is that place, as stored ([`held_places`]); any other is converted.
-pub(super) fn line_in_own(s: &Session, id: u32, grid: OwnGrid, line: &[Coord]) -> Result<Vec<Coord>, String> {
+/// A line drawn on the map, in longitude/latitude, in the coordinates of layer `id`, held in a
+/// projected system, for an edit worked out there (#2032 C2f-7): a point snapped to a stored place
+/// of a layer in that system is that place, as stored ([`held_places`]); any other is converted
+/// as the layer is drawn ([`rustgis_data::Dataset::shown_from_lonlat`]).
+pub(super) fn line_in_own(s: &Session, id: u32, line: &[Coord]) -> Result<Vec<Coord>, String> {
     let held = held_places(s, id, &[], &[&Geometry::Line(vec![line.to_vec()])]);
-    let to = rustgis_data::raster::Crs::LonLat.to(grid.crs)?;
+    // Through the map's system when the layer is shown through it, as its features are drawn.
+    let to = s.map().layer(id).ok_or("no such layer")?.dataset.shown_from_lonlat()?;
     line.iter()
         .map(|c| {
             held.get(*c)
@@ -1860,11 +1862,13 @@ fn split(s: &mut Session, p: &Json) -> CmdResult {
 }
 
 /// [`split`] of the selected lines of layer `id`, held in `grid`'s projected system, in its own
-/// coordinates (#2032 C2f-7): at the point nearest `at` (longitude/latitude; a point snapped to a
-/// stored place is that place) on its segments as they run straight there, measured flat in its
+/// coordinates (#2032 C2f-7): at the point nearest `at` (longitude/latitude) on its segments as they run straight there, measured flat in its
 /// grid. Every place of the line stays as stored; only the point it is split at is new.
 fn split_own(s: &mut Session, id: u32, grid: OwnGrid, at: Coord) -> CmdResult {
-    let at = *line_in_own(s, id, grid, &[at])?.first().ok_or("no point to split at")?;
+    // Converted as the layer is drawn; the split point is projected onto a segment anyway, so
+    // stored places aren't looked up for it.
+    let to_own = s.map().layer(id).ok_or("no such layer")?.dataset.shown_from_lonlat()?;
+    let at = to_own.point(at).ok_or("the point to split at is no place in the layer's coordinate system")?;
     // A millimetre and a centimetre of the grid, in its units.
     let (mm, cm) = (0.001 / grid.unit_m, 0.01 / grid.unit_m);
     let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;

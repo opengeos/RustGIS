@@ -53,7 +53,7 @@ pub(super) fn cut_polygon(s: &mut Session, p: &Value) -> CmdResult {
     // are new (#2032 C2f-7).
     let own = s.map().layer(id).and_then(super::OwnGrid::of);
     if let Some(grid) = own {
-        let line = super::line_in_own(s, id, grid, &line)?;
+        let line = super::line_in_own(s, id, &line)?;
         return cut_polygon_with(s, id, &line, Some(grid));
     }
     cut_polygon_with(s, id, &line, None)
@@ -173,7 +173,7 @@ pub(super) fn reshape(s: &mut Session, p: &Value) -> CmdResult {
         // Held in a projected system: reshaped in its own plane, the line converted into it, and
         // written as it is (#2032 C2f-7).
         Some(grid) => {
-            let line = super::line_in_own(s, id, grid, &line)?;
+            let line = super::line_in_own(s, id, &line)?;
             let _plane = rustgis_analysis::convert::install(rustgis_analysis::convert::run_plane_for(grid.crs));
             let done = sketch_edit::reshape(own, &line)?;
             super::super::edit::validate(&done.geometry)?;
@@ -263,8 +263,9 @@ fn traced(s: &Session, id: u32, row: usize, from: Coord, to: Coord, part: Option
         let g = l.dataset.feature_to_lonlat(feature.id(), own)?;
         return sketch_edit::trace(&g, from, to, part);
     };
-    let to_own = rustgis_data::raster::Crs::LonLat.to(grid.crs)?;
-    let place = |c: Coord| to_own.point(c).ok_or_else(|| "a point to trace from is no place in the layer's coordinate system".to_string());
+    // Through the map's system when the layer is shown through it, as the path goes back.
+    let to_own = l.dataset.shown_from_lonlat()?;
+    let place = |c: Coord| to_own.point(c).ok_or_else(|| "a point of the trace is no place in the layer's coordinate system".to_string());
     let (f, t) = (place(from)?, place(to)?);
     let traced = {
         let _plane = rustgis_analysis::convert::install(rustgis_analysis::convert::run_plane_for(grid.crs));
