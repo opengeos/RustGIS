@@ -132,7 +132,6 @@ impl Form {
     }
 }
 
-/// Shows the captured source and runs the appropriate undoable repair command.
 /// The form's item is no longer where it was opened on: another project or map (a moved map is the
 /// same one), or its layer or tile layer gone or replaced.
 fn gone(app: &RustGisApp, f: &Form) -> bool {
@@ -146,6 +145,7 @@ fn gone(app: &RustGisApp, f: &Form) -> bool {
         }
 }
 
+/// Shows the captured source and runs the appropriate undoable repair command.
 pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
     let Some(f) = app.dialogs.repair.take() else {
         app.dialogs.open = None;
