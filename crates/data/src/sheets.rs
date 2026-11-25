@@ -68,16 +68,17 @@ pub fn read(bytes: &[u8], name: &str, sheet: Option<&str>, opts: &CsvOptions) ->
             };
             message.push_str(&format!("; {what}, {}", crate::io::named_fields(&fields, &g.header_error_cells)));
         }
+        // Each error cell's value is read as empty: a value lost.
+        report.messages.push(crate::loss::Note::loss(crate::loss::LossCode::DroppedValue, message));
+        // A row with nothing but error cells is left out whole: a row lost, said on its own.
         if g.empty_error_rows > 0 {
             let what = if g.empty_error_rows == 1 {
                 "1 otherwise empty row with error cells was omitted".to_string()
             } else {
                 format!("{} otherwise empty rows with error cells were omitted", g.empty_error_rows)
             };
-            message.push_str(&format!("; {what}"));
+            report.messages.push(crate::loss::Note::loss(crate::loss::LossCode::DroppedFeature, what));
         }
-        // Each error cell's value is read as empty: a value lost.
-        report.messages.push(crate::loss::Note::loss(crate::loss::LossCode::DroppedValue, message));
     }
     if rounded > 0 {
         report.messages.push(crate::loss::Note::loss(
@@ -881,9 +882,13 @@ mod tests {
             let expected = if cell.is_empty() {
                 vec![]
             } else {
-                vec!["2 spreadsheet error cells were read as empty, in 'id', 'note'; 1 otherwise empty row with error cells was omitted"]
+                vec!["2 spreadsheet error cells were read as empty, in 'id', 'note'", "1 otherwise empty row with error cells was omitted"]
             };
             assert_eq!(report.messages.texts().collect::<Vec<_>>(), expected);
+            if !expected.is_empty() {
+                use crate::loss::LossCode::{DroppedFeature, DroppedValue};
+                assert_eq!(report.messages.iter().map(|m| m.loss).collect::<Vec<_>>(), [Some(DroppedValue), Some(DroppedFeature)]);
+            }
         }
     }
 
