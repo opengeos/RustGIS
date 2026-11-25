@@ -489,13 +489,15 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
   `{mean:Cities:pop}`, `{min:Cities:pop}` and `{max:Cities:pop}` add up, average or pick the least
   or greatest number of a field, read as a chart reads its values. They follow the layer's
   definition query, take the map of the layout's first map frame (in a series, the whole layer,
-  not the page's part of it), and write the decimal comma when the layout uses one. A layer read
-  in place covers what is loaded, as a chart does, and a warning says so. A token with no figure
-  (no such layer or field, a field with no numbers, a raster layer) stays as written, and a
-  warning names what is missing; both warnings come when the text is added or changed (or its layout
-  is made or imported), not when the page is exported. The text, its size (2 to 400 points, as text graphics on the map), colour,
-  bold, **Italic** (slanted, as water and ocean names are; the built-in fonts have no italic face,
-  so the letters are slanted 12°), **Alignment** (left, center or right within the element) and
+  not the page's part of it), and are written as a chart writes its values: thousands apart, up to
+  two decimals with the zeros at the end dropped, and the decimal comma when the layout uses one.
+  A layer read in place covers what is loaded, as a chart does, and a warning says so. A token with
+  no figure (no such layer or field, a field with no numbers, a raster layer) stays as written, and
+  a warning names what is missing. Both warnings come when the text is added or changed, or its
+  layout is made or imported, not when the page is exported. The text, its size (2 to 400 points,
+  as text graphics on the map), colour, bold, **Italic** (slanted, as water and ocean names are;
+  the built-in fonts have no italic face, so the letters are slanted 12°), **Alignment** (left,
+  center or right within the element) and
   **Letter spacing** in points
   (spaced-out names such as O C E A N O, or a negative value to tighten) are the same form a text
   on the map has in the pane; Enter ends the text and Shift+Enter starts a new line. Scripts set them with `italic`, `align` and
