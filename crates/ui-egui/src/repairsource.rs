@@ -17,8 +17,7 @@ pub enum Target {
 #[cfg_attr(target_arch = "wasm32", expect(dead_code, reason = "the browser can't pick a replacement file, so it reads less of the form"))]
 pub struct Form {
     target: Target,
-    opened: u64,
-    map: crate::dialogs::MapKey,
+    owner: crate::dialogs::MapOwner,
     /// An index is not an identity: closing on a different archive prevents accidental retargeting.
     archive: Option<(String, rustgis_engine::map::TileKind)>,
     name: String,
@@ -57,8 +56,7 @@ impl Form {
         };
         Ok(Self {
             target,
-            opened: s.opened,
-            map: crate::dialogs::map_key(s),
+            owner: crate::dialogs::MapOwner::of(s),
             archive: match target {
                 Target::Layer(_) => None,
                 Target::Tiles(index) => s.map().tiles.get(index).map(|t| (t.id.clone(), t.kind)),
@@ -135,8 +133,7 @@ impl Form {
 /// The form's item is no longer where it was opened on: another project or map (a moved map is the
 /// same one), or its layer or tile layer gone or replaced.
 fn gone(app: &RustGisApp, f: &Form) -> bool {
-    app.session.opened != f.opened
-        || crate::dialogs::map_key(&app.session) != f.map
+    !f.owner.holds(&app.session)
         || match f.target {
             Target::Layer(id) => app.session.map().layer(id).is_none(),
             Target::Tiles(index) => app.session.map().tiles.get(index).is_none_or(|t| {
@@ -287,8 +284,7 @@ mod tests {
     fn form() -> Form {
         Form {
             target: Target::Layer(1),
-            opened: 0,
-            map: (0, String::new()),
+            owner: crate::dialogs::MapOwner::of(&rustgis_engine::Session::new(rustgis_engine::Project::default())),
             archive: None,
             name: "Cities".into(),
             saved: "old.gpkg".into(),
@@ -317,8 +313,7 @@ mod tests {
         let first = app.session.map().name.clone();
         let mut f = form();
         f.target = Target::Layer(layer);
-        f.opened = app.session.opened;
-        f.map = crate::dialogs::map_key(&app.session);
+        f.owner = crate::dialogs::MapOwner::of(&app.session);
         assert!(!gone(&app, &f));
         app.run("map.new", json!({"name": "Second"})).unwrap();
         assert!(gone(&app, &f), "another map is in view");
@@ -326,7 +321,7 @@ mod tests {
         app.run("map.move", json!({"name": first, "to": 1})).unwrap();
         assert_eq!(app.session.project.active_map, 1, "the map in view moved to the end");
         assert!(!gone(&app, &f), "the same map, moved");
-        f.opened += 1;
+        app.run("project.new", json!({})).unwrap();
         assert!(gone(&app, &f), "another project");
     }
 
