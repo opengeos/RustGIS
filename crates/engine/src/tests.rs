@@ -47199,7 +47199,7 @@ fn a_streamed_export_counts_the_rows_it_could_not_read() {
         let exported = s.run("share.exportLayer", &json!({"layer": id, "path": fixture.dir.join(format!("out.{ext}"))})).unwrap();
         assert_eq!(exported["features"].as_u64(), Some(3), "{ext}");
         let notices: Vec<_> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
-        assert!(notices.iter().any(|n| n.contains("1 rows couldn't be read")), "{ext}: {notices:?}");
+        assert!(notices.iter().any(|n| n.contains("1 row couldn't be read")), "{ext}: {notices:?}");
     }
 }
 

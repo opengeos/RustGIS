@@ -812,10 +812,7 @@ fn write_layer(l: &rustgis_map::Layer, path: &str, asked: Option<Crs>, project: 
     said.extend(rustgis_data::io::left_out_note(path, &ext, left_out));
     said.extend(format_notes);
     if skipped > 0 {
-        said.push(rustgis_data::loss::Note::loss(
-            rustgis_data::loss::LossCode::DroppedFeature,
-            format!("{path}: {skipped} rows couldn't be read and were left out"),
-        ));
+        said.push(super::whole::unread_note(path, skipped));
     }
     said.extend(notes);
     said.extend(dbf_notes);
