@@ -39987,6 +39987,16 @@ fn layout_text_statistics_without_a_figure_are_said() {
         json!({"extent": [-46.8, -11.6, -38.5, -2.2], "title": "{count:Nowhere}", "sources": ["{count:Countries}"]}),
     );
     assert_eq!(said, ["{count:Nowhere} shows as written: the map of the layout's first frame has no layer named 'Nowhere'"]);
+    // So are those of an imported layout, a copy of the first one here.
+    let copy = serde_json::to_string(&s.project.layouts[0]).unwrap();
+    let (_, said) = run(&mut s, "layout.import", json!({"text": copy}));
+    assert_eq!(
+        said,
+        [
+            "{sum:Nowhere:pop} shows as written: the map of the layout's first frame has no layer named 'Nowhere'",
+            "{max:Countries:nosuch} shows as written: 'Countries' has no field named 'nosuch'",
+        ]
+    );
 }
 
 #[test]

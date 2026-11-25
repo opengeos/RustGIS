@@ -3038,12 +3038,7 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
     for cut in [name_cut, locator_cut].into_iter().flatten() {
         s.notify(cut, false);
     }
-    // A layer statistic in a text it was given (#2853) that has no figure is said, as for an added text.
-    let texts: Vec<u32> =
-        s.project.layouts[i].elements.iter().filter(|e| matches!(e.kind, ElementKind::Text { .. })).map(|e| e.id).collect();
-    for id in texts {
-        say_text_statistics(s, i, id);
-    }
+    say_layout_text_statistics(s, i);
     let locator = locator_map.map(|(map, ..)| map);
     Ok(
         json!({"layout": i, "name": name, "profile": profile.id, "page": [w, h], "scale": scale, "grid": step, "locator": locator, "style": style.code(), "arrangement": arrangement_used, "legendColumns": legend_cols, "mapShift": [map_shift.0, map_shift.1], "veiled": veiled.is_some(), "legendBox": legend_rect.is_some() && !legend_bare, "elements": elements, "moved": moved, "coverage": coverage_written, "warnings": warnings}),
@@ -3646,6 +3641,20 @@ fn say_text_fit(s: &mut Session, li: usize, id: u32, lines: bool) {
     };
     for notice in notices {
         s.warn(notice);
+    }
+}
+
+/// [`say_text_statistics`] for every text of the layout `li`, a publication's or an import's, which
+/// come with their texts already in it.
+fn say_layout_text_statistics(s: &mut Session, li: usize) {
+    let texts: Vec<u32> = s
+        .project
+        .layouts
+        .get(li)
+        .map(|l| l.elements.iter().filter(|e| matches!(e.kind, ElementKind::Text { .. })).map(|e| e.id).collect())
+        .unwrap_or_default();
+    for id in texts {
+        say_text_statistics(s, li, id);
     }
 }
 
@@ -6715,6 +6724,7 @@ pub(crate) fn import(s: &mut Session, text: &str) -> CmdResult {
     s.project.layouts.push(l);
     let i = s.project.layouts.len() - 1;
     s.active_layout = Some(i);
+    say_layout_text_statistics(s, i);
     Ok(json!({"layout": i, "name": name}))
 }
 
