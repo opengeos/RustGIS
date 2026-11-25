@@ -4599,7 +4599,10 @@ impl Pages {
                 if let Some(code) = losses.unusable_code.take() {
                     report.messages.push(crate::loss::Note::loss(
                         crate::loss::LossCode::AssumedCrs,
-                        format!("coordinate system {code} can't be used; coordinates are read in {asked}, the system asked for"),
+                        format!(
+                            "coordinate system {code} can't be used{}; coordinates are read in {asked}, the system asked for",
+                            losses.others_said()
+                        ),
                     ));
                 }
                 // One it names that RustGIS can't use (a code, a WKT): read as asked too (as a

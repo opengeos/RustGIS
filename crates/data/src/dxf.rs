@@ -371,10 +371,6 @@ enum Shape {
         constant_z: bool,
     },
     Insert(Insert),
-    /// An entity that can't be drawn: one RustGIS doesn't draw (by kind) or can't read. Kept in
-    /// its place so it is counted only where it would have been drawn: not in a block the
-    /// drawing never places, and once for each placement of one it does.
-    Lost(Option<String>),
 }
 
 impl Shape {
@@ -1165,7 +1161,16 @@ struct Drawing {
     layers: HashMap<String, (String, i64, String)>,
     blocks: HashMap<String, (P3, Vec<Ent>)>,
     entities: Vec<Ent>,
+    /// The entities that can't be drawn, counted by where they would have been, so they are
+    /// counted only where drawn: the model's and paper space's (`lost`), and each block's,
+    /// once for each placement of it (`block_lost`, by lower-cased name).
+    lost: LostCounts,
+    block_lost: HashMap<String, LostCounts>,
 }
+
+/// Entities that can't be drawn, counted by layer (as written, lower-cased), paper space, and
+/// kind: one RustGIS doesn't draw (its name), or one it can't read (`None`).
+type LostCounts = BTreeMap<(String, String, bool, Option<String>), usize>;
 
 /// The magnitude of an ACI color index (negative means its layer is off). The one signed
 /// integer without a positive counterpart is malformed and must not overflow while reading.
@@ -1177,7 +1182,10 @@ fn color_magnitude(color: i64) -> Result<i64> {
 
 /// Reads the records of each section.
 fn drawing(records: &[Record]) -> Result<Drawing> {
-    let mut d = Drawing { layers: HashMap::new(), blocks: HashMap::new(), entities: Vec::new() };
+    let mut d =
+        Drawing { layers: HashMap::new(), blocks: HashMap::new(), entities: Vec::new(), lost: BTreeMap::new(), block_lost: HashMap::new() };
+    // What can't be drawn in the block being read.
+    let mut block_lost = LostCounts::new();
     let mut section = "";
     // The block being read: name, base point, entities.
     let mut block: Option<(String, P3, Vec<Ent>)> = None;
@@ -1210,13 +1218,18 @@ fn drawing(records: &[Record]) -> Result<Drawing> {
                     if r.kind == "BLOCK" {
                         let name = g.s(2).map(str::trim).unwrap_or("").to_string();
                         block = Some((name, g.pt(10).unwrap_or([0.0; 3]), Vec::new()));
+                        block_lost = LostCounts::new();
                         continue;
                     }
                     if r.kind == "ENDBLK" {
                         if let Some((name, base, ents)) = block.take()
                             && !name.is_empty()
                         {
-                            d.blocks.insert(name.to_ascii_lowercase(), (base, ents));
+                            let key = name.to_ascii_lowercase();
+                            if !block_lost.is_empty() {
+                                d.block_lost.insert(key.clone(), std::mem::take(&mut block_lost));
+                            }
+                            d.blocks.insert(key, (base, ents));
                         }
                         continue;
                     }
@@ -1238,28 +1251,22 @@ fn drawing(records: &[Record]) -> Result<Drawing> {
                 if matches!(r.kind, "SEQEND" | "VERTEX") || (r.kind == "ATTDEF" && g.i(70).unwrap_or(0) & 2 == 0) {
                     continue;
                 }
-                // What can't be drawn stays in its place, counted where it would be drawn.
-                let lost = |shape: Shape| Ent {
-                    kind: "LOST",
-                    layer: g.s(8).map(str::trim).unwrap_or("0").to_string(),
-                    layer_key: g.s(8).map(str::trim).unwrap_or("0").to_ascii_lowercase(),
-                    // Not color-validated: nothing of it is drawn.
-                    color: 256,
-                    linetype: None,
-                    text: None,
-                    paper: g.i(67) == Some(1),
-                    height: None,
-                    rotation: None,
-                    shape,
-                    loss: PathLoss::default(),
+                // What can't be drawn is counted where it would be drawn: in its block, or in the
+                // model or paper space.
+                let mut count_lost = |kind: Option<String>| {
+                    let layer = g.s(8).map(str::trim).unwrap_or("0");
+                    let key = (layer.to_string(), layer.to_ascii_lowercase(), g.i(67) == Some(1), kind);
+                    let counts = match &block {
+                        Some(_) if section == "BLOCKS" => Some(&mut block_lost),
+                        _ if section == "ENTITIES" => Some(&mut d.lost),
+                        _ => None,
+                    };
+                    if let Some(counts) = counts {
+                        *counts.entry(key).or_insert(0) += 1;
+                    }
                 };
                 let Some(kind) = kind_name(r.kind) else {
-                    let e = lost(Shape::Lost(Some(r.kind.to_string())));
-                    match &mut block {
-                        Some((_, _, ents)) if section == "BLOCKS" => ents.push(e),
-                        _ if section == "ENTITIES" => d.entities.push(e),
-                        _ => {}
-                    }
+                    count_lost(Some(r.kind.to_string()));
                     continue;
                 };
                 let mut loss = PathLoss::default();
@@ -1267,12 +1274,7 @@ fn drawing(records: &[Record]) -> Result<Drawing> {
                 // Entity builders use Option for malformed data; cancellation must escape as an error.
                 crate::progress::check()?;
                 let Some(shape) = shape else {
-                    let e = lost(Shape::Lost(None));
-                    match &mut block {
-                        Some((_, _, ents)) if section == "BLOCKS" => ents.push(e),
-                        _ if section == "ENTITIES" => d.entities.push(e),
-                        _ => {}
-                    }
+                    count_lost(None);
                     continue;
                 };
                 let text = match kind {
@@ -1390,6 +1392,7 @@ fn has_varying_z<'a>(mut points: impl Iterator<Item = &'a P3>, first: Option<P3>
 fn emit(
     d: &Drawing,
     ents: &[Ent],
+    lost: Option<&LostCounts>,
     xf: &Xf,
     from: Inherit,
     depth: usize,
@@ -1397,13 +1400,38 @@ fn emit(
     opts: &Options,
     out: &mut Out,
 ) -> Result<()> {
+    // What can't be drawn here, counted as a drawn entity would be placed: a step each, in paper
+    // space only when that is drawn, and on the layer asked for (layer 0 in a block takes the
+    // INSERT's).
+    for ((layer, _, paper, kind), &n) in lost.into_iter().flatten() {
+        crate::progress::check()?;
+        out.steps = out.steps.saturating_add(n);
+        if out.steps > MAX_STEPS {
+            out.overworked = true;
+            return Ok(());
+        }
+        if depth == 0 && *paper && !opts.paper_space {
+            out.paper += n;
+            continue;
+        }
+        let layer = match from.layer {
+            Some(l) if layer == "0" => l,
+            _ => layer.as_str(),
+        };
+        if opts.layer.is_some_and(|want| !layer.eq_ignore_ascii_case(want)) {
+            continue;
+        }
+        match kind {
+            Some(k) => *out.unread.entry(k.clone()).or_insert(0) += n,
+            None => out.bad += n,
+        }
+    }
     for e in ents {
         crate::progress::check()?;
         if out.vertex_capped {
             return Ok(());
         }
-        let lost = matches!(e.shape, Shape::Lost(_));
-        if out.count >= MAX_FEATURES && !lost {
+        if out.count >= MAX_FEATURES {
             out.capped = true;
             return Ok(());
         }
@@ -1473,7 +1501,7 @@ fn emit(
                             loss: PathLoss::default(),
                         })
                         .collect();
-                    emit(d, &drawn, xf, from, depth + 1, stack, opts, out)?;
+                    emit(d, &drawn, None, xf, from, depth + 1, stack, opts, out)?;
                     continue;
                 }
                 out.cut += 1;
@@ -1506,7 +1534,8 @@ fn emit(
                         block: Some(ins.block.as_str()),
                         paper: from.paper || e.paper,
                     };
-                    emit(d, inner, &xf.then(&local), inner_from, depth + 1, stack, opts, out)?;
+                    let lost = stack.last().and_then(|k| d.block_lost.get(k));
+                    emit(d, inner, lost, &xf.then(&local), inner_from, depth + 1, stack, opts, out)?;
                     if out.capped || out.overworked || out.vertex_capped {
                         stack.pop();
                         out.copies = outer;
@@ -1523,21 +1552,13 @@ fn emit(
         {
             continue;
         }
-        // An entity that can't be drawn, here where it would have been: counted, by kind.
-        if let Shape::Lost(kind) = &e.shape {
-            match kind {
-                Some(k) => *out.unread.entry(k.clone()).or_insert(0) += 1,
-                None => out.bad += 1,
-            }
-            continue;
-        }
         // Every coordinate placed is charged before it is built: a large polyline in a block
         // inserted many times can't fill the memory.
         let n = match &e.shape {
             Shape::Point(_) => 1,
             Shape::Line { points: ps, .. } | Shape::Polygon(ps) => ps.len(),
             Shape::Rings { rings: rs, .. } => rs.iter().map(Vec::len).sum(),
-            Shape::Insert(_) | Shape::Lost(_) => 0,
+            Shape::Insert(_) => 0,
         };
         if out.vertices.saturating_add(n) > MAX_TOTAL_VERTICES {
             out.vertex_capped = true;
@@ -1598,7 +1619,7 @@ fn emit(
                 let varying = has_varying_z(kept.flatten(), first, *constant_z && preserves_z);
                 (g, first, 2, varying)
             }
-            Shape::Insert(_) | Shape::Lost(_) => continue,
+            Shape::Insert(_) => continue,
         };
         let Some(geometry) = geometry else {
             out.cut += 1;
@@ -1673,7 +1694,7 @@ pub fn read(file_name: &str, bytes: &[u8], opts: &Options) -> Result<Vec<(Datase
         bad: 0,
     };
     let none = Inherit { layer: None, layer_key: None, color: None, linetype: None, block: None, paper: false };
-    emit(&d, &d.entities, &Xf::ID, none, 0, &mut Vec::new(), opts, &mut out)?;
+    emit(&d, &d.entities, Some(&d.lost), &Xf::ID, none, 0, &mut Vec::new(), opts, &mut out)?;
 
     let mut report = ReadReport::default();
     if let Some(why) = encoding_note {
@@ -1888,11 +1909,11 @@ pub fn layers(file_name: &str, bytes: &[u8]) -> Result<Vec<String>> {
         add(name, key);
     }
     // What can't be drawn names no layer to pick.
-    for e in d.entities.iter().filter(|e| !matches!(e.shape, Shape::Lost(_))) {
+    for e in &d.entities {
         add(&e.layer, &e.layer_key);
     }
     for (_, ents) in d.blocks.values() {
-        for e in ents.iter().filter(|e| e.layer != "0" && !matches!(e.shape, Shape::Lost(_))) {
+        for e in ents.iter().filter(|e| e.layer != "0") {
             add(&e.layer, &e.layer_key);
         }
     }

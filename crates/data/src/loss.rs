@@ -138,7 +138,7 @@ loss_codes! {
     AssumedEncoding => (
         "assumed.encoding",
         Assumed,
-        "Give the file's encoding in a form RustGIS reads: for a Shapefile, a .cpg beside it naming UTF-8 or its Windows code page; for a drawing, its $DWGCODEPAGE."
+        "Give the file's encoding in a form RustGIS reads: a .cpg beside a Shapefile or dBASE file naming UTF-8 or its Windows code page, or a DXF saved as UTF-8."
     ),
 }
 

@@ -799,3 +799,23 @@ fn a_wkt_is_taken_from_the_text_room_at_its_size_once_read() {
     assert!(spatial_reference(&reference, &mut Tally { text_room: 13, ..Tally::default() }).is_err());
     assert!(spatial_reference(&reference, &mut Tally { text_room: 14, ..Tally::default() }).is_ok());
 }
+
+/// Pages joined that name different codes RustGIS can't use say the first and how many others,
+/// so every page's assumption is said; the same code again adds nothing.
+#[test]
+fn joined_pages_say_every_unusable_code() {
+    let page = |code| Losses { unusable_code: Some(code), ..Losses::default() };
+    let mut all = page(999_999);
+    all.add(&page(999_999));
+    all.add(&page(888_888));
+    all.add(&page(777_777));
+    let said: Vec<_> = all.messages().iter().map(|m| (m.as_str().to_string(), m.loss)).collect();
+    assert_eq!(
+        said,
+        [(
+            "coordinate system 999999 can't be used (and 2 other pages name codes it can't use either); coordinates are read as longitude/latitude"
+                .to_string(),
+            Some(crate::loss::LossCode::AssumedCrs)
+        )]
+    );
+}

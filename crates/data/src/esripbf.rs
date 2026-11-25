@@ -142,6 +142,8 @@ pub struct Losses {
     /// The coordinate system code an answer with features with a geometry names and RustGIS
     /// can't use, without a WKT (read as longitude/latitude).
     pub unusable_code: Option<u32>,
+    /// Pages joined after the first that named another code RustGIS can't use.
+    pub other_unusable: usize,
 }
 
 impl Losses {
@@ -155,7 +157,23 @@ impl Losses {
         self.unprojected = self.unprojected.saturating_add(other.unprojected);
         self.with_zm = self.with_zm.saturating_add(other.with_zm);
         self.beyond = self.beyond.saturating_add(other.beyond);
-        self.unusable_code = self.unusable_code.or(other.unusable_code);
+        match (self.unusable_code, other.unusable_code) {
+            (Some(a), Some(b)) if a != b => self.other_unusable += 1 + other.other_unusable,
+            (None, b) => {
+                self.unusable_code = b;
+                self.other_unusable += other.other_unusable;
+            }
+            _ => self.other_unusable += other.other_unusable,
+        }
+    }
+
+    /// The pages that named another code RustGIS can't use, as the notice for the first adds them.
+    pub fn others_said(&self) -> String {
+        match self.other_unusable {
+            0 => String::new(),
+            1 => " (and another page names a code it can't use either)".to_string(),
+            n => format!(" (and {n} other pages name codes it can't use either)"),
+        }
     }
 
     /// What they say, one message per kind (as [`read`] says them).
@@ -171,7 +189,7 @@ impl Losses {
         if let Some(code) = self.unusable_code {
             out.push(crate::loss::Note::loss(
                 crate::loss::LossCode::AssumedCrs,
-                format!("coordinate system {code} can't be used; coordinates are read as longitude/latitude"),
+                format!("coordinate system {code} can't be used{}; coordinates are read as longitude/latitude", self.others_said()),
             ));
         }
         if self.unreadable > 0 {
@@ -448,6 +466,7 @@ pub fn read_page_within(bytes: &[u8], name: &str, limit: usize) -> Result<Page> 
         no_crs: any_geometry && code.is_none() && wkt.is_none(),
         unread_code: any_geometry && unread_code,
         unusable_code: unusable_code.filter(|_| any_geometry),
+        other_unusable: 0,
         unreadable: tally.unreadable,
         not_utf8: tally.not_utf8,
         flat_rings: tally.flat_rings,
