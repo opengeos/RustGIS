@@ -1577,7 +1577,10 @@ pub(crate) fn supervised_work(s: &Session, p: &Value) -> Result<super::workflows
             // where the computer can give them ([`training_strips`]).
             let width = cols.end.saturating_sub(cols.start).max(1);
             let row = u64::from(width).saturating_mul(reading.held().band_count().max(1) as u64).saturating_mul(4);
-            let fits = |rows: u32| super::in_blocks::affordable(row.saturating_mul(u64::from(rows)).saturating_mul(2));
+            // Within what the computer can give, and what a part read reads at full size.
+            let fits = |rows: u32| {
+                super::in_blocks::affordable(row.saturating_mul(u64::from(rows)).saturating_mul(2)) && reading.part_fits(width, rows)
+            };
             let (top, strip) = training_strips(under.start, reading.chunk().map(|c| c.1), fits);
             reading
                 .each_block((cols.start, cols.end), (top, under.end), (width, strip), |_, _, read| {
@@ -1868,17 +1871,27 @@ pub(crate) fn process_work(s: &Session, p: &Value) -> Result<super::workflows::W
                 let (k, w, h) = super::in_blocks::resample_size(reading.full(), factor);
                 let bands = r.held().band_count();
                 let held = super::in_blocks::holds(super::in_blocks::resample_samples(reading.full(), factor, bands));
-                let block = resample_block(k, reading.chunk());
-                if (held || super::in_blocks::streams(bands)) && super::in_blocks::affordable(resample_need(w, h, bands, held, block, k)) {
+                // Planned with blocks of the factor alone; the file's tiles, which the work reads
+                // as it runs (not here, on the window's thread), choose the blocks it reads.
+                let plain = resample_block(k, None, |_, _| true);
+                if (held || super::in_blocks::streams(bands)) && super::in_blocks::affordable(resample_need(w, h, bands, held, plain, k)) {
                     reading.refused_in_script(s)?;
                     let folder = match held {
                         true => None,
                         false => Some(super::in_blocks::results_folder(s)?),
                     };
-                    return Ok(Box::new(move || match super::in_blocks::affordable(resample_need(w, h, bands, held, block, k)) {
-                        true => resample_in_blocks(&reading, k, out, folder),
-                        // Short of it since then: the file read as before.
-                        false => resample_whole(&r, factor, out),
+                    return Ok(Box::new(move || {
+                        // Blocks of whole tiles where the part reader reads them at full size and
+                        // the computer can give them now, else of the factor alone; the memory
+                        // planned for is the blocks read.
+                        let fits = |cols: u32, rows: u32| reading.part_fits(cols, rows);
+                        let blocks = [resample_block(k, reading.chunk(), fits), resample_block(k, None, fits)];
+                        let block = blocks.into_iter().find(|b| super::in_blocks::affordable(resample_need(w, h, bands, held, *b, k)));
+                        match block {
+                            Some(block) => resample_in_blocks(&reading, k, out, folder, block),
+                            // Short of it since then: the file read as before.
+                            None => resample_whole(&r, factor, out),
+                        }
                     }));
                 }
             }
@@ -1897,24 +1910,27 @@ pub(crate) fn resample_factor(p: &Value) -> u32 {
 /// set aside. `held`: its bands and its file, and for several bands the copy of them interleaved
 /// that the file is made from (one band is written from itself). Written: a row of blocks of the
 /// result (blocks of `block` of the file, `k` times the result's), and its file's levels' rows as
-/// they are written, with the tables of its tiles and the overview kept.
+/// they are written, with the tables of its tiles and the overview kept. Either way, a block of the
+/// file as it is read: its samples, and its tiles as decoded, about as many again.
 #[cfg(not(target_arch = "wasm32"))]
 fn resample_need(w: u32, h: u32, bands: usize, held: bool, block: (u32, u32), k: u32) -> u64 {
+    let input = u64::from(block.0).saturating_mul(u64::from(block.1)).saturating_mul(bands as u64).saturating_mul(4 * 2);
     if held {
         let copies = if bands > 1 { 3 } else { 2 };
-        return u64::from(w).saturating_mul(u64::from(h)).saturating_mul(bands as u64).saturating_mul(4 * copies);
+        return u64::from(w).saturating_mul(u64::from(h)).saturating_mul(bands as u64).saturating_mul(4 * copies).saturating_add(input);
     }
     let rows = block.1 / k.max(1);
     let row = u64::from(w).saturating_mul(u64::from(rows)).saturating_mul(bands as u64).saturating_mul(4);
-    super::in_blocks::stream_peak(w, h, bands).saturating_add(row)
+    super::in_blocks::stream_peak(w, h, bands).saturating_add(row).saturating_add(input)
 }
 
 /// The columns and rows of the blocks a resample by `k` reads of a file whose tiles are `chunk`:
 /// whole multiples of `k` near [`super::in_blocks::BLOCK`]'s size, and of the tiles too where a
 /// common multiple stays within four blocks' columns or rows, so that no tile is decoded for two
-/// blocks.
+/// blocks, and `fits` says the part reader reads a block that size at full size
+/// ([`super::in_blocks::Reading::part_fits`]).
 #[cfg(not(target_arch = "wasm32"))]
-fn resample_block(k: u32, chunk: Option<(u32, u32)>) -> (u32, u32) {
+fn resample_block(k: u32, chunk: Option<(u32, u32)>, fits: impl Fn(u32, u32) -> bool) -> (u32, u32) {
     let k = k.max(1);
     let side = |block: u32, tile: Option<u32>| {
         let plain = (block / k).max(1) * k;
@@ -1932,7 +1948,9 @@ fn resample_block(k: u32, chunk: Option<(u32, u32)>) -> (u32, u32) {
         }
     };
     let (bw, bh) = super::in_blocks::BLOCK;
-    (side(bw, chunk.map(|c| c.0)), side(bh, chunk.map(|c| c.1)))
+    let (aligned, plain) = ((side(bw, chunk.map(|c| c.0)), side(bh, chunk.map(|c| c.1))), (side(bw, None), side(bh, None)));
+    // Whole tiles each way the part reader reads at full size, else one way, else neither.
+    [aligned, (aligned.0, plain.1), (plain.0, aligned.1)].into_iter().find(|(c, r)| fits(*c, *r)).unwrap_or(plain)
 }
 
 /// A resample by `factor` of `r` read whole (the finest level of a file read in place that
@@ -2003,10 +2021,10 @@ fn resample_in_blocks(
     k: u32,
     out: String,
     folder: Option<std::path::PathBuf>,
+    size: (u32, u32),
 ) -> Result<super::workflows::Made, String> {
     let (fw, fh) = reading.full();
     let (w, h) = ((fw / k).max(1), (fh / k).max(1));
-    let size = resample_block(k, reading.chunk());
     let need = resample_need(w, h, reading.held().band_count(), folder.is_none(), size, k);
     let _held = rustgis_data::memory::Holding::of(need);
     let note = |rounded: u64| super::gp::tiled_read_notes(&[super::gp::ReadNote::rounded(reading.layer(), rounded)], "its");
@@ -2061,8 +2079,11 @@ fn resample_in_blocks(
     let (oh, row_len) = (size.1 / k, w as usize * (size.1 / k) as usize);
     let (dest, staged, (overview, rounded)) = super::in_blocks::write_new(&folder, &out, |sink| {
         let (mut sink, mut stream, mut row) = (Some(sink), None, Vec::new());
+        let mut marks: Vec<bool> = Vec::new();
         let rounded = reading
             .each_block((0, w * k), (0, h * k), size, |cols, rows, read| {
+                marks.resize(read.raster.band_count(), false);
+                marks.iter_mut().enumerate().for_each(|(b, m)| *m |= read.raster.band_rounded(b));
                 if stream.is_none() {
                     // Placed, named and coloured as a resample held is, its bands floats.
                     let t = resampled_as(read, k, &out)?;
@@ -2095,7 +2116,13 @@ fn resample_in_blocks(
             // A Cancel stays one, as on the path that holds its result.
             .map_err(rustgis_data::DataError::of_conversion)?;
         let stream = stream.ok_or_else(|| rustgis_data::DataError::Format(format!("{}: it has no pixels", reading.layer())))?;
-        let (_, overview) = stream.finish()?;
+        let (_, mut overview) = stream.finish()?;
+        // The blocks average values rounded when the file was read, some or all of them, as a
+        // held resample says of its bands.
+        if let Some(o) = overview.as_mut().filter(|_| marks.contains(&true)) {
+            o.rounded = Vec::new();
+            o.rounded_some = marks;
+        }
         Ok((overview, rounded))
     })?;
     let made = format!("resampled by {k} from {} at its full {fw} × {fh}", reading.layer());
@@ -3418,7 +3445,7 @@ fn a_resample_reads_blocks_of_whole_tiles() {
         (3, None),
         (61, Some((256, 256))),
     ] {
-        let (cols, rows) = resample_block(k, chunk);
+        let (cols, rows) = resample_block(k, chunk, |_, _| true);
         assert!(cols % k == 0 && rows % k == 0, "{k} {chunk:?}: {cols} × {rows}");
         let lcm = |t: u32| (1..=t).map(|i| i * k).find(|m| m % t == 0).unwrap_or(0);
         match chunk {
@@ -3429,6 +3456,11 @@ fn a_resample_reads_blocks_of_whole_tiles() {
             None => assert_eq!((cols, rows), ((bw / k) * k, (bh / k) * k)),
         }
     }
+    // Blocks the part reader can't read at full size give way to blocks of the factor alone, one
+    // way or both.
+    let plain = ((bw / 3) * 3, (bh / 3) * 3);
+    assert_eq!(resample_block(3, Some((256, 256)), |c, r| c <= plain.0 && r <= plain.1), plain);
+    assert_eq!(resample_block(3, Some((256, 256)), |c, _| c <= plain.0), (plain.0, 768));
 }
 
 /// A training read's strips start on a row of the file's own tiles and hold one, so a file of

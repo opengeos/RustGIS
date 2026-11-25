@@ -664,9 +664,11 @@ fn raster_functions_and_resamples_run_a_block_at_a_time() {
             let (before, mark) = (reads(), s.notice_mark());
             // The Assistant asks before a run that writes a file, and only then.
             let scope = crate::policy::Scope::assistant(8, std::sync::Arc::new(Live));
-            let asks =
-                matches!(s.review(&scope, &crate::policy::Call::command(command, p.clone())), crate::policy::Outcome::NeedsApproval(_));
-            assert_eq!(asks, written, "{why}: the Assistant asks");
+            match s.review(&scope, &crate::policy::Call::command(command, p.clone())) {
+                crate::policy::Outcome::NeedsApproval(_) => assert!(written, "{why}: the Assistant asks only before a file is written"),
+                crate::policy::Outcome::Allowed => assert!(!written, "{why}: the Assistant asks before a file is written"),
+                crate::policy::Outcome::Refused(e) => panic!("{why}: refused: {e}"),
+            }
             let got = s.run(command, p).unwrap();
             assert_eq!(reads(), before, "{why}: the file isn't read whole");
             let rl = raster(&s, "out");

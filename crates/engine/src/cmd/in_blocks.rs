@@ -176,7 +176,10 @@ fn written(full: (u32, u32)) -> bool {
 
 /// Whether command `id` with `params` writes its result to a file in the results folder: a
 /// command that works in blocks ([`in_blocks`]) over a layer too large to read whole, whose
-/// result is too large to hold. The permission check adds that it writes files.
+/// result is too large to hold, or a resample of such a layer whose result is ([`holds`]) and
+/// can be written ([`streams`]). The permission check adds that it writes files. It doesn't ask
+/// whether the memory is there now: a run that finds it isn't reads the file as before, having
+/// asked for more than it did.
 pub(crate) fn writes_file(context: &impl super::InputSource, id: &str, params: &Value) -> bool {
     let resample = id == "raster.process" && params.get("operation").and_then(Value::as_str) == Some("resample");
     if !in_blocks(id, params) && !resample {
@@ -296,6 +299,16 @@ impl Reading {
     /// The file's full columns and rows.
     pub(crate) fn full(&self) -> (u32, u32) {
         self.full
+    }
+
+    /// Whether a part of `cols` × `rows` of the file is read at its full size: its samples, every
+    /// band's, within what a part read takes ([`rustgis_data::raster::max_samples`]), a 64-bit
+    /// sample counted twice, as it is decoded at its size before it is held as a float.
+    pub(crate) fn part_fits(&self, cols: u32, rows: u32) -> bool {
+        let held = self.input.held();
+        let wide: u64 = if matches!(held.data_type.as_str(), "Float64" | "Int64" | "UInt64") { 2 } else { 1 };
+        let samples = u64::from(cols).saturating_mul(u64::from(rows)).saturating_mul(held.band_count().max(1) as u64).saturating_mul(wide);
+        samples <= rustgis_data::raster::max_samples() as u64
     }
 
     /// The columns and rows of its file's tiles (a strip's: the image's width), which a block
