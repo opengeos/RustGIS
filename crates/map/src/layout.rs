@@ -2466,6 +2466,8 @@ pub enum StatMissing {
     Field,
     /// The field holds no numbers to add up.
     NotNumeric,
+    /// A raster layer, which has no features to count.
+    Raster,
     /// None of the features the layer's definition query keeps has a number in the field, or the
     /// statistic is past a number's range.
     NoValue,
@@ -2474,6 +2476,9 @@ pub enum StatMissing {
 /// `stat` of `layer`'s `field` (none for a count) over the features its definition query keeps
 /// ([`crate::Layer::visible_rows`]), its numbers read as a chart's are (finite, nulls skipped).
 pub fn layer_statistic(layer: &crate::Layer, stat: StatKind, field: Option<&str>) -> Result<f64, StatMissing> {
+    if layer.raster.is_some() {
+        return Err(StatMissing::Raster);
+    }
     let ds = &layer.dataset;
     let fi = match (stat, field) {
         (StatKind::Count, _) => None,

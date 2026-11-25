@@ -1200,6 +1200,7 @@ pub fn statistic_notices(layout: &Layout, maps: &[Map], text: &str) -> Vec<Strin
                 }
                 continue;
             }
+            Some(Some(Err(StatMissing::Raster))) => format!("'{layer}' is a raster layer, which has no features"),
             Some(Some(Err(StatMissing::Field))) => format!("'{layer}' has no field named '{field}'"),
             Some(Some(Err(StatMissing::NotNumeric))) => format!("'{field}' of '{layer}' holds no numbers"),
             Some(Some(Err(StatMissing::NoValue))) => {
@@ -1219,7 +1220,13 @@ pub fn statistic_notices(layout: &Layout, maps: &[Map], text: &str) -> Vec<Strin
 fn statistics(t: &str, comma: bool, map: Option<&Map>) -> String {
     let Some(m) = map else { return t.to_string() };
     let mut out = t.to_string();
+    let mut done: Vec<&str> = Vec::new();
     for s in rustgis_map::layout::stat_tokens(t) {
+        // `replace` below puts in every occurrence, so a repeated token is worked out once.
+        if done.contains(&s.token) {
+            continue;
+        }
+        done.push(s.token);
         let Some(v) = m.layer_by_name(s.layer).and_then(|l| rustgis_map::layout::layer_statistic(l, s.stat, s.field).ok()) else {
             continue;
         };
@@ -10686,6 +10693,28 @@ Elaboração: RustGIS",
                 "{sum:Streamed:mw} covers only the features of 'Streamed' that are loaded: it is read in place".to_string(),
                 "{sum:Streamed:no} shows as written: 'Streamed' has no field named 'no'".to_string(),
             ]
+        );
+    }
+
+    /// A raster layer has no features, so a figure over it has none to give: drawn as written and
+    /// said (#2853), never a 0 that reads like a count.
+    #[test]
+    fn a_raster_layers_statistic_is_drawn_as_written() {
+        use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster};
+        let gt = GeoTransform { origin_x: 0.0, origin_y: 1.0, pixel_width: 1.0, pixel_height: -1.0 };
+        let r = Raster::new("e", 1, 1, vec![vec![1.0]], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
+        let mut map = Map::new("m");
+        map.add_raster("Elevation", rustgis_map::RasterLayer::from_path(r, "e.tif"));
+        let cam = frame_camera(&map, Coord::new(0.0, 0.0), 6_300_000.0, 0.0, 0.0);
+        let info = PageInfo { page: 1, pages: 1, page_name: String::new() };
+        let mut layout = Layout::new("L", 100.0, 100.0);
+        assert_eq!(expand("{count:Elevation}", &layout, &info, Some((&map, cam))), "{count:Elevation}");
+        let kind =
+            serde_json::from_value(serde_json::json!({"MapFrame": {"map": "m", "center": {"x": 0, "y": 0}, "scale": 6300000}})).unwrap();
+        layout.add("Frame", (0.0, 0.0, 50.0, 50.0), kind);
+        assert_eq!(
+            statistic_notices(&layout, &[map], "{count:Elevation}"),
+            vec!["{count:Elevation} shows as written: 'Elevation' is a raster layer, which has no features".to_string()]
         );
     }
 
