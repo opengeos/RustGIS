@@ -13,8 +13,9 @@
 //! A linked layer's codes are the ones linking it says; Load All may repeat them but says no
 //! new one.
 //!
-//! Files with others beside them (a Shapefile's parts) travel only by path and in a zip;
-//! folders (FileGDB) only by path; text only when it is UTF-8. GDAL and DuckDB are not routes
+//! Every file is read by path and linked in place. Files with others beside them (a
+//! Shapefile's parts) and folders (FileGDB) aren't read as bytes, text or a download, and folders
+//! aren't zipped; text is read only when it is UTF-8. GDAL and DuckDB are not routes
 //! here yet.
 //!
 //! Routes that read a format differently today are listed in [`DIFFERENT`] with how they differ;
@@ -93,19 +94,20 @@ fn read(dir: &std::path::Path, route: Route, file: &str, content: &[u8], beside:
         return None;
     }
     let _ = std::fs::remove_dir_all(dir);
-    std::fs::create_dir_all(dir).ok()?;
+    // Preparing the files can't fail quietly: that would skip the comparison.
+    std::fs::create_dir_all(dir).unwrap_or_else(|e| unprepared(file, route, &e));
     let path = dir.join(file);
     if file.ends_with(".gdb") {
         // The corpus stores a FileGDB folder zipped; RustGIS opens the folder.
-        std::fs::create_dir_all(&path).ok()?;
-        for (name, bytes) in rustgis_engine::data::zip::read(content).ok()? {
-            std::fs::write(path.join(name), bytes).ok()?;
+        std::fs::create_dir_all(&path).unwrap_or_else(|e| unprepared(file, route, &e));
+        for (name, bytes) in rustgis_engine::data::zip::read(content).unwrap_or_else(|e| unprepared(file, route, &e)) {
+            std::fs::write(path.join(name), bytes).unwrap_or_else(|e| unprepared(file, route, &e));
         }
     } else {
-        std::fs::write(&path, content).ok()?;
+        std::fs::write(&path, content).unwrap_or_else(|e| unprepared(file, route, &e));
     }
     for (name, bytes) in beside {
-        std::fs::write(dir.join(name), bytes).ok()?;
+        std::fs::write(dir.join(name), bytes).unwrap_or_else(|e| unprepared(file, route, &e));
     }
     let mut s = Session::new(Project::default());
     let mark = s.notice_mark();
@@ -115,7 +117,10 @@ fn read(dir: &std::path::Path, route: Route, file: &str, content: &[u8], beside:
         Route::Bytes => {
             s.run("layer.addDataBytes", &json!({"fileName": file, "data": base64::engine::general_purpose::STANDARD.encode(content)}))
         }
-        Route::Text => s.run("layer.addDataText", &json!({"fileName": file, "text": std::str::from_utf8(content).ok()?})),
+        Route::Text => s.run(
+            "layer.addDataText",
+            &json!({"fileName": file, "text": std::str::from_utf8(content).unwrap_or_else(|e| unprepared(file, route, &e))}),
+        ),
         Route::Download => {
             let id = s.download_started();
             s.download_landed(id, content.to_vec());
@@ -125,7 +130,8 @@ fn read(dir: &std::path::Path, route: Route, file: &str, content: &[u8], beside:
             let mut entries = vec![(file.to_string(), content.to_vec())];
             entries.extend(beside.iter().map(|(n, b)| (n.to_string(), b.clone())));
             let zip = dir.join("routes.zip");
-            std::fs::write(&zip, rustgis_engine::data::zip::write(&entries).ok()?).ok()?;
+            let bytes = rustgis_engine::data::zip::write(&entries).unwrap_or_else(|e| unprepared(file, route, &e));
+            std::fs::write(&zip, bytes).unwrap_or_else(|e| unprepared(file, route, &e));
             s.run("layer.addData", &json!({"path": zip}))
         }
     };
@@ -159,9 +165,20 @@ fn read(dir: &std::path::Path, route: Route, file: &str, content: &[u8], beside:
     Some(Ok(Read { layers, codes, said }))
 }
 
+/// Fails the test on a file that couldn't be prepared for `route`.
+fn unprepared(file: &str, route: Route, e: &dyn std::fmt::Display) -> ! {
+    panic!("preparing {file} for {route:?}: {e}")
+}
+
+/// Whether a refusal is a crash `Session::run` caught, which is a bug on any route.
+fn crashed(read: &Result<Read, String>) -> bool {
+    read.as_ref().err().is_some_and(|e| e.contains("failed unexpectedly") || e.contains("stopped unexpectedly"))
+}
+
 /// What differs between the path's read and another route's, or `None` when they agree.
 fn difference(path: &Result<Read, String>, other: &Result<Read, String>) -> Option<String> {
     match (path, other) {
+        _ if crashed(path) || crashed(other) => Some(format!("crashed: by path {path:?}; here {other:?}")),
         (Err(_), Err(_)) => None,
         (Ok(_), Err(e)) => Some(format!("refused what the path reads: {e}")),
         (Err(e), Ok(_)) => Some(format!("read what the path refuses ({e})")),
@@ -184,12 +201,23 @@ fn difference(path: &Result<Read, String>, other: &Result<Read, String>) -> Opti
     }
 }
 
-/// Whether `other` differs from the path's read only as `how` says.
-fn differs_as(how: Differs, path: &Result<Read, String>, other: &Result<Read, String>) -> bool {
+/// Whether `other` differs from the path's read of `content` (named `file`) only as `how` says.
+fn differs_as(how: Differs, file: &str, content: &[u8], path: &Result<Read, String>, other: &Result<Read, String>) -> bool {
     match (how, path, other) {
-        (Differs::Refuses, Ok(_), Err(_)) => true,
+        // A crash `Session::run` caught is a bug, never the refusal listed.
+        (Differs::Refuses, Ok(_), Err(_)) => !crashed(other),
         (Differs::FirstLayer, Ok(a), Ok(b)) => {
-            b.said && b.codes.is_subset(&a.codes) && b.layers.len() == 1 && a.layers.len() > 1 && a.layers.contains(&b.layers[0])
+            // The first in the file's own order: the map lists the path's layers in the order
+            // they were added, not read.
+            let first =
+                rustgis_engine::data::io::read_layers(file, content).ok().and_then(|l| l.into_iter().next()).map(|l| l.dataset.name);
+            let is_first = |layer: &String| first.as_ref().is_some_and(|name| layer.starts_with(&format!("{name} ")));
+            b.said
+                && b.codes.is_subset(&a.codes)
+                && a.layers.len() > 1
+                && b.layers.len() == 1
+                && a.layers.contains(&b.layers[0])
+                && is_first(&b.layers[0])
         }
         _ => false,
     }
@@ -210,7 +238,7 @@ fn route_reads_as_the_path_does(route: Route) {
             compared += 1;
             let Some(what) = difference(&by_path, &other) else { continue };
             let listed = DIFFERENT.iter().find(|&&(file, r, _)| file == c.file && r == route);
-            if listed.is_some_and(|&(_, _, how)| differs_as(how, &by_path, &other)) {
+            if listed.is_some_and(|&(_, _, how)| differs_as(how, c.file, content, &by_path, &other)) {
                 differing.insert(c.file);
             } else {
                 failures.push(format!("{} [{}, {kind}]: {what}", c.name, c.file));
