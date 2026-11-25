@@ -522,9 +522,11 @@ fn indices_over_a_file_too_large_to_read_whole_run_a_block_at_a_time() {
     // The Assistant asks before a run that writes a file.
     let scope = Scope::assistant(7, std::sync::Arc::new(Live));
     assert!(matches!(s.review(&scope, &Call::command("raster.index", ndvi.clone())), Outcome::NeedsApproval(_)));
-    // A script step nobody can stop is refused, with what to do.
+    // A script step on the app's window thread is refused, with what to do.
     let script = format!("raster.index {ndvi}");
+    s.on_window_thread = true;
     let e = s.run("script.run", &json!({"script": script})).unwrap_err();
+    s.on_window_thread = false;
     assert!(e.contains("a block at a time") && e.contains("run it on its own"), "{e}");
     let run = |s: &mut Session, p: &serde_json::Value, control: &std::sync::Arc<rustgis_analysis::control::Control>| {
         let run = raster_start(s, "raster.index", p).unwrap();
@@ -586,4 +588,8 @@ fn indices_over_a_file_too_large_to_read_whole_run_a_block_at_a_time() {
     assert!(raster_land(&mut s, id, made.unwrap()).unwrap());
     s.run("raster.index", &json!({"ran": id})).unwrap();
     assert!(folder.join("index 2.tif").is_file());
+    // A script step off any window (the command line's, Python's) runs it.
+    let scripted = json!({"layer": "checks", "index": "ndvi", "red": 1, "nir": 2, "name": "scripted"});
+    s.run("script.run", &json!({"script": format!("raster.index {scripted}")})).unwrap();
+    assert!(folder.join("scripted.tif").is_file());
 }

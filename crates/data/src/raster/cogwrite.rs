@@ -1263,20 +1263,28 @@ impl<'a, W: Write + Seek> TileStream<'a, W> {
         // Taken while its rows are written, which give the next level its own.
         let mut pending = self.pending.get_mut(i).map(std::mem::take).unwrap_or_default();
         let mut rest = rows;
-        if pending.is_empty() {
-            // Whole rows of tiles are written from the rows given, not copied first.
-            while rest.len() >= tile_rows {
-                let (row, after) = rest.split_at(tile_rows);
-                self.write_row(i, row)?;
-                rest = after;
+        let room = |n: usize, pending: &mut Vec<f32>| {
+            pending.try_reserve(n).map_err(|_| err("too little memory for the rows of a level waiting to be written"))
+        };
+        // A row of tiles begun: finished from the rows given, and written.
+        if !pending.is_empty() {
+            let (head, after) = rest.split_at(tile_rows.saturating_sub(pending.len()).min(rest.len()));
+            room(head.len(), &mut pending)?;
+            pending.extend_from_slice(head);
+            rest = after;
+            if pending.len() == tile_rows {
+                self.write_row(i, &pending)?;
+                pending.clear();
             }
         }
-        pending.try_reserve(rest.len()).map_err(|_| err("too little memory for the rows of a level waiting to be written"))?;
-        pending.extend_from_slice(rest);
-        while pending.len() >= tile_rows {
-            self.write_row(i, pending.get(..tile_rows).unwrap_or_default())?;
-            pending.drain(..tile_rows);
+        // Whole rows of tiles are written from the rows given, not copied first.
+        while pending.is_empty() && rest.len() >= tile_rows {
+            let (row, after) = rest.split_at(tile_rows);
+            self.write_row(i, row)?;
+            rest = after;
         }
+        room(rest.len(), &mut pending)?;
+        pending.extend_from_slice(rest);
         if let Some(p) = self.pending.get_mut(i) {
             *p = pending;
         }
@@ -1377,7 +1385,7 @@ fn stream_plan() -> Plan {
 fn average_rows(rows: &[f32], w: usize, nodata: f32) -> Vec<f32> {
     let h = rows.len() / w.max(1);
     let (hw, hh) = (w.div_ceil(2), h.div_ceil(2));
-    let valid = |v: f32| !v.is_nan() && v != nodata;
+    let valid = |v: f32| v.is_finite() && v != nodata;
     let mut out = Vec::with_capacity(hw * hh);
     for y in 0..hh {
         for x in 0..hw {
@@ -1412,6 +1420,19 @@ mod tests {
     fn utm(w: u32, h: u32, bands: Vec<Vec<f32>>, color: ColorHint, data_type: &str, nodata: Option<f64>) -> Raster {
         let gt = GeoTransform { origin_x: 500_000.0, origin_y: 4_000_000.0, pixel_width: 30.0, pixel_height: -30.0 };
         Raster::new("t", w, h, bands, gt, Crs::from_epsg(32617).unwrap(), nodata, color, data_type).unwrap()
+    }
+
+    /// An overview's pixel is the mean of the pixels with a value it covers: none, NaN or infinite
+    /// left out, an odd last row or column covering itself alone, and no-data where it covers
+    /// none with one.
+    #[test]
+    fn overview_rows_average_the_pixels_with_a_value() {
+        let nd = -9999.0;
+        assert_eq!(average_rows(&[1.0, f32::NAN, 5.0], 3, nd), [1.0, 5.0]);
+        assert_eq!(average_rows(&[f32::INFINITY, 2.0, 4.0, 6.0], 2, nd), [4.0]);
+        assert_eq!(average_rows(&[nd, f32::NAN, 3.0, 8.0, nd, nd], 3, nd), [8.0, 3.0]);
+        assert_eq!(average_rows(&[nd, nd, 1.0, 3.0], 2, nd), [2.0]);
+        assert_eq!(average_rows(&[nd, f32::NEG_INFINITY], 2, nd), [nd]);
     }
 
     /// A raster streamed in pieces of uneven rows (#2865) reads back pixel for pixel, its no-data

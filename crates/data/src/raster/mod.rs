@@ -1436,6 +1436,9 @@ pub struct Part {
     top: f64,
     right: f64,
     bottom: f64,
+    /// For a part given in whole pixels of the full image ([`Part::pixels`]): its columns and
+    /// rows (half-open), and the full image's size they are of.
+    pixels: Option<((u32, u32), (u32, u32), (u32, u32))>,
 }
 
 impl Part {
@@ -1448,7 +1451,22 @@ impl Part {
             top,
             right,
             bottom,
+            pixels: None,
         })
+    }
+
+    /// The part of columns `cols` and rows `rows` (half-open) of a full image `full` in size: at
+    /// the full size, exactly those pixels, which fractions can't always say (`53248 / 83517` of
+    /// the width multiplies back to `53247.99999999999`), so parts next to each other share none;
+    /// at a coarser level, the pixels covering them, as [`Part::new`]'s. `None` when they leave
+    /// nothing of the image.
+    pub fn pixels(cols: (u32, u32), rows: (u32, u32), full: (u32, u32)) -> Option<Part> {
+        let cols = (cols.0.min(full.0), cols.1.min(full.0));
+        let rows = (rows.0.min(full.1), rows.1.min(full.1));
+        let f = |v: u32, n: u32| f64::from(v) / f64::from(n.max(1));
+        let mut part = Part::new(f(cols.0, full.0), f(rows.0, full.1), f(cols.1, full.0), f(rows.1, full.1))?;
+        part.pixels = Some((cols, rows, full));
+        Some(part)
     }
 
     /// The columns and rows of a grid `w` × `h` the part covers, out to whole pixels: one at
@@ -1456,13 +1474,16 @@ impl Part {
     /// its size, or for every k-th pixel of it its size over k, which the grid's last pixel
     /// passes when k doesn't divide it.
     fn span(self, (w, h): (u32, u32), extent: (f64, f64)) -> geotiff::Span {
-        // An edge a rounding error from a pixel's edge is on it: a part made from whole pixels
-        // (`53248 / 83517` of the width, say, which multiplies back to `53247.99999999999`) is
-        // those pixels, not one more each way.
-        let snap = |v: f64| if (v - v.round()).abs() < 1e-6 { v.round() } else { v };
+        // Whole pixels of the full image, read at the full size: those pixels.
+        if let Some((cols, rows, full)) = self.pixels
+            && full == (w, h)
+            && extent == (f64::from(w), f64::from(h))
+        {
+            return geotiff::Span { cols, rows };
+        }
         let edges = |a: f64, b: f64, n: u32, units: f64| {
-            let start = (snap(a * units).floor() as u32).min(n.saturating_sub(1));
-            (start, (snap(b * units).ceil() as u32).min(n).max(start.saturating_add(1).min(n)))
+            let start = ((a * units).floor() as u32).min(n.saturating_sub(1));
+            (start, ((b * units).ceil() as u32).min(n).max(start.saturating_add(1).min(n)))
         };
         geotiff::Span { cols: edges(self.left, self.right, w, extent.0), rows: edges(self.top, self.bottom, h, extent.1) }
     }
@@ -2166,20 +2187,24 @@ fn extent_of(transform: &GeoTransform, transformer: &Transformer, width: u32, he
 pub(crate) mod tests {
     use super::*;
 
-    /// A part made from whole pixels of a grid is those pixels, whatever the fractions round to:
-    /// blocks of a file next to each other share no pixel (#2865), and an edge between pixels
-    /// still takes both.
+    /// A part given in whole pixels of the full image is those pixels at the full size, whatever
+    /// its fractions round to: blocks of a file next to each other share no pixel (#2865). A part
+    /// given in fractions takes every pixel it touches, however little of one, and a part in
+    /// pixels read at a coarser level the pixels covering them.
     #[test]
     fn a_part_of_whole_pixels_is_those_pixels() {
         let (w, h) = (83_517u32, 78_739u32);
+        let full = (f64::from(w), f64::from(h));
         for (c0, c1, r0, r1) in [(53_248u32, 57_344u32, 512u32, 1024u32), (0, 4096, 78_336, 78_739), (81_920, 83_517, 0, 512)] {
-            let f = |v: u32, n: u32| f64::from(v) / f64::from(n);
-            let part = Part::new(f(c0, w), f(r0, h), f(c1, w), f(r1, h)).unwrap();
-            let span = part.span((w, h), (f64::from(w), f64::from(h)));
+            let span = Part::pixels((c0, c1), (r0, r1), (w, h)).unwrap().span((w, h), full);
             assert_eq!((span.cols, span.rows), ((c0, c1), (r0, r1)));
         }
-        let between = Part::new(0.25, 0.25, 0.5005, 0.5).unwrap().span((1000, 1000), (1000.0, 1000.0));
-        assert_eq!((between.cols, between.rows), ((250, 501), (250, 500)));
+        let half =
+            Part::pixels((53_248, 57_344), (512, 1024), (w, h)).unwrap().span((w.div_ceil(2), h.div_ceil(2)), (full.0 / 2.0, full.1 / 2.0));
+        assert!(half.cols.0 <= 26_624 && half.cols.1 >= 28_672 && half.rows == (256, 512), "the pixels covering it: {half:?}");
+        let tiny = 2f64.powi(-32);
+        let between = Part::new(0.5 - tiny, 0.25, 0.5 + tiny, 0.5).unwrap().span((1024, 1024), (1024.0, 1024.0));
+        assert_eq!((between.cols, between.rows), ((511, 513), (256, 512)), "both pixels it touches");
     }
 
     #[test]

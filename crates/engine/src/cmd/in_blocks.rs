@@ -101,7 +101,7 @@ pub(crate) fn writes_file(context: &impl super::InputSource, id: &str, params: &
 /// when this computer gives no folder to write it to.
 pub(crate) fn plan(s: &Session, input: &Input, out: &str) -> Result<Option<Blocks>, String> {
     let (Some(full), Some((layer, path))) = (too_large(input), input.file()) else { return Ok(None) };
-    if s.steps_running > 0 && !s.stoppable {
+    if s.steps_running > 0 && s.on_window_thread {
         return Err(format!(
             "{layer}: its full {} × {} pixels are made a block at a time, which a script step can't do without holding the window: run it on its own",
             full.0, full.1
@@ -112,6 +112,16 @@ pub(crate) fn plan(s: &Session, input: &Input, out: &str) -> Result<Option<Block
         false => None,
     };
     Ok(Some(Blocks { input: input.clone(), layer: layer.to_string(), path: path.to_string(), out: out.to_string(), folder, full }))
+}
+
+/// The file name, before its extension, of a result called `name`: its safe form
+/// ([`super::items::safe`]), cut at a character's end to 200 bytes so that with a number, the
+/// extension and the name it is written under first it stays within the 255 bytes a file name
+/// can have.
+fn stem(name: &str) -> String {
+    let safe = super::items::safe(name);
+    let end = safe.char_indices().map(|(i, c)| i + c.len_utf8()).take_while(|end| *end <= 200).last().unwrap_or(0);
+    safe.get(..end).unwrap_or_default().to_string()
 }
 
 /// Makes the results folder `folder` (and the folders it is in): whether this call made it, rather
@@ -198,7 +208,7 @@ impl Blocks {
         let mut made_folder = make_folder(&folder)?;
         let (mut taken, mut i, mut remade) = (None, 1u32, 0);
         while i < 10_000 {
-            let stem = super::items::safe(&out);
+            let stem = stem(&out);
             let dest = folder.join(if i == 1 { format!("{stem}.tif") } else { format!("{stem} {i}.tif") });
             // The file's name is reserved before it is written: two runs never take the same one.
             let wrote = rustgis_data::io::stage_streamed_new(&dest, made_folder.then_some(folder.as_path()), |w| {
@@ -294,10 +304,7 @@ impl Source<'_> {
         cols: (u32, u32),
         rows: (u32, u32),
     ) -> Result<(rustgis_data::raster::PartRead, std::sync::Arc<rustgis_data::memory::Holding>), String> {
-        let (fw, fh) = self.full;
-        let f = |v: u32, n: u32| f64::from(v) / f64::from(n.max(1));
-        let part = Part::new(f(cols.0, fw), f(rows.0, fh), f(cols.1, fw), f(rows.1, fh))
-            .ok_or_else(|| format!("{}: a block of no pixels", self.layer))?;
+        let part = Part::pixels(cols, rows, self.full).ok_or_else(|| format!("{}: a block of no pixels", self.layer))?;
         let (read, count) = super::gp::read_tiled_part(self.layer, self.path, part, 1, self.input.held())?.ok_or_else(|| {
             format!("{}: its file can't be read in blocks: it isn't the file the layer was read from any more (Reload Data)", self.layer)
         })?;
