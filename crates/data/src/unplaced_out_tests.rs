@@ -247,6 +247,8 @@ fn an_export_takes_its_box_from_its_one_conversion_on_any_number_of_threads() {
         ds.push(Some(Geometry::Line(vec![part])), vec![Value::Text(i.to_string())]);
     }
     let to = ds.lonlat_conversion().unwrap();
+    // Several threads wherever the computer has them, so the threaded path is what is checked.
+    assert!(crate::threads::cores() == 1 || crate::threads::max() > 1, "threads: {}", crate::threads::max());
     let mut threaded = ds.features.to_vec();
     let (unplaced, placed) = crate::io::project_each_leaving_out(&mut threaded, &to, true).unwrap();
     assert_eq!(unplaced, 30, "one feature in a thousand has a place it can't give");

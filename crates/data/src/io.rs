@@ -826,8 +826,11 @@ fn project_pieces_leaving_out(
     let failure: Mutex<Option<DataError>> = Mutex::new(None);
     let failed = AtomicBool::new(false);
     let probe = crate::progress::current();
+    // A poisoned lock (a thread panicked holding it) fails the run rather than skip what it holds.
+    let poisoned = || DataError::Format("the features couldn't be converted".into());
     let work = || {
         let _probe = crate::progress::install(probe.clone());
+        // A poisoned `failure` loses `e`, but is itself an error once the threads finish.
         let stop = |e: DataError| {
             failed.store(true, Ordering::Relaxed);
             if let Ok(mut f) = failure.lock() {
@@ -835,8 +838,15 @@ fn project_pieces_leaving_out(
             }
         };
         'pieces: while !failed.load(Ordering::Relaxed) {
-            // The lock is held only to take a piece; a poisoned one means a thread panicked.
-            let Some((k, piece)) = next.lock().ok().and_then(|mut n| n.next()) else { break };
+            // The lock is held only to take a piece.
+            let taken = match next.lock() {
+                Ok(mut n) => n.next(),
+                Err(_) => {
+                    stop(poisoned());
+                    break;
+                }
+            };
+            let Some((k, piece)) = taken else { break };
             if let Err(e) = crate::progress::check() {
                 stop(e);
                 break;
@@ -850,8 +860,16 @@ fn project_pieces_leaving_out(
                     break 'pieces;
                 }
             }
-            if let Some(slot) = done.lock().ok().as_mut().and_then(|d| d.get_mut(k)) {
-                *slot = (unplaced, placed);
+            match done.lock() {
+                Ok(mut d) => {
+                    if let Some(slot) = d.get_mut(k) {
+                        *slot = (unplaced, placed);
+                    }
+                }
+                Err(_) => {
+                    stop(poisoned());
+                    break;
+                }
             }
         }
     };
@@ -864,12 +882,12 @@ fn project_pieces_leaving_out(
             }
         }
     });
-    if let Some(e) = failure.into_inner().ok().flatten() {
+    if let Some(e) = failure.into_inner().map_err(|_| poisoned())? {
         return Err(e);
     }
     // A Cancel that came after the last piece was taken, which no thread may have seen.
     crate::progress::check()?;
-    let done = done.into_inner().map_err(|_| DataError::Format("the features couldn't be converted".into()))?;
+    let done = done.into_inner().map_err(|_| poisoned())?;
     Ok(done.iter().fold((head_unplaced, head_placed), |(n, e), (u, p)| (n + u, e.union(p))))
 }
 
