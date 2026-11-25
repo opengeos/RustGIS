@@ -1171,9 +1171,10 @@ pub fn expand(t: &str, layout: &Layout, info: &PageInfo, frame: Option<(&Map, ru
     rustgis_map::graphics::expand(&t, &v)
 }
 
-/// What the layer statistics in `text` (#2853) that [`expand`] draws as written are missing, one
-/// line per token, each once: no map frame, no such layer in the first frame's map, or what
-/// [`rustgis_map::layout::layer_statistic`] finds missing.
+/// What the layer statistics in `text` (#2853) are missing, one line per token, each once: no map
+/// frame, no such layer in the first frame's map, or what [`rustgis_map::layout::layer_statistic`]
+/// finds missing (drawn as written by [`expand`]); and a figure over a layer read in place, which
+/// covers only the features loaded.
 pub fn statistic_notices(layout: &Layout, maps: &[Map], text: &str) -> Vec<String> {
     use rustgis_map::layout::StatMissing;
     let map = layout.first_frame().and_then(|f| match &layout.element(f)?.kind {
@@ -1188,10 +1189,17 @@ pub fn statistic_notices(layout: &Layout, maps: &[Map], text: &str) -> Vec<Strin
         }
         seen.push(t.token);
         let (layer, field) = (t.layer, t.field.unwrap_or_default());
-        let why = match map.map(|m| m.layer_by_name(layer).map(|l| rustgis_map::layout::layer_statistic(l, t.stat, t.field))) {
+        let found = map.map(|m| m.layer_by_name(layer));
+        let why = match found.map(|l| l.map(|l| rustgis_map::layout::layer_statistic(l, t.stat, t.field))) {
             None => "the layout has no map frame whose map it would read".to_string(),
             Some(None) => format!("the map of the layout's first frame has no layer named '{layer}'"),
-            Some(Some(Ok(_))) => continue,
+            // A layer read in place holds only what is loaded, so its figure is partial.
+            Some(Some(Ok(_))) => {
+                if found.flatten().is_some_and(|l| l.is_streamed()) {
+                    said.push(format!("{} covers only the features of '{layer}' that are loaded: it is read in place", t.token));
+                }
+                continue;
+            }
             Some(Some(Err(StatMissing::Field))) => format!("'{layer}' has no field named '{field}'"),
             Some(Some(Err(StatMissing::NotNumeric))) => format!("'{field}' of '{layer}' holds no numbers"),
             Some(Some(Err(StatMissing::NoValue))) => {
@@ -10648,6 +10656,35 @@ Elaboração: RustGIS",
                 "{sum:Plants:name} shows as written: 'name' of 'Plants' holds no numbers".to_string(),
                 "{count:Nowhere} shows as written: the map of the layout's first frame has no layer named 'Nowhere'".to_string(),
                 "{min:Plants:nosuch} shows as written: 'Plants' has no field named 'nosuch'".to_string(),
+            ]
+        );
+    }
+
+    /// A layer read in place holds only the features loaded, so a figure over it is partial: said
+    /// when the text is set (#2853), as is a layer that holds everything not.
+    #[test]
+    fn a_streamed_layers_statistic_says_it_covers_what_is_loaded() {
+        use rustgis_data::{Dataset, Field, FieldType, GeometryType, Value};
+        let layer = |name: &str| {
+            let mut ds = Dataset::new(name, GeometryType::None, vec![Field::new("mw", FieldType::Double)]);
+            ds.push(None, vec![Value::Float(1.0)]);
+            ds
+        };
+        let mut map = Map::new("m");
+        map.add_dataset(layer("Held"));
+        map.add_dataset(layer("Streamed"));
+        map.layers.iter_mut().find(|l| l.name == "Streamed").unwrap().source = Some(Default::default());
+        let mut layout = Layout::new("L", 100.0, 100.0);
+        let kind =
+            serde_json::from_value(serde_json::json!({"MapFrame": {"map": "m", "center": {"x": 0, "y": 0}, "scale": 6300000}})).unwrap();
+        layout.add("Frame", (0.0, 0.0, 50.0, 50.0), kind);
+        let maps = [map];
+        assert_eq!(
+            statistic_notices(&layout, &maps, "{count:Held} {count:Streamed} {count:Streamed} {sum:Streamed:mw} {sum:Streamed:no}"),
+            vec![
+                "{count:Streamed} covers only the features of 'Streamed' that are loaded: it is read in place".to_string(),
+                "{sum:Streamed:mw} covers only the features of 'Streamed' that are loaded: it is read in place".to_string(),
+                "{sum:Streamed:no} shows as written: 'Streamed' has no field named 'no'".to_string(),
             ]
         );
     }
