@@ -11927,10 +11927,10 @@ mod tests {
         assert_eq!(rows(Marker::Circle, 10.0, 175.0), 0, "a small one all under the edge: nothing");
     }
 
-    /// At every pitch an upright marker is drawn wherever its box meets the view, down the whole
-    /// view (the ground a screen pixel covers grows up the view with the pitch).
+    /// At 60, 75 and 82 degrees an upright marker is drawn wherever its box meets the view, down
+    /// the whole view (the ground a screen pixel covers grows up the view with the pitch).
     #[test]
-    fn an_upright_marker_is_kept_wherever_its_box_meets_the_view_at_any_pitch() {
+    fn an_upright_marker_is_kept_wherever_its_box_meets_the_view_at_steep_pitches() {
         // A tall image (10 pt wide, ten times as tall) and a circle (60 pt across), each with the
         // half its box reaches from its point, in units of its drawn size.
         let markers = [(Marker::Picture(solid_png(4, 40, [255, 0, 0, 255])), 10.0, 50.0), (Marker::Circle, 60.0, 30.0)];
