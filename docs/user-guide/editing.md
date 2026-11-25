@@ -96,14 +96,19 @@ you edit the value or choose units; click **Apply elevation** to apply the new i
   whose selection spans layers in more than one system (or some in one and some in
   longitude/latitude; graphics don't count) moves them all as below, so places they share stay
   together, and says so. Rotate and Scale turn each feature about its own middle anyway, so
-  they take each layer's own grid even then. The rest of this paragraph, about Web Mercator and the ground, is for
-  the other layers.
+  they take each layer's own grid even then. Cut Polygon, Reshape, Split, Merge and Trace work
+  on such a layer's own segments, as they run straight in its coordinates: the line drawn is
+  converted into them (a point snapped to a place of a layer in that system is that place), the
+  points a cut, a reshape or a split makes lie on the layer's segments there, every other place
+  stays as stored, and Merge unions the shapes as stored, converting nothing. Distances (a
+  centimetre at a line's end, Trace's `fromOffM` and `toOffM`) are metres of its grid. The rest
+  of this paragraph, about Web Mercator and the ground, is for the other layers.
   A selected feature with a place that can't be given in longitude/latitude (one far past where
-  its layer's own system reaches) is left as it is by Move, Rotate and Scale (except in a layer
-  edited in its own grid, where it changes with the rest), Split and Cut Polygon,
-  and a notice counts them by layer; Flip Line flips it in the layer's own coordinates. An edit
-  of that one feature (a vertex, Reshape, Trace, Merge with it, a shape conversion) is refused,
-  naming the layer and the feature; Set Geometry gives it a new shape, and Delete removes it.
+  its layer's own system reaches) is left as it is by Move, Rotate and Scale, Split and Cut
+  Polygon (except in a layer edited in its own grid, where it changes with the rest), and a
+  notice counts them by layer; Flip Line flips it in the layer's own coordinates. An edit of that
+  one feature (a vertex, Reshape, Trace, Merge with it, a shape conversion) is refused, outside a
+  layer edited in its own grid, naming the layer and the feature; Set Geometry gives it a new shape, and Delete removes it.
   Beyond 85.05°, where Web Mercator stops, Move, Rotate and Scale work on the ground: a feature
   that reaches beyond it, or that the edit would take beyond it, moves rigidly, together with the
   selected features sharing a vertex with it (their center goes the distance and direction asked,

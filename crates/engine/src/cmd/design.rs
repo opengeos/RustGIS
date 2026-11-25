@@ -750,18 +750,18 @@ fn distance_unit_metres(p: &Json) -> Result<f64, String> {
 /// longitude/latitude, Web Mercator, another world projection or a geographic system has none,
 /// and is edited in Web Mercator or on the ground, as before.
 #[derive(Clone, Copy)]
-struct OwnGrid {
+pub(super) struct OwnGrid {
     /// The system.
-    crs: rustgis_data::raster::Crs,
+    pub(super) crs: rustgis_data::raster::Crs,
     /// Metres per unit of its coordinates.
-    unit_m: f64,
+    pub(super) unit_m: f64,
     /// The (east, north) of a step of one along x, then along y.
     axes: [(f64, f64); 2],
 }
 
 impl OwnGrid {
     /// The grid layer `l` is edited in, if any.
-    fn of(l: &rustgis_map::Layer) -> Option<Self> {
+    pub(super) fn of(l: &rustgis_map::Layer) -> Option<Self> {
         let crs = l.dataset.coord_crs();
         // Graphics are edited as before: their shapes share no places with features.
         if l.is_raster() || l.graphics || !rustgis_analysis::works_in(crs) {
@@ -1509,6 +1509,21 @@ pub(crate) fn held_places(s: &Session, id: u32, originals: &[&Geometry], edited:
     held
 }
 
+/// A line drawn on the map (in longitude/latitude) in the coordinates of layer `id`, held in
+/// `grid`'s system, for an edit worked out there (#2032 C2f-7): a point snapped to a stored place
+/// of a layer in that system is that place, as stored ([`held_places`]); any other is converted.
+pub(super) fn line_in_own(s: &Session, id: u32, grid: OwnGrid, line: &[Coord]) -> Result<Vec<Coord>, String> {
+    let held = held_places(s, id, &[], &[&Geometry::Line(vec![line.to_vec()])]);
+    let to = rustgis_data::raster::Crs::LonLat.to(grid.crs)?;
+    line.iter()
+        .map(|c| {
+            held.get(*c)
+                .or_else(|| to.point(*c))
+                .ok_or_else(|| "a point of the line is no place in the layer's coordinate system".to_string())
+        })
+        .collect()
+}
+
 /// How far a round trip through longitude/latitude may move place `c`, in its own units, with
 /// room to spare: a millionth of its size.
 fn round_trip_reach(c: Coord) -> f64 {
@@ -1565,15 +1580,20 @@ fn merge(s: &mut Session, _: &Json) -> CmdResult {
     if sel.len() < 2 {
         return Err("select two or more features to merge".into());
     }
-    // Merged in longitude/latitude, from the layer's own coordinates, and written back in them, the
-    // places it keeps as stored.
-    // A feature with a place that can't be given there refuses the merge, naming it: the merged
-    // shape would lose that place.
+    // Held in a projected system, merged in its own coordinates, as they are: the shapes are
+    // unioned where their segments run straight there (#2032 C2f-7), and nothing is converted.
+    // Otherwise merged in longitude/latitude, from the layer's own coordinates, and written back
+    // in them, the places it keeps as stored; a feature with a place that can't be given there
+    // refuses the merge, naming it: the merged shape would lose that place.
+    let own = OwnGrid::of(l).is_some();
     let with_ids: Vec<(u64, &Geometry)> =
         sel.iter().filter_map(|r| l.dataset.features.row(*r)).filter_map(|f| Some((f.id(), f.geometry()?))).collect();
     let originals: Vec<&Geometry> = with_ids.iter().map(|(_, g)| *g).collect();
-    let geoms: Vec<Geometry> =
-        with_ids.iter().map(|(fid, g)| l.dataset.feature_to_lonlat(*fid, g).map(std::borrow::Cow::into_owned)).collect::<Result<_, _>>()?;
+    let geoms: Vec<Geometry> = if own {
+        originals.iter().map(|g| (*g).clone()).collect()
+    } else {
+        with_ids.iter().map(|(fid, g)| l.dataset.feature_to_lonlat(*fid, g).map(std::borrow::Cow::into_owned)).collect::<Result<_, _>>()?
+    };
     let kind = |g: &Geometry| match g {
         Geometry::Point(_) | Geometry::MultiPoint(_) => 0,
         Geometry::Line(_) => 1,
@@ -1582,12 +1602,19 @@ fn merge(s: &mut Session, _: &Json) -> CmdResult {
     if geoms.len() != sel.len() || geoms.windows(2).any(|w| w.first().map(kind) != w.get(1).map(kind)) {
         return Err("merge features of one kind (all points, all lines or all polygons), each with a shape".into());
     }
-    let merged = rustgis_analysis::topology::merge(&geoms).ok_or("these features can't be merged")?;
-    let mut held = rustgis_data::HeldPlaces::default();
-    for g in &originals {
-        l.dataset.hold_places(g, None, &mut held);
-    }
-    let merged = l.dataset.edit_from_lonlat(merged, &held)?;
+    let merged = {
+        let _plane = own.then(|| rustgis_analysis::convert::install(rustgis_analysis::convert::run_plane_for(l.dataset.coord_crs())));
+        rustgis_analysis::topology::merge(&geoms).ok_or("these features can't be merged")?
+    };
+    let merged = if own {
+        merged
+    } else {
+        let mut held = rustgis_data::HeldPlaces::default();
+        for g in &originals {
+            l.dataset.hold_places(g, None, &mut held);
+        }
+        l.dataset.edit_from_lonlat(merged, &held)?
+    };
     let keep = sel.first().copied().ok_or("nothing selected")?;
     let mut changes = Vec::new();
     for r in sel.iter().skip(1).rev() {
@@ -1648,6 +1675,9 @@ fn split(s: &mut Session, p: &Json) -> CmdResult {
         return Err("lon and lat are degrees".into());
     }
     let id = selection_layer(s)?;
+    if let Some(grid) = s.map().layer(id).and_then(OwnGrid::of) {
+        return split_own(s, id, grid, at);
+    }
     let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
     // A vertex past ±90° is no place: the search would take it for the pole, so the lines are
     // refused up front, before any is split.
@@ -1825,6 +1855,80 @@ fn split(s: &mut Session, p: &Json) -> CmdResult {
     }
     if whole > 0 {
         s.warn(format!("{} and were left whole: the nearest point found was at an end", unsearched(whole)));
+    }
+    Ok(json!({"split": true}))
+}
+
+/// [`split`] of the selected lines of layer `id`, held in `grid`'s projected system, in its own
+/// coordinates (#2032 C2f-7): at the point nearest `at` (longitude/latitude; a point snapped to a
+/// stored place is that place) on its segments as they run straight there, measured flat in its
+/// grid. Every place of the line stays as stored; only the point it is split at is new.
+fn split_own(s: &mut Session, id: u32, grid: OwnGrid, at: Coord) -> CmdResult {
+    let at = *line_in_own(s, id, grid, &[at])?.first().ok_or("no point to split at")?;
+    // A millimetre and a centimetre of the grid, in its units.
+    let (mm, cm) = (0.001 / grid.unit_m, 0.01 / grid.unit_m);
+    let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
+    let (mut changes, mut unmeasured) = (Vec::new(), 0usize);
+    for r in l.selection.clone() {
+        let Some(f) = l.dataset.features.get(r).cloned() else { continue };
+        let Some(Geometry::Line(parts)) = &f.geometry else { continue };
+        let mut best: Option<(f64, usize, usize, Coord)> = None;
+        for (pi, part) in parts.iter().enumerate() {
+            for (si, w) in part.windows(2).enumerate() {
+                let (a, b) = (w[0], w[1]);
+                if !(a.is_finite() && b.is_finite()) {
+                    unmeasured += 1;
+                    continue;
+                }
+                let (dx, dy) = (b.x - a.x, b.y - a.y);
+                let len2 = dx * dx + dy * dy;
+                let t = if len2 > 0.0 { (((at.x - a.x) * dx + (at.y - a.y) * dy) / len2).clamp(0.0, 1.0) } else { 0.0 };
+                let q = Coord::new(a.x + t * dx, a.y + t * dy);
+                let d = (q.x - at.x).hypot(q.y - at.y);
+                if d.is_finite() && best.is_none_or(|b| d < b.0) {
+                    best = Some((d, pi, si, q));
+                }
+            }
+        }
+        let Some((_, pi, si, q)) = best else { continue };
+        let Some(part) = parts.get(pi) else { continue };
+        let apart = |a: &Coord, b: Coord| (a.x - b.x).hypot(a.y - b.y);
+        // At a vertex (to within a millimetre), the parts meet there, without it repeated.
+        let q = [part.get(si), part.get(si + 1)].into_iter().flatten().find(|v| apart(v, q) < mm).copied().unwrap_or(q);
+        let mut first: Vec<Coord> = part.iter().take(si + 1).copied().collect();
+        if first.last() != Some(&q) {
+            first.push(q);
+        }
+        let mut second = vec![q];
+        second.extend(part.iter().skip(si + 1).copied().skip_while(|c| *c == q));
+        // At (or within a centimetre of) the line's ends isn't a split.
+        let near = |a: Option<&Coord>| a.is_some_and(|a| apart(a, q) < cm);
+        if first.len() < 2 || second.len() < 2 || near(first.first()) || near(second.last()) {
+            continue;
+        }
+        let mut a_parts: Vec<Vec<Coord>> = parts.iter().take(pi).cloned().collect();
+        a_parts.push(first);
+        let mut b_parts = vec![second];
+        b_parts.extend(parts.iter().skip(pi + 1).cloned());
+        if let Some(feat) = l.dataset.features.get_mut(r) {
+            feat.geometry = Some(Geometry::Line(a_parts));
+            changes.push(Change { before: Some(f.clone()), row: Some(r) });
+        }
+        l.dataset.push(Some(Geometry::Line(b_parts)), f.attrs.clone());
+        changes.push(Change { before: None, row: Some(l.dataset.features.len() - 1) });
+    }
+    if changes.is_empty() {
+        if unmeasured > 0 {
+            return Err(format!(
+                "no line could be split away from its ends; {unmeasured} segment(s) could not be measured because of invalid coordinates"
+            ));
+        }
+        return Err("select a line to split (away from its ends)".into());
+    }
+    l.touch_geometry();
+    apply(s, id, changes)?;
+    if unmeasured > 0 {
+        s.warn(format!("{unmeasured} segment(s) of the selected lines could not be measured because of invalid coordinates; the split search skipped them, so the point found may not be the nearest"));
     }
     Ok(json!({"split": true}))
 }
