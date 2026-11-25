@@ -563,7 +563,7 @@ pub(crate) fn capitals(t: &str) -> String {
             .then(|| {
                 let closed = rest.find('}').filter(|&end| end > 1 && rest[1..end].chars().all(|c| c.is_ascii_alphanumeric()));
                 closed.or_else(|| {
-                    let statistic = rustgis_map::layout::stat_tokens(rest).into_iter().next()?;
+                    let statistic = rustgis_map::layout::stat_tokens(&rest[..=rest.find('}')?]).into_iter().next()?;
                     rest.starts_with(statistic.token).then(|| statistic.token.len() - 1)
                 })
             })

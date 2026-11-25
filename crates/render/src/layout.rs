@@ -1197,6 +1197,7 @@ pub fn statistic_notices(layout: &Layout, maps: &[Map], text: &str) -> Vec<Strin
             said.push(format!("{} covers only the features of '{layer}' that are loaded: it is read in place", t.token));
         }
         let why = match found.map(|l| l.map(|(_, figure)| figure)) {
+            None if layout.first_frame().is_some() => "the map of the layout's first frame is not in the project".to_string(),
             None => "the layout has no map frame whose map it would read".to_string(),
             Some(None) => format!("the map of the layout's first frame has no layer named '{layer}'"),
             Some(Some(Ok(_))) => continue,
@@ -10719,6 +10720,21 @@ Elaboração: RustGIS",
         assert_eq!(
             statistic_notices(&layout, &[map], "{count:Elevation}"),
             vec!["{count:Elevation} shows as written: 'Elevation' is a raster layer, which has no features".to_string()]
+        );
+    }
+
+    /// A frame whose map the project doesn't hold is told apart from a layout with no frame (#2853).
+    #[test]
+    fn a_statistic_names_a_frame_whose_map_is_missing() {
+        let mut layout = Layout::new("L", 100.0, 100.0);
+        let said = |layout: &Layout| statistic_notices(layout, &[Map::new("m")], "{count:Cities}");
+        assert_eq!(said(&layout), vec!["{count:Cities} shows as written: the layout has no map frame whose map it would read".to_string()]);
+        let kind =
+            serde_json::from_value(serde_json::json!({"MapFrame": {"map": "gone", "center": {"x": 0, "y": 0}, "scale": 6300000}})).unwrap();
+        layout.add("Frame", (0.0, 0.0, 50.0, 50.0), kind);
+        assert_eq!(
+            said(&layout),
+            vec!["{count:Cities} shows as written: the map of the layout's first frame is not in the project".to_string()]
         );
     }
 

@@ -3429,7 +3429,7 @@ mod tests {
             ds.push(None, vec![n, Value::Text("x".into()), Value::Int(keep)]);
         }
         let mut layer = crate::Layer::new(1, ds);
-        let stat = |l: &crate::Layer, s: StatKind, f: Option<&str>| layer_statistic(l, s, f);
+        let stat = layer_statistic;
         // Every feature: five, and the 100 counted.
         assert_eq!(stat(&layer, StatKind::Count, None), Ok(5.0));
         assert_eq!(stat(&layer, StatKind::Max, Some("n")), Ok(100.0));
