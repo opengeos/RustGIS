@@ -4,7 +4,10 @@
 //! off the frame; `catalog.search` reads the answers.
 
 use egui::vec2;
-use rustgis_engine::render::rustgis_tiles::{address::Reach, cache};
+use rustgis_engine::{
+    cmd::service,
+    render::rustgis_tiles::{address::Reach, cache},
+};
 use serde_json::{Value, json};
 
 use crate::{RustGisApp, Slot};
@@ -16,8 +19,8 @@ pub struct State {
     pub query: String,
     /// Only records within the map's area.
     pub use_view: bool,
-    /// `catalog.search`'s parameters and its answer on the way.
-    waiting: Option<(Value, Slot<Result<Vec<u8>, String>>)>,
+    /// The request on its way.
+    waiting: Option<Asked>,
     records: Vec<Value>,
     matched: u64,
     next: Option<u64>,
@@ -25,6 +28,14 @@ pub struct State {
     asked: Value,
     notes: Vec<String>,
     pub error: Option<String>,
+}
+
+/// A page asked for: `catalog.search`'s parameters, its answer on the way, and the error of the
+/// request it is the second try of (`service::records_again`).
+struct Asked {
+    p: Value,
+    answer: Slot<Result<Vec<u8>, String>>,
+    refused: Option<String>,
 }
 
 /// Links shown for a record.
@@ -70,8 +81,8 @@ pub fn search(app: &mut RustGisApp, start: u64) {
     }
     let asked = p.clone();
     p["start"] = json!(start);
-    match rustgis_engine::cmd::service::records_request(&app.session, &p) {
-        Ok(request) => {
+    match ask(app, p, None) {
+        Ok(()) => {
             let st = &mut app.ui.csw;
             st.error = None;
             if start <= 1 {
@@ -81,36 +92,62 @@ pub fn search(app: &mut RustGisApp, start: u64) {
                 st.next = None;
                 st.asked = asked;
             }
-            // A catalogue held to the internet is searched only there; an answer read from the
-            // internet is recorded, so `catalog.search` holds the links it lists there.
-            if p.get("url").and_then(Value::as_str).is_some_and(|url| cache::ceiling_for(url) == Reach::Public) {
-                cache::restrict_to_public(&request);
-            }
-            st.waiting = Some((p, crate::fetch_document_into(&request)));
         }
         Err(e) => app.ui.csw.error = Some(e),
     }
 }
 
+/// Sends a page's request, its answer read by [`poll`].
+fn ask(app: &mut RustGisApp, p: Value, refused: Option<String>) -> Result<(), String> {
+    let request = service::records_request(&app.session, &p)?;
+    // A catalogue held to the internet is searched only there; an answer read from the
+    // internet is recorded, so `catalog.search` holds the links it lists there.
+    if p.get("url").and_then(Value::as_str).is_some_and(|url| cache::ceiling_for(url) == Reach::Public) {
+        cache::restrict_to_public(&request);
+    }
+    app.ui.csw.waiting = Some(Asked { p, answer: crate::fetch_document_into(&request), refused });
+    Ok(())
+}
+
 /// Reads a page of records once it has arrived.
 pub fn poll(app: &mut RustGisApp) {
-    let Some((_, slot)) = &app.ui.csw.waiting else { return };
-    let Some(r) = slot.lock().unwrap_or_else(|e| e.into_inner()).take() else { return };
-    let Some((mut p, _)) = app.ui.csw.waiting.take() else { return };
-    let r = r.and_then(|bytes| {
-        p["text"] = json!(String::from_utf8_lossy(&bytes));
-        // Not `app.run`: an error belongs in the dialog, not the notices.
-        app.session.run("catalog.search", &p)
-    });
-    let st = &mut app.ui.csw;
+    let Some(Asked { answer, .. }) = &app.ui.csw.waiting else { return };
+    let Some(r) = answer.lock().unwrap_or_else(|e| e.into_inner()).take() else { return };
+    let Some(Asked { mut p, refused, .. }) = app.ui.csw.waiting.take() else { return };
+    let r = match r {
+        Ok(bytes) => {
+            // Before the command reads it: a refusal asked again for is no error yet.
+            if let Some((again, refused)) = service::records_again(&app.session, &p, &bytes) {
+                if let Err(e) = ask(app, again, Some(refused)) {
+                    app.ui.csw.error = Some(e);
+                }
+                return;
+            }
+            p["text"] = json!(String::from_utf8_lossy(&bytes));
+            // Not `app.run`: an error belongs in the dialog, not the notices.
+            app.session.run("catalog.search", &p)
+        }
+        Err(e) => Err(e),
+    };
     match r {
         Ok(v) => {
+            let st = &mut app.ui.csw;
             st.matched = v.get("matched").and_then(Value::as_u64).unwrap_or(0);
             st.next = v.get("next").and_then(Value::as_u64);
             st.records.extend(v.get("records").and_then(Value::as_array).into_iter().flatten().cloned());
+            st.notes.extend(refused.map(|_| service::AREA_UNNAMED.to_string()));
             st.notes.extend(v.get("notes").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(String::from));
+            // More asks for the area as this page's was read.
+            if let Some(crs) = v.get("bboxCrs") {
+                st.asked["bboxCrs"] = crs.clone();
+            }
         }
-        Err(e) => st.error = Some(e),
+        Err(e) => {
+            app.ui.csw.error = Some(match refused {
+                Some(first) => service::refused_again(&first, &e),
+                None => e,
+            });
+        }
     }
 }
 
@@ -339,6 +376,55 @@ mod tests {
             app.run("ui.addService", json!({"url": csw, "type": "csw", "fromDocument": public})).unwrap();
             let want = if public { Reach::Public } else { Reach::Local };
             assert_eq!(asked.lock().unwrap().clone(), [want]);
+        }
+    }
+
+    /// Only where the map is: a catalogue that answers the area's CRS84 with an exception is asked
+    /// once more without it, which is said, and More asks as that page was read; one that answers
+    /// it is asked once. One that refuses both shows the server's words (#2889).
+    #[test]
+    fn an_area_refused_with_its_system_named_is_asked_for_again_without() {
+        const REFUSED: &str = "<ows:ExceptionReport xmlns:ows='o'><ows:Exception><ows:ExceptionText>no such system</ows:ExceptionText></ows:Exception></ows:ExceptionReport>";
+        const PAGE: &str = r#"<csw:GetRecordsResponse xmlns:csw="http://www.opengis.net/cat/csw/2.0.2" xmlns:dc="http://purl.org/dc/elements/1.1/"><csw:SearchResults numberOfRecordsMatched="40" nextRecord="21"><csw:Record><dc:title>Roads</dc:title></csw:Record></csw:SearchResults></csw:GetRecordsResponse>"#;
+        for (n, named, unnamed) in [(1, true, true), (2, false, true), (3, false, false)] {
+            let _turn = crate::fetching::turn();
+            let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let log = asked.clone();
+            cache::set_fetcher_with_origin(move |url, ceiling, done, _| {
+                let is_named = url.contains("CRS84");
+                log.lock().unwrap().push((is_named, url.contains("&startPosition=21&"), ceiling));
+                let body = if if is_named { named } else { unnamed } { PAGE } else { REFUSED };
+                let origin = Origin::with_observed_reach(cache::split_download_limit(&url).0, ceiling).unwrap();
+                done(Ok(cache::Fetched { bytes: body.into(), origin }));
+            });
+            let mut app = RustGisApp::new(rustgis_engine::Session::new(rustgis_engine::Project::default()));
+            app.session.run("map.zoomToExtent", &json!({"extent": [-43, -21, -42, -20]})).unwrap();
+            let csw = format!("https://csw-area-{n}.example/csw");
+            // Held to the internet, which the second request follows too.
+            app.run("ui.addService", json!({"url": csw, "type": "csw", "query": "roads", "bbox": "view", "fromDocument": true})).unwrap();
+            poll(&mut app);
+            poll(&mut app);
+            let public = Reach::Public;
+            let st = &app.ui.csw;
+            assert!(st.waiting.is_none());
+            if !named && !unnamed {
+                assert_eq!(asked.lock().unwrap().clone(), [(true, false, public), (false, false, public)]);
+                let error = st.error.as_deref().unwrap_or_default();
+                assert!(error.ends_with("the catalogue answered with an error: no such system"), "{error}");
+                assert!(st.records.is_empty() && st.notes.is_empty());
+                continue;
+            }
+            assert_eq!((st.error.as_deref(), st.records.len(), st.next), (None, 1, Some(21)));
+            // The refusal asked again for isn't an error in the status bar either.
+            assert!(!app.session.notices.iter().any(|n| n.error));
+            let said = if named { vec![] } else { vec![service::AREA_UNNAMED.to_string()] };
+            assert_eq!(st.notes, said);
+            search(&mut app, 21);
+            poll(&mut app);
+            let first: &[_] = if named { &[(true, false, public)] } else { &[(true, false, public), (false, false, public)] };
+            assert_eq!(asked.lock().unwrap().clone(), [first, &[(named, true, public)]].concat());
+            let st = &app.ui.csw;
+            assert_eq!((st.error.as_deref(), st.records.len(), &st.notes), (None, 2, &said));
         }
     }
 }
