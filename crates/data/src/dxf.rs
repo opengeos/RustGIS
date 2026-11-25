@@ -1404,15 +1404,19 @@ fn emit(
     opts: &Options,
     out: &mut Out,
 ) -> Result<()> {
-    // What can't be drawn here, counted as a drawn entity would be placed: a step each, in paper
-    // space only when that is drawn, and on the layer asked for (layer 0 in a block takes the
-    // INSERT's).
+    // What can't be drawn here, counted as a drawn entity would be placed: in a block, a step
+    // each; in paper space only when that is drawn; and on the layer asked for (layer 0 in a block
+    // takes the INSERT's).
     for ((layer, paper, kind), &n) in lost.into_iter().flatten() {
         crate::progress::check()?;
-        out.steps = out.steps.saturating_add(n);
-        if out.steps > MAX_STEPS {
-            out.overworked = true;
-            return Ok(());
+        // In a block, each copy walks these again, so each is a step; the model's are counted
+        // once, and cost the drawable entities after them nothing.
+        if depth > 0 {
+            out.steps = out.steps.saturating_add(n);
+            if out.steps > MAX_STEPS {
+                out.overworked = true;
+                return Ok(());
+            }
         }
         if depth == 0 && *paper && !opts.paper_space {
             out.paper += n;
