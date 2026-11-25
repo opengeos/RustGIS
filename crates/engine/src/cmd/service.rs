@@ -1858,8 +1858,7 @@ fn coverage(s: &mut Session, p: &Value) -> CmdResult {
 }
 
 /// Said when the records read are those of an area asked for without its coordinate system.
-pub const AREA_UNNAMED: &str =
-    "the catalogue refused the area with its coordinate system named (CRS84), so it was asked for again without it, longitude first";
+pub const AREA_UNNAMED: &str = "the catalogue answered with an exception when the area's coordinate system was named (CRS84), so it was asked again without it, longitude first";
 
 /// The area `catalog.search` asks for, if any. A box across the antimeridian isn't asked for: the
 /// whole catalogue is searched.

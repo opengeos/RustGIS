@@ -27557,6 +27557,11 @@ fn a_catalogue_refusing_crs84_is_asked_for_the_area_without_it() {
     let (url, _) = serve(refused("no such system"), refused("no areas"));
     let e = s.run("catalog.search", &json!({"url": url, "bbox": area})).unwrap_err();
     assert!(e.ends_with("error: no such system (asked again without the area's coordinate system: no areas)"), "{e}");
+    // The note says what happened, not why: an exception may be about something else.
+    let (url, _) = serve(refused("the server is busy"), PAGE.into());
+    let v = s.run("catalog.search", &json!({"url": url, "bbox": area})).unwrap();
+    let note = v["notes"][0].as_str().unwrap_or_default();
+    assert!(note.contains("answered with an exception when") && !note.contains("refused"), "{note}");
     // What isn't a catalogue's answer is no refusal.
     let (url, asked) = serve("<html/>".into(), PAGE.into());
     assert!(s.run("catalog.search", &json!({"url": url, "bbox": area})).is_err());
