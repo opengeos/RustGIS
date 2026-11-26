@@ -1251,10 +1251,13 @@ fn info(s: &mut Session, p: &Value) -> CmdResult {
 /// GeoTIFF bytes of a raster layer (band is 1-based; RGB rasters keep their colour bands; `cog`
 /// makes it a cloud-optimised one).
 pub fn geotiff_bytes(s: &mut Session, p: &Value) -> Result<(String, Vec<u8>), String> {
-    let (_, r) = get(s, p)?;
+    let (id, r) = get(s, p)?;
     let bi = band(p, "band", &r)?.unwrap_or(0);
     let cog = b(p, "cog") == Some(true);
-    let bytes = if cog { raster::cogwrite::write(&r, bi) } else { raster::geotiff::write(&r, bi) }.map_err(|e| e.to_string())?;
+    let bytes = match written_export(s, id, &r, bi, cog) {
+        Some(bytes) => bytes.to_vec(),
+        None => if cog { raster::cogwrite::write(&r, bi) } else { raster::geotiff::write(&r, bi) }.map_err(|e| e.to_string())?,
+    };
     let note = geotiff_note(&r, bi, cog, "give \"band\" for another")?;
     if !note.is_empty() {
         s.notify(format!("Exported {}.tif{note}", r.name), false);
@@ -1282,10 +1285,7 @@ pub(crate) fn export_work(s: &Session, p: &Value) -> Result<super::exports::Work
     let (id, r) = get(s, p)?;
     let bi = band(p, "band", &r)?.unwrap_or(0);
     let cog = b(p, "cog") == Some(true);
-    // A raster a command made embeds the GeoTIFF it was written as: a plain export of every band
-    // writes those same bytes, so they are written again rather than encoded again.
-    let written = s.map().layer(id).and_then(|l| l.raster.as_ref()).and_then(|rl| rl.written_file()).cloned();
-    if let Some(bytes) = written.filter(|_| !cog && raster::geotiff::written_bands(&r, bi).len() == r.bands.len()) {
+    if let Some(bytes) = written_export(s, id, &r, bi, cog) {
         return Ok(Box::new(move || {
             // One write of bytes the layer holds, with no look at Cancel inside it: looked at before.
             rustgis_data::progress::check().map_err(|e| e.to_string())?;
@@ -1294,6 +1294,16 @@ pub(crate) fn export_work(s: &Session, p: &Value) -> Result<super::exports::Work
         }));
     }
     Ok(Box::new(move || write_geotiff(&r, bi, cog, &path)))
+}
+
+/// The file layer `id` embeds, when a plain export of `r`'s band `bi` (or its colour bands) would
+/// write those same bytes: a raster a command made embeds the GeoTIFF it was written as, and an
+/// export of every band writes it again rather than encoding it again.
+fn written_export(s: &Session, id: u32, r: &Raster, bi: usize, cog: bool) -> Option<Arc<Vec<u8>>> {
+    if cog || raster::geotiff::written_bands(r, bi).len() != r.bands.len() {
+        return None;
+    }
+    s.map().layer(id).and_then(|l| l.raster.as_ref()).and_then(|rl| rl.written_file()).cloned()
 }
 
 /// Writes raster `r` (band `bi`, or its colour bands) to `path`, and says what the file holds.
