@@ -7,6 +7,9 @@
 //! asked for; [`scaled`] takes it as an argument, so tests pass fixed amounts. Most limits plan for
 //! what is left once the process holds more than half the memory ([`planned`], #2431 fix 3), so
 //! they can be lower later in a session, never below their floors.
+//!
+//! A phone ([`set_phone`]) plans the same way from what its system allows, which its app says in
+//! place of the memory read here, and takes the browser's floors where those are lower.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -22,13 +25,15 @@ pub const SHARE: u64 = 4;
 /// On the desktop, [`OVERRIDE`] set to a positive whole number of bytes replaces the memory read,
 /// a container's limit included, for tests and to reproduce a smaller computer; any other value is
 /// ignored. [`source`] says which one was used.
+///
+/// On a phone it is what the app said the system allows ([`set_phone`]), unless [`OVERRIDE`] is set.
 pub fn physical() -> Option<u64> {
     reading().0
 }
 
 /// Where [`physical`]'s figure came from: `"override"` ([`OVERRIDE`]), `"container"` (a
 /// control-group limit, a container's or a service's such as systemd's `MemoryMax`, lower than
-/// the computer's memory), `"computer"`, or `"unknown"` (the browser,
+/// the computer's memory), `"computer"`, `"phone"` ([`set_phone`]), or `"unknown"` (the browser,
 /// a fuzzing build, or memory that couldn't be read), so a leftover override doesn't change the
 /// limits unnoticed.
 pub fn source() -> &'static str {
@@ -43,12 +48,54 @@ fn reading() -> (Option<u64>, &'static str) {
     }
     #[cfg(all(not(fuzzing), not(target_arch = "wasm32")))]
     {
-        static MEMORY: std::sync::OnceLock<(Option<u64>, &'static str)> = std::sync::OnceLock::new();
         *MEMORY.get_or_init(read)
     }
     #[cfg(all(not(fuzzing), target_arch = "wasm32"))]
     {
         (None, "unknown")
+    }
+}
+
+/// The memory and its source, once read.
+#[cfg(all(not(fuzzing), not(target_arch = "wasm32")))]
+static MEMORY: std::sync::OnceLock<(Option<u64>, &'static str)> = std::sync::OnceLock::new();
+
+/// What a phone's system allows RustGIS ([`set_phone`]).
+#[cfg(not(target_arch = "wasm32"))]
+struct Phone {
+    /// The bytes it plans with, in place of the device's memory.
+    allowed: u64,
+    /// The bytes free now; `None` when the system can't say.
+    free: Box<dyn Fn() -> Option<u64> + Send + Sync>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+static PHONE: std::sync::OnceLock<Phone> = std::sync::OnceLock::new();
+
+/// Says RustGIS runs on a phone, for the phone app to call once, before anything asks for a limit.
+/// The limits then plan with `allowed` bytes, what the system lets apps use, in place of the
+/// device's memory ([`physical`]), and for no more than `free` says is free each time it is asked
+/// ([`available`]; any thread asks). Where the browser's floor is lower than the desktop's, they
+/// take it ([`on_phone`]). Returns whether it took: not for no bytes, a second call, or once the
+/// memory has been read.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn set_phone(allowed: u64, free: impl Fn() -> Option<u64> + Send + Sync + 'static) -> bool {
+    #[cfg(not(fuzzing))]
+    if MEMORY.get().is_some() {
+        return false;
+    }
+    allowed > 0 && PHONE.set(Phone { allowed, free: Box::new(free) }).is_ok()
+}
+
+/// Whether a phone's app said what its system allows (`set_phone`, which the browser lacks).
+pub fn on_phone() -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        PHONE.get().is_some()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        false
     }
 }
 
@@ -61,12 +108,16 @@ fn overridden(value: Option<&str>) -> Option<u64> {
     value?.trim().parse::<u64>().ok().filter(|m| *m > 0)
 }
 
-/// The memory to plan for: the override when it is set, else physical memory, or a control-group
-/// limit (a container's, or a service's such as systemd's `MemoryMax`) when that is lower.
+/// The memory to plan for: the override when it is set, else what a phone's system allows, else
+/// physical memory, or a control-group limit (a container's, or a service's such as systemd's
+/// `MemoryMax`) when that is lower.
 #[cfg(all(not(fuzzing), not(target_arch = "wasm32")))]
 fn read() -> (Option<u64>, &'static str) {
     if let Some(m) = overridden(std::env::var(OVERRIDE).ok().as_deref()) {
         return (Some(m), "override");
+    }
+    if let Some(phone) = PHONE.get() {
+        return (Some(phone.allowed), "phone");
     }
     let Some(mut s) = sysinfo::System::new().ok() else { return (None, "unknown") };
     s.refresh_memory_specifics(sysinfo::MemoryRefreshKind::nothing().with_ram());
@@ -160,12 +211,14 @@ pub fn margin(memory: u64) -> u64 {
 ///
 /// Memory RustGIS freed that its allocator keeps for reuse still counts as used here. On macOS
 /// the system counts pages programs are using as available too, so this rarely bounds anything
-/// there.
+/// there. On a phone it is what the app says its system has free ([`set_phone`]).
 pub fn available() -> Option<u64> {
     #[cfg(all(not(fuzzing), not(target_arch = "wasm32")))]
     {
-        if source() != "computer" {
-            return None;
+        match source() {
+            "computer" => {}
+            "phone" => return PHONE.get().and_then(|phone| (phone.free)()),
+            _ => return None,
         }
         let mut s = sysinfo::System::new().ok()?;
         s.refresh_memory_specifics(sysinfo::MemoryRefreshKind::nothing().with_ram());

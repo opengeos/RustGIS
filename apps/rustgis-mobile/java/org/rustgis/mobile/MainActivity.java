@@ -35,6 +35,7 @@ import java.util.ArrayList;
  *                                        empty; time in milliseconds since 1970; elapsed in
  *                                        nanoseconds since boot, from getElapsedRealtimeNanos)
  *   stopped                          positioning ended without being asked to
+ *   low-memory                       Android is short of memory
  *   photo     name  path             a photo the camera took, in the app's photos folder
  *   failed    text                   what went wrong, to show the user
  */
@@ -50,6 +51,11 @@ public class MainActivity extends NativeActivity {
      */
     private static final int MOST_EVENTS = 200_000;
     private static final int COPY_BUFFER = 1 << 16;
+    /**
+     * The least time between takeEvents' questions whether Android is low on memory: under the 5 s
+     * an idle window waits between its calls (src/android.rs), so each of those asks.
+     */
+    private static final long MEMORY_LOOK_MILLIS = 4_000;
     /** Shared by every activity/copy worker for this process, including activity recreation. */
     private static final String COPY_OWNER = java.util.UUID.randomUUID().toString();
 
@@ -94,6 +100,9 @@ public class MainActivity extends NativeActivity {
     private boolean saveProject;
     /** A project is being written back to its document (set on the main thread, cleared by its worker). */
     private volatile boolean writing;
+    /** When takeEvents last asked whether Android is low on memory, and its answer (its thread's alone). */
+    private long memoryLooked;
+    private boolean memoryLow;
 
     @Override
     protected void onCreate(android.os.Bundle saved) {
@@ -710,8 +719,71 @@ public class MainActivity extends NativeActivity {
         add((project ? "project-save-failed\t" : "failed\t") + name + " wasn't saved: " + reason);
     }
 
+    /**
+     * What Android allows, in bytes, as "total free": the memory it has (totalMem), and how much
+     * of it is free before it counts itself low and ends processes (availMem less threshold).
+     * Empty when it can't say. Called from any thread. (getMemoryClass isn't asked: it bounds the
+     * Java heap, and the engine's memory is native.)
+     */
+    public String memory() {
+        android.app.ActivityManager.MemoryInfo info = memoryInfo();
+        return info == null ? "" : info.totalMem + " " + Math.max(0, info.availMem - info.threshold);
+    }
+
+    private android.app.ActivityManager.MemoryInfo memoryInfo() {
+        android.app.ActivityManager manager = (android.app.ActivityManager) getSystemService(ACTIVITY_SERVICE);
+        if (manager == null) {
+            return null;
+        }
+        android.app.ActivityManager.MemoryInfo info = new android.app.ActivityManager.MemoryInfo();
+        manager.getMemoryInfo(info);
+        return info;
+    }
+
+    /**
+     * Android 14 and later tell an app in use nothing when memory runs short (no onLowMemory, no
+     * "running" trim level), so it is asked, at most every MEMORY_LOOK_MILLIS: each time it
+     * turns low is a "low-memory" event.
+     */
+    private void lookAtMemory() {
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (now - memoryLooked < MEMORY_LOOK_MILLIS) {
+            return;
+        }
+        memoryLooked = now;
+        android.app.ActivityManager.MemoryInfo info = memoryInfo();
+        boolean low = info != null && info.lowMemory;
+        if (low && !memoryLow) {
+            add("low-memory");
+        }
+        memoryLow = low;
+    }
+
+    /**
+     * The warnings Android 13 and earlier give an app in use. Those for one out of sight aren't
+     * passed on: it draws no frames to take them, and would drop what it is about to draw once
+     * back.
+     */
+    @Override
+    public void onTrimMemory(int level) {
+        super.onTrimMemory(level);
+        if (level == TRIM_MEMORY_RUNNING_LOW || level == TRIM_MEMORY_RUNNING_CRITICAL) {
+            add("low-memory");
+        }
+    }
+
+    /** The system as a whole is out of memory (Android 13 and earlier), said while in sight. */
+    @Override
+    public void onLowMemory() {
+        super.onLowMemory();
+        if (started) {
+            add("low-memory");
+        }
+    }
+
     /** What happened since the last call, oldest first, one event to a line. */
     public String takeEvents() {
+        lookAtMemory();
         String why = refusal.getAndSet(null);
         if (why != null) {
             keepLocatingRefused();

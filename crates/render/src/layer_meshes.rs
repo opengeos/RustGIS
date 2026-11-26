@@ -169,6 +169,16 @@ fn with_meshes<R>(f: impl FnOnce(&mut Meshes) -> R) -> R {
     MESHES.with_borrow_mut(f)
 }
 
+/// Drops the kept meshes ([`crate::release_memory`]), but those a scene being drawn may have
+/// used. A scene on screen shares its meshes' data, so that stays while it does.
+pub(crate) fn release() {
+    with_meshes(|m| {
+        let began = m.drawing.iter().map(|d| d.1).min();
+        m.kept.retain(|k| began.is_some_and(|began| k.used > began));
+        m.kept.shrink_to_fit();
+    });
+}
+
 /// A scene being drawn, from [`Scene::begin`] until it is dropped (when the scene is done,
 /// stopped or failed): while it lasts, no mesh a scene being drawn has used goes, though another
 /// scene drawn at the same time (on the UI's thread and a worker's) keeps meshes too.
@@ -355,7 +365,7 @@ mod tests {
     /// (`frame_cache`) doesn't draw the layers under it. A frame drawn on the CPU instead fails
     /// the test.
     fn scene(m: &mut Map, view: &View) -> GpuScene {
-        crate::frame_cache::clear();
+        crate::frame_cache::release();
         match render_backend(m, view, Backend::Gpu) {
             Some(RenderOutput::Gpu(s)) => s,
             _ => panic!("no GPU scene"),

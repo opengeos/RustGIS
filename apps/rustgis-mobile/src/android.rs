@@ -26,6 +26,11 @@ impl shell::Phone for Phone {
     fn picking(&self) -> bool {
         Phone::picking(self)
     }
+
+    /// The activity looks at Android's memory when asked what happened, so an idle window asks.
+    fn idle_look(&self) -> Option<u64> {
+        Some(5000)
+    }
 }
 
 /// Points the app's folders (`rustgis_data::dirs`) at the app's own storage: Android has no
@@ -44,8 +49,13 @@ fn set_folders(app: &AndroidApp) -> Option<std::path::PathBuf> {
 fn android_main(android: AndroidApp) {
     android_logger::init_once(android_logger::Config::default().with_max_level(log::LevelFilter::Info).with_tag("rustgis"));
     let folders = set_folders(&android);
-    let mut app = shell::front_end(folders.as_deref());
     let phone = Phone::new(&android);
+    // Before anything plans a job: the limits follow what Android allows, with the browser's
+    // floors.
+    if let Ok(phone) = &phone {
+        phone.plan_memory();
+    }
+    let mut app = shell::front_end(folders.as_deref());
     // The app's external files folder (`/sdcard/Android/data/org.rustgis.mobile/files`), where
     // `adb push` can put files.
     let pushed = shell::pushed(android.external_data_path(), &mut app);
