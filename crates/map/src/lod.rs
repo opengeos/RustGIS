@@ -194,7 +194,9 @@ pub(crate) fn cache_bytes(geoms: &Vec<Option<Geometry>>) -> usize {
 /// budget discards only this optional display cache; drawing still uses the full projection.
 pub(crate) fn thin_budgeted(geoms: crate::shapes::Shapes<'_>, tol: f64, budget: usize) -> Option<Vec<Option<Geometry>>> {
     match geoms {
+        // A layer's own rows: a list of their geometry to work over, counted against the budget.
         crate::shapes::Shapes::Rows(rows) => {
+            let budget = budget.checked_sub(rows.len().checked_mul(std::mem::size_of::<Option<&Geometry>>())?)?;
             let rows: Vec<Option<&Geometry>> = rows.rows().map(|r| r.geometry()).collect();
             map_budgeted(&rows, budget, |g| *g, |g| thin(g, tol))
         }

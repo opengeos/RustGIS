@@ -38,7 +38,7 @@ type Drawn = Option<Vec<Option<Geometry>>>;
 fn drawn_stats(features: &[rustgis_data::Feature], projected: &Drawn) -> (Arc<Vec<Extent>>, usize, usize) {
     let geoms: Vec<Option<&Geometry>> = match projected {
         Some(p) => p.iter().map(Option::as_ref).collect(),
-        None => features.iter().map(|f| f.geometry.as_ref()).collect(),
+        None => features.iter().map(geometry).collect(),
     };
     let extents = Arc::new(geoms.iter().map(|g| g.map_or(Extent::EMPTY, Geometry::extent)).collect());
     let vertices = geoms.iter().flatten().map(|g| crate::lod::thinnable(g)).sum();
@@ -266,13 +266,18 @@ fn whole(batch: Batch, projection: &crate::Projection, crs: Crs) -> (Batch, Cach
 /// draws them as they are, with no copy (#2032 C2f).
 fn projected_rows(flat: &crate::projection::Flat, crs: Crs, features: &[rustgis_data::Feature]) -> Drawn {
     if crs == Crs::LonLat {
-        return Some(features.iter().map(|f| f.geometry.as_ref().map(|g| flat.project(g))).collect());
+        return Some(features.iter().map(|f| geometry(f).map(|g| flat.project(g))).collect());
     }
     match flat.held(crs) {
         Ok(held) if held.is_identity() => None,
-        Ok(held) => Some(features.iter().map(|f| f.geometry.as_ref().map(|g| held.geometry(g).0)).collect()),
+        Ok(held) => Some(features.iter().map(|f| geometry(f).map(|g| held.geometry(g).0)).collect()),
         Err(_) => Some(features.iter().map(|_| None).collect()),
     }
+}
+
+/// A window row's geometry.
+fn geometry(f: &rustgis_data::Feature) -> Option<&Geometry> {
+    f.geometry.as_ref()
 }
 
 #[cfg(test)]

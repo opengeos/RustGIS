@@ -695,11 +695,15 @@ fn a_nan_shape_outside_an_area_its_system_cant_bound_is_counted_as_of_the_layer(
         // give none of them (a shape without geometry is in no area), and the note says its count
         // is of the layer, not of the area.
         let layer = vec![format!(
-            "2 shape(s) in the layer (a count of the whole layer, as the area couldn't be placed in its coordinates) {SAID}: they have no geometry to read, but the layer's extent and its index still take in their stored boxes"
+            "2 shape(s) in the layer (a count of the whole layer, as the area couldn't be placed in its coordinates) {SAID}: they have no geometry, so the read leaves them out, but the layer's extent and its index still take in their stored boxes"
         )];
         assert_eq!(reads(src.as_ref()), ((0, 0, layer.clone()), (0, 0, layer)));
-        // A whole read keeps its plain count.
-        assert_eq!(said(&src.read(&Request::all()).unwrap().notes).first().map(|n| n.starts_with("2 shape(s) have")), Some(true));
+        // A whole read gives them without geometry, and says that once, with its plain count.
+        let whole = src.read(&Request::all()).unwrap();
+        assert!(said(&whole.notes).is_empty(), "{:?}", whole.notes);
+        let kept: Vec<_> = whole.notes.iter().filter(|n| n.contains("their features are kept without geometry")).collect();
+        assert_eq!(kept.len(), 1, "{:?}", whole.notes);
+        assert!(kept[0].starts_with("2 shape(s) have"), "{:?}", kept[0]);
     });
     std::fs::remove_dir_all(fixture).unwrap();
 }
@@ -770,26 +774,29 @@ fn a_nan_shape_under_a_finite_box_is_said_when_kept_without_geometry() {
         assert!(src.info().indexed);
         assert_eq!(src.info().extent, Extent::new(0.0, 0.0, 3.0, 3.0), "the stored box framed");
         let one = vec![format!(
-            "1 shape(s) {SAID}: they have no geometry to read, but the layer's extent and its index still take in their stored boxes"
+            "1 shape(s) {SAID}: they have no geometry, so the read leaves them out, but the layer's extent and its index still take in their stored boxes"
         )];
+        const BOXES: &str = ", but the layer's extent and its index still take in their stored boxes";
         let one_kept = vec![format!("1 shape(s) {KEPT}")];
+        let one_kept_boxed = vec![format!("1 shape(s) {KEPT}{BOXES}")];
         // Kept without geometry, its attributes too, as a whole read of the file keeps it.
         let (ds, report) = crate::source::materialize(src.as_ref()).unwrap();
         assert_eq!((ds.features.len(), report.skipped), (3, 0));
         assert!(ds.features[1].geometry.is_none());
         let (whole, _) = crate::io::read_path(&p).unwrap();
         assert_eq!(whole.features.iter().map(|f| f.geometry.is_none()).collect::<Vec<_>>(), [false, true, false]);
-        assert_eq!(said(&report.messages).len(), 1, "{:?}", report.messages);
-        assert!(report.messages.iter().any(|m| m.ends_with(&one[0])), "{:?}", report.messages);
-        assert!(report.messages.iter().any(|m| m.ends_with(&one_kept[0])), "{:?}", report.messages);
+        // Said once: kept without geometry, under its stored box.
+        assert!(said(&report.messages).is_empty(), "{:?}", report.messages);
+        assert_eq!(kept(&report.messages).len(), 1, "{:?}", report.messages);
+        assert!(report.messages.iter().any(|m| m.ends_with(&one_kept_boxed[0])), "{:?}", report.messages);
         let all = src.read(&Request::all()).unwrap();
-        assert_eq!((all.features.len(), all.skipped, said(&all.notes), kept(&all.notes)), (3, 0, one.clone(), one_kept.clone()));
-        // By area, over the stored box only: matched by it, given as no feature (a shape without
-        // geometry is in no area), its box said.
+        assert_eq!((all.features.len(), all.skipped, said(&all.notes), kept(&all.notes)), (3, 0, Vec::new(), one_kept_boxed.clone()));
+        // By area, over the stored box only: matched by it, left out (a shape without geometry is
+        // in no area), its box said.
         let area = Some(Extent::new(1.4, 1.4, 1.6, 1.6));
         let by_area = src.read(&Request { extent: area, ..Request::all() }).unwrap();
         assert_eq!((by_area.features.len(), by_area.skipped, said(&by_area.notes), kept(&by_area.notes)), (0, 0, one.clone(), Vec::new()));
-        assert_eq!(chunk_notes(src.as_ref(), None), (0, 1, one.clone(), one_kept.clone()));
+        assert_eq!(chunk_notes(src.as_ref(), None), (0, 1, Vec::new(), one_kept_boxed.clone()));
         assert_eq!(chunk_notes(src.as_ref(), area), (0, 0, one.clone(), Vec::new()));
         // A limited read visits a sample (here the first and third records), so its count is of
         // the shapes it read, not a total: the first record's point made NaN (content at 108,
@@ -804,17 +811,10 @@ fn a_nan_shape_under_a_finite_box_is_said_when_kept_without_geometry() {
         let sample = "1 of the shapes read (a sample of the layer, which may hold more)";
         assert_eq!(
             (some.features.len(), some.skipped, said(&some.notes), kept(&some.notes)),
-            (
-                2,
-                0,
-                vec![format!(
-                    "{sample} {SAID}: they have no geometry to read, but the layer's extent and its index still take in their stored boxes"
-                )],
-                vec![format!("{sample} {KEPT}")]
-            )
+            (2, 0, Vec::new(), vec![format!("{sample} {KEPT}{BOXES}")])
         );
         // A whole read of the same file still gives the total.
-        assert_eq!(said(&src.read(&Request::all()).unwrap().notes), one);
+        assert_eq!(kept(&src.read(&Request::all()).unwrap().notes), one_kept_boxed);
         // The second record's stored box made backwards, (2, 2, 1, 1) at 200..232, over the same
         // NaN point: the index can't frame it from the points, so it's left out of the extent and
         // said as having no usable box, and the read doesn't claim the index took it in. Reads by

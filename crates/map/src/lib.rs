@@ -1505,8 +1505,10 @@ impl Layer {
         &self.projected_extents
     }
 
-    /// The Web Mercator copies from the last [`Layer::projected`] call, without refreshing them:
-    /// call `projected` first (it needs `&mut self`) whenever the geometry may have changed.
+    /// The geometry as the last [`Layer::projected_in`] call drew it, without refreshing it: call
+    /// that first (it needs `&mut self`) whenever the geometry or the map may have changed. On a
+    /// map in the layer's own system it is the layer's rows, read in place, so a later edit shows
+    /// in it at once, while [`Layer::projected_extents`] stays as made until it is refreshed.
     pub fn projected_cache(&self) -> Shapes<'_> {
         shapes_of(self.projected_own, &self.dataset.features, &self.projected)
     }
@@ -1613,7 +1615,8 @@ impl Layer {
     pub fn is_cached(&self, key: &str) -> bool {
         self.projected_for == key
             && self.projected_rev == self.geometry_rev
-            && (self.projected_own || self.projected.len() == self.dataset.features.len())
+            // Its own rows read in place: their extents still made for as many rows.
+            && (if self.projected_own { self.projected_extents.len() } else { self.projected.len() }) == self.dataset.features.len()
             && self.projected_crs == Some(self.dataset.coord_crs())
     }
 
