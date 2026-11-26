@@ -229,9 +229,20 @@ impl Value {
         }
     }
 
+    /// The yes/no value text says, ignoring case and spaces around it: `true`, `t`, `yes`, `y` and
+    /// `1` are true; `false`, `f`, `no`, `n` and `0` are false; other text is neither.
+    pub fn yes_no(text: &str) -> Option<bool> {
+        match text.trim().to_ascii_lowercase().as_str() {
+            "true" | "t" | "yes" | "y" | "1" => Some(true),
+            "false" | "f" | "no" | "n" | "0" => Some(false),
+            _ => None,
+        }
+    }
+
     /// Parses user text into a value of `ty` (empty → Null). Text a number field can't hold,
     /// including a non-finite Double (`NaN`, `inf`), is Null. Dates are ISO 8601: `YYYY-MM-DD`
     /// for a date; that, a time and an optional zone for a date-time. Text that isn't one is Null.
+    /// A yes/no field takes the words of [`yes_no`](Value::yes_no); other text is Null, not false.
     pub fn parse(text: &str, ty: FieldType) -> Value {
         let t = text.trim();
         if t.is_empty() || t.eq_ignore_ascii_case("<null>") {
@@ -244,7 +255,7 @@ impl Value {
                 .or_else(|| t.parse::<f64>().ok().filter(|f| f.is_finite()).map(|f| f as i64))
                 .map_or(Value::Null, Value::Int),
             FieldType::Double => t.parse::<f64>().ok().filter(|f| f.is_finite()).map_or(Value::Null, Value::Float),
-            FieldType::Boolean => Value::Bool(matches!(t.to_ascii_lowercase().as_str(), "true" | "yes" | "1" | "y")),
+            FieldType::Boolean => Value::yes_no(t).map_or(Value::Null, Value::Bool),
             FieldType::Text => Value::Text(t.to_string()),
             FieldType::Date => Date::parse(t).map(Value::Date).unwrap_or(Value::Null),
             FieldType::DateTime => DateTime::parse(t).map(Value::DateTime).unwrap_or(Value::Null),
@@ -671,6 +682,14 @@ mod tests {
             assert_eq!(Value::parse(text, FieldType::Integer), Value::Null, "{text}");
             assert!(matches!(Value::parse_source(text, FieldType::Integer), Value::Float(f) if !f.is_finite()));
             assert!(matches!(Value::parse_source(text, FieldType::Double), Value::Float(f) if !f.is_finite()));
+        }
+        for (text, said) in [(" Yes ", Some(true)), ("T", Some(true)), ("1", Some(true)), ("n", Some(false)), ("FALSE", Some(false))] {
+            assert_eq!(Value::yes_no(text), said, "{text}");
+            assert_eq!(Value::parse(text, FieldType::Boolean), Value::Bool(said.unwrap_or_default()), "{text}");
+        }
+        for text in ["maybe", "2", "on", "yess"] {
+            assert_eq!(Value::yes_no(text), None, "{text}");
+            assert_eq!(Value::parse(text, FieldType::Boolean), Value::Null, "{text} is neither, not no");
         }
         assert_eq!(Value::parse("2.5", FieldType::Double), Value::Float(2.5));
         assert_eq!(Value::parse("2.5", FieldType::Integer), Value::Int(2));

@@ -780,6 +780,34 @@ pub(crate) fn non_finite_input(value: &Value, ty: FieldType) -> bool {
         }
 }
 
+/// A value set once for a field and used again (a template's or subtype's default, a domain's
+/// code, a contingent combination) as a `ty` field holds it, refused when holding it would lose
+/// any of it: one that isn't finite or isn't a value of the field's type, or that the field would
+/// cut, clamp or round. It is checked when it is set, as no later edit could say what was lost.
+pub(crate) fn held_default(field: &str, value: &Value, ty: FieldType) -> Result<Value, String> {
+    if non_finite_input(value, ty) {
+        return Err(format!("field '{field}' requires a finite number"));
+    }
+    let coerced = coerce(value.clone(), ty);
+    if coerced.is_null() && !value.asks_null() {
+        return Err(format!("field '{field}': '{value}' isn't a {} value", ty.label()));
+    }
+    let whole = match value {
+        Value::Int(i) => Some(*i),
+        Value::Text(t) => t.trim().parse::<i64>().ok(),
+        _ => None,
+    };
+    // i128 holds both exactly: a whole number past 2^53 its decimal doesn't.
+    let rounded = ty == FieldType::Double && matches!(coerced, Value::Float(f) if whole.is_some_and(|i| f as i128 != i128::from(i)));
+    if numeric_loss(value, &coerced, ty).is_some()
+        || rounded
+        || matches!(value, Value::DateTime(t) if ty == FieldType::Date && !t.is_date())
+    {
+        return Err(format!("field '{field}': a {} field can't hold '{value}' as given", ty.label()));
+    }
+    Ok(coerced)
+}
+
 /// Whether a number, or a number written as text, is an infinity (not NaN).
 fn infinite(value: &Value) -> bool {
     match value {
@@ -818,6 +846,9 @@ fn convert(v: Value, ty: FieldType) -> (Value, Cut, Option<f64>) {
                 _ => (Value::parse(&t, ty), Cut::None, None),
             },
         },
+        // A whole number is yes when it isn't 0, as a shapefile writes it.
+        (Value::Int(i), FieldType::Boolean) => (Value::Bool(i != 0), Cut::None, None),
+        (Value::Float(f), FieldType::Boolean) if f.fract() == 0.0 => (Value::Bool(f != 0.0), Cut::None, None),
         // Uncounted coercion retains source numbers until output can explain any loss.
         (Value::Text(t), _) => (Value::parse_source(&t, ty), Cut::None, None),
         (other, _) => (Value::parse(&other.to_string(), ty), Cut::None, None),
@@ -964,8 +995,8 @@ fn set_value(s: &mut Session, p: &Json) -> CmdResult {
     Ok(Json::Null)
 }
 
-/// `raw` (an `edit.setValue` value) as a value of a `ty` field. A number that isn't finite, and a
-/// value a date field can't hold, are refused.
+/// `raw` (an `edit.setValue` value) as a value of a `ty` field. A number that isn't finite, a
+/// value a date field can't hold, and text that isn't a yes/no word in a yes/no field, are refused.
 fn typed(raw: Json, ty: FieldType) -> Result<Value, String> {
     Ok(match raw {
         // A number that isn't finite (NaN, infinity) is no value a number field holds, nor one a
@@ -973,16 +1004,20 @@ fn typed(raw: Json, ty: FieldType) -> Result<Value, String> {
         Json::String(t) if ty.is_numeric() && t.trim().parse::<f64>().is_ok_and(|f| !f.is_finite()) => {
             return Err(format!("'{}' isn't a finite number, which a {} field holds", t.trim(), ty.label()));
         }
-        // Text a date field can't hold (`soon`) is refused, not stored as null.
+        // Text a date or yes/no field can't hold (`soon`, `maybe`) is refused, not stored as null.
         Json::String(t) => match Value::parse(&t, ty) {
-            Value::Null if ty.is_temporal() && !t.trim().is_empty() && !t.trim().eq_ignore_ascii_case("<null>") => {
+            Value::Null
+                if (ty.is_temporal() || ty == FieldType::Boolean) && !t.trim().is_empty() && !t.trim().eq_ignore_ascii_case("<null>") =>
+            {
                 return Err(format!("'{}' isn't a {} value", t.trim(), ty.label()));
             }
             v => v,
         },
-        // So is any other value a date field can't hold (`20260305`).
+        // So is any other value a date or yes/no field can't hold (`20260305`, `0.5`).
         other => match coerce(Value::from_json(&other), ty) {
-            Value::Null if ty.is_temporal() && !other.is_null() => return Err(format!("'{other}' isn't a {} value", ty.label())),
+            Value::Null if (ty.is_temporal() || ty == FieldType::Boolean) && !other.is_null() => {
+                return Err(format!("'{other}' isn't a {} value", ty.label()));
+            }
             v => v,
         },
     })
