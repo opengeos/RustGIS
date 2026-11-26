@@ -31,13 +31,12 @@ pub fn matches(text: &str, query: &str, case: bool, whole: bool) -> Found {
             _ => c,
         }
     };
-    let text: Vec<char> = text.chars().map(fold).collect();
     let query: Vec<char> = query.chars().map(fold).collect();
     let mut found = Found::default();
     if query.is_empty() {
         return found;
     }
-    let word = |c: Option<&char>| c.is_some_and(|c| c.is_alphanumeric() || *c == '_');
+    let word = |c: Option<char>| c.map(fold).is_some_and(|c| c.is_alphanumeric() || c == '_');
     // Knuth, Morris and Pratt (1977): each character of the text is read once, whatever the two
     // hold, so a long query against a long run of one letter costs no more than any other.
     // `back[k]`: how much of the query still matches when its character after `k + 1` doesn't.
@@ -51,7 +50,12 @@ pub fn matches(text: &str, query: &str, case: bool, whole: bool) -> Found {
         back.push(matched);
     }
     let mut matched = 0;
-    for (i, c) in text.iter().enumerate() {
+    // The script is read as it goes, never copied (the box takes any size): `rest` is read once, and
+    // `behind`, which only moves forward, gives the character before a match.
+    let mut rest = text.chars().enumerate().peekable();
+    let (mut behind, mut passed) = (text.chars(), 0);
+    while let Some((i, c)) = rest.next() {
+        let c = &fold(c);
         while matched > 0 && query.get(matched) != Some(c) {
             matched = back.get(matched - 1).copied().unwrap_or(0);
         }
@@ -60,7 +64,12 @@ pub fn matches(text: &str, query: &str, case: bool, whole: bool) -> Found {
             continue;
         }
         let at = i + 1 - query.len();
-        if !whole || (!word(at.checked_sub(1).and_then(|b| text.get(b))) && !word(text.get(i + 1))) {
+        let before = at.checked_sub(1).filter(|_| whole).and_then(|b| {
+            let c = behind.nth(b.saturating_sub(passed));
+            passed = b + 1;
+            c
+        });
+        if !whole || (!word(before) && !word(rest.peek().map(|&(_, c)| c))) {
             if found.ranges.len() == MAX_MATCHES {
                 found.capped = true;
                 break;
@@ -347,7 +356,8 @@ pub fn keys(ui: &egui::Ui, box_id: egui::Id, script: &str, bar: &mut Bar) {
         }
         if let Some(r) = range.filter(|_| ui.memory(|m| m.has_focus(box_id))) {
             let (a, b) = (r.primary.index.0.min(r.secondary.index.0), r.primary.index.0.max(r.secondary.index.0));
-            let picked: String = script.chars().skip(a).take(b - a).collect();
+            // No more of a selection than tells whether it fits the field.
+            let picked: String = script.chars().skip(a).take((b - a).min(FIELD_MAX + 1)).collect();
             let word = !picked.is_empty() && picked.chars().count() <= FIELD_MAX && !picked.contains(['\n', '\r']);
             // The same query keeps what it left out of a longer one.
             if word && bar.query.text != picked {
