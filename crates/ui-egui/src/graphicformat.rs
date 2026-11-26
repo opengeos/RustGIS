@@ -169,8 +169,9 @@ pub fn show(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) {
 
 /// Saves the text typed for a graphic the pane didn't draw this frame (the pane was closed or
 /// hidden, or the selection changed) before its field could say it lost focus. A draft for
-/// another project, or another map than the one shown, is dropped, and that is said (#2987): its
-/// layer ids and rows aren't this one's. Runs once a frame, after the panes and the view.
+/// another project, or another map than the one shown, is dropped, and so is one whose graphic is
+/// gone, and that is said (#2987): the layer ids and rows of another map aren't this one's. Runs once
+/// a frame, after the panes and the view.
 pub(crate) fn save_draft(app: &mut RustGisApp) {
     let drawn = app.graphic_format.drawn.take();
     let Some((k, opened, text)) = app.graphic_format.draft.take() else { return };
@@ -185,9 +186,13 @@ pub(crate) fn save_draft(app: &mut RustGisApp) {
         app.session.notify(tl!("Text typed for a graphic on another map or project was not saved.").to_string(), false);
         return;
     }
-    let current = app.session.map().layer(layer).and_then(|l| graphics::label(&l.dataset, row)).map(str::to_string);
+    let Some(current) = app.session.map().layer(layer).and_then(|l| graphics::label(&l.dataset, row)).map(str::to_string) else {
+        // Its layer was removed, or its row is no longer a text.
+        app.session.notify(tl!("Text typed for a graphic that is no longer there was not saved.").to_string(), false);
+        return;
+    };
     // A blank text goes to `graphics.edit` too, which refuses it and says so, as when Enter ends it.
-    if current.is_some_and(|c| c != text) {
+    if current != text {
         let _ = app.run("graphics.edit", json!({"layer": layer, "row": row, "text": text}));
     }
 }
@@ -330,6 +335,27 @@ mod tests {
         h.run_steps(3);
         assert_eq!(said(&h), 1, "once, not every frame");
         assert!(h.state().graphic_format.draft.is_none());
+    }
+
+    /// A text typed for a graphic that is then gone (its layer removed) is not saved, and that is said once.
+    #[test]
+    fn a_text_typed_for_a_graphic_that_is_gone_says_it_was_not_saved() {
+        let mut app = RustGisApp::with_sample();
+        let added = app.run("graphics.add", json!({"shape": "text", "points": [[10, 50]], "text": "Old"})).unwrap();
+        let (layer, row) = (added["layer"].as_u64().unwrap() as u32, added["row"].as_u64().unwrap() as usize);
+        let mut h = harness(app);
+        h.run_steps(2);
+        h.state_mut().run("select.rows", json!({"layer": layer, "rows": [row]})).unwrap();
+        h.run_steps(3);
+        h.query_all_by_role(Role::MultilineTextInput).find(|n| n.value().as_deref() == Some("Old")).unwrap().focus();
+        h.run_steps(2);
+        h.query_all_by_role(Role::MultilineTextInput).find(|n| n.is_focused()).unwrap().type_text("New");
+        h.run_steps(2);
+        let mark = h.state().session.notice_mark();
+        h.state_mut().run("layer.remove", json!({"layer": layer})).unwrap();
+        h.run_steps(3);
+        let said = h.state().session.notices_since(mark).iter().filter(|n| n.text.contains("was not saved")).count();
+        assert_eq!(said, 1, "{:?}", h.state().session.notices_since(mark).iter().map(|n| &n.text).collect::<Vec<_>>());
     }
 
     /// A text field focused but not edited has nothing pending: switching map says nothing of it (#2987).
