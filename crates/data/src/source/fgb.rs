@@ -313,6 +313,7 @@ impl FgbSource {
         crate::progress::begin(self.info.count.and_then(|n| usize::try_from(n).ok()).unwrap_or(0));
         let mut states = vec![0u8; self.info.fields.len()];
         let mut iter = open_reader(reader)?.select_all().map_err(err)?;
+        let kind = iter.geometry_type();
         while let Some(feature) = iter.next().map_err(err)? {
             crate::progress::step(1)?;
             let mut props = Props {
@@ -325,7 +326,7 @@ impl FgbSource {
             // Reads skip a feature with unreadable properties or geometry and report it in
             // Batch::skipped. Such a feature must not influence the inferred date type either: its
             // geometry is converted as a read converts it.
-            if wkb_of(feature).as_deref().and_then(wkb::decode).is_none()
+            if geometry_of(feature, kind).is_none()
                 || !properties_fit(feature, &self.kinds)
                 || feature.process_properties(&mut props).is_err()
             {
@@ -398,6 +399,7 @@ impl FgbSource {
         if late {
             crate::progress::begin(usize::try_from(matched).unwrap_or(0));
         }
+        let kind = iter.geometry_type();
         while let Some(f) = iter.next().map_err(err)? {
             if late {
                 crate::progress::step(1)?;
@@ -408,7 +410,7 @@ impl FgbSource {
             if !late && !sample.wants() {
                 continue;
             }
-            let geometry = wkb_of(f).as_deref().and_then(wkb::decode).and_then(|g| self.reproject.place(g, req));
+            let geometry = geometry_of(f, kind).and_then(|g| self.reproject.place(g, req));
             let Some(geometry) = geometry else {
                 out.skipped += 1;
                 continue;
@@ -470,11 +472,12 @@ impl FgbSource {
         let mut out = Batch { complete: true, ..Batch::default() };
         let mut n = 0u64;
         crate::progress::begin(iter.features_count().unwrap_or(0));
+        let kind = iter.geometry_type();
         while let Some(f) = iter.next().map_err(err)? {
             crate::progress::step(1)?;
             n += 1;
             let id = numbers.as_ref().and_then(|v| v.get(usize::try_from(n - 1).unwrap_or(usize::MAX)).copied()).unwrap_or(n);
-            let geometry = wkb_of(f).as_deref().and_then(wkb::decode).and_then(|g| self.reproject.place(g, &req));
+            let geometry = geometry_of(f, kind).and_then(|g| self.reproject.place(g, &req));
             let Some(geometry) = geometry else {
                 out.skipped += 1;
                 continue;
@@ -508,9 +511,10 @@ impl FgbSource {
     fn peek_kind(&self) -> GeometryType {
         let first = |r: Box<dyn ReadSeek>| -> Option<GeometryType> {
             let mut iter = open_reader(r).ok()?.select_all().ok()?;
+            let kind = iter.geometry_type();
             for _ in 0..16 {
                 let f = iter.next().ok()??;
-                if let Some(g) = wkb_of(f).as_deref().and_then(wkb::decode) {
+                if let Some(g) = geometry_of(f, kind) {
                     return Some(g.kind());
                 }
             }
@@ -777,6 +781,7 @@ impl FgbSource {
         if late {
             crate::progress::begin(n);
         }
+        let kind = iter.geometry_type();
         while let Some(feat) = iter.next().map_err(err)? {
             if late {
                 crate::progress::step(1)?;
@@ -787,7 +792,7 @@ impl FgbSource {
                 continue;
             }
             let id = hits.items.get(this).map(|(_, i)| i + 1).unwrap_or(this as u64 + 1);
-            let geometry = wkb_of(feat).as_deref().and_then(wkb::decode).and_then(|g| self.reproject.place(g, req));
+            let geometry = geometry_of(feat, kind).and_then(|g| self.reproject.place(g, req));
             let Some(geometry) = geometry else {
                 out.skipped += 1;
                 continue;
@@ -924,36 +929,41 @@ fn field_type(t: ColumnType) -> Option<FieldType> {
     })
 }
 
-/// A feature's geometry as WKB, or `None` when it can't be read: also when its ring or part ends
-/// don't fit its coordinates ([`geometry_fits`]).
-fn wkb_of(feature: &flatgeobuf::FgbFeature) -> Option<Vec<u8>> {
-    if !geometry_fits(feature) {
+/// A feature's geometry as a read takes it, or `None` when it can't be read: also when it doesn't
+/// hold what the reader indexes ([`geometry_fits`]). `kind` is the file's geometry type, from its
+/// header. Reads and the date pass all convert through this, so they skip the same features.
+fn geometry_of(feature: &flatgeobuf::FgbFeature, kind: GeometryKind) -> Option<crate::Geometry> {
+    if !geometry_fits(feature, kind) {
         return None;
     }
-    feature.to_wkb(CoordDimensions::xy()).ok()
+    feature.to_wkb(CoordDimensions::xy()).ok().as_deref().and_then(wkb::decode)
 }
+
+type GeometryKind = flatgeobuf::GeometryType;
 
 /// Whether a feature's geometry holds what flatgeobuf 6.0.1 reads from it, in it and in each of its
 /// parts: an even number of `xy` values, ring or line ends that never go back and stay within them,
-/// and at least one coordinate where a point may be read. The reader indexes `xy` by the ends the
-/// file gives, and reads a point's first coordinate whatever `xy` holds; past the end, or on an end
-/// before the one before it, it panics, which the browser can't catch. A feature that fails this
-/// is skipped as unreadable, as one whose geometry the reader refuses. Found by fuzzing
-/// `read_layers` (#3006).
-fn geometry_fits(feature: &flatgeobuf::FgbFeature) -> bool {
-    // The file's header, which the reader may take over the geometry's own type, isn't reachable
-    // from a feature: the geometry is held to a point's needs. One with no coordinate is empty,
-    // which a read skips anyway.
-    feature.fbs_feature().geometry().is_none_or(|g| geometry_part_fits(&g, 0, true))
+/// and a coordinate where a point is read. The reader indexes `xy` by the ends the file gives, and
+/// reads a point's first coordinate whatever `xy` holds; past the end, or on an end before the one
+/// before it, it panics, which the browser can't catch. A feature that fails this is skipped as
+/// unreadable, as one whose geometry the reader refuses. Found by fuzzing `read_layers` (#3006).
+fn geometry_fits(feature: &flatgeobuf::FgbFeature, kind: GeometryKind) -> bool {
+    // As the reader does: the file's type, or the feature's own when the file says Unknown.
+    feature.fbs_feature().geometry().is_none_or(|g| {
+        let kind = if kind == GeometryKind::Unknown { g.type_() } else { kind };
+        geometry_part_fits(&g, kind, 0)
+    })
 }
 
-fn geometry_part_fits(g: &flatgeobuf::Geometry<'_>, depth: u32, point: bool) -> bool {
+/// [`geometry_fits`] for `g`, read as `kind`.
+fn geometry_part_fits(g: &flatgeobuf::Geometry<'_>, kind: GeometryKind, depth: u32) -> bool {
     // Parts within parts are a collection's; a file nesting them deeper is refused, not followed.
     if depth > 32 {
         return false;
     }
     let values = g.xy().map_or(0, |xy| xy.len());
-    if !values.is_multiple_of(2) || (point && g.xy().is_some() && values < 2) {
+    // A point is read from its own first coordinate; a multi-part geometry's own xy isn't read.
+    if !values.is_multiple_of(2) || (kind == GeometryKind::Point && g.xy().is_some() && values < 2) {
         return false;
     }
     if let Some(ends) = g.ends() {
@@ -966,9 +976,13 @@ fn geometry_part_fits(g: &flatgeobuf::Geometry<'_>, depth: u32, point: bool) -> 
             last = end;
         }
     }
-    // A collection's parts are read by their own type; a multi-polygon's are polygons whatever it says.
-    g.parts()
-        .is_none_or(|parts| parts.iter().all(|part| geometry_part_fits(&part, depth + 1, part.type_() == flatgeobuf::GeometryType::Point)))
+    // A collection's parts are read by their own type; other parts (rings, curves) never as points.
+    g.parts().is_none_or(|parts| {
+        parts.iter().all(|part| {
+            let read_as = if kind == GeometryKind::GeometryCollection { part.type_() } else { GeometryKind::Unknown };
+            geometry_part_fits(&part, read_as, depth + 1)
+        })
+    })
 }
 
 /// Whether a feature's property bytes hold what they say, laid out as FlatGeobuf has them: each a
@@ -1231,6 +1245,63 @@ fn write_run(
     fed?;
     w.write(out).map_err(err)?;
     Ok(Some(left_out))
+}
+
+#[cfg(test)]
+mod geometry_fits_tests {
+    use super::{GeometryKind, geometry_part_fits};
+    use flatbuffers::FlatBufferBuilder;
+    use flatgeobuf::{Geometry, GeometryArgs};
+
+    /// `g`, built in a buffer of its own, as the reader would see it.
+    fn fits(build: impl FnOnce(&mut FlatBufferBuilder<'static>) -> flatbuffers::WIPOffset<Geometry<'static>>, kind: GeometryKind) -> bool {
+        let mut fbb = FlatBufferBuilder::new();
+        let root = build(&mut fbb);
+        fbb.finish(root, None);
+        let g = flatbuffers::root::<Geometry>(fbb.finished_data()).unwrap();
+        geometry_part_fits(&g, kind, 0)
+    }
+
+    fn square<'a>(fbb: &mut FlatBufferBuilder<'a>) -> flatbuffers::WIPOffset<Geometry<'a>> {
+        let xy = fbb.create_vector(&[0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 0.0]);
+        Geometry::create(fbb, &GeometryArgs { xy: Some(xy), type_: GeometryKind::Polygon, ..Default::default() })
+    }
+
+    /// A multi-polygon whose own `xy` is there but empty reads from its parts, so it fits; a point
+    /// with an empty `xy` doesn't, nor a collection's point part (#3006).
+    #[test]
+    fn a_point_is_held_to_its_coordinate_and_a_multi_part_geometry_is_not() {
+        let multi = |kind| {
+            fits(
+                |fbb| {
+                    let part = square(fbb);
+                    let parts = fbb.create_vector(&[part]);
+                    let xy = fbb.create_vector::<f64>(&[]);
+                    Geometry::create(fbb, &GeometryArgs { xy: Some(xy), parts: Some(parts), type_: kind, ..Default::default() })
+                },
+                kind,
+            )
+        };
+        assert!(multi(GeometryKind::MultiPolygon));
+        assert!(multi(GeometryKind::GeometryCollection), "its polygon part fits");
+        // Read as a point, as a file whose header says Point reads it: refused.
+        assert!(!multi(GeometryKind::Point));
+        let empty_point = |fbb: &mut FlatBufferBuilder<'static>| {
+            let xy = fbb.create_vector::<f64>(&[]);
+            Geometry::create(fbb, &GeometryArgs { xy: Some(xy), type_: GeometryKind::Point, ..Default::default() })
+        };
+        assert!(!fits(empty_point, GeometryKind::Point));
+        let collection = fits(
+            |fbb| {
+                let point = empty_point(fbb);
+                let parts = fbb.create_vector(&[point]);
+                Geometry::create(fbb, &GeometryArgs { parts: Some(parts), type_: GeometryKind::GeometryCollection, ..Default::default() })
+            },
+            GeometryKind::GeometryCollection,
+        );
+        assert!(!collection, "a collection reads its point part as a point");
+        assert!(fits(square, GeometryKind::Polygon));
+    }
 }
 
 #[cfg(test)]
