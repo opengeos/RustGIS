@@ -3180,7 +3180,8 @@ impl Layout {
                 }
                 ElementKind::Text { text, size, letter_spacing, rotation: turn, valign, line_spacing, case, .. } => {
                     *turn = rotation(*turn);
-                    // A file's unknown name or wrong kind of value is read as a marker: back to the default.
+                    // A file's unknown name or wrong kind of value is read as a marker: back to the
+                    // default.
                     *valign = valign.kept();
                     *case = case.kept();
                     *line_spacing = line_spacing_in_range(*line_spacing);

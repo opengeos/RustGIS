@@ -543,8 +543,8 @@ mod tests {
         assert_eq!(h.state().settled, ["italic"]);
     }
 
-    /// A layout text's Vertical alignment, Line spacing and Case show only where they are lent (not on a
-    /// text graphic); picking another item settles it, picking the current one doesn't.
+    /// A layout text's Vertical alignment, Line spacing and Case show only where they are lent (not
+    /// on a text graphic); picking another item settles it, picking the current one doesn't.
     #[test]
     fn block_rows_show_only_when_lent_and_are_settled() {
         let mut h = harness(Form { text: "T".into(), size: 12.0, styled: true, line_spacing: 1.0, ..Form::default() });

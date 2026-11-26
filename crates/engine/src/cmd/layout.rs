@@ -6121,15 +6121,15 @@ fn frame_view_changed(s: &mut Session, li: usize, frame: u32, basis: Option<&Box
 /// them out (one place, one width, none locked), take the width that bar and the text under it
 /// (its tokens filled as the page draws them, measured as drawn) now need, kept on the side of the
 /// frame they are nearer, the text measured in its case. A layout without them, with them moved
-/// apart, with that text spaced out or in another font, naming a map series page (which differs from page to
-/// page), or of a frame other than the first (whose map the page fills the text from) is left as
-/// it is; so is a text longer than the widest box a publication gives. Only a box as wide as
-/// `before` (what it was measured from before the change: its frame, bar and text) is measured
-/// again: one set by hand keeps its width. A change to the text under the bar or to anything of
-/// the bar's that changes its labels or their room (its units, divisions, text size, subdivisions,
-/// divisions before zero, labels, unit label and where it sits, decimals or fit) measures it again
-/// too, with every setting the bar has. A box that would then cover the legend, locator or north
-/// arrow, which it didn't, stays as it was, which is said.
+/// apart, with that text spaced out or in another font, naming a map series page (which differs
+/// from page to page), or of a frame other than the first (whose map the page fills the text
+/// from) is left as it is; so is a text longer than the widest box a publication gives. Only a
+/// box as wide as `before` (what it was measured from before the change: its frame, bar and text)
+/// is measured again: one set by hand keeps its width. A change to the text under the bar or to
+/// anything of the bar's that changes its labels or their room (its units, divisions, text size,
+/// subdivisions, divisions before zero, labels, unit label and where it sits, decimals or fit)
+/// measures it again too, with every setting the bar has. A box that would then cover the legend,
+/// locator or north arrow, which it didn't, stays as it was, which is said.
 fn refit_scale_box(s: &mut Session, li: usize, before: &BoxBasis) {
     let frame = before.frame;
     let Some(now) = scale_box_basis(s, li).filter(|b| b.frame == frame) else { return };
