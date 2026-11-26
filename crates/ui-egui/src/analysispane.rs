@@ -2327,7 +2327,9 @@ fn script(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, fit: bool) {
     }
     // Over the box's top right, once it is laid out; a replace it makes comes after the box's own
     // keys, so it is not read as what a key did.
-    crate::scriptfind::show(ui, box_id, &mut app.workflow.script, running, out.inner_rect);
+    if let Some(cut) = crate::scriptfind::show(ui, box_id, &mut app.workflow.script, running, out.inner_rect) {
+        app.session.notify(cut, false);
+    }
     // Where the box's cursor is (#2831), focused or not, on the right of a row of its own: the
     // row of buttons has no room for it in a narrow pane. The row is there before the box has a
     // cursor too, so nothing below moves when it gets one. Read from the box's state as it is
@@ -3324,6 +3326,10 @@ mod tests {
         h.run();
         // 200 characters in a script of 400: two matches. All 400 would be one.
         h.get_by_label("1 of 2");
+        // What was left out is said, under the fields and in Messages.
+        let cut = "The Find field takes 200 characters: 200 left out";
+        h.get_by_label(cut);
+        assert!(h.state().session.notices.iter().any(|n| n.text == cut), "{:?}", h.state().session.notices);
         // The Replace field takes no more either: Replace All writes it once per match, so a long
         // paste would make the script the matches times its length.
         h.get_by_label("Toggle Replace").click();
@@ -3332,6 +3338,9 @@ mod tests {
         h.run();
         h.event(Event::Text("b".repeat(400)));
         h.run();
+        let cut = "The Replace field takes 200 characters: 200 left out";
+        h.get_by_label(cut);
+        assert!(h.state().session.notices.iter().any(|n| n.text == cut), "{:?}", h.state().session.notices);
         h.get_by_label("Replace All").click();
         h.run();
         assert_eq!(h.state().workflow.script, "b".repeat(400), "200 characters for each of the two matches");
@@ -3384,6 +3393,39 @@ mod tests {
         h.ctx.memory_mut(|m| m.surrender_focus(box_id.with("find_query")));
         h.run();
         assert!(!taken(&h, "f", "KeyF"), "given back when the focus leaves");
+    }
+
+    /// What fits the fields is neither cut nor said (#2996).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_find_query_that_fits_says_nothing() {
+        use egui::{Event, Key, Modifiers};
+        use egui_kittest::kittest::Queryable;
+        let mut app = RustGisApp::with_sample();
+        app.workflow.script = "a".repeat(400);
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(900.0, 800.0)).build_ui_state(
+            move |ui, app: &mut RustGisApp| {
+                // The icons draw letters: the fonts first, as the other pane tests do.
+                if !fonts {
+                    crate::theme::install_fonts(ui.ctx(), &[], None);
+                    fonts = true;
+                    return;
+                }
+                script_pane(app, ui, &Tokens::light());
+            },
+            app,
+        );
+        h.run();
+        h.ctx.memory_mut(|m| m.request_focus(egui::Id::unique("script_text")));
+        h.run();
+        h.key_press_modifiers(Modifiers::COMMAND, Key::F);
+        h.run();
+        h.event(Event::Text("a".repeat(200)));
+        h.run();
+        h.get_by_label("1 of 2");
+        assert!(h.query_by_label_contains("left out").is_none());
+        assert!(!h.state().session.notices.iter().any(|n| n.text.contains("left out")));
     }
 
     /// The editor shortcuts around the find bar (#2996): Ctrl+H opens it with the Replace row, F3 and

@@ -131,6 +131,8 @@ struct Bar {
     focus_query: bool,
     /// The Replace row is shown.
     replace_open: bool,
+    /// What the last change of a field left out of it, said under the fields.
+    cut: Option<String>,
     found: std::sync::Arc<Found>,
     /// What `found` was worked out for: the script's hash, the query and the case.
     key: Option<(u64, String, bool, bool)>,
@@ -312,14 +314,16 @@ enum Toggle {
 /// under the arrow at its left, a field for what to replace with and the Replace and Replace All
 /// buttons. Does what it's asked: a replace changes `script` as one undo step of the box, which
 /// `running` forbids.
-pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: bool, area: egui::Rect) {
+pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: bool, area: egui::Rect) -> Option<String> {
     use egui::text::{CCursor, CCursorRange};
     let id = box_id.with("find");
     let (query_id, replace_id) = (box_id.with("find_query"), box_id.with("find_replace"));
     let mut bar: Bar = ui.data_mut(|d| d.get_temp(id)).unwrap_or_default();
     if !bar.open {
-        return;
+        return None;
     }
+    // What a field lost this frame, for Messages too.
+    let mut said = None;
     let total = bar.found.ranges.len();
     let capped = bar.found.capped;
     let width = (area.width() - 2.0 * EDGE).clamp(MIN_BAR, MAX_BAR);
@@ -353,7 +357,6 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
                         egui::TextEdit::singleline(&mut bar.query)
                             .id(query_id)
                             .desired_width(field)
-                            .char_limit(FIELD_MAX)
                             .margin(egui::Margin { left: 6, right: 54, top: 3, bottom: 3 })
                             .hint_text(tl!("Find")),
                     );
@@ -375,6 +378,13 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
                     }
                     if query.changed() {
                         bar.reseek = true;
+                        let cut = cap(&mut bar.query).map(|n| {
+                            crate::i18n::fmt(
+                                "The Find field takes {max} characters: {n} left out",
+                                &[("max", &FIELD_MAX.to_string()), ("n", &n.to_string())],
+                            )
+                        });
+                        said = say_once(&mut bar.cut, cut);
                     }
                     let shift = ui.input(|i| i.modifiers.shift);
                     if query.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
@@ -417,12 +427,20 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
                             egui::TextEdit::singleline(&mut bar.replace)
                                 .id(replace_id)
                                 .desired_width(field)
-                                .char_limit(FIELD_MAX)
                                 .margin(egui::Margin { left: 6, right: 6, top: 3, bottom: 3 })
                                 .hint_text(tl!("Replace")),
                         );
                         // Under the count, the Replace buttons: one match, and all of them.
                         ui.add_space(COUNT_WIDTH + GAP);
+                        if replace.changed() {
+                            let cut = cap(&mut bar.replace).map(|n| {
+                                crate::i18n::fmt(
+                                    "The Replace field takes {max} characters: {n} left out",
+                                    &[("max", &FIELD_MAX.to_string()), ("n", &n.to_string())],
+                                )
+                            });
+                            said = say_once(&mut bar.cut, cut);
+                        }
                         let can = !running && bar.current.is_some();
                         let wait = tl!("Wait for the run to finish").to_string();
                         let (one_say, all_say) = (tl!("Replace (Enter)").to_string(), tl!("Replace All").to_string());
@@ -463,6 +481,9 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
                             todo = Some(Action::Close);
                         }
                     });
+                }
+                if let Some(cut) = &bar.cut {
+                    ui.label(egui::RichText::new(cut).small().color(ui.visuals().warn_fg_color));
                 }
             });
         });
@@ -511,6 +532,7 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
         ui.ctx().request_repaint();
     }
     ui.data_mut(|d| d.insert_temp(id, bar));
+    said
 }
 
 /// The chords the Script box and its find bar take while one of them has the focus, as (Alt, Shift,
@@ -528,6 +550,22 @@ pub fn browser_keys(ctx: &egui::Context) -> &'static [(bool, bool, egui::Key)] {
     } else {
         &[]
     }
+}
+
+/// Cuts `text` to [`FIELD_MAX`] characters, and says how many it left out, if any.
+fn cap(text: &mut String) -> Option<usize> {
+    let (end, _) = text.char_indices().nth(FIELD_MAX)?;
+    let left = text[end..].chars().count();
+    text.truncate(end);
+    Some(left)
+}
+
+/// Keeps `cut` as the bar's note, and gives it back when it is news: a key held past the limit
+/// says it once, in Messages too, not once a keystroke.
+fn say_once(note: &mut Option<String>, cut: Option<String>) -> Option<String> {
+    let news = cut.clone().filter(|c| note.as_ref() != Some(c));
+    *note = cut;
+    news
 }
 
 /// The fill of a match, and of the current one: amber over the text, translucent, as the stop's
@@ -596,6 +634,17 @@ mod tests {
         bar.case = false;
         bar.whole = true;
         assert!(!bar.is_current("cat dog"), "Match Whole Word changed");
+    }
+
+    #[test]
+    fn a_cut_is_said_once_while_it_repeats() {
+        let mut note = None;
+        let cut = || Some("1 left out".to_string());
+        assert_eq!(say_once(&mut note, cut()), cut());
+        assert_eq!(say_once(&mut note, cut()), None, "held past the limit");
+        assert_eq!(say_once(&mut note, None), None);
+        assert_eq!(note, None, "a change that fits takes the note away");
+        assert_eq!(say_once(&mut note, cut()), cut(), "said again after");
     }
 
     #[test]
