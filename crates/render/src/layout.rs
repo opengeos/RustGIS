@@ -7521,12 +7521,21 @@ mod tests {
     /// rows shrink with the text down to the least size, and its labels about as wide as each other
     /// (the other values' too), so no column is much narrower than the rest.
     fn rows_map(n: usize) -> Map {
+        point_rows_map(n, Some(4.0))
+    }
+
+    /// [`rows_map`] with its symbols `symbol_size` points across, or as large as a point layer's own
+    /// default when `None`: such a symbol holds its row open however small the text.
+    fn point_rows_map(n: usize, symbol_size: Option<f64>) -> Map {
         use rustgis_data::{Dataset, Field, FieldType, Geometry, Value};
         let mut map = Map::new("m");
         let mut d = Dataset::new("pts", GeometryType::Point, vec![Field::new("g", FieldType::Text)]);
         d.push(Some(Geometry::Point(Coord::new(0.0, 0.0))), vec![Value::Text("c0".into())]);
         let pts = map.add_dataset(d);
-        let s = |c| rustgis_map::Symbol { size: 4.0, ..rustgis_map::Symbol::default_for(GeometryType::Point, c) };
+        let s = |c| {
+            let symbol = rustgis_map::Symbol::default_for(GeometryType::Point, c);
+            rustgis_map::Symbol { size: symbol_size.map_or(symbol.size, |z| z as f32), ..symbol }
+        };
         if let Some(l) = map.layers.iter_mut().find(|l| l.id == pts) {
             let classes = (0..n.saturating_sub(2) as u32).map(|i| (format!("c{i}"), s(i))).collect();
             l.renderer = rustgis_map::Renderer::Unique {
@@ -7836,6 +7845,107 @@ mod tests {
                 assert!(got.data() != render(&as_set, &mut as_set_maps, dpi, &PageInfo::default()).unwrap().data(), "{fit:?} as set");
             }
         }
+    }
+
+    /// A fitted legend's SVG and its vector PDF are those of the manual legend of the columns and
+    /// text size it fitted to: both are written from the recorded page, so neither has a legend of
+    /// its own to drift. It fails if the SVG or the PDF drew a legend by some path other than
+    /// `legend_missing` (the fitted and the manual would then differ), or if the fit changed
+    /// nothing (the fitted would then equal the manual legend as set).
+    #[test]
+    fn a_fitted_legend_exports_as_a_manual_legend_of_its_fitted_size() {
+        let mm = 25.4 / 96.0;
+        let row = f64::from(LEGEND_ROW) * mm;
+        let two_across = {
+            let map = rows_map(32);
+            f64::from(2.0 * widest(&legend_rows(&map, None, &opts(true)), (1e6, 1.0)) + LEGEND_COLUMN_GAP + 1.0) * mm
+        };
+        let asked = LegendAsked {
+            all_classes: true,
+            hide_other: false,
+            show_no_data: false,
+            layer_names: true,
+            text_size: 9.0,
+            exclude: &[],
+            labels: &NO_LABELS,
+        };
+        let info = PageInfo::default();
+        let export = |(page, mut maps, _): (Layout, Vec<Map>, f64)| {
+            let svg = crate::svg::layout_svg(&page, &mut maps, 72.0, &info).unwrap().0;
+            let (drawing, _) = render_drawing(&page, &mut maps, 150.0, &info).unwrap();
+            let pdf = crate::pdf::write(&[crate::pdf::Page::drawing(drawing, page.width, page.height)], "Legend");
+            (svg, pdf)
+        };
+        let boxes = [
+            (LegendFit::AdjustSize, (40.0, 20.0 * row)),
+            (LegendFit::AdjustColumns, (100.0, 12.0 * row)),
+            (LegendFit::AdjustColumnsAndSize, (two_across, 12.0 * row)),
+        ];
+        for (fit, room) in boxes {
+            let (_, mut maps, scale) = fit_page(rows_map(32), room, (1, fit), ("", 9.0));
+            let f = legend_fitted_mm(&mut maps[0], scale, &asked, (1, fit), room).unwrap();
+            assert!((f.text_size < 9.0 || f.columns > 1) && !f.too_tall && !f.too_wide, "{fit:?} fits otherwise than set: {f:?}");
+            let (svg, pdf) = export(fit_page(rows_map(32), room, (1, fit), ("", 9.0)));
+            let (manual_svg, manual_pdf) = export(fit_page(rows_map(32), room, (f.columns, LegendFit::Manual), ("", f.text_size)));
+            let (set_svg, set_pdf) = export(fit_page(rows_map(32), room, (1, LegendFit::Manual), ("", 9.0)));
+            // Not two empty pages: the legend's own text is in the SVG.
+            assert!(svg.contains(r#"aria-label="c0""#), "{fit:?}: the legend's text is written");
+            assert!(svg == manual_svg, "{fit:?}: the SVG of the fitted legend is the manual one's");
+            assert!(pdf == manual_pdf, "{fit:?}: the PDF of the fitted legend is the manual one's");
+            assert!(svg != set_svg, "{fit:?}: the SVG differs from the legend as set");
+            assert!(pdf != set_pdf, "{fit:?}: the PDF differs from the legend as set");
+        }
+    }
+
+    /// adjustSize with the default point symbols in a box too short for them: a row is never
+    /// shorter than its symbol, so shrinking the text can't make 32 of them fit 20 rows' height. The
+    /// fit goes to the 4 point floor and says it is still too tall. It fails if a fit stopped short
+    /// of the floor (the size would be above 4), called a cut legend fitting (`too_tall` would be
+    /// false), or if the symbols no longer held their rows open (the first assertion).
+    #[test]
+    fn adjust_size_stops_at_the_floor_when_symbols_hold_the_rows_open() {
+        let map = point_rows_map(32, None);
+        let rows = legend_rows(&map, None, &opts(true));
+        let room = (500.0, 20.0 * LEGEND_ROW);
+        let symbols: f32 = rows.iter().map(|row| row.symbol_side(1e6)).sum();
+        assert!(symbols > room.1, "the symbols alone ({symbols}) are taller than the room ({})", room.1);
+        let f = fit_legend(&rows, (1, LegendFit::AdjustSize), room, (1e6, 9.0));
+        assert_eq!((f.columns, f.text_size, f.too_wide, f.too_tall), (1, 4.0, false, true), "{f:?}");
+        assert_eq!(f.size, legend_size(4.0));
+        // The same rows with small symbols fit by shrinking (the test of that is above).
+        let small = rows_map(32);
+        let rows = legend_rows(&small, None, &opts(true));
+        assert!(!fit_legend(&rows, (1, LegendFit::AdjustSize), room, (1e6, 9.0)).too_tall);
+    }
+
+    /// A web layer's legend picture is a pixel a point at the default size and shrinks with the
+    /// text: adjustSize draws it smaller than the manual legend and holds it in its box. It fails
+    /// if a picture kept its size under a fit (the fitted height would equal the manual one, or
+    /// the box would stay too short).
+    #[test]
+    fn adjust_size_shrinks_a_legend_picture() {
+        let url = "https://tiles.test/waits/fit-picture-legend.png";
+        let fetch = crate::tiles::tests::hold_fetch(url);
+        let mut map = Map::new("m");
+        let mut tile = rustgis_map::TileLayer::new("Walls", rustgis_map::TileKind::Raster, "https://tiles.test/red/{z}/{x}/{y}.png");
+        tile.legends = vec![rustgis_data::ogc::Legend { url: url.into(), ..Default::default() }];
+        map.tiles.push(tile);
+        assert!(tile_legends_pending(&map, 1e6, &[]), "the picture is asked for");
+        fetch.recv_timeout(std::time::Duration::from_secs(5)).unwrap()(Ok(red_picture()));
+        wait_for_tile_legends(&map, 1e6, &[], web_time::Instant::now() + LEGEND_WAIT).unwrap();
+        assert!(!tile_legends_pending(&map, 1e6, &[]), "the picture has landed");
+        let rows = legend_rows(&map, None, &opts(true));
+        assert_eq!(row_kinds(&rows), ["Head", "Picture"]);
+        // A box 70 percent as tall as the legend at 9 points.
+        let manual = measure(&rows, 1, (1e6, legend_size(9.0)));
+        let room = (500.0, 0.7 * manual.1);
+        let f = fit_legend(&rows, (1, LegendFit::AdjustSize), room, (1e6, 9.0));
+        assert!(f.text_size < 9.0 && f.text_size >= 4.0 && !f.too_tall && !f.too_wide, "{f:?}");
+        let fitted = measure(&rows, 1, (1e6, f.size));
+        assert!(fitted.1 < manual.1 && fitted.1 <= room.1 + 1e-3, "{} against {} in {}", fitted.1, manual.1, room.1);
+        assert!(rows[1].height(1e6, f.size) < rows[1].height(1e6, legend_size(9.0)), "the picture itself is smaller");
+        // As set it is cut.
+        assert!(fit_legend(&rows, (1, LegendFit::Manual), room, (1e6, 9.0)).too_tall);
     }
 
     /// Legends with nothing to list, a box shorter than its title or no room at all draw and fit
