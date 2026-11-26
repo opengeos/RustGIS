@@ -74,10 +74,12 @@ const BYTE_COUNT_CHUNK: usize = 1 << 20;
 fn byte_stats(cells: &[f32]) -> Result<Option<BandStats>, String> {
     let chunks: Vec<&[f32]> = cells.chunks(BYTE_COUNT_CHUNK).collect();
     crate::control::begin(chunks.len());
-    // Two chunks, two million cells, before threads pay off.
-    let counted = crate::parallel::try_map(
+    // Two chunks, two million cells, before threads pay off; each thread takes one at a time, as
+    // there are few of them.
+    let threads = crate::parallel::threads_for_each(chunks.len(), 2, 0);
+    let counted = crate::parallel::try_map_each_on(
         &chunks,
-        2,
+        threads,
         || (),
         |_, _, chunk: &&[f32]| {
             let mut counts = [0u64; 256];
@@ -3165,12 +3167,16 @@ mod tests {
                 .clone()
         };
         for azimuth in [0.0, 135.0, 315.0] {
-            let shade = hillshade(&dem, 0, azimuth, 45.0, 1.0).unwrap_or_default();
+            let shade = hillshade(&dem, 0, azimuth, 45.0, 1.0).unwrap_or_else(|e| panic!("{e}"));
+            let mut bytes = shade.clone();
+            bytes.iter_mut().filter(|v| !v.is_finite() || **v < 1.0).for_each(|v| *v = 0.0);
+            assert!(matches!(byte_stats(&bytes), Ok(Some(_))), "azimuth {azimuth}: not counted as bytes");
             let out = derive_hillshade(&dem, "shade", shade).unwrap_or_else(|e| panic!("{e}"));
             assert_eq!(out.bands[0].stats, measured(out.bands[0].data.clone()), "azimuth {azimuth}");
         }
         let mut fractions = vec![3.5_f32; w * h];
         fractions[0] = 300.0;
+        assert!(matches!(byte_stats(&fractions), Ok(None)), "fractions counted as bytes");
         let out = derive_hillshade(&dem, "shade", fractions.clone()).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(out.bands[0].stats, measured(fractions));
     }
