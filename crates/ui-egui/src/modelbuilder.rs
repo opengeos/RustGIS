@@ -624,7 +624,9 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let full = ui.available_rect_before_wrap();
     ui.painter().rect_filled(full, 0.0, t.pane);
-    let bar = Rect::from_min_size(full.min, vec2(full.width(), 40.0));
+    // A shell with its own interface puts a finger-sized Back to the map in the toolbar.
+    let bar_h = if app.chrome.is_some() { crate::chrome::FINGER + 12.0 } else { 40.0 };
+    let bar = Rect::from_min_size(full.min, vec2(full.width(), bar_h));
     let body = Rect::from_min_max(pos2(full.min.x, bar.max.y), full.max);
     let narrow = body.width() < 760.0;
     let palette_w = if narrow { 0.0 } else { PALETTE_W };

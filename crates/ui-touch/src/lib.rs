@@ -2348,9 +2348,10 @@ mod tests {
         let words = held.frame(Vec::new());
         let foot = held.app.map.view_rect.unwrap().0.max.y;
         let toasts: Vec<Rect> = words.iter().filter(|(text, _)| text.starts_with("Toast ")).map(|(_, at)| *at).collect();
-        assert!(!toasts.is_empty(), "the newest is shown");
-        for at in toasts {
+        assert!(toasts.len() > 1, "the map above the sheet has room for more than one: {toasts:?}");
+        for (i, at) in toasts.iter().enumerate() {
             assert!(at.max.y <= foot, "{at:?} is over the sheet, below {foot}");
+            assert!(toasts[i + 1..].iter().all(|other| !other.intersects(*at)), "{at:?} overlaps another");
         }
     }
 
