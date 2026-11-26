@@ -12,7 +12,9 @@ package org.rustgis.mobile;
  * neither read, written over nor removed.
  *
  * Each call answers with a line: "ok" (with the secret after a tab, for a load that found one),
- * "none" (a load that found none), "unavailable" or "failed", each with the reason after a tab.
+ * "none" (a load that found none), "unavailable" with the system's reason after a tab, or
+ * "failed" with a code after a tab (newer, unwritten, damaged, no-key, undecryptable, error) and
+ * the system's reason, if any, after another: the Rust side words them (src/vaultanswer.rs).
  * Called on any thread, one call at a time.
  */
 final class SecretVault {
@@ -24,8 +26,8 @@ final class SecretVault {
     private static final int VERSION = 1;
     private static final String CIPHER = "AES/GCM/NoPadding";
     private static final int TAG_BITS = 128;
-    private static final String NEWER = "failed\tit was kept by a newer RustGIS: update RustGIS to use it";
-    private static final String UNWRITTEN = "failed\tthe app's storage can't be written to";
+    private static final String NEWER = "failed\tnewer";
+    private static final String UNWRITTEN = "failed\tunwritten";
 
     private SecretVault() {}
 
@@ -41,12 +43,12 @@ final class SecretVault {
             }
             String[] parts = kept.split("\\.", -1);
             if (version != VERSION || parts.length != 3) {
-                return "failed\tthe kept secret is damaged";
+                return "failed\tdamaged";
             }
             javax.crypto.SecretKey key = key(false);
             if (key == null) {
                 // Restored to another device, say: the key never leaves the one it was made on.
-                return "failed\tthe kept secret can't be decrypted: the keystore no longer has its key";
+                return "failed\tno-key";
             }
             byte[] iv = android.util.Base64.decode(parts[1], android.util.Base64.NO_WRAP);
             byte[] sealed = android.util.Base64.decode(parts[2], android.util.Base64.NO_WRAP);
@@ -60,9 +62,9 @@ final class SecretVault {
             return "unavailable\t" + reason(e);
         } catch (java.security.GeneralSecurityException | IllegalArgumentException e) {
             // A damaged entry, or one sealed with a key the keystore no longer has.
-            return "failed\tthe kept secret can't be decrypted: " + reason(e);
+            return "failed\tundecryptable\t" + reason(e);
         } catch (RuntimeException e) {
-            return "failed\t" + reason(e);
+            return "failed\terror\t" + reason(e);
         }
     }
 
@@ -85,7 +87,7 @@ final class SecretVault {
                 | java.security.ProviderException e) {
             return "unavailable\t" + reason(e);
         } catch (java.security.GeneralSecurityException | RuntimeException e) {
-            return "failed\t" + reason(e);
+            return "failed\terror\t" + reason(e);
         }
     }
 
@@ -98,7 +100,7 @@ final class SecretVault {
             }
             return before == null || file.delete() || !file.exists() ? "ok" : UNWRITTEN;
         } catch (java.io.IOException | RuntimeException e) {
-            return "failed\t" + reason(e);
+            return "failed\terror\t" + reason(e);
         }
     }
 
@@ -119,10 +121,18 @@ final class SecretVault {
                 out.getFD().sync();
             }
             java.nio.file.Files.move(part.toPath(), file.toPath(), java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+            // The rename on the disk too. It is made whatever this comes to: only a power cut
+            // before Android writes the folder could still undo it.
+            try (java.nio.channels.FileChannel dir =
+                    java.nio.channels.FileChannel.open(folder.toPath(), java.nio.file.StandardOpenOption.READ)) {
+                dir.force(true);
+            } catch (java.io.IOException | RuntimeException e) {
+                android.util.Log.w("rustgis", "the secrets' folder wasn't synced: " + reason(e));
+            }
             return "ok";
         } catch (java.io.IOException | RuntimeException e) {
             part.delete();
-            return UNWRITTEN + ": " + reason(e);
+            return UNWRITTEN + "\t" + reason(e);
         }
     }
 
