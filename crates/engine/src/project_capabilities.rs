@@ -1278,6 +1278,7 @@ mod tests {
             (&["graticule-color"], "map.graticule", json!({"color": "#000000"})),
             (&["layout-element-ink"], "layout.import", json!({"text": ink_layout})),
             (&["layout-element-wrap"], "layout.addElement", json!({"kind": "text", "wrap": true})),
+            (&["layout-text-block"], "layout.update", json!({"element": 1, "lineSpacing": 1.5})),
             (&["layout-chart-data"], "layout.addElement", json!({"kind": "chart", "group": "Region"})),
             (&["layout-chart-look"], "layout.update", json!({"element": 1, "values": true})),
             (&["layout-chart-classes"], "layout.update", json!({"element": 1, "classes": true})),
