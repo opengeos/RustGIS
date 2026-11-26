@@ -99,14 +99,15 @@ impl Budget {
     pub(crate) fn trim(&mut self, live: &Project, undo: &mut Vec<Step>, redo: &mut Vec<Step>) -> Option<NoticeText> {
         let mut seen: HashSet<_> = rows(live).map(|features| features.allocation_key().as_ptr() as usize).collect();
         seen.extend(self.readers.allocations().iter().map(|key| key.as_ptr() as usize));
-        // Rasters the open project holds cost history nothing, as its rows don't (#2908).
+        // Rasters the open project holds cost history nothing, as its rows don't (#2908): this
+        // only marks them seen, and the total it returns is not needed.
         let mut rasters_seen = HashSet::new();
-        raster_bytes(std::iter::once(live), &mut rasters_seen);
+        let _ = raster_bytes(std::iter::once(live), &mut rasters_seen);
         let mut used = 0u64;
         let undo_protected = usize::from(!undo.is_empty());
         let mut account = |step: &Step| {
-            let rows = self.private_bytes(&step.8, &mut seen) as u64;
-            used = used.saturating_add(rows).saturating_add(raster_bytes(std::iter::once(&step.0), &mut rasters_seen));
+            let stored = self.private_bytes(&step.8, &mut seen) as u64;
+            used = used.saturating_add(stored).saturating_add(raster_bytes(std::iter::once(&step.0), &mut rasters_seen));
             used <= self.limit as u64
         };
 
