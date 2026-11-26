@@ -18971,8 +18971,8 @@ fn hillshade_is_made_and_written_as_bytes() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
-/// A made raster's plain export writes the GeoTIFF the layer embeds, the same bytes an encode
-/// would; once its pixels change, the export encodes them.
+/// A made raster embeds the bytes an encode would write, and its plain export writes the file the
+/// layer embeds; once its pixels change, the export encodes them.
 #[test]
 fn exporting_a_made_raster_writes_its_embedded_file_until_its_pixels_change() {
     let mut s = world();
@@ -18985,10 +18985,15 @@ fn exporting_a_made_raster_writes_its_embedded_file_until_its_pixels_change() {
     assert_eq!(embedded.as_slice(), rustgis_data::raster::geotiff::write(rl.data.as_ref().unwrap(), 0).unwrap().as_slice());
     let dir = std::env::temp_dir().join(format!("rustgis-written-export-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
+    // Marked bytes in its place show which file the export writes: a fresh encode wouldn't hold them.
+    let marked = [embedded.as_slice(), b"written"].concat();
+    let pixels = rl.data.clone().unwrap();
+    drop(rl);
+    s.map_mut().layer_mut(id).unwrap().raster =
+        Some(rustgis_map::RasterLayer::from_written(std::sync::Arc::unwrap_or_clone(pixels), "hill.tif", marked.clone()));
     let tif = dir.join("hill.tif");
     s.run("share.exportRaster", &json!({"layer": id, "path": tif.display().to_string()})).unwrap();
-    assert_eq!(std::fs::read(&tif).unwrap(), *embedded);
-    drop(rl);
+    assert_eq!(std::fs::read(&tif).unwrap(), marked);
     let rl = s.map_mut().layer_mut(id).unwrap().raster.as_mut().unwrap();
     let band = &mut std::sync::Arc::make_mut(rl.data.as_mut().unwrap()).bands[0];
     band.data[0] = if band.data[0] == 7.0 { 8.0 } else { 7.0 };

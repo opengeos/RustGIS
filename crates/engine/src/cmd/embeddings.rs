@@ -526,9 +526,10 @@ fn add_zones(s: &mut Session, p: &Value, d: &emb::EmbeddingDataset, name: Option
     let year = year(d, p)?;
     let b = bands(p, z.bands, tessera::DEFAULT_BANDS)?;
     let none = format!("{} has no embeddings there", z.name);
-    let (r, tif) = match handed(s, p)? {
+    // Whether `tif` is the file `geotiff::write` wrote of `r`, rather than one handed over.
+    let (r, tif, written) = match handed(s, p)? {
         Some((_, tif)) => match raster::read_bytes(&format!("{}.tif", z.id), &tif) {
-            Ok(r) if r.bands.iter().any(|band| band.stats.count > 0) => (r, tif),
+            Ok(r) if r.bands.iter().any(|band| band.stats.count > 0) => (r, tif, false),
             Ok(_) => return Err(none),
             Err(e) => return Err(e.to_string()),
         },
@@ -550,7 +551,7 @@ fn add_zones(s: &mut Session, p: &Value, d: &emb::EmbeddingDataset, name: Option
                     s.notify(format!("{}: the view is larger than one read; its centre was read (zoom in for the rest)", z.name), false);
                 }
                 let tif = raster::geotiff::write(&r, 0).map_err(|e| e.to_string())?;
-                (r, tif)
+                (r, tif, true)
             }
         }
     };
@@ -558,7 +559,8 @@ fn add_zones(s: &mut Session, p: &Value, d: &emb::EmbeddingDataset, name: Option
         return Err(none);
     }
     let name = name.unwrap_or_else(|| format!("{} {year} ({})", z.name, band_label(b)));
-    let layer = RasterLayer::from_bytes(r, format!("{}_{year}.tif", z.id), tif);
+    let file = format!("{}_{year}.tif", z.id);
+    let layer = if written { RasterLayer::from_written(r, file, tif) } else { RasterLayer::from_bytes(r, file, tif) };
     let mut out = super::raster::add_raster(s, &name, layer)?;
     if !d.license.is_empty() {
         out["license"] = json!(d.license);
