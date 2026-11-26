@@ -48,6 +48,7 @@ fn reading() -> (Option<u64>, &'static str) {
     }
     #[cfg(all(not(fuzzing), not(target_arch = "wasm32")))]
     {
+        static MEMORY: std::sync::OnceLock<(Option<u64>, &'static str)> = std::sync::OnceLock::new();
         *MEMORY.get_or_init(read)
     }
     #[cfg(all(not(fuzzing), target_arch = "wasm32"))]
@@ -55,10 +56,6 @@ fn reading() -> (Option<u64>, &'static str) {
         (None, "unknown")
     }
 }
-
-/// The memory and its source, once read.
-#[cfg(all(not(fuzzing), not(target_arch = "wasm32")))]
-static MEMORY: std::sync::OnceLock<(Option<u64>, &'static str)> = std::sync::OnceLock::new();
 
 /// What a phone's system allows RustGIS ([`set_phone`]).
 #[cfg(not(target_arch = "wasm32"))]
@@ -69,8 +66,10 @@ struct Phone {
     free: Box<dyn Fn() -> Option<u64> + Send + Sync>,
 }
 
+/// The phone's allowance, or that there is none: settled by [`set_phone`] or by the first read of
+/// the memory, whichever comes first.
 #[cfg(not(target_arch = "wasm32"))]
-static PHONE: std::sync::OnceLock<Phone> = std::sync::OnceLock::new();
+static PHONE: std::sync::OnceLock<Option<Phone>> = std::sync::OnceLock::new();
 
 /// Says RustGIS runs on a phone, for the phone app to call once, before anything asks for a limit.
 /// The limits then plan with `allowed` bytes, what the system lets apps use, in place of the
@@ -80,18 +79,14 @@ static PHONE: std::sync::OnceLock<Phone> = std::sync::OnceLock::new();
 /// memory has been read.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn set_phone(allowed: u64, free: impl Fn() -> Option<u64> + Send + Sync + 'static) -> bool {
-    #[cfg(not(fuzzing))]
-    if MEMORY.get().is_some() {
-        return false;
-    }
-    allowed > 0 && PHONE.set(Phone { allowed, free: Box::new(free) }).is_ok()
+    allowed > 0 && PHONE.set(Some(Phone { allowed, free: Box::new(free) })).is_ok()
 }
 
 /// Whether a phone's app said what its system allows (`set_phone`, which the browser lacks).
 pub fn on_phone() -> bool {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        PHONE.get().is_some()
+        matches!(PHONE.get(), Some(Some(_)))
     }
     #[cfg(target_arch = "wasm32")]
     {
@@ -113,10 +108,12 @@ fn overridden(value: Option<&str>) -> Option<u64> {
 /// `MemoryMax`) when that is lower.
 #[cfg(all(not(fuzzing), not(target_arch = "wasm32")))]
 fn read() -> (Option<u64>, &'static str) {
+    // Settled first, so a phone's app can't say what it allows once this has read without it.
+    let phone = PHONE.get_or_init(|| None);
     if let Some(m) = overridden(std::env::var(OVERRIDE).ok().as_deref()) {
         return (Some(m), "override");
     }
-    if let Some(phone) = PHONE.get() {
+    if let Some(phone) = phone {
         return (Some(phone.allowed), "phone");
     }
     let Some(mut s) = sysinfo::System::new().ok() else { return (None, "unknown") };
@@ -217,7 +214,7 @@ pub fn available() -> Option<u64> {
     {
         match source() {
             "computer" => {}
-            "phone" => return PHONE.get().and_then(|phone| (phone.free)()),
+            "phone" => return PHONE.get().and_then(Option::as_ref).and_then(|phone| (phone.free)()),
             _ => return None,
         }
         let mut s = sysinfo::System::new().ok()?;
@@ -365,6 +362,10 @@ mod tests {
     fn the_memory_is_read_once_and_stays() {
         let first = physical();
         assert!(first.is_none_or(|m| m >= 64 << 20), "{first:?}");
+        assert_eq!(physical(), first);
+        // Once read, a phone's allowance comes too late, and changes nothing.
+        assert!(!set_phone(1 << 30, || None));
+        assert!(!on_phone());
         assert_eq!(physical(), first);
     }
 }

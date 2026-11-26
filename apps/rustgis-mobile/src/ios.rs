@@ -794,7 +794,7 @@ unsafe extern "C" {
 /// job plans. Where it says nothing at start, [`shell::MEMORY_UNSAID`] stands in, with nothing
 /// known to be free.
 fn plan_memory() {
-    let left = || u64::try_from(os_proc_available_memory()).unwrap_or(u64::MAX);
+    let left = || os_proc_available_memory() as u64;
     let start = left();
     let taken = if start > 0 {
         rustgis_engine::data::memory::set_phone(start, move || Some(left()))

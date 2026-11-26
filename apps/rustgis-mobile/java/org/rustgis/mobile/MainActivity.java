@@ -760,14 +760,14 @@ public class MainActivity extends NativeActivity {
     }
 
     /**
-     * The warnings Android 13 and earlier give an app in use. Those for one out of sight aren't
-     * passed on: it draws no frames to take them, and would drop what it is about to draw once
-     * back.
+     * The warnings Android 13 and earlier give a running app, passed on while it is in sight. Out
+     * of sight (a track being recorded) it draws no frames to take them, and would drop what it
+     * is about to draw once back.
      */
     @Override
     public void onTrimMemory(int level) {
         super.onTrimMemory(level);
-        if (level == TRIM_MEMORY_RUNNING_LOW || level == TRIM_MEMORY_RUNNING_CRITICAL) {
+        if (started && (level == TRIM_MEMORY_RUNNING_LOW || level == TRIM_MEMORY_RUNNING_CRITICAL)) {
             add("low-memory");
         }
     }

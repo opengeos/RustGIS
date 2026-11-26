@@ -169,14 +169,10 @@ fn with_meshes<R>(f: impl FnOnce(&mut Meshes) -> R) -> R {
     MESHES.with_borrow_mut(f)
 }
 
-/// Drops the kept meshes ([`crate::release_memory`]), but those a scene being drawn may have
-/// used. A scene on screen shares its meshes' data, so that stays while it does.
+/// Drops every kept mesh ([`crate::release_memory`]), those a scene being drawn has used too: a
+/// scene shares its meshes' data, so what it draws stays while it does.
 pub(crate) fn release() {
-    with_meshes(|m| {
-        let began = m.drawing.iter().map(|d| d.1).min();
-        m.kept.retain(|k| began.is_some_and(|began| k.used > began));
-        m.kept.shrink_to_fit();
-    });
+    with_meshes(|m| m.kept = Vec::new());
 }
 
 /// A scene being drawn, from [`Scene::begin`] until it is dropped (when the scene is done,

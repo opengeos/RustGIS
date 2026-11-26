@@ -1397,8 +1397,9 @@ impl RustGisApp {
     /// sooner ([`Session::release_memory`], the map's drapes, and its textures and buffers on the
     /// graphics card), and says so the first time.
     pub fn release_memory(&mut self) {
-        self.session.release_memory();
+        // The map first: it stops the frames being drawn, which would keep more.
         self.map.release_memory();
+        self.session.release_memory();
         if !std::mem::replace(&mut self.said_low_memory, true) {
             self.session.warn(tl!(
                 "The device is low on memory: RustGIS dropped the map tiles and drawings it kept to draw faster. They are made or downloaded again when needed."

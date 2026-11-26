@@ -56,7 +56,7 @@ impl Phone {
     /// at start, [`shell::MEMORY_UNSAID`] stands in.
     pub fn plan_memory(&self) {
         let activity = self.activity.clone();
-        let total = memory(&activity).map(|(total, _)| total).unwrap_or_else(|| {
+        let total = memory(&activity).map(|(total, _)| total).filter(|total| *total > 0).unwrap_or_else(|| {
             log::warn!("Android didn't say how much memory it has");
             shell::MEMORY_UNSAID
         });
