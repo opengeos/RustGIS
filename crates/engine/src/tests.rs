@@ -54431,6 +54431,7 @@ fn stl_leaves_out_lines_and_skips_flat_triangles_and_says_so() {
         // those left out.
         mesh_feature(json!({"type": "Polygon", "coordinates": [[[0.08, 0.0], [0.09, 0.0], [0.08, 0.0]]]}), 0.0),
         mesh_feature(json!({"type": "Polygon", "coordinates": [[[0.08, 0.03], [0.09, 0.03], [0.1, 0.03], [0.08, 0.03]]]}), 0.0),
+        mesh_feature(json!({"type": "Polygon", "coordinates": [[[0.0, 0.05], [0.01, 0.08], [0.02, 0.11], [0.0, 0.05]]]}), 0.0),
         mesh_feature(
             json!({"type": "Polygon", "coordinates": [[[0.06, 0.0], [0.07, 0.0], [0.070_000_000_01, 0.0], [0.07, 0.01], [0.06, 0.01], [0.06, 0.0]]]}),
             30.0

@@ -1445,9 +1445,18 @@ fn layer_mesh(s: &Session, p: &Value, keep_lines: bool) -> Result<Mesh, String> 
             let shaped = match &*g {
                 Geometry::Polygon(polys) => polys.iter().any(|rings| {
                     rings.first().is_some_and(|r| {
-                        // Twice the ring's signed area (the shoelace sum); a closing vertex adds nothing.
-                        let twice: f64 = r.iter().zip(r.iter().cycle().skip(1)).map(|(a, b)| a.x * b.y - b.x * a.y).sum();
-                        twice.is_finite() && twice != 0.0
+                        // Twice the ring's signed area (the shoelace sum), taken from its first
+                        // vertex so that coordinates far from the origin don't cancel a small
+                        // area out; a closing vertex adds nothing. Against the size of its terms,
+                        // so rounding on a ring along a slanted line isn't taken for an area.
+                        let Some(o) = r.first() else { return false };
+                        let (mut twice, mut terms) = (0.0f64, 0.0f64);
+                        for (a, b) in r.iter().zip(r.iter().cycle().skip(1)) {
+                            let (ax, ay, bx, by) = (a.x - o.x, a.y - o.y, b.x - o.x, b.y - o.y);
+                            twice += ax * by - bx * ay;
+                            terms += (ax * by).abs() + (bx * ay).abs();
+                        }
+                        twice.is_finite() && twice.abs() > 1e-12 * terms
                     })
                 }),
                 Geometry::MultiPoint(points) => !points.is_empty(),

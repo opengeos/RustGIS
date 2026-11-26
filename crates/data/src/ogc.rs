@@ -394,8 +394,11 @@ pub struct ServiceLayer {
     /// style's, each for its scales. None when the service gives none.
     pub legends: Vec<Legend>,
     /// The legend pictures its default style offers that RustGIS can't show: in a format other
-    /// than PNG or JPEG, or at an address other than the web's (an `ftp:` one). A WMS layer's
-    /// count is 1 when none of its style's pictures could be shown and the service draws none.
+    /// than PNG or JPEG, or at an address other than the web's (an `ftp:` one). A WMS style's
+    /// `LegendURL`s are the one legend in other formats or sizes (WMS 1.3.0 §7.2.4.6.4), so a WMS
+    /// layer keeps the first it can show and loses nothing while it has one: its count is 1 when
+    /// none could be shown and the service draws none. A WMTS style's are for different scales,
+    /// so each it can't keep is counted.
     pub legends_left_out: usize,
     /// The Web Mercator zooms its tiles are drawn at, least and greatest, when the service says:
     /// a WMS layer's scale hints, a WMTS layer's tile matrices. `None`: the usual range.
