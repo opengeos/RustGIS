@@ -107,7 +107,7 @@ pub fn add_file(app: &mut RustGisApp, path: &str) -> Result<Value, String> {
         return add(app, json!({"path": path}));
     }
     let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let slot = list_in_background(path, stop.clone());
+    let slot = list_in_background(path, stop.clone(), crate::named_thread("rustgis-list-layers"));
     let opened = app.session.opened;
     app.ui.choosing.push(Chooser {
         path: path.to_string(),
@@ -123,13 +123,18 @@ pub fn add_file(app: &mut RustGisApp, path: &str) -> Result<Value, String> {
 }
 
 /// Lists `path`'s layers (and Add Data's question about it) off the frame: a geodatabase's or
-/// GDAL's listing can take a while. A `stop` set, by a chooser cancelled or closed, stops it
-/// between a GeoPackage's tables ([`list_layers`]).
-fn list_in_background(path: &str, stop: std::sync::Arc<std::sync::atomic::AtomicBool>) -> crate::Slot<Result<Value, String>> {
+/// GDAL's listing can take a while. A `stop` set, by a chooser cancelled or closed, ends the
+/// question between a GeoPackage's tables ([`list_layers`]). `spawn` starts the thread (a test
+/// runs the work where it stands).
+fn list_in_background(
+    path: &str,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    spawn: impl FnOnce(Box<dyn FnOnce() + Send>) -> std::io::Result<()>,
+) -> crate::Slot<Result<Value, String>> {
     let slot: crate::Slot<Result<Value, String>> = crate::Slot::default();
     let out = slot.clone();
     let listed = path.to_string();
-    crate::work_off_frame("rustgis-list-layers", &slot, move || {
+    crate::work_off_frame_with(spawn, &slot, move || {
         let result = list_layers(&listed, stop);
         *out.lock().unwrap_or_else(|e| e.into_inner()) = Some(result);
     });
@@ -137,7 +142,8 @@ fn list_in_background(path: &str, stop: std::sync::Arc<std::sync::atomic::Atomic
 }
 
 /// What [`list_in_background`] runs on its thread: `info.fileLayers` with Add Data's question,
-/// which a `stop` already set (or set while it runs) leaves unmade.
+/// which a `stop` already set (or set while it runs) leaves unmade. The listing itself still runs to
+/// the end.
 fn list_layers(path: &str, stop: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Result<Value, String> {
     let _stop = rustgis_engine::data::progress::also_stop_when(stop);
     let mut session = rustgis_engine::Session::new(rustgis_engine::Project::default());
@@ -359,6 +365,14 @@ mod tests {
         h
     }
 
+    /// Writes `ds` to a GeoPackage at `path` as two tables, `a` and `b`.
+    fn two_table_gpkg(ds: &rustgis_engine::data::Dataset, path: &std::path::Path) {
+        for table in ["a", "b"] {
+            let add = rustgis_engine::data::io::GpkgTable { mode: rustgis_engine::data::io::GpkgMode::AddTable, name: Some(table.into()) };
+            rustgis_engine::data::io::write_path_to(ds, path, rustgis_engine::data::raster::Crs::LonLat, &add).unwrap();
+        }
+    }
+
     /// A chooser whose listing has already landed, for the project `opened`.
     fn listed(opened: u64, path: &str, result: Result<Value, String>) -> Chooser {
         let slot: crate::Slot<Result<Value, String>> = crate::Slot::default();
@@ -500,10 +514,7 @@ mod tests {
         let fgb = dir.path().join("one.fgb");
         rustgis_engine::data::io::write_path(&ds, &fgb).unwrap();
         let gpkg = dir.path().join("two.gpkg");
-        for table in ["a", "b"] {
-            let add = rustgis_engine::data::io::GpkgTable { mode: rustgis_engine::data::io::GpkgMode::AddTable, name: Some(table.into()) };
-            rustgis_engine::data::io::write_path_to(&ds, &gpkg, rustgis_engine::data::raster::Crs::LonLat, &add).unwrap();
-        }
+        two_table_gpkg(&ds, &gpkg);
         let (fgb, gpkg) = (fgb.display().to_string(), gpkg.display().to_string());
         let mut app = RustGisApp::new(Session::new(Project::default()));
         // Dropped, picked or double-clicked, it waits for the answer.
@@ -633,9 +644,10 @@ mod tests {
         assert!(stop.load(std::sync::atomic::Ordering::Relaxed), "the listing is told to stop");
     }
 
-    /// The listing Add Data starts stops when Cancel sets its flag (#2827): a flag already set on
-    /// a GeoPackage of two tables lands a listing with no question made, one still clear lands
-    /// it with one. Deleting `also_stop_when` from [`list_layers`] fails the first.
+    /// The listing Add Data starts stops when Cancel sets its flag (#2827): through
+    /// [`list_in_background`], a flag already set on a GeoPackage of two tables lands a listing
+    /// with no question made, one still clear lands it with one. Deleting `also_stop_when` from
+    /// [`list_layers`], or `list_in_background` passing it another flag, fails the first.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn a_listing_told_to_stop_makes_no_question() {
@@ -645,15 +657,17 @@ mod tests {
         let mut ds = Dataset::new("points", GeometryType::Point, vec![Field::new("name", FieldType::Text)]);
         ds.push(Some(Geometry::Point(Coord::new(0.0, 1.0))), vec![V::Text("p".into())]);
         let gpkg = dir.path().join("two.gpkg");
-        for table in ["a", "b"] {
-            let add = rustgis_engine::data::io::GpkgTable { mode: rustgis_engine::data::io::GpkgMode::AddTable, name: Some(table.into()) };
-            rustgis_engine::data::io::write_path_to(&ds, &gpkg, rustgis_engine::data::raster::Crs::LonLat, &add).unwrap();
-        }
+        two_table_gpkg(&ds, &gpkg);
         let gpkg = gpkg.display().to_string();
-        let told = list_layers(&gpkg, Arc::new(AtomicBool::new(true))).unwrap();
+        let inline = |work: Box<dyn FnOnce() + Send>| {
+            work();
+            Ok(())
+        };
+        let landed = |slot: crate::Slot<Result<Value, String>>| slot.lock().unwrap().take().expect("the work ran").unwrap();
+        let told = landed(list_in_background(&gpkg, Arc::new(AtomicBool::new(true)), inline));
         assert_eq!(told["layers"], json!(["a", "b"]));
         assert!(told.get("link").is_none(), "stopped: no question made: {told}");
-        let free = list_layers(&gpkg, Arc::new(AtomicBool::new(false))).unwrap();
+        let free = landed(list_in_background(&gpkg, Arc::new(AtomicBool::new(false)), inline));
         assert_eq!(free["link"], json!({"linked": false, "copy": true}), "not stopped: a question: {free}");
     }
 
