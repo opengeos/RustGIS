@@ -160,6 +160,7 @@ const COMMAND_CAPABILITIES: &[(&str, CommandCheck)] = &[
     ("graticule-color", command_colors_graticule),
     ("layout-element-ink", command_uses_element_ink),
     ("layout-element-wrap", command_uses_element_wrap),
+    ("layout-text-block", command_uses_text_block),
     ("layout-chart-data", command_uses_chart_data),
     ("layout-chart-look", command_uses_chart_look),
     ("layout-chart-classes", command_uses_chart_classes),
@@ -368,6 +369,37 @@ fn command_uses_element_wrap(id: &str, params: &Value) -> bool {
         "layout.addElement" | "layout.update" => params.get("wrap").and_then(crate::cmd::bool_value) == Some(true),
         "layout.import" => imported_layout_uses(params, &["\"wrap\""], wraps),
         "script.run" => params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, command_uses_element_wrap)),
+        _ => false,
+    }
+}
+
+/// Whether a layout element is a text placed in the middle or at the bottom of its box, spaced
+/// other than at the usual line spacing, or drawn in upper or lower case, once brought into range:
+/// an older reader would draw it at the top, at the usual spacing and as typed.
+fn text_blocks(e: &rustgis_map::layout::Element) -> bool {
+    e.kind.text_uses_block()
+}
+
+/// A layout command that gives a text a block alignment, line spacing or case off its default:
+/// an older reader ignores `valign`, `lineSpacing` and `case` and draws the text at the top, at
+/// the usual spacing and as typed. Each is read as the command reads it, so the defaults
+/// (`"top"`, `1` or `"1"`, `"none"`, in any case) and `null`, which leaves a text as it is, keep a
+/// text as an older reader draws it. A value the command refuses needs nothing either: the command
+/// changes nothing. Only a text takes the keys, so a `layout.update` is read by them alone. A
+/// `layout.import` requires it for such a text once its layout is read into range, so a name it
+/// doesn't know or a spacing that isn't a number, read as the default, needs nothing.
+fn command_uses_text_block(id: &str, params: &Value) -> bool {
+    use rustgis_map::layout::{LINE_SPACING, MAX_LINE_SPACING, MIN_LINE_SPACING, TextCase, TextVAlign};
+    match id {
+        "layout.addElement" | "layout.update" => {
+            let name = |k: &str| params.get(k).and_then(Value::as_str);
+            name("valign").and_then(TextVAlign::from_name).is_some_and(|v| v != TextVAlign::Top)
+                || crate::cmd::f(params, "lineSpacing")
+                    .is_some_and(|v| (MIN_LINE_SPACING..=MAX_LINE_SPACING).contains(&v) && v != LINE_SPACING)
+                || name("case").and_then(TextCase::from_name).is_some_and(|v| v != TextCase::None)
+        }
+        "layout.import" => imported_layout_uses(params, &["\"valign\"", "\"line_spacing\"", "\"case\""], text_blocks),
+        "script.run" => params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, command_uses_text_block)),
         _ => false,
     }
 }
@@ -954,6 +986,7 @@ fn layout_capabilities(layouts: &[rustgis_map::layout::Layout]) -> Vec<&'static 
         (elements().any(|e| e.background.is_some()), "layout-element-background"),
         (elements().any(|e| e.kind.ink().is_some()), "layout-element-ink"),
         (elements().any(wraps), "layout-element-wrap"),
+        (elements().any(text_blocks), "layout-text-block"),
         (elements().any(charts_data), "layout-chart-data"),
         (elements().any(charts_look), "layout-chart-look"),
         (elements().any(charts_classes), "layout-chart-classes"),
@@ -1902,6 +1935,64 @@ mod tests {
                 let saved = serde_json::to_value(Project::from_json(&document.to_string()).unwrap()).unwrap();
                 let expected = if required { json!(["layout-chart-stack"]) } else { Value::Null };
                 assert_eq!(saved.get("requires").cloned().unwrap_or(Value::Null), expected, "{id} {params}");
+            }
+        }
+    }
+
+    /// A text with a block setting is required where it is saved, so an older reader refuses the
+    /// project instead of drawing it at the top, at the usual spacing, as typed, and saving it again
+    /// without them; so is a saved command that sets one. The defaults, null and values read as
+    /// them need nothing.
+    #[test]
+    fn text_block_capability_follows_saved_layouts_and_commands() {
+        use rustgis_map::layout::ElementKind;
+        let fixture = Project::from_json(include_str!("../../../schema/fixtures/layout_text_block.rgis")).unwrap();
+        let saved = serde_json::to_value(&fixture).unwrap();
+        assert_eq!(saved["requires"], json!(["layout-text-block"]));
+        let reread = Project::from_json(&saved.to_string()).unwrap();
+        assert!(reread.layouts[0].elements[1].kind.text_uses_block());
+        assert!(!reread.layouts[0].elements[2].kind.text_uses_block());
+        let mut clean = fixture;
+        for e in &mut clean.layouts[0].elements {
+            if let ElementKind::Text { text, size, color, bold, .. } = &e.kind {
+                e.kind = ElementKind::text(text.clone(), *size, *color, *bold);
+            }
+        }
+        let base = serde_json::to_value(&clean).unwrap();
+        assert!(base.get("requires").is_none(), "a plain text needs nothing");
+        for key in ["valign", "line_spacing", "\"case\""] {
+            assert!(!base["layouts"].to_string().contains(key), "nor writes {key}");
+        }
+        // A name it doesn't know and a spacing that isn't a number read as the defaults.
+        let mut damaged = base["layouts"][0].clone();
+        damaged["elements"][1]["kind"]["Text"]["valign"] = json!("sideways");
+        damaged["elements"][1]["kind"]["Text"]["line_spacing"] = json!("x");
+        for (id, params, required) in [
+            ("layout.addElement", json!({"kind": "text", "valign": "middle"}), true),
+            ("layout.addElement", json!({"kind": "dynamicText", "case": "upper"}), true),
+            ("layout.update", json!({"element": 2, "lineSpacing": 1.5}), true),
+            ("layout.update", json!({"element": 2, "lineSpacing": "0.75"}), true),
+            ("layout.update", json!({"element": 2, "valign": "top", "lineSpacing": 1, "case": "none"}), false),
+            ("layout.update", json!({"element": 2, "valign": " Top ", "lineSpacing": "1", "case": "NONE"}), false),
+            ("layout.update", json!({"element": 2, "lineSpacing": 1.0}), false),
+            ("layout.update", json!({"element": 2, "valign": null, "lineSpacing": null, "case": null}), false),
+            ("layout.update", json!({"element": 2, "wrap": false}), false),
+            ("layout.import", json!({"text": saved["layouts"][0].to_string()}), true),
+            ("layout.import", json!({"text": base["layouts"][0].to_string()}), false),
+            ("layout.import", json!({"text": damaged.to_string()}), false),
+            ("layout.import", json!({"path": "texts.rgislayout"}), false),
+        ] {
+            let script = format!("{id}= {params}");
+            for value in [
+                json!([{"name": "Task", "steps": [{"title": "Text", "command": id, "params": params}]}]),
+                json!([{"name": "Script", "steps": [{"title": "Text", "command": "script.run", "params": {"script": script}}]}]),
+            ] {
+                let mut document = base.clone();
+                document["tasks"] = value;
+                let saved = serde_json::to_value(Project::from_json(&document.to_string()).unwrap()).unwrap();
+                let requires = saved.get("requires").and_then(Value::as_array).cloned().unwrap_or_default();
+                assert_eq!(requires.contains(&json!("layout-text-block")), required, "{id} {params}");
+                assert!(requires.iter().all(|r| r == "layout-text-block"), "{id} {params}: {requires:?}");
             }
         }
     }

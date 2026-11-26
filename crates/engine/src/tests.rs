@@ -8133,6 +8133,9 @@ fn hostile_junk() -> Vec<Value> {
         json!({"kind": "scaleBar", "element": 1, "unitLabelPosition": "", "decimals": "x", "textSize": "NaN", "fit": {"x": 1}}),
         json!({"kind": "scaleBar", "element": 1, "subdivisions": 1e308, "divisionsBeforeZero": -1e308, "decimals": f64::MAX, "textSize": -1e308, "unitLabel": null}),
         json!({"kind": "scaleBar", "element": 1, "unitLabel": "x".repeat(5000), "fit": "adjustWidth", "labelPosition": "below", "unitLabelPosition": "afterBar"}),
+        json!({"kind": "text", "element": 1, "valign": {}, "lineSpacing": [null], "case": 7}),
+        json!({"kind": "dynamicText", "element": 1, "valign": "", "lineSpacing": f64::MAX, "case": "x".repeat(5000)}),
+        json!({"kind": "scaleBar", "element": 1, "valign": "middle", "lineSpacing": "1e309", "case": null}),
         json!({"kind": "legend", "element": 1, "decimals": 2, "textSize": f64::INFINITY, "fit": "adjustDivision", "unitLabel": "m"}),
         // A QGIS project and style whose web layer and scale range are junk.
         json!({"text": "<qgis><projectlayers><maplayer type=\"raster\" hasScaleBasedVisibilityFlag=\"1\" minScale=\"NaN\" maxScale=\"-1e308\"><datasource>type=xyz&amp;url=&amp;zmax=999</datasource><layername></layername><provider>wms</provider><pipe><rasterrenderer opacity=\"inf\"/></pipe></maplayer></projectlayers></qgis>"}),
@@ -12505,6 +12508,162 @@ fn layout_surrounds_take_cartographic_options() {
     assert_eq!(back, s.project.layouts[0]);
 }
 
+/// A text's block alignment, line spacing and case through layout.addElement and layout.update:
+/// names and numbers checked before anything changes, refused for other elements, null leaving
+/// them as they are, one undo step, saved with the layout.
+#[test]
+fn layout_texts_take_a_block_alignment_line_spacing_and_case() {
+    use rustgis_map::layout::{ElementKind, TextCase, TextVAlign};
+    let mut s = world();
+    s.run("layout.new", &json!({"page": "a4", "orientation": "landscape", "template": "map"})).unwrap();
+    let title = s.project.layouts[0].elements.iter().find(|e| e.name == "Title").unwrap().id;
+    let block = |s: &Session, id: u32| match &s.project.layouts[0].element(id).unwrap().kind {
+        ElementKind::Text { valign, line_spacing, case, .. } => (*valign, *line_spacing, *case),
+        k => panic!("{k:?}"),
+    };
+    let plain = (TextVAlign::Top, 1.0, TextCase::None);
+    assert_eq!(block(&s, title), plain);
+    let depth = s.undo_depth();
+    s.run("layout.update", &json!({"element": title, "valign": "middle", "lineSpacing": 1.5, "case": "upper"})).unwrap();
+    let all = (TextVAlign::Middle, 1.5, TextCase::Upper);
+    assert_eq!((block(&s, title), s.undo_depth()), (all, depth + 1));
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert_eq!(block(&s, title), plain);
+    s.run("edit.redo", &Value::Null).unwrap();
+    assert_eq!(block(&s, title), all);
+    // Names in any case and with spaces, centre for middle; a number as text; the limits taken.
+    s.run("layout.update", &json!({"element": title, "valign": " Bottom ", "lineSpacing": "2", "case": "LOWER"})).unwrap();
+    assert_eq!(block(&s, title), (TextVAlign::Bottom, 2.0, TextCase::Lower));
+    s.run("layout.update", &json!({"element": title, "valign": "centre", "lineSpacing": 0.5})).unwrap();
+    assert_eq!(block(&s, title), (TextVAlign::Middle, 0.5, TextCase::Lower));
+    s.run("layout.update", &json!({"element": title, "lineSpacing": 3})).unwrap();
+    assert_eq!(block(&s, title), (TextVAlign::Middle, 3.0, TextCase::Lower));
+    // Null leaves each as it is, as for wrap.
+    s.run("layout.update", &json!({"element": title, "valign": null, "lineSpacing": null, "case": null})).unwrap();
+    assert_eq!(block(&s, title), (TextVAlign::Middle, 3.0, TextCase::Lower));
+    // A bad value changes nothing, not even the good values given with it.
+    let before = block(&s, title);
+    for bad in [
+        json!({"valign": "baseline"}),
+        json!({"valign": 2}),
+        json!({"valign": true}),
+        json!({"valign": ["top"]}),
+        json!({"lineSpacing": 0.49}),
+        json!({"lineSpacing": 3.01}),
+        json!({"lineSpacing": -1}),
+        json!({"lineSpacing": "wide"}),
+        json!({"lineSpacing": "NaN"}),
+        json!({"lineSpacing": "1e309"}),
+        json!({"lineSpacing": {}}),
+        json!({"case": "title"}),
+        json!({"case": 1}),
+        json!({"case": ""}),
+    ] {
+        let mut p = bad.clone();
+        p["element"] = json!(title);
+        p["size"] = json!(30);
+        p["case"] = p.get("case").cloned().unwrap_or(json!("upper"));
+        assert!(s.run("layout.update", &p).is_err(), "{bad}");
+        assert_eq!(block(&s, title), before, "{bad}");
+        assert!(matches!(s.project.layouts[0].element(title).unwrap().kind, ElementKind::Text { size, .. } if size != 30.0), "{bad}");
+    }
+    // Added: text and dynamicText take them; a bad one adds nothing.
+    let count = s.project.layouts[0].elements.len();
+    for kind in ["text", "dynamicText"] {
+        let id =
+            s.run("layout.addElement", &json!({"kind": kind, "valign": "bottom", "lineSpacing": 1.25, "case": "upper"})).unwrap()["element"]
+                .as_u64()
+                .unwrap() as u32;
+        assert_eq!(block(&s, id), (TextVAlign::Bottom, 1.25, TextCase::Upper), "{kind}");
+    }
+    assert!(s.run("layout.addElement", &json!({"kind": "text", "lineSpacing": 4})).is_err());
+    assert!(s.run("layout.addElement", &json!({"kind": "text", "valign": "baseline"})).is_err());
+    assert!(s.run("layout.addElement", &json!({"kind": "text", "case": "title"})).is_err());
+    assert_eq!(s.project.layouts[0].elements.len(), count + 2);
+    // Other kinds refuse them with one message; null is not refused there, as wrap's isn't.
+    let bar = s.project.layouts[0].elements.iter().find(|e| e.kind.code() == "scaleBar").unwrap().id;
+    for key in ["valign", "lineSpacing", "case"] {
+        let value = if key == "lineSpacing" { json!(1.5) } else { json!("middle") };
+        let err = s.run("layout.update", &json!({"element": bar, key: value})).unwrap_err().to_string();
+        assert!(err.contains("only text elements take a vertical alignment, line spacing or case"), "{key}: {err}");
+        let err = s.run("layout.addElement", &json!({"kind": "legend", key: value})).unwrap_err().to_string();
+        assert!(err.contains("only text elements take"), "{key}: {err}");
+        s.run("layout.update", &json!({"element": bar, key: null})).unwrap();
+    }
+    assert_eq!(s.project.layouts[0].elements.len(), count + 2);
+    // Saved with the layout and read back.
+    let back: rustgis_map::layout::Layout = serde_json::from_value(serde_json::to_value(&s.project.layouts[0]).unwrap()).unwrap();
+    assert_eq!(back, s.project.layouts[0]);
+}
+
+/// A wider line spacing that leaves lines out of a text's box is said at once, a tighter one that
+/// draws them all says nothing, and a case or a block alignment that moves ink past the page's
+/// edge is said.
+#[test]
+fn layout_update_says_the_lines_a_wider_line_spacing_leaves_out() {
+    let mut s = world();
+    s.run("layout.new", &json!({"page": "a4", "orientation": "landscape", "template": "blank"})).unwrap();
+    let said = |s: &Session, mark: u64| s.notices_since(mark).iter().map(|n| n.text.clone()).collect::<Vec<_>>().join(" | ");
+    let add = |s: &mut Session, p: Value| s.run("layout.addElement", &p).unwrap()["element"].as_u64().unwrap();
+    let mark = s.notice_mark();
+    let id = add(&mut s, json!({"kind": "text", "text": "one\ntwo\nthree\nfour\nfive", "size": 12, "x": 20, "y": 20, "w": 60, "h": 25}));
+    assert_eq!(said(&s, mark), "", "all five lines fit");
+    let mark = s.notice_mark();
+    s.run("layout.update", &json!({"element": id, "lineSpacing": 2})).unwrap();
+    let wider = said(&s, mark);
+    assert!(wider.contains("2 lines of the text") && wider.contains("don't fit its box"), "{wider}");
+    let mark = s.notice_mark();
+    s.run("layout.update", &json!({"element": id, "lineSpacing": 1})).unwrap();
+    assert_eq!(said(&s, mark), "", "back at the usual spacing they all fit");
+    // Upper case widens an unwrapped line past the page's right edge: its box placed so the line
+    // as typed ends inside the page and in upper case past it.
+    let words = "the quick brown fox jumps";
+    let width = |s: &str| crate::render::report::width_mm(s, 12.0, false);
+    let (lower, upper) = (width(words), width(&words.to_uppercase()));
+    assert!(upper - lower > 4.0, "{lower} {upper}");
+    let x = 297.0 - (lower + upper) / 2.0;
+    let line = add(&mut s, json!({"kind": "text", "text": words, "size": 12, "x": x, "y": 100, "w": 10, "h": 10}));
+    let mark = s.notice_mark();
+    s.run("layout.update", &json!({"element": line, "case": "lower"})).unwrap();
+    assert_eq!(said(&s, mark), "", "in lower case it is on the page");
+    let mark = s.notice_mark();
+    s.run("layout.update", &json!({"element": line, "case": "upper"})).unwrap();
+    assert!(said(&s, mark).contains("runs off the page"), "{}", said(&s, mark));
+    // At the top of a box reaching past the page's foot its line is on the page; at the bottom, not.
+    let low = add(&mut s, json!({"kind": "text", "text": "Note", "size": 12, "x": 20, "y": 190, "w": 60, "h": 40}));
+    let mark = s.notice_mark();
+    s.run("layout.update", &json!({"element": low, "valign": "top"})).unwrap();
+    assert_eq!(said(&s, mark), "", "at the top it is on the page");
+    let mark = s.notice_mark();
+    s.run("layout.update", &json!({"element": low, "valign": "bottom"})).unwrap();
+    assert!(said(&s, mark).contains("runs off the page"), "{}", said(&s, mark));
+}
+
+/// A hand-edited project whose text has a block setting out of range, of the wrong kind or not a
+/// name opens, the setting repaired, and says so.
+#[test]
+fn a_project_with_a_damaged_text_block_opens_and_says_so() {
+    use rustgis_map::layout::{ElementKind, TextCase, TextVAlign};
+    let fixture = include_str!("../../../schema/fixtures/layout_text_block.rgis");
+    let block = |p: &crate::Project| match &p.layouts[0].element(2).unwrap().kind {
+        ElementKind::Text { valign, line_spacing, case, .. } => (*valign, *line_spacing, *case),
+        k => panic!("{k:?}"),
+    };
+    let notices = |p: &mut crate::Project| -> Vec<String> {
+        p.take_read_notices(&[crate::project::ReadPart::Layouts]).iter().map(|n| n.english()).collect()
+    };
+    let mut clean = crate::Project::from_json(fixture).unwrap();
+    assert_eq!(block(&clean), (TextVAlign::Bottom, 1.5, TextCase::Upper));
+    let said = notices(&mut clean);
+    assert!(!said.iter().any(|n| n.contains("value out of range")), "{said:?}");
+    let edited = fixture.replace("\"valign\":\"bottom\",\"line_spacing\":1.5", "\"valign\":\"sideways\",\"line_spacing\":\"x\"");
+    assert_ne!(edited, fixture);
+    let mut damaged = crate::Project::from_json(&edited).unwrap();
+    assert_eq!(block(&damaged), (TextVAlign::Top, 1.0, TextCase::Upper));
+    let said = notices(&mut damaged);
+    assert!(said.iter().any(|n| n.contains("1 layout element(s) with a value out of range")), "{said:?}");
+}
+
 /// A scale bar's details through layout.addElement and layout.update: names and numbers checked
 /// before anything changes, refused for other elements, one undo step, saved with the layout.
 #[test]
@@ -12746,6 +12905,34 @@ fn a_publication_scale_box_follows_a_detailed_bar() {
     assert!((boxed(&s) - hand).abs() < 1e-9, "set by hand, kept with a detail: {} vs {hand}", boxed(&s));
     s.run("layout.update", &json!({"layout": li, "element": bar, "subdivisions": 0})).unwrap();
     assert!((boxed(&s) - hand).abs() < 1e-9, "set by hand, kept plain again: {} vs {hand}", boxed(&s));
+}
+
+/// A publication's scale box isn't measured again for a "Scale" text drawn in upper or lower case,
+/// which a box measured for the text as typed would not hold, as it isn't for one spaced out:
+/// its frame drawn at another scale keeps the box's width.
+#[test]
+fn a_publication_scale_box_keeps_its_width_for_a_cased_scale_text() {
+    use rustgis_map::layout::ElementKind;
+    let mut s = world();
+    s.run("layout.publication", &json!({"profile": "thesis-half", "extent": [-46.8, -11.6, -38.5, -2.2]})).unwrap();
+    let li = s.project.layouts.len() - 1;
+    let named = |s: &Session, n: &str| s.project.layouts[li].elements.iter().find(|e| e.name == n).unwrap().clone();
+    let frame = s.project.layouts[li].first_frame().unwrap();
+    let auto = |s: &Session| crate::cmd::layout::scale_box_auto(s, li).expect("an automatic box");
+    let boxed = |s: &Session| named(s, "Scale Box").w;
+    let scale = match &s.project.layouts[li].element(frame).unwrap().kind {
+        ElementKind::MapFrame { scale, .. } => *scale,
+        k => panic!("{k:?}"),
+    };
+    // Plain, the frame at another scale measures the box again.
+    s.run("layout.update", &json!({"layout": li, "element": frame, "scale": scale * 2.0})).unwrap();
+    assert!((boxed(&s) - auto(&s)).abs() < 0.01, "plain, refitted: {} vs {}", boxed(&s), auto(&s));
+    // In upper case, it keeps its width though the plain text's box would now be another.
+    s.run("layout.update", &json!({"layout": li, "element": named(&s, "Scale").id, "case": "upper"})).unwrap();
+    let kept = boxed(&s);
+    s.run("layout.update", &json!({"layout": li, "element": frame, "scale": scale * 5.0})).unwrap();
+    assert!((auto(&s) - kept).abs() > 0.01, "the plain text's box would change: {} vs {kept}", auto(&s));
+    assert!((boxed(&s) - kept).abs() < 1e-9, "cased, kept: {} vs {kept}", boxed(&s));
 }
 
 /// A layout element refuses a colour, fill or outline its kind doesn't draw, before anything
