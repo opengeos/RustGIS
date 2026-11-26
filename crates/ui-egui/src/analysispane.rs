@@ -3340,10 +3340,20 @@ mod tests {
         h.run();
         let cut = "The Replace field takes 200 characters: 200 left out";
         h.get_by_label(cut);
+        // Each field keeps its own note: the Find one stays while its text stays cut, whatever
+        // the Replace field is given.
+        h.get_by_label("The Find field takes 200 characters: 200 left out");
         assert!(h.state().session.notices.iter().any(|n| n.text == cut), "{:?}", h.state().session.notices);
         h.get_by_label("Replace All").click();
         h.run();
         assert_eq!(h.state().workflow.script, "b".repeat(400), "200 characters for each of the two matches");
+        // A change that fits takes that field's note away, and only that one.
+        h.ctx.memory_mut(|m| m.request_focus(box_id.with("find_replace")));
+        h.run();
+        h.key_press(Key::Backspace);
+        h.run();
+        assert!(h.query_by_label(cut).is_none(), "the Replace note went");
+        h.get_by_label("The Find field takes 200 characters: 200 left out");
     }
 
     /// In a browser the find shortcuts are kept from the browser's own (#2996): while the box or a

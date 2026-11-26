@@ -131,8 +131,10 @@ struct Bar {
     focus_query: bool,
     /// The Replace row is shown.
     replace_open: bool,
-    /// What the last change of a field left out of it, said under the fields.
-    cut: Option<String>,
+    /// What the last change of each field left out of it, said under the fields: each its own, so
+    /// one field's note stays while its text is cut, whatever the other is given.
+    query_cut: Option<String>,
+    replace_cut: Option<String>,
     found: std::sync::Arc<Found>,
     /// What `found` was worked out for: the script's hash, the query and the case.
     key: Option<(u64, String, bool, bool)>,
@@ -384,7 +386,7 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
                                 &[("max", &FIELD_MAX.to_string()), ("n", &n.to_string())],
                             )
                         });
-                        said = say_once(&mut bar.cut, cut);
+                        said = say_once(&mut bar.query_cut, cut);
                     }
                     let shift = ui.input(|i| i.modifiers.shift);
                     if query.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
@@ -439,7 +441,7 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
                                     &[("max", &FIELD_MAX.to_string()), ("n", &n.to_string())],
                                 )
                             });
-                            said = say_once(&mut bar.cut, cut);
+                            said = say_once(&mut bar.replace_cut, cut);
                         }
                         let can = !running && bar.current.is_some();
                         let wait = tl!("Wait for the run to finish").to_string();
@@ -482,7 +484,7 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
                         }
                     });
                 }
-                if let Some(cut) = &bar.cut {
+                for cut in [&bar.query_cut, &bar.replace_cut].into_iter().flatten() {
                     ui.label(egui::RichText::new(cut).small().color(ui.visuals().warn_fg_color));
                 }
             });
