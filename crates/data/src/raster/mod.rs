@@ -372,7 +372,8 @@ impl BandStats {
     /// (`counts`, by value), leaving out `nodata`: the same, to the bit, as [`Raster::new`] makes
     /// by reading the cells, for a caller that counted them as it made them. The sums of whole
     /// numbers are exact in `f64` as long as they stay below 2⁵³, so a pass over the cells in any
-    /// order makes the same mean and spread; `None` past that (some 1.4 × 10¹¹ cells).
+    /// order makes the same mean and spread; `None` past that (some 1.4 × 10¹¹ cells), or past
+    /// what a count of cells holds here (`usize`, 32 bits in the browser).
     pub fn of_byte_counts(counts: &[u64; 256], nodata: Option<u8>) -> Option<BandStats> {
         let kept = || counts.iter().enumerate().filter(|&(v, &c)| c > 0 && nodata != Some(v as u8)).map(|(v, &c)| (v as u64, c));
         let n: u64 = kept().map(|(_, c)| c).sum();
@@ -383,6 +384,7 @@ impl BandStats {
             return None;
         }
         let (sum, sum2) = kept().fold((0u64, 0u64), |(s, s2), (v, c)| (s + v * c, s2 + v * v * c));
+        let count = usize::try_from(n).ok()?;
         let (min, max) = (kept().next()?.0 as f64, kept().next_back()?.0 as f64);
         let mean = sum as f64 / n as f64;
         let std_dev = (sum2 as f64 / n as f64 - mean * mean).max(0.0).sqrt();
@@ -397,7 +399,7 @@ impl BandStats {
             }
         }
         let categories = Some(kept().map(|(v, _)| v as f64).collect());
-        Some(BandStats { count: n as usize, min, max, mean, std_dev, histogram, categories })
+        Some(BandStats { count, min, max, mean, std_dev, histogram, categories })
     }
 
     /// The value below which `p` (0–100) percent of pixels fall, from the histogram.
@@ -443,16 +445,17 @@ struct Tally {
 /// million.
 const PARALLEL_VALUES: usize = 1 << 20;
 
-/// Whether finite `x` is a whole number: `x.fract() == 0.0`, without the call to the C library
+/// Whether `x` is a whole number: `x.fract() == 0.0`, without the call to the C library
 /// that `fract` makes where the processor has no instruction for it (x86-64's baseline). From 2⁵²
 /// up every `f64` is whole.
 fn is_whole(x: f64) -> bool {
-    x.abs() >= 4_503_599_627_370_496.0 || x == x as i64 as f64
+    x.is_finite() && (x.abs() >= 4_503_599_627_370_496.0 || x == x as i64 as f64)
 }
 
-/// `x.round()` for `x` from 0 to 2⁵² (a histogram bin), halves away from zero, without the call
-/// to the C library that `round` makes there.
-fn round_positive(x: f64) -> f64 {
+/// `x.round()` for `x` from 0 to 2⁵², halves away from zero, without the call to the C library
+/// that `round` makes where the processor has no instruction for it (x86-64's baseline): for a
+/// histogram's bins here, and a hillshade's cells.
+pub fn round_positive(x: f64) -> f64 {
     let whole = x as u64 as f64;
     if x - whole >= 0.5 { whole + 1.0 } else { whole }
 }

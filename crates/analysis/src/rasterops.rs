@@ -66,18 +66,18 @@ pub fn derive_hillshade(r: &Raster, name: &str, mut shade: Vec<f32>) -> Result<R
     Ok(out)
 }
 
-/// The cells [`byte_stats`] counts at a time.
-const BYTE_COUNT_CHUNK: usize = 1 << 16;
+/// The cells [`byte_stats`] counts at a time: its 2 KB of counts for each are 0.05% of their cells.
+const BYTE_COUNT_CHUNK: usize = 1 << 20;
 
 /// The statistics of `cells` with 0 as no-data, from how many hold each value, when every one is
 /// a whole number from 0 to 255; `None` when one isn't.
 fn byte_stats(cells: &[f32]) -> Result<Option<BandStats>, String> {
     let chunks: Vec<&[f32]> = cells.chunks(BYTE_COUNT_CHUNK).collect();
     crate::control::begin(chunks.len());
-    // Sixteen chunks, a million cells, before threads pay off.
+    // Two chunks, two million cells, before threads pay off.
     let counted = crate::parallel::try_map(
         &chunks,
-        16,
+        2,
         || (),
         |_, _, chunk: &&[f32]| {
             let mut counts = [0u64; 256];
@@ -339,15 +339,8 @@ pub fn hillshade_on(r: &Raster, b: usize, azimuth: f64, altitude: f64, zf: f64, 
             let aspect = (-gx).atan2(-gy);
             cos_zen * slope.cos() + sin_zen * slope.sin() * (az - aspect).cos()
         };
-        round_positive(v.max(0.0) * 255.0).max(1.0)
+        rustgis_data::raster::round_positive(v.max(0.0) * 255.0).max(1.0)
     })
-}
-
-/// `x.round()` for `x` from 0 to 2⁵², halves away from zero, without the call to the C library
-/// that `round` makes where the processor has no instruction for it (x86-64's baseline).
-fn round_positive(x: f64) -> f64 {
-    let whole = x as u64 as f64;
-    if x - whole >= 0.5 { whole + 1.0 } else { whole }
 }
 
 /// A band arithmetic expression over `b1`, `b2`… (+ - * / and parentheses, numbers).
