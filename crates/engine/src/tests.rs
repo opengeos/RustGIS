@@ -26258,7 +26258,10 @@ fn service_legends_left_out_are_reported() {
 <Layer><CRS>EPSG:3857</CRS><Layer><Name>roads</Name><Title>Roads</Title>
 <Style><Name>default</Name><LegendURL><Format>image/png</Format><OnlineResource xlink:href="LEGEND"/></LegendURL></Style></Layer></Layer></Capability></WMS_Capabilities>"#;
     let long = format!("https://maps.example.com/legends/{}.png", "a".repeat(rustgis_map::tiles::MAX_LEGEND_URL));
-    for (legend, left_out) in [(long.as_str(), true), ("https://maps.example.com/legends/roads.png", false)] {
+    // Too long, on ftp (which the parse leaves out, counted for this notice), and kept.
+    for (legend, left_out) in
+        [(long.as_str(), true), ("ftp://maps.example.com/legends/roads.png", true), ("https://maps.example.com/legends/roads.png", false)]
+    {
         let mut s = Session::new(Project::default());
         let mark = s.notice_mark();
         s.run("service.add", &json!({"url": "https://maps.example.com/wms", "layer": "roads", "text": WMS.replace("LEGEND", legend)}))
@@ -54428,6 +54431,8 @@ fn stl_leaves_out_lines_and_skips_flat_triangles_and_says_so() {
         mesh_feature(json!({"type": "LineString", "coordinates": [[0.0, 0.02], [0.01, 0.02]]}), 5.0),
         mesh_feature(json!({"type": "Point", "coordinates": [0.03, 0.02]}), 20.0),
         mesh_feature(json!({"type": "Point", "coordinates": [0.05, 0.02]}), 0.0),
+        // Flat, and with no area to lose: not counted among those left out.
+        mesh_feature(json!({"type": "Polygon", "coordinates": [[[0.08, 0.0], [0.09, 0.0], [0.08, 0.0]]]}), 0.0),
         mesh_feature(
             json!({"type": "Polygon", "coordinates": [[[0.06, 0.0], [0.07, 0.0], [0.070_000_000_01, 0.0], [0.07, 0.01], [0.06, 0.01], [0.06, 0.0]]]}),
             30.0

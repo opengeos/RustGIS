@@ -1439,8 +1439,20 @@ fn layer_mesh(s: &Session, p: &Value, keep_lines: bool) -> Result<Mesh, String> 
         let below = h < 0.0;
         let orient = |o: Orient| if below { o.reversed() } else { o };
         // A solid of zero height would be two coincident caps facing apart: STL leaves it out.
+        // Counted as lost only when it had an area or a point to give: a polygon whose every outer
+        // ring has fewer than 3 vertices has neither.
         if !mesh.keep_lines && h == 0.0 && !matches!(&*g, Geometry::Line(_)) {
-            mesh.flat += 1;
+            let shaped = match &*g {
+                Geometry::Polygon(polys) => polys.iter().any(|rings| {
+                    rings.first().is_some_and(|r| {
+                        let n = if r.len() > 1 && r.first() == r.last() { r.len() - 1 } else { r.len() };
+                        n >= 3
+                    })
+                }),
+                Geometry::MultiPoint(points) => !points.is_empty(),
+                _ => true,
+            };
+            mesh.flat += usize::from(shaped);
             continue;
         }
         let before = mesh.vertices;
