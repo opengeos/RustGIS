@@ -4998,10 +4998,12 @@ pub(crate) fn drag_tab(ui: &Ui, resp: &egui::Response, layout: bool, name: &str)
 
 /// While an item is dragged over a list that scrolls (the view tabs, the Browser or the Layers
 /// pane), scrolls the list `ui` is in when the `pointer` is near its edge along the axis
-/// (`vertical`, else horizontal), faster the closer it is, and asks for a frame to go on (#2957). The
-/// `pointer` is inside the list's visible rectangle, as its callers check.
-pub(crate) fn edge_scroll(ui: &Ui, pointer: egui::Pos2, vertical: bool) {
-    let view = ui.clip_rect();
+/// (`vertical`, else horizontal), faster the closer it is, and asks for a frame to go on (#2957).
+/// `view` is the list's visible rectangle: a `pointer` outside it scrolls nothing.
+pub(crate) fn edge_scroll(ui: &Ui, view: Rect, pointer: egui::Pos2, vertical: bool) {
+    if !view.contains(pointer) {
+        return;
+    }
     let a = usize::from(vertical);
     let edge = 28.0;
     let push = ((view.min[a] + edge - pointer[a]).max(0.0) - (pointer[a] - (view.max[a] - edge)).max(0.0)) / edge;
@@ -5026,7 +5028,7 @@ pub(crate) fn tab_drop(app: &mut RustGisApp, ui: &Ui, t: &Tokens, tabs: &[Rect],
     let Some(pointer) = ui.ctx().pointer_interact_pos().filter(|p| view.contains(*p)) else { return };
     // Along the row (x) or the list (y).
     let a = usize::from(vertical);
-    edge_scroll(ui, pointer, vertical);
+    edge_scroll(ui, view, pointer, vertical);
     let (Some(from), Some(first), Some(last)) = (names.iter().position(|n| *n == dragged.name), tabs.first(), tabs.last()) else {
         return;
     };
