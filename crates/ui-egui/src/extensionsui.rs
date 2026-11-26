@@ -71,12 +71,12 @@ fn set(app: &mut RustGisApp, id: &str, on: bool) {
         Ok(_) => {
             let name = extensions::get(id).map_or(id, |e| e.name);
             let tab = extensions::get(id).is_some_and(|e| e.tab.is_some());
-            let said = match (on, tab) {
-                (true, _) => "{name} is on.",
-                (false, true) => "{name} is off: its tab and commands are hidden.",
-                (false, false) => "{name} is off: its buttons and commands are hidden.",
+            let name = [("name", tl_raw!(name))];
+            let text = match (on, tab) {
+                (true, _) => crate::i18n::fmt("{name} is on.", &name),
+                (false, true) => crate::i18n::fmt("{name} is off: its tab and commands are hidden.", &name),
+                (false, false) => crate::i18n::fmt("{name} is off: its buttons and commands are hidden.", &name),
             };
-            let text = crate::i18n::fmt(said, &[("name", tl_raw!(name))]);
             app.extensions.message = Some((true, text));
         }
         Err(e) => app.extensions.message = Some((false, e)),
