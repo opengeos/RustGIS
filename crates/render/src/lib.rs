@@ -383,6 +383,8 @@ use std::sync::OnceLock;
 
 pub use block::{FlatWalls, flat_walls};
 pub(crate) use canvas::Canvas;
+use image::codecs::png::{CompressionType, FilterType, PngEncoder};
+use image::{ExtendedColorType, ImageEncoder};
 use rustgis_data::query::Env;
 use rustgis_data::{Dataset, Geometry, GeometryType};
 use rustgis_geom::{Coord, Extent, extent_to_merc, lonlat_to_merc};
@@ -8984,8 +8986,21 @@ pub fn render_png(map: &mut Map, view: &View) -> Result<Vec<u8>, String> {
     }
     text::scale_bar(&mut pm, view, map.ground_res_at(&view.camera));
     draw_attribution(&mut pm, &r.attribution, view.pixels_per_point as f32, (0.0, 0.0));
-    let png = pm.into_pixmap().encode_png().map_err(|e| e.to_string())?;
+    let png = encode_map_png(pm.into_pixmap())?;
     revisions.finish(map, None, Some(png), "could not encode the image")
+}
+
+/// A drawn map as PNG bytes, holding its pixels exactly: deflated at level 4, each row's filter
+/// chosen by the encoder. Its default level 6 takes more than twice as long on an elevation model's
+/// shades, for a file about 4% smaller (#1227).
+fn encode_map_png(pm: Pixmap) -> Result<Vec<u8>, String> {
+    let (width, height) = (pm.width(), pm.height());
+    let rgba = pm.take_demultiplied();
+    let mut png = Vec::new();
+    PngEncoder::new_with_quality(&mut png, CompressionType::Level(4), FilterType::Adaptive)
+        .write_image(&rgba, width, height, ExtendedColorType::Rgba8)
+        .map_err(|e| e.to_string())?;
+    Ok(png)
 }
 
 /// A map drawn as data ([`render_placed`]), with what it holds besides its pixels.
@@ -10945,6 +10960,21 @@ mod tests {
         let png = render_png(&mut m, &view).unwrap();
         assert!(png.len() > 1000);
         assert!(!world().is_empty());
+    }
+
+    /// An exported map's PNG holds the drawn pixels, see-through ones included, as tiny-skia's own
+    /// encoder writes them.
+    #[test]
+    fn an_exported_png_holds_the_drawn_pixels() {
+        let mut pm = Pixmap::new(37, 23).unwrap();
+        for (i, p) in pm.data_mut().as_chunks_mut::<4>().0.iter_mut().enumerate() {
+            // Premultiplied: no channel past its alpha.
+            let a = (i % 256) as u8;
+            *p = [a.min((i % 97) as u8), a / 2, a, a];
+        }
+        let decoded = |png: &[u8]| image::load_from_memory(png).unwrap().to_rgba8();
+        let own = decoded(&pm.encode_png().unwrap());
+        assert_eq!(decoded(&encode_map_png(pm).unwrap()), own);
     }
 
     /// The MGRS graticule's names (#1042) come with the frame's placed labels, after them, in the
