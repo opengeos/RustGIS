@@ -1454,8 +1454,9 @@ fn layer_mesh(s: &Session, p: &Value, keep_lines: bool) -> Result<Mesh, String> 
                     rings.first().is_some_and(|r| {
                         // Twice the ring's signed area (the shoelace sum), taken from its first
                         // vertex so that coordinates far from the origin don't cancel a small
-                        // area out; a closing vertex adds nothing. Against the size of its terms,
-                        // so rounding on a ring along a slanted line isn't taken for an area.
+                        // area out; a closing vertex adds nothing. Against the rounding its terms
+                        // can carry (a few ulps each), so rounding on a ring along a slanted line
+                        // isn't taken for an area, and a real one past it is.
                         let Some(o) = r.first() else { return false };
                         let (mut twice, mut terms) = (0.0f64, 0.0f64);
                         for (a, b) in r.iter().zip(r.iter().cycle().skip(1)) {
@@ -1464,7 +1465,8 @@ fn layer_mesh(s: &Session, p: &Value, keep_lines: bool) -> Result<Mesh, String> 
                             terms += (ax * by).abs() + (bx * ay).abs();
                         }
                         // A coordinate that isn't finite gives no sum, but a place to lose all the same.
-                        !twice.is_finite() || twice.abs() > 1e-12 * terms
+                        let rounding = 4.0 * f64::EPSILON * terms * r.len() as f64;
+                        !twice.is_finite() || twice.abs() > rounding
                     })
                 }),
                 Geometry::MultiPoint(points) => !points.is_empty(),
