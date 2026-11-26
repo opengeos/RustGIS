@@ -7163,6 +7163,34 @@ pub(crate) fn legends_follow_layer(s: &mut Session, old: &str, new: Option<&str>
     }
 }
 
+/// What a layer rename does to a text's layer statistics (#2853).
+enum Renamed {
+    /// No statistic names the layer.
+    Same,
+    /// The text with the new name written in.
+    To(String),
+    /// The new name would take the text past `limit` characters, which the file would cut.
+    TooLong,
+    /// The new name holds a brace, which ends a token early.
+    Braces,
+}
+
+/// `text` with the layer a rename moves (`replace` says the name that takes the old one's place)
+/// written into its statistic tokens, held to `limit` characters.
+fn renamed_statistics(text: &str, limit: usize, braces: bool, replace: &mut impl FnMut(&mut String)) -> Renamed {
+    let renamed = rustgis_map::layout::rename_stat_layers(text, |layer| {
+        let mut name = layer.to_string();
+        replace(&mut name);
+        (name != layer).then_some(name)
+    });
+    match renamed {
+        None => Renamed::Same,
+        Some(_) if braces => Renamed::Braces,
+        Some(renamed) if renamed.chars().count() <= limit => Renamed::To(renamed),
+        Some(_) => Renamed::TooLong,
+    }
+}
+
 /// Carries typed references to a renamed layer along with it. Map-local references and layout
 /// frames stay in their map. A name still present there keeps its references, as legends do;
 /// project-wide references without a map stay unchanged when another map still has that name.
@@ -7282,19 +7310,11 @@ fn references_follow_layer(s: &mut Session, old: &str, new: &str) {
                 }
                 ElementKind::Colorbar { frame, layer: Some(layer), .. } if frames.contains(frame) => replace(layer),
                 ElementKind::Text { text, .. } if texts_read_this_map => {
-                    let renamed = rustgis_map::layout::rename_stat_layers(text, |layer| {
-                        let mut name = layer.to_string();
-                        replace(&mut name);
-                        (name != layer).then_some(name)
-                    });
-                    // A longer name must not take the text past what a text holds: the file would
-                    // cut its tail, so that text keeps the old name.
-                    match renamed {
-                        // A brace in the new name would end the token early (`{count:Cities}}`).
-                        Some(_) if braces => texts_with_braces += 1,
-                        Some(renamed) if renamed.chars().count() <= rustgis_map::layout::MAX_TEXT_CHARS => *text = renamed,
-                        Some(_) => texts_too_long += 1,
-                        None => {}
+                    match renamed_statistics(text, rustgis_map::layout::MAX_TEXT_CHARS, braces, &mut replace) {
+                        Renamed::To(renamed) => *text = renamed,
+                        Renamed::TooLong => texts_too_long += 1,
+                        Renamed::Braces => texts_with_braces += 1,
+                        Renamed::Same => {}
                     }
                 }
                 _ => {}
@@ -7312,16 +7332,11 @@ fn references_follow_layer(s: &mut Session, old: &str, new: &str) {
     let mut titles_with_braces = 0usize;
     for page in s.project.presentations.iter_mut().flat_map(|p| &mut p.pages) {
         if matches!(&page.kind, rustgis_map::presentation::PageKind::Map { map, .. } if map.eq_ignore_ascii_case(&map_name)) {
-            let renamed = rustgis_map::layout::rename_stat_layers(&page.title, |layer| {
-                let mut name = layer.to_string();
-                replace(&mut name);
-                (name != layer).then_some(name)
-            });
-            match renamed {
-                Some(_) if braces => titles_with_braces += 1,
-                Some(renamed) if renamed.chars().count() <= rustgis_map::presentation::MAX_TITLE => page.title = renamed,
-                Some(_) => titles_too_long += 1,
-                None => {}
+            match renamed_statistics(&page.title, rustgis_map::presentation::MAX_TITLE, braces, &mut replace) {
+                Renamed::To(renamed) => page.title = renamed,
+                Renamed::TooLong => titles_too_long += 1,
+                Renamed::Braces => titles_with_braces += 1,
+                Renamed::Same => {}
             }
         }
     }

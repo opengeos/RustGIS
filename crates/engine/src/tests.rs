@@ -40173,8 +40173,8 @@ fn a_publications_wrapped_text_keeps_its_statistic_tokens_whole() {
 #[test]
 fn a_statistic_token_is_measured_as_wide_as_its_figure() {
     use crate::cmd::layout::like_figures;
-    assert_eq!(like_figures("{count:A} of {sum:Ab:f}"), "1,234,567.89 of 1,234,567.89");
-    assert_eq!(like_figures("{max:Cities of Spain:population} {min:A:f}"), "{max:Cities of Spain:population} 1,234,567.89");
+    assert_eq!(like_figures("{count:A} of {sum:Ab:f}"), "1,234,567,890.12 of 1,234,567,890.12");
+    assert_eq!(like_figures("{max:Cities of Spain:population} {min:A:f}"), "{max:Cities of Spain:population} 1,234,567,890.12");
     assert_eq!(like_figures("Plain {scale} {foo} text"), "Plain {scale} {foo} text");
 }
 

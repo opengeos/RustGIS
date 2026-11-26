@@ -563,7 +563,7 @@ fn projected_extent(s: &Session, e: &Extent) -> Extent {
 }
 
 /// The width a layer statistic (#2853) is measured at in a publication, a typical figure.
-const LIKE_FIGURE: &str = "1,234,567.89";
+const LIKE_FIGURE: &str = "1,234,567,890.12";
 
 /// `t` with each layer statistic token a typical figure wide where the token as written is
 /// narrower: the layout fills a token in only when it draws, so a short one (`{sum:Ab:f}`) can
