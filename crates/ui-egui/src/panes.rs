@@ -8618,8 +8618,16 @@ mod tests {
         h.run_steps(6);
         assert_ne!(h.state().session.active_layer, Some(picked));
         let at = h.get_by_label("Rivers").rect().center();
-        touch_drag(&mut h, at, at, 0);
+        // Down and up at once: no long press, whose menu would pick the row itself.
+        use egui::{Event, Modifiers, PointerButton, TouchDeviceId, TouchId, TouchPhase};
+        let touch = |phase| Event::Touch { device_id: TouchDeviceId(1), id: TouchId(1), phase, pos: at, force: None };
+        let button = |pressed| Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+        h.input_mut().events.extend([Event::PointerMoved(at), touch(TouchPhase::Start), button(true)]);
+        h.step();
+        h.input_mut().events.extend([touch(TouchPhase::End), button(false), Event::PointerGone]);
+        h.step();
         h.run_steps(3);
+        assert!(h.query_by_label("Labeling Properties…").is_none(), "a tap opened the menu");
         assert_eq!(h.state().session.active_layer, Some(picked));
     }
 
