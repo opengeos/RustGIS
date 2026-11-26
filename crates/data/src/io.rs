@@ -3391,7 +3391,7 @@ impl TextColumn {
 /// `0.10000000000000001` (0.1 to 17 digits) and `0.00000000023283064365386962890625` (2^-32
 /// exactly) are; `12345678901234567891` and `0.12345678901234567891` aren't. No Double's exact
 /// value has more than 767 significant digits, so longer text isn't one, and isn't formatted.
-fn double_holds(v: &str) -> bool {
+pub fn double_holds(v: &str) -> bool {
     /// The digits of a number's mantissa without leading or trailing zeros.
     fn digits(s: &str) -> String {
         let mantissa = s.split(['e', 'E']).next().unwrap_or_default();

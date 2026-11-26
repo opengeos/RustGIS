@@ -1509,6 +1509,7 @@ fn value(v: ValueRef<'_>, ty: FieldType, unread: &mut Vec<usize>, rounded: Optio
         (ValueRef::Real(f), FieldType::Integer) if f.fract() == 0.0 && f.abs() < 9e15 => Value::Int(f as i64),
         (ValueRef::Real(f), _) => Value::Float(f),
         (ValueRef::Text(t), FieldType::Text) => Value::Text(String::from_utf8_lossy(t).into_owned()),
+        (ValueRef::Text(t), FieldType::Boolean) => super::yes_no_text(&String::from_utf8_lossy(t), unread, k),
         (ValueRef::Text(t), ty) => Value::parse_source(&String::from_utf8_lossy(t), ty),
         (ValueRef::Blob(_), _) => Value::Null,
     }

@@ -792,15 +792,8 @@ pub(crate) fn held_default(field: &str, value: &Value, ty: FieldType) -> Result<
     if coerced.is_null() && !value.asks_null() {
         return Err(format!("field '{field}': '{value}' isn't a {} value", ty.label()));
     }
-    let whole = match value {
-        Value::Int(i) => Some(*i),
-        Value::Text(t) => t.trim().parse::<i64>().ok(),
-        _ => None,
-    };
-    // i128 holds both exactly: a whole number past 2^53 its decimal doesn't.
-    let rounded = ty == FieldType::Double && matches!(coerced, Value::Float(f) if whole.is_some_and(|i| f as i128 != i128::from(i)));
     if numeric_loss(value, &coerced, ty).is_some()
-        || rounded
+        || (ty == FieldType::Double && matches!(coerced, Value::Float(_)) && value.rounds_as_double())
         || matches!(value, Value::DateTime(t) if ty == FieldType::Date && !t.is_date())
     {
         return Err(format!("field '{field}': a {} field can't hold '{value}' as given", ty.label()));
@@ -849,6 +842,8 @@ fn convert(v: Value, ty: FieldType) -> (Value, Cut, Option<f64>) {
         // A whole number is yes when it isn't 0, as a shapefile writes it.
         (Value::Int(i), FieldType::Boolean) => (Value::Bool(i != 0), Cut::None, None),
         (Value::Float(f), FieldType::Boolean) if f.fract() == 0.0 => (Value::Bool(f != 0.0), Cut::None, None),
+        // A fraction is no yes/no value: null, not the text it's shown as (`0.0000001` shows `0`).
+        (Value::Float(_), FieldType::Boolean) => (Value::Null, Cut::None, None),
         // Uncounted coercion retains source numbers until output can explain any loss.
         (Value::Text(t), _) => (Value::parse_source(&t, ty), Cut::None, None),
         (other, _) => (Value::parse(&other.to_string(), ty), Cut::None, None),

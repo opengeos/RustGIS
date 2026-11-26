@@ -1539,6 +1539,8 @@ fn yes_no_text_that_isnt_yes_or_no_is_refused_or_said_never_read_as_no() {
     assert_eq!(err, "'maybe' isn't a Boolean value");
     let err = s.run("edit.setValue", &json!({"layer": "Cities", "row": 0, "field": "flag", "value": 0.5})).unwrap_err();
     assert_eq!(err, "'0.5' isn't a Boolean value");
+    let err = s.run("edit.setValue", &json!({"layer": "Cities", "row": 0, "field": "flag", "value": 1e-7})).unwrap_err();
+    assert!(err.ends_with("isn't a Boolean value"), "not the 0 it shows as: {err}");
     assert_eq!(cell(&s, 0), V::Bool(false), "a refused value leaves the cell as it was");
     // Calculate Field writes null for a result that isn't yes or no, and says so; clean results say nothing.
     let mark = s.notice_mark();
@@ -1584,13 +1586,18 @@ fn a_default_its_field_cant_hold_as_given_is_refused_when_set() {
     }
     let err = s.run("edit.template", &json!({"layer": "Cities", "name": "T", "defaults": {"x": 9_007_199_254_740_993_i64}})).unwrap_err();
     assert_eq!(err, "field 'x': a Double field can't hold '9007199254740993' as given");
+    for text in ["9007199254740993.0", "12345678901234567890"] {
+        let err = s.run("edit.template", &json!({"layer": "Cities", "name": "T", "defaults": {"x": text}})).unwrap_err();
+        assert!(err.contains("can't hold"), "{text}: {err}");
+    }
     let err = s.run("data.contingentValues", &json!({"layer": "Cities", "name": "C", "fields": ["n", "flag"], "combos": [[2.5, true]]}));
     assert_eq!(err.unwrap_err(), "field 'n': a Long field can't hold '2.5' as given");
     let err = s.run("data.domain", &json!({"layer": "Cities", "field": "flag", "coded": [[true, "Yes"], ["maybe", "Maybe"]]})).unwrap_err();
     assert_eq!(err, "field 'flag': 'maybe' isn't a Boolean value");
     assert!(s.map().layer_by_name("Cities").unwrap().design.templates.is_empty(), "a refused template isn't added");
     // Defaults the fields hold as given are kept, and fill new features with nothing to say.
-    s.run("edit.template", &json!({"layer": "Cities", "name": "T", "defaults": {"n": 2.0, "flag": "yes"}})).unwrap();
+    s.run("edit.template", &json!({"layer": "Cities", "name": "T", "defaults": {"n": 2.0, "flag": "yes", "x": "9007199254740992.0"}}))
+        .unwrap();
     let mark = s.notice_mark();
     let point = json!({"type": "Point", "coordinates": [0.0, 0.0]});
     let row = s.run("edit.addFeature", &json!({"layer": "Cities", "geometry": point, "template": "T"})).unwrap()["row"].as_u64().unwrap();
@@ -1624,7 +1631,7 @@ fn a_default_its_field_cant_hold_as_given_is_refused_when_set() {
     assert_eq!(
         said,
         [(
-            "Cities: field 'n' left empty in 1 new feature, as it can't hold its subtype default as given".to_string(),
+            "Cities: subtype defaults left out of 1 new feature, as their fields can't hold them as given: 'n'".to_string(),
             Some(rustgis_data::loss::LossCode::DroppedValue)
         )]
     );

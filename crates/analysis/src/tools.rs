@@ -2863,6 +2863,8 @@ fn converted(v: &Value, ty: FieldType) -> Value {
         // A whole number is yes when it isn't 0, as a shapefile writes it.
         (Value::Int(i), FieldType::Boolean) => Value::Bool(*i != 0),
         (Value::Float(f), FieldType::Boolean) if f.fract() == 0.0 => Value::Bool(*f != 0.0),
+        // A fraction is no yes/no value: null, not the text it's shown as (`0.0000001` shows `0`).
+        (Value::Float(_), FieldType::Boolean) => Value::Null,
         (Value::Bool(b), FieldType::Double) => Value::Float(if *b { 1.0 } else { 0.0 }),
         // Text that reads as an integer is one; text that reads as another number goes as that
         // float would, so one out of range (or not a number) is empty, not clamped.
@@ -2977,7 +2979,11 @@ fn update_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>) -> Result<ToolR
         if rounded > 0 {
             losses.push(rustgis_data::loss::LossMessage {
                 code: rustgis_data::loss::LossCode::ChangedRounded,
-                text: format!("Update: '{}' holds decimals, so whole numbers past 2^53 in {} were rounded", f.name, features(rounded)),
+                text: format!(
+                    "Update: '{}' holds decimals, so the numbers of {} were rounded to the digits it holds",
+                    f.name,
+                    features(rounded)
+                ),
             });
         }
     }
@@ -2993,7 +2999,7 @@ struct Unfit {
     days: usize,
     /// Numbers with a fraction a whole-number field cut.
     fractions: usize,
-    /// Whole numbers past 2^53 a decimal field rounded.
+    /// Numbers a decimal field rounded: whole numbers past 2^53, and text with more digits than it holds.
     rounded: usize,
 }
 
@@ -3009,14 +3015,7 @@ impl Unfit {
             _ => None,
         };
         self.fractions += usize::from(matches!(c, Value::Int(_)) && decimal.is_some_and(|f| f.fract() != 0.0));
-        let whole = match v {
-            Value::Int(i) => Some(*i),
-            Value::Text(t) => t.trim().parse::<i64>().ok(),
-            _ => None,
-        };
-        // i128 holds both exactly: a whole number past 2^53 its decimal doesn't.
-        self.rounded +=
-            usize::from(ty == FieldType::Double && matches!(c, Value::Float(f) if whole.is_some_and(|i| *f as i128 != i128::from(i))));
+        self.rounded += usize::from(ty == FieldType::Double && matches!(c, Value::Float(_)) && v.rounds_as_double());
     }
 }
 
@@ -14609,7 +14608,7 @@ mod tests {
         zones.push(Some(sq(7.0, 0.0, 1.0)), vec![Value::Float(-2.7), Value::Int((1 << 53) + 1), Value::Text("maybe".into())]);
         let lossy = [
             "ChangedTruncated: Update: 'n' holds whole numbers, so 1 update feature lost its fraction",
-            "ChangedRounded: Update: 'x' holds decimals, so whole numbers past 2^53 in 1 update feature were rounded",
+            "ChangedRounded: Update: 'x' holds decimals, so the numbers of 1 update feature were rounded to the digits it holds",
             "DroppedValue: Update: 'b' is null in 1 update feature, whose value isn't a Boolean value",
         ];
         let res = run(&zones);
@@ -14624,7 +14623,7 @@ mod tests {
         assert_eq!(said(&run(&zones))[1..], [] as [&str; 0]);
         zones.push(
             Some(sq(7.0, 0.0, 1.0)),
-            vec![Value::Text("-2.7".into()), Value::Text("9007199254740993".into()), Value::Text("maybe".into())],
+            vec![Value::Text("-2.7".into()), Value::Text("9007199254740993.0".into()), Value::Text("maybe".into())],
         );
         assert_eq!(said(&run(&zones))[1..], lossy);
     }
@@ -14660,6 +14659,7 @@ mod tests {
         assert_eq!(converted(&Value::Int(2), FieldType::Boolean), Value::Bool(true));
         assert_eq!(converted(&Value::Float(0.0), FieldType::Boolean), Value::Bool(false));
         assert_eq!(converted(&Value::Float(0.5), FieldType::Boolean), Value::Null);
+        assert_eq!(converted(&Value::Float(1e-7), FieldType::Boolean), Value::Null, "not the 0 it shows as");
         assert_eq!(converted(&Value::Text("maybe".into()), FieldType::Boolean), Value::Null);
         assert_eq!(converted(&Value::Text("x".into()), FieldType::Double), Value::Null);
         assert_eq!(converted(&Value::Null, FieldType::Text), Value::Null);

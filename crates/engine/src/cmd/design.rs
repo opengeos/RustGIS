@@ -197,12 +197,13 @@ pub(crate) fn apply_with<B: Borrow<Feature>>(s: &mut Session, id: u32, changes: 
     let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
     // New features: subtype defaults fill empty fields; elevation goes in `z`. A default its field
     // can't hold as given (one saved before it was checked, or for a field retyped since) is left
-    // out, and said, by field, once the edit is kept; one that isn't finite refuses the edit.
-    let mut unheld: Vec<(String, usize)> = Vec::new();
+    // out, and said once the edit is kept, naming its fields; one that isn't finite refuses the edit.
+    let (mut unheld, mut unheld_rows): (Vec<String>, usize) = (Vec::new(), 0);
     if let Some(st) = l.design.subtypes.clone()
         && let Some(sfi) = l.dataset.field_index(&st.field)
     {
         for r in &new_rows {
+            let mut left_out = false;
             let code = l.dataset.value(*r, sfi).as_f64().map(|v| v as i64);
             let Some(sub) = code.and_then(|c| st.subtypes.iter().find(|x| x.code == c)) else { continue };
             for (field, v) in &sub.defaults {
@@ -217,13 +218,16 @@ pub(crate) fn apply_with<B: Borrow<Feature>>(s: &mut Session, id: u32, changes: 
                     }
                     match super::edit::held_default(field, v, ty) {
                         Ok(held) => *cell = held,
-                        Err(_) => match unheld.iter_mut().find(|(f, _)| f == field) {
-                            Some((_, n)) => *n += 1,
-                            None => unheld.push((field.clone(), 1)),
-                        },
+                        Err(_) => {
+                            left_out = true;
+                            if !unheld.contains(field) {
+                                unheld.push(field.clone());
+                            }
+                        }
                     }
                 }
             }
+            unheld_rows += usize::from(left_out);
         }
     }
     if elevation != Elevation::None && !zs.is_empty() {
@@ -333,11 +337,13 @@ pub(crate) fn apply_with<B: Borrow<Feature>>(s: &mut Session, id: u32, changes: 
             s.notify_loss(code, notice);
         }
     }
-    for (field, n) in unheld {
-        let features = if n == 1 { "1 new feature".to_string() } else { format!("{n} new features") };
+    if unheld_rows > 0 {
+        let features = if unheld_rows == 1 { "1 new feature".to_string() } else { format!("{unheld_rows} new features") };
+        let fields: Vec<String> = unheld.iter().map(|f| format!("'{f}'")).collect();
         s.notify_loss(
             rustgis_data::loss::LossCode::DroppedValue,
-            format!("{layer}: field '{field}' left empty in {features}, as it can't hold its subtype default as given").into(),
+            format!("{layer}: subtype defaults left out of {features}, as their fields can't hold them as given: {}", fields.join(", "))
+                .into(),
         );
     }
     if !unread.is_empty() {

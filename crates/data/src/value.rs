@@ -229,6 +229,18 @@ impl Value {
         }
     }
 
+    /// Whether this value, put in a decimal (Double) field, comes out rounded: a whole number past
+    /// 2^53, or a number written as text with more digits than a decimal holds
+    /// ([`double_holds`](crate::io::double_holds): `9007199254740993.0` is, `0.1` and `1e3` aren't).
+    pub fn rounds_as_double(&self) -> bool {
+        match self {
+            // i128 holds both exactly.
+            Value::Int(i) => (*i as f64) as i128 != i128::from(*i),
+            Value::Text(t) => t.trim().parse::<f64>().is_ok_and(f64::is_finite) && !crate::io::double_holds(t.trim()),
+            _ => false,
+        }
+    }
+
     /// The yes/no value text says, ignoring case and spaces around it: `true`, `t`, `yes`, `y` and
     /// `1` are true; `false`, `f`, `no`, `n` and `0` are false; other text is neither.
     pub fn yes_no(text: &str) -> Option<bool> {
