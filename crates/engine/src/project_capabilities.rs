@@ -239,7 +239,8 @@ fn holds_statistic_joined(v: &Value, sep: &str) -> bool {
     }
 }
 
-/// What a layout's JSON holds of a layer statistic (#2853), to read only a file that may have one.
+/// What the JSON of a layout or presentation shows of a layer statistic (#2853): a file with none
+/// of these keys has none, so only the others are parsed.
 const STATISTIC_KEYS: [&str; 5] = ["{count:", "{sum:", "{mean:", "{min:", "{max:"];
 
 /// A layout command that gives a text a layer statistic (#2853), read as a text reads its tokens

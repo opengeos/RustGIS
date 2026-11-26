@@ -7296,6 +7296,20 @@ fn references_follow_layer(s: &mut Session, old: &str, new: &str) {
             replace(&mut series.layer);
         }
     }
+    // A presentation's map page draws its title over its own map, where a layer statistic is filled
+    // in (#2853).
+    for page in s.project.presentations.iter_mut().flat_map(|p| &mut p.pages) {
+        if matches!(&page.kind, rustgis_map::presentation::PageKind::Map { map, .. } if map.eq_ignore_ascii_case(&map_name)) {
+            let renamed = rustgis_map::layout::rename_stat_layers(&page.title, |layer| {
+                let mut name = layer.to_string();
+                replace(&mut name);
+                (name != layer).then_some(name)
+            });
+            if let Some(renamed) = renamed {
+                page.title = renamed;
+            }
+        }
+    }
     // These items do not record a map; changing an ambiguous name would redirect references
     // used with another map. Keep those spellings until the user chooses their intended layer.
     let shared = s.project.maps.iter().enumerate().any(|(i, map)| {

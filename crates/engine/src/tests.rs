@@ -40101,6 +40101,21 @@ fn renaming_a_layer_renames_it_in_layout_text_statistics() {
     assert_eq!(said(&s, plain), "Countries", "a text with no token is left alone");
 }
 
+/// A presentation's map page draws its title over its own map, where a layer statistic is filled
+/// in (#2853), so renaming a layer of that map renames it in the title; a page of another map, or
+/// with no map frame, keeps its title.
+#[test]
+fn renaming_a_layer_renames_it_in_a_presentation_map_page_title() {
+    let mut s = world();
+    s.run("presentation.new", &json!({"name": "P"})).unwrap();
+    s.run("presentation.mapPage", &json!({"title": "{count:Countries} countries"})).unwrap();
+    s.run("presentation.blankPage", &json!({"title": "{count:Countries} on a blank page"})).unwrap();
+    s.run("layer.rename", &json!({"layer": "Countries", "name": "Nations"})).unwrap();
+    let titles: Vec<String> = s.project.presentations[0].pages.iter().map(|p| p.title.clone()).collect();
+    // The first page is the title page a new presentation starts with.
+    assert_eq!(titles, ["World Atlas", "{count:Nations} countries", "{count:Countries} on a blank page"]);
+}
+
 #[test]
 fn locked_layout_elements_take_no_change_until_unlocked() {
     use rustgis_map::layout::ElementKind;

@@ -1171,11 +1171,11 @@ pub fn expand(t: &str, layout: &Layout, info: &PageInfo, frame: Option<(&Map, ru
     rustgis_map::graphics::expand(&t, &v)
 }
 
-/// What the layer statistics in `text` (#2853) are missing, one line per token, each once (a layer
-/// read in place with a figure has a line for its scope as well): no map
-/// frame, no such layer in the first frame's map, or what [`rustgis_map::layout::layer_statistic`]
-/// finds missing (drawn as written by [`expand`]); and a figure over a layer read in place, which
-/// covers only the features loaded.
+/// What the layer statistics in `text` (#2853) are missing, one line per token, each once: no map
+/// frame, the first frame's map not in the project, no such layer in it, or what
+/// [`rustgis_map::layout::layer_statistic`] finds missing (each drawn as written by [`expand`]); and
+/// a figure over a layer read in place, which covers only the features loaded, has a line for that
+/// as well.
 pub fn statistic_notices(layout: &Layout, maps: &[Map], text: &str) -> Vec<String> {
     use rustgis_map::layout::StatMissing;
     let map = layout.first_frame().and_then(|f| match &layout.element(f)?.kind {
