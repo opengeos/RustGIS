@@ -256,6 +256,32 @@ impl Value {
         }
     }
 
+    /// Whether a number written as text has a fraction, read from its digits (not from the
+    /// decimal it parses to, which can round one away): `2.5`, `2.0000000000000001` and
+    /// `2.0000000000000000001e0` have; `2`, `2.000` and `1e3` haven't. Text that isn't a number
+    /// written out in digits (`inf`, `x`) has none.
+    pub fn text_has_fraction(text: &str) -> bool {
+        let t = text.trim().trim_start_matches(['-', '+']);
+        let (mantissa, exp) = match t.split_once(['e', 'E']) {
+            Some((m, e)) => (m, e.parse::<i64>().ok()),
+            None => (t, Some(0)),
+        };
+        let Some(exp) = exp else { return false };
+        let (whole, frac) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+        if !whole.bytes().chain(frac.bytes()).all(|b| b.is_ascii_digit()) || whole.len() + frac.len() == 0 {
+            return false;
+        }
+        // The digits past the point once the exponent moves it: a fraction when any isn't 0.
+        let digits = format!("{whole}{frac}");
+        let past = i64::try_from(frac.len()).unwrap_or(i64::MAX).saturating_sub(exp);
+        let kept = i64::try_from(digits.len()).unwrap_or(0).saturating_sub(past.max(0));
+        match usize::try_from(kept) {
+            Ok(kept) => digits.get(kept..).is_some_and(|f| f.bytes().any(|b| b != b'0')),
+            // The point moves past every digit: all of them are fraction.
+            Err(_) => digits.bytes().any(|b| b != b'0'),
+        }
+    }
+
     /// The yes/no value text says, ignoring case and spaces around it: `true`, `t`, `yes`, `y` and
     /// `1` are true; `false`, `f`, `no`, `n` and `0` are false; other text is neither.
     pub fn yes_no(text: &str) -> Option<bool> {
@@ -726,6 +752,24 @@ mod tests {
             assert_eq!(Value::Text(text.into()).rounds_as_double(), rounded, "{text}");
         }
         assert!(Value::Int((1 << 53) + 1).rounds_as_double() && !Value::Int(1 << 53).rounds_as_double());
+        for (text, fraction) in [
+            ("2.5", true),
+            ("-2.7", true),
+            ("2.0000000000000001", true),
+            ("2.0000000000000000001e0", true),
+            ("25e-1", true),
+            ("5e-1", true),
+            (".5", true),
+            ("2", false),
+            ("2.000", false),
+            ("1e3", false),
+            ("1.5e1", false),
+            ("2.50e1", false),
+            ("inf", false),
+            ("x", false),
+        ] {
+            assert_eq!(Value::text_has_fraction(text), fraction, "{text}");
+        }
         for text in ["maybe", "2", "on", "yess"] {
             assert_eq!(Value::yes_no(text), None, "{text}");
             assert_eq!(Value::parse(text, FieldType::Boolean), Value::Null, "{text} is neither, not no");

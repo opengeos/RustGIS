@@ -3020,17 +3020,15 @@ impl Unfit {
         // Empty or `<null>` text asks for null: no loss.
         self.nulls += usize::from(c.is_null() && !v.asks_null());
         self.days += usize::from(matches!(v, Value::DateTime(t) if ty == FieldType::Date && !t.is_date()));
-        let fraction = match v {
-            Value::Float(f) => f.fract() != 0.0,
-            // A decimal written out is read from its digits, which a decimal can round away:
-            // `2.0000000000000001` has a fraction, `2.000` hasn't.
-            Value::Text(t) => match t.trim().split_once('.') {
-                Some((_, digits)) if digits.bytes().all(|b| b.is_ascii_digit()) => digits.bytes().any(|b| b != b'0'),
-                _ => t.trim().parse::<i64>().is_err() && t.trim().parse::<f64>().is_ok_and(|f| f.fract() != 0.0),
-            },
-            _ => false,
-        };
-        self.fractions += usize::from(matches!(c, Value::Int(_)) && fraction);
+        // Text is read from its digits, which a decimal can round away: `2.0000000000000001` has a
+        // fraction, `2.000` hasn't.
+        let fraction = matches!(c, Value::Int(_))
+            && match v {
+                Value::Float(f) => f.fract() != 0.0,
+                Value::Text(t) => Value::text_has_fraction(t),
+                _ => false,
+            };
+        self.fractions += usize::from(fraction);
         self.rounded += usize::from(ty == FieldType::Double && matches!(c, Value::Float(_)) && v.rounds_as_double());
     }
 }
@@ -14639,7 +14637,7 @@ mod tests {
         assert_eq!(said(&run(&zones))[1..], [] as [&str; 0]);
         zones.push(
             Some(sq(7.0, 0.0, 1.0)),
-            vec![Value::Text("2.0000000000000001".into()), Value::Text("9007199254740993.0".into()), Value::Text("maybe".into())],
+            vec![Value::Text("2.0000000000000000001e0".into()), Value::Text("9007199254740993.0".into()), Value::Text("maybe".into())],
         );
         assert_eq!(said(&run(&zones))[1..], lossy);
     }

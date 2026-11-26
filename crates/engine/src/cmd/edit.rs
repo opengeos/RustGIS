@@ -492,9 +492,8 @@ pub(crate) fn validate(g: &Geometry) -> Result<(), String> {
 /// text it shows (which rounds a decimal to six places); a decimal, or text written as one, into a
 /// whole-number field loses its fraction (toward zero); a whole number past 2^53 into a decimal
 /// field is the nearest decimal. Not a number, and an infinity in a whole-number field, are null.
-/// Other values go through their text (a
-/// decimal into a text field as it's shown, to six places), and what the field can't hold is
-/// null. A number past the 64-bit range is held at the range's end, as it was; [`coerce_cut`], for
+/// A decimal goes into a text field in full, as a file writes it. Other values go through their
+/// text, and what the field can't hold is null. A number past the 64-bit range is held at the range's end, as it was; [`coerce_cut`], for
 /// callers that say what was cut, makes it null instead.
 pub(crate) fn coerce(v: Value, ty: FieldType) -> Value {
     match convert(v, ty) {
@@ -788,19 +787,14 @@ pub(crate) fn held_default(field: &str, value: &Value, ty: FieldType) -> Result<
     if non_finite_input(value, ty) {
         return Err(format!("field '{field}' requires a finite number"));
     }
-    // A decimal goes into a text field in full, not as the six places it's shown to.
-    if ty == FieldType::Text && matches!(value, Value::Float(_)) {
-        return Ok(Value::Text(value.to_file_text()));
-    }
     let coerced = coerce(value.clone(), ty);
+    // Named as given, not as shown (which rounds a decimal to six places).
+    let given = value.to_file_text();
     if coerced.is_null() && !value.asks_null() {
-        return Err(format!("field '{field}': '{value}' isn't a {} value", ty.label()));
+        return Err(format!("field '{field}': '{given}' isn't a {} value", ty.label()));
     }
-    if numeric_loss(value, &coerced, ty).is_some()
-        || (ty == FieldType::Double && matches!(coerced, Value::Float(_)) && value.rounds_as_double())
-        || matches!(value, Value::DateTime(t) if ty == FieldType::Date && !t.is_date())
-    {
-        return Err(format!("field '{field}': a {} field can't hold '{value}' as given", ty.label()));
+    if numeric_loss(value, &coerced, ty).is_some() || matches!(value, Value::DateTime(t) if ty == FieldType::Date && !t.is_date()) {
+        return Err(format!("field '{field}': a {} field can't hold '{given}' as given", ty.label()));
     }
     Ok(coerced)
 }
@@ -837,12 +831,18 @@ fn convert(v: Value, ty: FieldType) -> (Value, Cut, Option<f64>) {
                 (Some((v, cut)), Ok(f)) => (v, cut, Some(f)),
                 // A word the decimal reader takes ("inf", "NaN") isn't a number written as text:
                 // null, and said so, as not a number.
-                (None, Ok(f)) if f.is_finite() || t.bytes().any(|b| b.is_ascii_digit()) => whole(f),
+                // A fraction the decimal rounded away (`2.0000000000000000001e0`) is still one.
+                (None, Ok(f)) if f.is_finite() || t.bytes().any(|b| b.is_ascii_digit()) => match whole(f) {
+                    (v @ Value::Int(_), Cut::None, x) if Value::text_has_fraction(&t) => (v, Cut::Fraction, x),
+                    held => held,
+                },
                 (None, Ok(f)) if f.is_infinite() => (Value::Null, Cut::NotFinite, None),
                 (None, Ok(_)) => (Value::Null, Cut::NotANumber, None),
                 _ => (Value::parse(&t, ty), Cut::None, None),
             },
         },
+        // A decimal goes into a text field in full, not as the six places it's shown to.
+        (Value::Float(f), FieldType::Text) if f.is_finite() => (Value::Text(Value::Float(f).to_file_text()), Cut::None, None),
         // A whole number is yes when it isn't 0, as a shapefile writes it.
         (Value::Int(i), FieldType::Boolean) => (Value::Bool(i != 0), Cut::None, None),
         (Value::Float(f), FieldType::Boolean) if f.fract() == 0.0 => (Value::Bool(f != 0.0), Cut::None, None),
@@ -936,6 +936,8 @@ fn numeric_loss(input: &Value, v: &Value, ty: FieldType) -> Option<CellLoss> {
             }
             _ => None,
         }
+    } else if ty == FieldType::Double && matches!(v, Value::Float(_)) && input.rounds_as_double() {
+        Some(("{layer}, field '{field}', row {row}: 1 attribute value was rounded to the digits a decimal holds", LossCode::ChangedRounded))
     } else {
         None
     }
@@ -1012,8 +1014,6 @@ fn typed(raw: Json, ty: FieldType) -> Result<Value, String> {
             }
             v => v,
         },
-        // A number goes into a text field in full, not as the six decimals it's shown to.
-        Json::Number(n) if ty == FieldType::Text => Value::Text(Value::from_json(&Json::Number(n)).to_file_text()),
         // So is any other value a date or yes/no field can't hold (`20260305`, `0.5`).
         other => match coerce(Value::from_json(&other), ty) {
             Value::Null if (ty.is_temporal() || ty == FieldType::Boolean) && !other.is_null() => {

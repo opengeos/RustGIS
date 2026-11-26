@@ -1541,6 +1541,8 @@ fn yes_no_text_that_isnt_yes_or_no_is_refused_or_said_never_read_as_no() {
     assert_eq!(err, "'0.5' isn't a Boolean value");
     let err = s.run("edit.setValue", &json!({"layer": "Cities", "row": 0, "field": "flag", "value": 1e-7})).unwrap_err();
     assert!(err.ends_with("isn't a Boolean value"), "not the 0 it shows as: {err}");
+    let err = s.run("edit.template", &json!({"layer": "Cities", "name": "T", "defaults": {"flag": 1e-7}})).unwrap_err();
+    assert_eq!(err, "field 'flag': '0.0000001' isn't a Boolean value", "named as given");
     assert_eq!(cell(&s, 0), V::Bool(false), "a refused value leaves the cell as it was");
     // Calculate Field writes null for a result that isn't yes or no, and says so; clean results say nothing.
     let mark = s.notice_mark();
@@ -1586,9 +1588,24 @@ fn a_default_its_field_cant_hold_as_given_is_refused_when_set() {
     }
     let err = s.run("edit.template", &json!({"layer": "Cities", "name": "T", "defaults": {"x": 9_007_199_254_740_993_i64}})).unwrap_err();
     assert_eq!(err, "field 'x': a Double field can't hold '9007199254740993' as given");
-    for text in ["9007199254740993.0", "12345678901234567890"] {
-        let err = s.run("edit.template", &json!({"layer": "Cities", "name": "T", "defaults": {"x": text}})).unwrap_err();
-        assert!(err.contains("can't hold"), "{text}: {err}");
+    for (field, text) in [("x", "9007199254740993.0"), ("x", "12345678901234567890"), ("n", "1.00000000000000001e0")] {
+        let err = s.run("edit.template", &json!({"layer": "Cities", "name": "T", "defaults": {field: text}})).unwrap_err();
+        assert_eq!(err, format!("field '{field}': a {} field can't hold '{text}' as given", if field == "n" { "Long" } else { "Double" }));
+    }
+    // edit.setValue keeps such values, and says what holding them lost; exact ones say nothing.
+    for (field, value, said) in [
+        ("x", json!(9_007_199_254_740_993_i64), Some(rustgis_data::loss::LossCode::ChangedRounded)),
+        ("x", json!("9007199254740993.0"), Some(rustgis_data::loss::LossCode::ChangedRounded)),
+        ("x", json!("9007199254740992.0"), None),
+        ("x", json!(0.1), None),
+        ("n", json!("2.0000000000000000001e0"), Some(rustgis_data::loss::LossCode::ChangedTruncated)),
+        ("n", json!("1e3"), None),
+    ] {
+        let mark = s.notice_mark();
+        s.run("edit.setValue", &json!({"layer": "Cities", "row": 0, "field": field, "value": value})).unwrap();
+        let codes: Vec<_> = s.notices_since(mark).iter().filter_map(|n| n.loss()).collect();
+        assert_eq!(codes, said.into_iter().collect::<Vec<_>>(), "{value}");
+        s.run("edit.undo", &Value::Null).unwrap();
     }
     let err = s.run("data.contingentValues", &json!({"layer": "Cities", "name": "C", "fields": ["n", "flag"], "combos": [[2.5, true]]}));
     assert_eq!(err.unwrap_err(), "field 'n': a Long field can't hold '2.5' as given");
@@ -1611,6 +1628,10 @@ fn a_default_its_field_cant_hold_as_given_is_refused_when_set() {
     s.run("edit.setValue", &json!({"layer": "Cities", "row": 0, "field": "note", "value": 0.1234567})).unwrap();
     let ds = &s.map().layer_by_name("Cities").unwrap().dataset;
     assert_eq!(ds.value(0, ds.field_index("note").unwrap()), &V::Text("0.1234567".into()), "edit.setValue too");
+    s.run("edit.undo", &Value::Null).unwrap();
+    s.run("edit.calculateField", &json!({"layer": "Cities", "field": "note", "expression": "0.1234567"})).unwrap();
+    let ds = &s.map().layer_by_name("Cities").unwrap().dataset;
+    assert_eq!(ds.value(0, ds.field_index("note").unwrap()), &V::Text("0.1234567".into()), "Calculate Field too");
     s.run("edit.undo", &Value::Null).unwrap();
     // A subtype's defaults fill a new feature of its code. One saved before defaults were
     // checked, that its field can't hold as given, is left out and said.
