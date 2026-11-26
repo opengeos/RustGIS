@@ -12616,10 +12616,10 @@ fn layout_update_says_the_lines_a_wider_line_spacing_leaves_out() {
     s.run("layout.update", &json!({"element": id, "lineSpacing": 1})).unwrap();
     assert_eq!(said(&s, mark), "", "back at the usual spacing they all fit");
     // Upper case widens an unwrapped line past the page's right edge: its box placed so the line
-    // as typed ends inside the page and in upper case past it.
-    let words = "the quick brown fox jumps";
+    // in lower case ends inside the page and in upper case past it.
+    let words = "The Quick Brown Fox Jumps";
     let width = |s: &str| crate::render::report::width_mm(s, 12.0, false);
-    let (lower, upper) = (width(words), width(&words.to_uppercase()));
+    let (lower, upper) = (width(&words.to_lowercase()), width(&words.to_uppercase()));
     assert!(upper - lower > 4.0, "{lower} {upper}");
     let x = 297.0 - (lower + upper) / 2.0;
     let line = add(&mut s, json!({"kind": "text", "text": words, "size": 12, "x": x, "y": 100, "w": 10, "h": 10}));

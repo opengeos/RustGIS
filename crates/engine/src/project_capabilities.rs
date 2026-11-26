@@ -382,21 +382,23 @@ fn text_blocks(e: &rustgis_map::layout::Element) -> bool {
 
 /// A layout command that gives a text a block alignment, line spacing or case off its default:
 /// an older reader ignores `valign`, `lineSpacing` and `case` and draws the text at the top, at
-/// the usual spacing and as typed. Each is read as the command reads it, so the defaults
-/// (`"top"`, `1` or `"1"`, `"none"`, in any case) and `null`, which leaves a text as it is, keep a
-/// text as an older reader draws it. A value the command refuses needs nothing either: the command
-/// changes nothing. Only a text takes the keys, so a `layout.update` is read by them alone. A
-/// `layout.import` requires it for such a text once its layout is read into range, so a name it
-/// doesn't know or a spacing that isn't a number, read as the default, needs nothing.
+/// the usual spacing and as typed. Each is read on its own by the command's own reader
+/// ([`crate::cmd::layout::text_block_settings`]), so the defaults (`"top"`, `1` or `"1"`, `"none"`,
+/// in any case) and `null`, which leaves a text as it is, keep a text as an older reader draws it.
+/// A value the command refuses needs nothing either: the command changes nothing. Only a text
+/// takes the keys, so a `layout.update` is read by them alone. A `layout.import` requires it for
+/// such a text once its layout is read into range, so a name it doesn't know or a spacing that
+/// isn't a number, read as the default, needs nothing.
 fn command_uses_text_block(id: &str, params: &Value) -> bool {
-    use rustgis_map::layout::{LINE_SPACING, MAX_LINE_SPACING, MIN_LINE_SPACING, TextCase, TextVAlign};
+    use rustgis_map::layout::{LINE_SPACING, TextCase, TextVAlign};
     match id {
         "layout.addElement" | "layout.update" => {
-            let name = |k: &str| params.get(k).and_then(Value::as_str);
-            name("valign").and_then(TextVAlign::from_name).is_some_and(|v| v != TextVAlign::Top)
-                || crate::cmd::f(params, "lineSpacing")
-                    .is_some_and(|v| (MIN_LINE_SPACING..=MAX_LINE_SPACING).contains(&v) && v != LINE_SPACING)
-                || name("case").and_then(TextCase::from_name).is_some_and(|v| v != TextCase::None)
+            let usual = (TextVAlign::Top, LINE_SPACING, TextCase::None);
+            // Each key on its own, so one the command refuses doesn't hide another one set.
+            ["valign", "lineSpacing", "case"].into_iter().any(|k| {
+                let one = Value::Object(params.get(k).into_iter().map(|v| (k.to_string(), v.clone())).collect());
+                crate::cmd::layout::text_block_settings(&one, usual).is_ok_and(|set| set != usual)
+            })
         }
         "layout.import" => imported_layout_uses(params, &["\"valign\"", "\"line_spacing\"", "\"case\""], text_blocks),
         "script.run" => params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, command_uses_text_block)),

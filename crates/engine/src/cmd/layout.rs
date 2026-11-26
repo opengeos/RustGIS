@@ -3873,7 +3873,7 @@ fn add_element(s: &mut Session, p: &Value) -> CmdResult {
             let (font, font_name) = text_font(p, (FontFamily::Sans, None))?;
             let rotation = text_rotation(p)?.unwrap_or(0.0);
             let wrap = text_wrap(p)?.unwrap_or(false);
-            let (valign, line_spacing, case) = text_block(p, (TextVAlign::Top, LINE_SPACING, TextCase::None))?;
+            let (valign, line_spacing, case) = text_block_settings(p, (TextVAlign::Top, LINE_SPACING, TextCase::None))?;
             let k = ElementKind::Text {
                 text,
                 size,
@@ -4383,8 +4383,9 @@ fn gives_text_block(p: &Value) -> bool {
 /// or null: `valign` and `case` a name as [`TextVAlign::from_name`] and [`TextCase::from_name`]
 /// read it, `lineSpacing` a number (or a numeric string) from [`MIN_LINE_SPACING`] to
 /// [`MAX_LINE_SPACING`]. Anything else is refused, so nothing changes, rather than drawn otherwise
-/// than asked.
-fn text_block(p: &Value, current: (TextVAlign, f64, TextCase)) -> Result<(TextVAlign, f64, TextCase), String> {
+/// than asked. The one reader of these keys: the commands and their capability check
+/// (`command_uses_text_block`) both read them here.
+pub(crate) fn text_block_settings(p: &Value, current: (TextVAlign, f64, TextCase)) -> Result<(TextVAlign, f64, TextCase), String> {
     let (mut valign, mut spacing, mut case) = current;
     if gives(p, "valign") {
         valign = ps(p, "valign").and_then(TextVAlign::from_name).ok_or("valign is top, middle or bottom")?;
@@ -5513,7 +5514,7 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
     };
     // A text's block alignment, line spacing and case, checked before anything changes.
     let new_block = match kind_now {
-        Some(ElementKind::Text { valign, line_spacing, case, .. }) => Some(text_block(p, (*valign, *line_spacing, *case))?),
+        Some(ElementKind::Text { valign, line_spacing, case, .. }) => Some(text_block_settings(p, (*valign, *line_spacing, *case))?),
         _ if gives_text_block(p) => return Err(ONLY_TEXT_BLOCK.into()),
         _ => None,
     };
@@ -6033,19 +6034,19 @@ fn frame_view_changed(s: &mut Session, li: usize, frame: u32, basis: Option<&Box
 
 /// A publication's scale bar box measured again after its frame's scale, width, centre or map
 /// changed (#1379, #2581), each measured on its own map and centre:
-/// the "Scale Box", the "Scale Bar" of `frame` and the "Scale" under it, as a publication lays them
-/// out (one place, one width, none locked), take the width that bar and the text under it (its
-/// tokens filled as the page draws them, measured as drawn) now need, kept on the side of the
+/// the "Scale Box", the "Scale Bar" of `frame` and the "Scale" under it, as a publication lays
+/// them out (one place, one width, none locked), take the width that bar and the text under it
+/// (its tokens filled as the page draws them, measured as drawn) now need, kept on the side of the
 /// frame they are nearer. A layout without them, with them moved apart, with that text spaced out,
-/// in upper or lower case or in another font, naming a map series page (which differs from page to page), or of a frame
-/// other than the first (whose map the page fills the text from) is left as it is; so is a text
-/// longer than the widest box a publication gives. Only a box as wide as `before` (what it was
-/// measured from before the change: its frame, bar and text) is measured again: one set
-/// by hand keeps its width. A change to the text under the bar or to anything of the bar's that
-/// changes its labels or their room (its units, divisions, text size, subdivisions, divisions
-/// before zero, labels, unit label and where it sits, decimals or fit) measures it again too,
-/// with every setting the bar has. A box that would then cover the legend, locator or north arrow, which
-/// it didn't, stays as it was, which is said.
+/// in upper or lower case or in another font, naming a map series page (which differs from page to
+/// page), or of a frame other than the first (whose map the page fills the text from) is left as
+/// it is; so is a text longer than the widest box a publication gives. Only a box as wide as
+/// `before` (what it was measured from before the change: its frame, bar and text) is measured
+/// again: one set by hand keeps its width. A change to the text under the bar or to anything of
+/// the bar's that changes its labels or their room (its units, divisions, text size, subdivisions,
+/// divisions before zero, labels, unit label and where it sits, decimals or fit) measures it again
+/// too, with every setting the bar has. A box that would then cover the legend, locator or north
+/// arrow, which it didn't, stays as it was, which is said.
 fn refit_scale_box(s: &mut Session, li: usize, before: &BoxBasis) {
     let frame = before.frame;
     let Some(now) = scale_box_basis(s, li).filter(|b| b.frame == frame) else { return };
