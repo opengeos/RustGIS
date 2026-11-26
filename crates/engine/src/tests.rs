@@ -18988,6 +18988,7 @@ fn exporting_a_made_raster_writes_its_embedded_file_until_its_pixels_change() {
     let tif = dir.join("hill.tif");
     s.run("share.exportRaster", &json!({"layer": id, "path": tif.display().to_string()})).unwrap();
     assert_eq!(std::fs::read(&tif).unwrap(), *embedded);
+    drop(rl);
     let rl = s.map_mut().layer_mut(id).unwrap().raster.as_mut().unwrap();
     let band = &mut std::sync::Arc::make_mut(rl.data.as_mut().unwrap()).bands[0];
     band.data[0] = if band.data[0] == 7.0 { 8.0 } else { 7.0 };

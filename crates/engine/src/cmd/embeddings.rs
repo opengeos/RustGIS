@@ -880,7 +880,7 @@ const IN_THE_BROWSER: &str = "AlphaEarth's similarity and change are worked out 
 fn made_saying(r: rustgis_data::raster::Raster, notes: Vec<String>, extra: Value) -> Result<super::workflows::Made, String> {
     let bytes = raster::geotiff::write_all(&r).map_err(|e| e.to_string())?;
     let name = r.name.clone();
-    let layer = RasterLayer::from_bytes(r, format!("{name}.tif"), bytes);
+    let layer = RasterLayer::from_written(r, format!("{name}.tif"), bytes);
     let said = name.clone();
     let then: super::workflows::Then = Box::new(move |s: &mut Session, v: &mut Value| {
         let id = v.get("layer").and_then(Value::as_u64).and_then(|i| u32::try_from(i).ok());
