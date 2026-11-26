@@ -4478,20 +4478,24 @@ impl TextStyle {
     /// unknown alignment is the top, a line spacing not a number the usual one, and one outside
     /// 0.5..=3 the nearer limit.
     pub(crate) fn with_block(self, valign: TextVAlign, line_spacing: f64) -> TextStyle {
-        // An infinity clamps to the nearer limit; only NaN has none.
-        let ls = if line_spacing.is_nan() {
-            rustgis_map::layout::LINE_SPACING
-        } else {
-            line_spacing.clamp(rustgis_map::layout::MIN_LINE_SPACING, rustgis_map::layout::MAX_LINE_SPACING)
-        };
-        TextStyle { valign: valign.kept(), line_spacing: ls as f32, ..self }
+        TextStyle { valign: valign.kept(), line_spacing: kept_line_spacing(line_spacing) as f32, ..self }
     }
 
-    /// Its line spacing, clamped again where it is used: in 0.5..=3, the usual one when it is not
-    /// a number. Exactly 1 for the usual spacing, so a plain text is placed as it always was.
+    /// Its line spacing, clamped again where it is used ([`kept_line_spacing`]). Exactly 1 for the
+    /// usual spacing (an `f32` goes to `f64` and back unchanged), so a plain text is placed as it
+    /// always was.
     fn line_spacing_kept(self) -> f32 {
-        let (lo, hi) = (rustgis_map::layout::MIN_LINE_SPACING as f32, rustgis_map::layout::MAX_LINE_SPACING as f32);
-        if self.line_spacing.is_nan() { 1.0 } else { self.line_spacing.clamp(lo, hi) }
+        kept_line_spacing(f64::from(self.line_spacing)) as f32
+    }
+}
+
+/// A line spacing as it is drawn: the usual one when it is not a number, else clamped to 0.5..=3
+/// (an infinity to the nearer limit).
+fn kept_line_spacing(ls: f64) -> f64 {
+    if ls.is_nan() {
+        rustgis_map::layout::LINE_SPACING
+    } else {
+        ls.clamp(rustgis_map::layout::MIN_LINE_SPACING, rustgis_map::layout::MAX_LINE_SPACING)
     }
 }
 
@@ -4625,7 +4629,8 @@ fn colorbar_bar_room(ppp: f32, orientation: Orientation) -> f32 {
     }
 }
 
-/// The distance between two lines of text at `size` points, in mm, as [`text_block`] sets them.
+/// The distance between two lines of text at `size` points, in mm, at the usual line spacing (1),
+/// as [`text_block`] sets them there; a text's line spacing multiplies it.
 pub fn line_pitch_mm(size: f64) -> f64 {
     size.clamp(2.0, 400.0) * 1.33 * 1.25 * 25.4 / 96.0
 }
@@ -8238,9 +8243,10 @@ Elaboração: RustGIS",
         (0..pm.height()).filter(|&y| (0..pm.width()).any(|x| rgb(pm, x, y).0 < 128)).collect()
     }
 
-    /// How many pixels are dark.
-    fn dark_count(pm: &Pixmap) -> usize {
-        (0..pm.height()).flat_map(|y| (0..pm.width()).map(move |x| (x, y))).filter(|&(x, y)| rgb(pm, x, y).0 < 128).count()
+    /// How many separate runs of columns with a dark pixel there are, from the left.
+    fn ink_column_runs(pm: &Pixmap) -> usize {
+        let inked: Vec<bool> = (0..pm.width()).map(|x| (0..pm.height()).any(|y| rgb(pm, x, y).0 < 128)).collect();
+        inked.windows(2).filter(|w| !w[0] && w[1]).count() + usize::from(inked.first() == Some(&true))
     }
 
     /// A text's block sits at the top of its box, as texts always have, in its middle, or with its
@@ -8256,7 +8262,10 @@ Elaboração: RustGIS",
         let plain = ink_rows(&render(&block_page("one\ntwo\nthree", 60.0, &|_| {}), &mut [], 96.0, &PageInfo::default()).unwrap());
         assert_eq!(top, plain, "top is today's drawing");
         let span = |r: &[u32]| r[r.len() - 1] - r[0];
-        assert_eq!((span(&mid), span(&bottom)), (span(&top), span(&top)), "the same block, moved");
+        // Moved by part of a pixel, its edge rows may shade past the threshold one row more or less.
+        for moved in [&mid, &bottom] {
+            assert!(span(moved).abs_diff(span(&top)) <= 1, "the same block, moved: {} and {}", span(moved), span(&top));
+        }
         let (box_top, box_bottom) = ((10.0 * 96.0 / 25.4) as u32, (70.0 * 96.0 / 25.4) as u32);
         assert!(box_bottom - bottom[bottom.len() - 1] <= 12, "bottom: last ink row {} of the box's {box_bottom}", bottom[bottom.len() - 1]);
         let (above, below) = (mid[0] - box_top, box_bottom - mid[mid.len() - 1]);
@@ -8345,13 +8354,62 @@ Elaboração: RustGIS",
                 &info,
             )
             .unwrap();
-            (dark_count(&pm), ink_bounds(&pm))
+            (ink_bounds(&pm), ink_column_runs(&pm))
         };
-        let (top, moved) = (ink(TextVAlign::Top, 1.0), ink(TextVAlign::Bottom, 1.5));
-        // Within a tenth: a 12 pt text of some 290 dark pixels shifted by part of a pixel shades
-        // its edges differently (3 % here); a line of it left out is far more.
-        assert!(top.0.abs_diff(moved.0) * 10 <= top.0, "every letter drawn: {} and {}", top.0, moved.0);
-        assert_ne!(top.1, moved.1, "the block moved");
+        // Spaced alike, so only the alignment differs. Turned a quarter clockwise, the box's
+        // down runs leftwards across the page: its lines are runs of inked columns.
+        let ((tl, tt, tr, tb), top_runs) = ink(TextVAlign::Top, 1.5);
+        let ((bl, bt, br, bb), bottom_runs) = ink(TextVAlign::Bottom, 1.5);
+        assert_eq!((top_runs, bottom_runs), (3, 3), "a run of columns a line, all three drawn");
+        assert!((tr - tl).abs_diff(br - bl) <= 2, "the same block across: {tl}..{tr} and {bl}..{br}");
+        assert!((tb - tt).abs_diff(bb - bt) <= 2, "the same lines along: {tt}..{tb} and {bt}..{bb}");
+        // Moved left by the room the block leaves: the box's 60 mm less three lines at 1.5,
+        // 12 pt × 1.33 × 1.25 × (1 + 2 × 1.5) = 79.8 px, of 226.8 px: 147.0 px.
+        let free = 60.0 * 96.0 / 25.4 - 12.0 * 1.33 * 1.25 * (1.0 + 2.0 * 1.5);
+        for (t, b) in [(tl, bl), (tr, br)] {
+            assert!((f64::from(t) - f64::from(b) - free).abs() <= 2.0, "moved {} px of {free:.1}", f64::from(t) - f64::from(b));
+        }
+    }
+
+    /// Where a text's block and case put its ink decides whether it runs off the page: a box
+    /// hanging past the page's bottom, its one line at the box's top, middle or bottom; and a line
+    /// near the page's right edge in upper case, its letters wider.
+    #[test]
+    fn a_text_block_and_case_are_said_off_the_page_where_they_put_the_ink() {
+        let info = PageInfo::default();
+        // The 100 mm page is 378.0 px tall at 96 dpi; the box (10, 80, 40, 30) mm runs from 302.4
+        // to 415.7 px. Its one line of 12 pt (15.96 px a line, a pitch of 19.95) has its middle
+        // 9.6 px under where the block starts, the block 19.95 px tall in a box of 113.4: at the
+        // top at 312.0 px, in the middle 46.7 px lower at 358.7, at the bottom 93.4 px lower at
+        // 405.4, below the page's 378.0 whatever the font's letters (some 8 px each way).
+        let hanging = |v| {
+            let mut l = Layout::new("L", 100.0, 100.0);
+            let mut kind = ElementKind::text("one", 12.0, Rgba::rgb(0, 0, 0), false);
+            set_block(&mut kind, v, 1.0, TextCase::None);
+            l.add("Hanging", (10.0, 80.0, 40.0, 30.0), kind);
+            text_losses(&l, &[], 96.0, &info)
+        };
+        assert_eq!(hanging(TextVAlign::Top), [], "at the top, on the page");
+        assert_eq!(hanging(TextVAlign::Middle), [], "in the middle, still on the page");
+        let bottom = hanging(TextVAlign::Bottom);
+        assert!(bottom.len() == 1 && bottom[0].off_page && bottom[0].left_out == 0, "{bottom:?}");
+        assert!(off_page_notice(&bottom[0]).is_some());
+        // The page is 378.0 px wide; the box starts at 83 mm, 313.7 px, 64.3 px from its edge.
+        // Ten letters `lflflflflf` of 12 pt (an em of 15.96 px) take some 0.25 em each as typed,
+        // about 40 px, and some 0.58 em in upper case (`LFLFLFLFLF`), about 93 px: on the page as
+        // typed with room for 1.6 times as wide letters, past its edge in upper case at 0.69 times
+        // as wide ones.
+        let near_edge = |c| {
+            let mut l = Layout::new("L", 100.0, 100.0);
+            let mut kind = ElementKind::text("lflflflflf", 12.0, Rgba::rgb(0, 0, 0), false);
+            set_block(&mut kind, TextVAlign::Top, 1.0, c);
+            l.add("Edge", (83.0, 50.0, 10.0, 10.0), kind);
+            text_losses(&l, &[], 96.0, &info)
+        };
+        assert_eq!(near_edge(TextCase::None), [], "as typed, on the page");
+        let upper = near_edge(TextCase::Upper);
+        assert!(upper.len() == 1 && upper[0].off_page && upper[0].left_out == 0, "{upper:?}");
+        assert!(off_page_notice(&upper[0]).is_some());
     }
 
     /// A block alignment or line spacing that reaches the page unrepaired is clamped where it is
