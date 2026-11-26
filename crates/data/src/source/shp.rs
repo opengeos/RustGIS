@@ -470,6 +470,7 @@ impl FeatureSource for ShpSource {
         // A read of an area, in longitude/latitude or in the file's own system, which holds no
         // shape without geometry; a box over the whole plane in its own system is no area, as in
         // `visit_with`.
+        let everywhere = req.extent.is_none() && self.reproject.own_box(req) == Some(super::whole_plane());
         let by_area = req.extent.is_some() || self.reproject.own_box(req).is_some_and(|b| b != super::whole_plane());
         if late {
             crate::progress::begin(self.info.count.and_then(|n| usize::try_from(n).ok()).unwrap_or(0));
@@ -556,7 +557,9 @@ impl FeatureSource for ShpSource {
             features = std::mem::take(&mut sample.items);
             (sample.seen(), sample.complete())
         } else {
-            self.index.visit(bounds, limit, &mut each)?
+            // A box over the whole plane narrows nothing: every record, those without a usable
+            // box too, as `visit_with` reads them.
+            self.index.visit(bounds.filter(|_| !everywhere), limit, &mut each)?
         };
         Ok(Batch {
             features,

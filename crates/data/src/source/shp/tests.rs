@@ -703,6 +703,21 @@ fn a_nan_shape_outside_an_area_its_system_cant_bound_is_counted_as_of_the_layer(
         let own = Some((crs, Extent::new(-1e7, -1e7, 1e7, 1e7)));
         let boxed = src.read(&Request { own, ..Request::all() }).unwrap();
         assert_eq!(boxed.features.iter().map(|f| f.geometry.is_some()).collect::<Vec<_>>(), [true]);
+        // A box over the whole plane in its own system is no area: every record, as a whole read
+        // gives them, one without a usable box too (the first record's stored box made
+        // backwards: its corners at 112..144 swapped).
+        let p = write("nan_unboxed.shp");
+        let mut b = std::fs::read(&p).unwrap();
+        b[156..164].copy_from_slice(&f64::NAN.to_le_bytes());
+        let (lo, hi) = (b[112..128].to_vec(), b[128..144].to_vec());
+        b[112..128].copy_from_slice(&hi);
+        b[128..144].copy_from_slice(&lo);
+        std::fs::write(&p, b).unwrap();
+        let unboxed = open_path(&p, None).unwrap();
+        let plane = Request { own: Some((crs, crate::source::whole_plane())), ..Request::all() };
+        let all = |r: &Batch| r.features.iter().map(|f| f.geometry.is_some()).collect::<Vec<_>>();
+        assert_eq!(all(&unboxed.read(&plane).unwrap()), [false, true, true]);
+        assert_eq!(all(&unboxed.read(&Request::all()).unwrap()), [false, true, true]);
         // A whole read gives them without geometry, and says that once, with its plain count.
         let whole = src.read(&Request::all()).unwrap();
         assert!(said(&whole.notes).is_empty(), "{:?}", whole.notes);
