@@ -5329,6 +5329,8 @@ impl RustGisApp {
             "ui.pane.assistant" => match p.get("ask").and_then(Value::as_str).map(str::trim).filter(|t| !t.is_empty()) {
                 Some(text) => {
                     self.ui.open_right(RightPane::Assistant);
+                    // A message still waiting isn't lost to this one: it goes back to the box.
+                    assistant::unqueue(&mut self.assistant);
                     self.assistant.queued = Some(text.to_string());
                     self.assistant.queued_from_box = false;
                 }

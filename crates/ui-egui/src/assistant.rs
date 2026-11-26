@@ -887,7 +887,7 @@ pub fn stop(app: &mut RustGisApp) {
 
 /// Puts a message still waiting to be sent back into the input box, so it is never lost: as the
 /// draft when the box is empty or already holds it, above newer typing otherwise.
-fn unqueue(state: &mut AssistantState) {
+pub(crate) fn unqueue(state: &mut AssistantState) {
     let from_box = std::mem::take(&mut state.queued_from_box);
     if let Some(text) = state.queued.take()
         && !from_box

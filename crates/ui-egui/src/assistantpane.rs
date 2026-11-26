@@ -1492,6 +1492,11 @@ pub(crate) mod tests {
             assert!(app.assistant.queued.is_none());
             assert_eq!(app.assistant.input, "from before");
         }
+        // A command's message doesn't push one still waiting out: that one goes to the box.
+        app.assistant.queued = Some("waiting".into());
+        app.assistant.input.clear();
+        app.run("ui.pane.assistant", serde_json::json!({"ask": "from a command"})).unwrap();
+        assert_eq!((app.assistant.queued.as_deref(), app.assistant.input.as_str()), (Some("from a command"), "waiting"));
         // Nor into a peer's project that replaces this one.
         app.assistant.queued = Some("a suggestion".into());
         app.assistant.input.clear();
