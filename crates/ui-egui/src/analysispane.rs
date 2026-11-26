@@ -3317,6 +3317,13 @@ mod tests {
         );
         h.run();
         let box_id = egui::Id::unique("script_text");
+        // Ctrl+Alt+F is AltGr+F on many layouts, a letter to type, outside a Mac, where it is ⌥⌘F: it
+        // opens nothing (the key event has `command` set as a platform's has).
+        h.ctx.memory_mut(|m| m.request_focus(box_id));
+        h.run();
+        h.key_press_modifiers(Modifiers { ctrl: true, alt: true, command: true, ..Default::default() }, Key::F);
+        h.run();
+        assert!(h.query_by_label("Close (Esc)").is_none(), "AltGr+F opens no bar");
         // Ctrl+H: the bar with its Replace row open. Typed text is the query, the first match from the cursor current; F3 and Shift+F3 step.
         h.ctx.memory_mut(|m| m.request_focus(box_id));
         h.run();

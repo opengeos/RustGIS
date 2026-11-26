@@ -206,12 +206,16 @@ pub fn prepare(ui: &egui::Ui, box_id: egui::Id, script: &str) -> Option<Shown> {
     let in_box = ui.memory(|m| m.has_focus(box_id));
     let in_bar = ui.memory(|m| m.has_focus(query_id) || m.has_focus(replace_id));
     // Ctrl+F (⌘F) opens the bar; Ctrl+H (⌥⌘F on a Mac, where ⌘H hides the app) opens it with the
-    // Replace row, as a code editor's do.
-    let find = (in_box || in_bar) && ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::F));
-    let replace = (in_box || in_bar)
+    // Replace row, as a code editor's do. Not with Alt held, but on a Mac for ⌥⌘F: elsewhere
+    // Ctrl+Alt is AltGr, and AltGr+F types a letter on many layouts, which egui's Ctrl+F
+    // pattern would otherwise take as its own.
+    let (here, mac) = (in_box || in_bar, ui.ctx().os().is_mac());
+    let alt = ui.input(|i| i.modifiers.alt);
+    let find = here && !alt && ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::F));
+    let replace = here
         && ui.input_mut(|i| {
-            i.consume_key(egui::Modifiers::COMMAND, egui::Key::H)
-                || i.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::ALT, egui::Key::F)
+            (!alt && i.consume_key(egui::Modifiers::COMMAND, egui::Key::H))
+                || (mac && alt && i.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::ALT, egui::Key::F))
         });
     if find || replace {
         if in_box && let Some(r) = crate::widgets::cursor_range(ui.ctx(), box_id) {
