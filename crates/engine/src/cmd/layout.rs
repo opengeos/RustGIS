@@ -3653,6 +3653,15 @@ fn say_text_fit(s: &mut Session, li: usize, id: u32, lines: bool) {
     }
 }
 
+/// The map of the first frame of the layout `li`, which the figures of its texts are read from.
+fn first_frame_map(s: &Session, li: usize) -> Option<String> {
+    let l = s.project.layouts.get(li)?;
+    match &l.element(l.first_frame()?)?.kind {
+        ElementKind::MapFrame { map, .. } => Some(map.clone()),
+        _ => None,
+    }
+}
+
 /// What the layout `li`'s texts lose when another frame is the first (#2853), the one whose map they
 /// read their figures from: [`say_layout_text_statistics`] when it isn't `before`.
 fn say_first_frame_change(s: &mut Session, li: usize, before: Option<u32>) {
@@ -5327,6 +5336,8 @@ fn restyle(kind: &ElementKind, p: &Value) -> Result<Option<ElementKind>, String>
 
 fn update(s: &mut Session, p: &Value) -> CmdResult {
     let id = element_id(p)?;
+    // The first frame's map as it is, to say what the texts lose only when it changes (#2853).
+    let map_before = index(s, p).ok().and_then(|li| first_frame_map(s, li));
     // Checked before anything changes, so a bad value leaves the element as it was.
     let new_center = match p.get("center") {
         Some(c) => {
@@ -5900,7 +5911,7 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
     }
     // The first frame's map decides every text's figures (#2853): another map, which may lack a
     // layer or a field, says what the layout's texts lose.
-    if given(&["map"]) && s.project.layouts.get(li).is_some_and(|l| l.first_frame() == Some(id)) {
+    if given(&["map"]) && s.project.layouts.get(li).is_some_and(|l| l.first_frame() == Some(id)) && first_frame_map(s, li) != map_before {
         say_layout_text_statistics(s, li);
     }
     // A centre the frame's map can't place (a pole on Web Mercator) is said (#2684).
