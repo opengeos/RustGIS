@@ -534,21 +534,18 @@ pub fn plugin_start(s: &mut Session, tool: &str, params: &Value) -> Result<Plugi
     let spec = pin.spec();
     let plugin = pin.plugin().ok_or_else(|| format!("no plugin tool '{tool}'"))?;
     let (_, tid) = rustgis_plugins::split_id(spec.id).ok_or("invalid plugin tool id")?;
-    let (job, full_ids, said, lost) = preparing(&continuation, || {
+    let (job, full_ids, said) = preparing(&continuation, || {
         let inputs = map_inputs(s, Some(spec), resolved, Tiled::Overview)?;
         let job = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             rustgis_plugins::tools::prepare_pinned(plugin.plugin(), tid, &inputs, resolved)
         }))
         .unwrap_or_else(|_| Err(format!("{} failed unexpectedly", spec.name)))?;
-        Ok((job, full_ids(&inputs.loaded), inputs.messages.clone(), inputs.losses.clone()))
+        Ok((job, full_ids(&inputs.loaded), inputs.messages.clone()))
     })?;
     // What reading its inputs approximated (a raster's overview read for a file read in place),
-    // and what it lost, with its code, said now: the run's result is the plugin's own.
+    // said now: the run's result is the plugin's own.
     if !said.is_empty() {
         s.notify(format!("{}: {}", spec.name, said.join("; ")), false);
-    }
-    for l in lost {
-        s.say(rustgis_data::loss::Note::loss(l.code, format!("{}: {}", spec.name, l.text)));
     }
     let read = read_layers(s, spec, resolved);
     s.next_pending = s.next_pending.wrapping_add(1);
