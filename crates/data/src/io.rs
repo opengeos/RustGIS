@@ -3993,19 +3993,20 @@ fn read_zip_layers_budget(file_name: &str, bytes: &[u8], crs: Option<Crs>, budge
         } else if is_multi_layer_name(leaf) && !leaf.to_ascii_lowercase().ends_with(".zip") {
             // Every layer of a KML, GPX or other file of several, with its styles, as when it is
             // added by itself, within the allowance.
+            // A KML's ground overlays are pictures drawn beside its file; from a zip, they aren't,
+            // even in a document of overlays only, which gives no layer.
+            if matches!(ext_of(&n).as_str(), "kml" | "kmz")
+                && let Ok((found, undrawn, over_budget)) = crate::kml::ground_overlays(leaf, &b)
+                && found.len() + undrawn + over_budget > 0
+            {
+                overlays_left.push((n.clone(), found.len() + undrawn + over_budget));
+            }
             read_layers(leaf, &b).and_then(|layers| {
                 // A KML's styles stay with its layers.
                 let styles = layers.iter().flat_map(|l| &l.styles).fold(0usize, |sum, (id, _)| {
                     sum.saturating_add(std::mem::size_of::<(String, crate::kml::Style)>()).saturating_add(id.capacity())
                 });
                 charge_retained_with(layers.iter().map(|l| &l.dataset), styles, leaf, budget)?;
-                // A KML's ground overlays are pictures drawn beside its file; from a zip, they aren't.
-                if matches!(ext_of(&n).as_str(), "kml" | "kmz")
-                    && let Ok((found, undrawn, over_budget)) = crate::kml::ground_overlays(leaf, &b)
-                    && found.len() + undrawn + over_budget > 0
-                {
-                    overlays_left.push((n.clone(), found.len() + undrawn + over_budget));
-                }
                 Ok(layers)
             })
         } else {
@@ -9125,6 +9126,12 @@ mod tests {
         let mut left = cost;
         assert!(charge_retained([&alone[0].0, &alone[0].0], "two.kml", &mut left).is_err());
         assert_eq!(left, cost);
+        // A document of overlays only gives no layer, but its overlays are still said.
+        let only = br##"<?xml version="1.0"?><kml xmlns="http://www.opengis.net/kml/2.2"><Document><GroundOverlay><name>o</name><Icon><href>p.png</href></Icon><LatLonBox><north>1</north><south>0</south><east>1</east><west>0</west></LatLonBox></GroundOverlay></Document></kml>"##;
+        let zip = crate::zip::write(&[("a.csv".into(), b"id,x,y\n1,1,2\n".to_vec()), ("o.kml".into(), only.to_vec())]).unwrap();
+        let read = read_zip("mixed.zip", &zip).unwrap();
+        assert_eq!(read.len(), 1);
+        assert!(read[0].1.messages.iter().any(|m| m.contains("1 ground overlays") && m.contains("o.kml (1)")), "{:?}", read[0].1.messages);
         // Without overlays, nothing is said.
         let plain = crate::zip::write(&[("a.gpx".into(), br#"<?xml version="1.0"?><gpx version="1.1" creator="t" xmlns="http://www.topografix.com/GPX/1/1"><wpt lat="1" lon="2"/></gpx>"#.to_vec())]).unwrap();
         assert!(read_zip("p.zip", &plain).unwrap().iter().all(|(_, r)| r.messages.is_empty()));
