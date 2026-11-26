@@ -1126,7 +1126,9 @@ fn every_corpus_file_reads() {
         let dir = path.parent().unwrap().to_string_lossy().to_string();
         let mut report = Report::default();
         super::read_style(&text, "layer", &dir, &mut read, &mut report).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-        if path.to_string_lossy().contains("symbol-raster-marker-") {
+        // By the file's name: the checkout's own folders may contain anything.
+        let name = path.file_name().unwrap().to_string_lossy();
+        if name.starts_with("symbol-raster-marker-") {
             assert!(
                 !report.notes.iter().any(|n| n.text.starts_with("raster image markers whose")),
                 "{}: {:?}",
@@ -1134,7 +1136,7 @@ fn every_corpus_file_reads() {
                 report.notes
             );
         }
-        if path.to_string_lossy().contains("symbol-svg-marker-") {
+        if name.starts_with("symbol-svg-marker-") {
             assert!(
                 report.notes.iter().any(|n| n.text.starts_with("SVG markers, drawn as circles")),
                 "{}: {:?}",

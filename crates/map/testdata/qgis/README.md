@@ -36,7 +36,10 @@ no specification of these formats, so the corpus stands in for one: `every_corpu
 
 ## Regenerating
 
-QGIS 4.2.3 (4.4.0 for the SVG marker files), here the Flathub Flatpak, whose `/tmp` is private, so it writes under `~/.cache`:
+QGIS 4.2.3 wrote the corpus, and 4.4.0 the SVG marker files. The command runs whichever QGIS is
+installed (here the Flathub Flatpak, whose `/tmp` is private, so it writes under `~/.cache`) and
+writes the whole corpus again, so copy only the files you mean to replace: for the SVG markers,
+`data/icon.svg`, `data/marker.svg`, `qml/symbol-svg-marker-*.qml` and `qgs/svg-markers.qgs`.
 
 ```sh
 mkdir -p ~/.cache/qgis-corpus
@@ -46,6 +49,6 @@ flatpak run --env=PYTHONPATH=/app/share/qgis/python --env=QT_QPA_PLATFORM=offscr
 
 It writes `data/`, `qml/`, `qgs/`, `types.txt` and `log.txt` (what was written, and what this
 QGIS couldn't write) into the output folder, then runs `scrub.py` on the projects. QGIS may crash
-on exit, after writing everything. Copy the files here without `log.txt`, `sample.sqlite`,
+on exit, after writing everything. When replacing the whole corpus, copy the files here without `log.txt`, `sample.sqlite`,
 `dem.tif.aux.xml`, `all-styles.qgs` (the `.qgz` holds it) and the `_attachments.zip` files QGIS
 writes beside each project.
