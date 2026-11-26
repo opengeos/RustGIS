@@ -40136,6 +40136,27 @@ fn layout_text_statistics_are_said_when_the_first_frames_map_is_deleted() {
     assert_eq!(said(&mut s, "Detail"), ["{count:Countries} shows as written: the map of the layout's first frame is not in the project"]);
 }
 
+/// A publication's texts are stored with the line breaks the sheet draws them in, but a layer
+/// statistic (#2853) whose layer has a space in its name must not be broken at it: a text too wide
+/// for its box is kept whole and wrapped when it is drawn, as a `{map}` one is, so every token
+/// stays one and the page fills it in.
+#[test]
+fn a_publications_wrapped_text_keeps_its_statistic_tokens_whole() {
+    use rustgis_map::layout::ElementKind;
+    let mut s = world();
+    let extent = json!([-46.8, -11.6, -38.5, -2.2]);
+    let title = "{count:World Countries} ".repeat(12);
+    s.run("layout.publication", &json!({"profile": "a4-portrait", "extent": extent, "title": title.trim()})).unwrap();
+    let li = s.active_layout.unwrap();
+    let Some(ElementKind::Text { text, wrap, .. }) =
+        s.project.layouts[li].elements.iter().find(|e| e.name == "Title").map(|e| e.kind.clone())
+    else {
+        panic!("a title text")
+    };
+    assert_eq!(text.matches("{count:World Countries}").count(), 12, "{text:?}");
+    assert!(wrap, "the page wraps it when it draws");
+}
+
 #[test]
 fn locked_layout_elements_take_no_change_until_unlocked() {
     use rustgis_map::layout::ElementKind;
