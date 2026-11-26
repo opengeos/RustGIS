@@ -7254,12 +7254,24 @@ fn references_follow_layer(s: &mut Session, old: &str, new: &str) {
                 _ => None,
             })
             .collect();
+        // A text's layer statistics (#2853) read the map of the layout's first frame.
+        let texts_read_this_map = layout.first_frame().is_some_and(|f| frames.contains(&f));
         for element in &mut layout.elements {
             match &mut element.kind {
                 ElementKind::Table { frame, layer, .. } | ElementKind::Chart { frame, layer, .. } if frames.contains(frame) => {
                     replace(layer)
                 }
                 ElementKind::Colorbar { frame, layer: Some(layer), .. } if frames.contains(frame) => replace(layer),
+                ElementKind::Text { text, .. } if texts_read_this_map => {
+                    let renamed = rustgis_map::layout::rename_stat_layers(text, |layer| {
+                        let mut name = layer.to_string();
+                        replace(&mut name);
+                        (name != layer).then_some(name)
+                    });
+                    if let Some(renamed) = renamed {
+                        *text = renamed;
+                    }
+                }
                 _ => {}
             }
         }

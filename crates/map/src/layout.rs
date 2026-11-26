@@ -2459,6 +2459,38 @@ pub fn stat_tokens(text: &str) -> Vec<StatToken<'_>> {
     out
 }
 
+/// `text` with the layer of each statistic token put in another name by `rename` (given the layer's
+/// name, and the name to write in its place, or none to leave it): none when no token changes. The
+/// layer a token names is read as [`stat_tokens`] reads it.
+pub fn rename_stat_layers(text: &str, mut rename: impl FnMut(&str) -> Option<String>) -> Option<String> {
+    let mut out = text.to_string();
+    let mut changed = false;
+    let mut done: Vec<&str> = Vec::new();
+    for t in stat_tokens(text) {
+        if done.contains(&t.token) {
+            continue;
+        }
+        done.push(t.token);
+        let Some(layer) = rename(t.layer) else { continue };
+        let code = match t.stat {
+            StatKind::Count => "count",
+            StatKind::Sum => "sum",
+            StatKind::Mean => "mean",
+            StatKind::Min => "min",
+            StatKind::Max => "max",
+        };
+        let new = match t.field {
+            Some(field) => format!("{{{code}:{layer}:{field}}}"),
+            None => format!("{{{code}:{layer}}}"),
+        };
+        if new != t.token {
+            out = out.replace(t.token, &new);
+            changed = true;
+        }
+    }
+    changed.then_some(out)
+}
+
 /// Why a [`StatToken`] has no figure: drawn as written instead, and said when the text is set.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StatMissing {
@@ -3389,6 +3421,18 @@ mod tests {
 
     /// A text's statistic tokens (#2853): each kind, a layer named with a colon, and braces that
     /// aren't one left alone.
+    /// A layer renamed is renamed in the tokens that name it, whatever their statistic or field, and
+    /// a text none of them names is left as it is (#2853).
+    #[test]
+    fn statistic_tokens_follow_a_renamed_layer() {
+        let to_z = |l: &str| (l == "A").then(|| "Z".to_string());
+        assert_eq!(
+            rename_stat_layers("{count:A} {sum:A:f} {count:A} {max:B:A} {scale}", to_z).as_deref(),
+            Some("{count:Z} {sum:Z:f} {count:Z} {max:B:A} {scale}")
+        );
+        assert_eq!(rename_stat_layers("{count:B} {sum:B:A} A", to_z), None);
+    }
+
     #[test]
     fn statistic_tokens_are_read_from_a_text() {
         fn read(t: &str) -> Vec<(&str, StatKind, &str, Option<&str>)> {

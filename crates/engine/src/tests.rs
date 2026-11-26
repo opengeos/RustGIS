@@ -40058,6 +40058,29 @@ fn layout_text_statistics_are_said_when_the_first_frame_changes() {
     assert_eq!(told, ["{count:Countries} shows as written: the layout has no map frame whose map it would read"]);
 }
 
+/// A layout text's layer statistics (#2853) name their layer, so renaming the layer carries them
+/// along as it does a chart's or table's layer, in the layouts whose first frame shows that map;
+/// another layer's token, and the field, stay as they are.
+#[test]
+fn renaming_a_layer_renames_it_in_layout_text_statistics() {
+    let mut s = world();
+    s.run("layout.new", &json!({"name": "L"})).unwrap();
+    let text = |s: &mut Session, t: &str| {
+        s.run("layout.addElement", &json!({"kind": "text", "text": t, "x": 10, "y": 10})).unwrap()["element"].as_u64().unwrap() as u32
+    };
+    let first = text(&mut s, "{count:Countries} in {sum:countries:pop_est}; {count:Rivers} {scale} {count:Countries:pop_est}");
+    let plain = text(&mut s, "Countries");
+    s.run("layer.rename", &json!({"layer": "Countries", "name": "Nations"})).unwrap();
+    let li = s.active_layout.unwrap();
+    let said = |s: &Session, id: u32| match &s.project.layouts[li].element(id).unwrap().kind {
+        rustgis_map::layout::ElementKind::Text { text, .. } => text.clone(),
+        _ => unreachable!("a text"),
+    };
+    // A count's layer is all that follows its colon, so `Countries:pop_est` is another layer's name.
+    assert_eq!(said(&s, first), "{count:Nations} in {sum:Nations:pop_est}; {count:Rivers} {scale} {count:Countries:pop_est}");
+    assert_eq!(said(&s, plain), "Countries", "a text with no token is left alone");
+}
+
 #[test]
 fn locked_layout_elements_take_no_change_until_unlocked() {
     use rustgis_map::layout::ElementKind;
