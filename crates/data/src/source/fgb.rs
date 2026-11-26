@@ -980,7 +980,9 @@ fn geometry_part_fits(g: &flatgeobuf::Geometry<'_>, kind: GeometryKind, depth: u
         if !values.is_multiple_of(2) || (kind == K::Point && values < 2) {
             return false;
         }
-        if let Some(ends) = g.ends() {
+        // Ends are read only for these kinds, and only when there are two or more of them.
+        let reads_ends = matches!(kind, K::Polygon | K::MultiLineString | K::Triangle | K::TIN);
+        if let Some(ends) = g.ends().filter(|ends| reads_ends && ends.len() > 1) {
             let mut last = 0usize;
             for end in ends.iter() {
                 let end = usize::try_from(end).unwrap_or(usize::MAX);
@@ -1351,6 +1353,23 @@ mod geometry_fits_tests {
             GeometryKind::Polygon,
         );
         assert!(polygon_with_broken_part);
+        // Stray ends are refused only where the reader follows them: on a polygon, two or more.
+        let with_ends = |kind, ends: &'static [u32]| {
+            fits(
+                |fbb| {
+                    let xy = fbb.create_vector(&[0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 0.0]);
+                    let ends = fbb.create_vector(ends);
+                    Geometry::create(fbb, &GeometryArgs { xy: Some(xy), ends: Some(ends), type_: kind, ..Default::default() })
+                },
+                kind,
+            )
+        };
+        assert!(with_ends(GeometryKind::LineString, &[9, 2]));
+        assert!(with_ends(GeometryKind::MultiPoint, &[9, 2]));
+        assert!(with_ends(GeometryKind::Polygon, &[9]), "one end is never read");
+        assert!(!with_ends(GeometryKind::Polygon, &[2, 9]));
+        assert!(!with_ends(GeometryKind::MultiLineString, &[3, 2]));
+        assert!(with_ends(GeometryKind::Polygon, &[2, 4]));
     }
 }
 
