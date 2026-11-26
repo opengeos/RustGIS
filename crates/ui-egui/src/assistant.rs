@@ -35,6 +35,9 @@ pub struct AssistantState {
     /// A message to send on the next frame (`ui.pane.assistant {"ask": …}`), or once the key or a
     /// picture it waits for is read.
     pub queued: Option<String>,
+    /// The message waiting is the input box's own draft (sent from the box, which keeps it until
+    /// it goes): nothing to put back if it isn't sent.
+    pub(crate) queued_from_box: bool,
     /// The request out: its generation and where its response lands.
     pub(crate) inflight: Option<(u64, Reply)>,
     /// The pieces of the request out's reply, as they stream in (desktop).
@@ -682,8 +685,9 @@ pub(crate) fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
     if crate::assistantpictures::take_read(app) {
         ctx.request_repaint_after(web_time::Duration::from_millis(100));
     }
+    let from_box = std::mem::take(&mut app.assistant.queued_from_box);
     if let Some(text) = app.assistant.queued.take() {
-        send(app, text, ctx);
+        send_from(app, text, from_box, ctx);
     }
     // The reply's text so far, as it streams in.
     if let Some((generation, chunks)) = &app.assistant.chunks {
@@ -803,9 +807,19 @@ pub fn open(app: &mut RustGisApp, ctx: &egui::Context) {
 /// message: text typed while it waited stays. While the assistant is busy it isn't sent: a notice
 /// says so, and the message is in the box to send again.
 pub fn send(app: &mut RustGisApp, text: String, ctx: &egui::Context) {
+    let from_box = text.trim() == app.assistant.input.trim();
+    send_from(app, text, from_box, ctx);
+}
+
+/// [`send`], told whether `text` is the input box's own draft (`from_box`), which the box keeps
+/// until it goes: a message from elsewhere (a suggestion, a command's) is put in the box when it
+/// isn't sent, the box's own is already there.
+fn send_from(app: &mut RustGisApp, text: String, from_box: bool, ctx: &egui::Context) {
     ensure_loaded(app, ctx);
     if app.assistant.busy() {
-        to_box(&mut app.assistant, &text);
+        if !from_box {
+            to_box(&mut app.assistant, &text);
+        }
         app.session.notify(tl!("The assistant is busy; stop it or wait for it to finish."), true);
         return;
     }
@@ -814,6 +828,7 @@ pub fn send(app: &mut RustGisApp, text: String, ctx: &egui::Context) {
     if key_loading(app) || app.assistant.pictures.reading() {
         unqueue(&mut app.assistant);
         app.assistant.queued = Some(text);
+        app.assistant.queued_from_box = from_box;
         return;
     }
     let text = text.trim().to_string();
@@ -873,7 +888,10 @@ pub fn stop(app: &mut RustGisApp) {
 /// Puts a message still waiting to be sent back into the input box, so it is never lost: as the
 /// draft when the box is empty or already holds it, above newer typing otherwise.
 fn unqueue(state: &mut AssistantState) {
-    if let Some(text) = state.queued.take() {
+    let from_box = std::mem::take(&mut state.queued_from_box);
+    if let Some(text) = state.queued.take()
+        && !from_box
+    {
         to_box(state, &text);
     }
 }
@@ -1126,6 +1144,7 @@ pub(crate) fn peer_replaced(app: &mut RustGisApp) {
     }
     app.assistant.inflight = None;
     app.assistant.chunks = None;
-    app.assistant.queued = None;
+    // Not sent into the peer's project: back to the box.
+    unqueue(&mut app.assistant);
     app.assistant.always = false;
 }

@@ -415,6 +415,12 @@ mod tests {
         crate::assistant::send(&mut app, "second".into(), &ctx);
         assert_eq!(app.assistant.queued.as_deref(), Some("second"));
         assert_eq!(app.assistant.input, "first");
+        // Typed on in the box and sent again: the box's own draft isn't put back a second time.
+        app.assistant.input = "A".into();
+        crate::assistant::send(&mut app, "A".into(), &ctx);
+        app.assistant.input = "AB".into();
+        crate::assistant::send(&mut app, "AB".into(), &ctx);
+        assert_eq!((app.assistant.queued.as_deref(), app.assistant.input.as_str()), (Some("AB"), "AB"));
     }
 
     #[test]

@@ -1492,6 +1492,12 @@ pub(crate) mod tests {
             assert!(app.assistant.queued.is_none());
             assert_eq!(app.assistant.input, "from before");
         }
+        // Nor into a peer's project that replaces this one.
+        app.assistant.queued = Some("a suggestion".into());
+        app.assistant.input.clear();
+        assistant::peer_replaced(&mut app);
+        assert!(app.assistant.queued.is_none());
+        assert_eq!(app.assistant.input, "a suggestion");
     }
 
     /// Real pending reviews keep their reach visible while exact requests wait under Details.

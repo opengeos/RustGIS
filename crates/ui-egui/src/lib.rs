@@ -5330,6 +5330,7 @@ impl RustGisApp {
                 Some(text) => {
                     self.ui.open_right(RightPane::Assistant);
                     self.assistant.queued = Some(text.to_string());
+                    self.assistant.queued_from_box = false;
                 }
                 None => toggle_right(&mut self.ui, RightPane::Assistant),
             },
