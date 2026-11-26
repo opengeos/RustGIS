@@ -141,7 +141,7 @@ pub fn show(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) {
         }
         let _ = app.run("graphics.edit", p);
     };
-    if settled.typing {
+    if settled.typing && text != current {
         app.graphic_format.draft = Some((k, opened, text));
     } else if settled.text && text != current {
         save(app, json!({"text": text}));
@@ -169,8 +169,8 @@ pub fn show(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) {
 
 /// Saves the text typed for a graphic the pane didn't draw this frame (the pane was closed or
 /// hidden, or the selection changed) before its field could say it lost focus. A draft for
-/// another project, or another map than the one shown, is dropped: its layer ids and rows aren't
-/// this one's. Runs once a frame, after the panes and the view.
+/// another project, or another map than the one shown, is dropped, and that is said (#2987): its
+/// layer ids and rows aren't this one's. Runs once a frame, after the panes and the view.
 pub(crate) fn save_draft(app: &mut RustGisApp) {
     let drawn = app.graphic_format.drawn.take();
     let Some((k, opened, text)) = app.graphic_format.draft.take() else { return };
@@ -180,9 +180,14 @@ pub(crate) fn save_draft(app: &mut RustGisApp) {
     }
     let (map, layer, row) = k;
     let here = opened == app.session.opened && map == app.session.map().instance_id();
+    // What was typed for a map no longer in view can't be saved there, and the typing isn't lost without a word.
+    if !here {
+        app.session.notify(tl!("Text typed for a graphic on another map or project was not saved.").to_string(), false);
+        return;
+    }
     let current = app.session.map().layer(layer).and_then(|l| graphics::label(&l.dataset, row)).map(str::to_string);
     // A blank text goes to `graphics.edit` too, which refuses it and says so, as when Enter ends it.
-    if here && current.is_some_and(|c| c != text) {
+    if current.is_some_and(|c| c != text) {
         let _ = app.run("graphics.edit", json!({"layer": layer, "row": row, "text": text}));
     }
 }
@@ -286,6 +291,7 @@ mod tests {
         h.run_steps(2);
         h.query_all_by_role(Role::MultilineTextInput).find(|n| n.is_focused()).unwrap().type_text("New");
         h.run_steps(2);
+        let mark = h.state().session.notice_mark();
         h.state_mut().run("map.new", json!({"name": "Second"})).unwrap();
         h.state_mut().run("map.activate", json!({"name": first})).unwrap();
         h.state_mut().run("map.move", json!({"name": first, "to": 1})).unwrap();
@@ -296,6 +302,52 @@ mod tests {
         h.run_steps(2);
         let label = h.state().session.map().layer(layer).and_then(|l| graphics::label(&l.dataset, row)).map(str::to_string);
         assert!(label.as_deref().is_some_and(|t| t.contains("New")), "{label:?}");
+        assert!(h.state().session.notices_since(mark).iter().all(|n| !n.text.contains("was not saved")), "moved, not dropped");
+    }
+
+    /// A text typed for a map that is then replaced in view is not saved, and that is said once (#2987);
+    /// one moved with its map is kept without a word (`moving_the_map_keeps_the_text_being_typed`).
+    #[test]
+    fn a_text_typed_for_a_map_no_longer_in_view_says_it_was_not_saved() {
+        let mut app = RustGisApp::with_sample();
+        let added = app.run("graphics.add", json!({"shape": "text", "points": [[10, 50]], "text": "Old"})).unwrap();
+        let (layer, row) = (added["layer"].as_u64().unwrap() as u32, added["row"].as_u64().unwrap() as usize);
+        let mut h = harness(app);
+        h.run_steps(2);
+        h.state_mut().run("select.rows", json!({"layer": layer, "rows": [row]})).unwrap();
+        h.run_steps(3);
+        h.query_all_by_role(Role::MultilineTextInput).find(|n| n.value().as_deref() == Some("Old")).unwrap().focus();
+        h.run_steps(2);
+        h.query_all_by_role(Role::MultilineTextInput).find(|n| n.is_focused()).unwrap().type_text("New");
+        h.run_steps(2);
+        let mark = h.state().session.notice_mark();
+        h.state_mut().run("map.new", json!({"name": "Second"})).unwrap();
+        h.run_steps(3);
+        let said = |h: &egui_kittest::Harness<'_, RustGisApp>| {
+            h.state().session.notices_since(mark).iter().filter(|n| n.text.contains("was not saved")).count()
+        };
+        assert_eq!(said(&h), 1, "{:?}", h.state().session.notices_since(mark).iter().map(|n| &n.text).collect::<Vec<_>>());
+        h.run_steps(3);
+        assert_eq!(said(&h), 1, "once, not every frame");
+        assert!(h.state().graphic_format.draft.is_none());
+    }
+
+    /// A text field focused but not edited has nothing pending: switching map says nothing of it (#2987).
+    #[test]
+    fn a_focused_text_nobody_edited_leaves_no_notice_when_the_map_changes() {
+        let mut app = RustGisApp::with_sample();
+        let added = app.run("graphics.add", json!({"shape": "text", "points": [[10, 50]], "text": "Old"})).unwrap();
+        let (layer, row) = (added["layer"].as_u64().unwrap() as u32, added["row"].as_u64().unwrap() as usize);
+        let mut h = harness(app);
+        h.run_steps(2);
+        h.state_mut().run("select.rows", json!({"layer": layer, "rows": [row]})).unwrap();
+        h.run_steps(3);
+        h.query_all_by_role(Role::MultilineTextInput).find(|n| n.value().as_deref() == Some("Old")).unwrap().focus();
+        h.run_steps(2);
+        let mark = h.state().session.notice_mark();
+        h.state_mut().run("map.new", json!({"name": "Second"})).unwrap();
+        h.run_steps(3);
+        assert!(h.state().session.notices_since(mark).iter().all(|n| !n.text.contains("was not saved")));
     }
 
     /// A text cleared in the pane is refused, as `graphics.edit` refuses one: when Enter ends it and
