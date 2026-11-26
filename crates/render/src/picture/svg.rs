@@ -32,6 +32,9 @@ pub(super) enum Refusal {
     NotSvg,
     /// It has more to draw than the cap given, or more elements than [`ELEMENTS`].
     TooMuch,
+    /// Its style sheets and `style` attributes come to more than [`STYLE_UNITS`], or the attributes
+    /// of its elements to more than [`ATTRIBUTE_PAIRS`]: more to read than the readers do in time.
+    TooMuchToRead,
     /// It has more XML nodes than [`XML_NODES`], or nests deeper than [`DEPTH`].
     TooNested,
     /// A shape's radius may be any size: in em or ex, font sizes, which no font is loaded to give,
@@ -102,7 +105,7 @@ const STOPS_PER_UNIT: u64 = 16;
 pub(super) fn read(text: &str, cap: u64, matched: &mut u64) -> Result<usvg::Tree, Refusal> {
     // Before roxmltree checks each attribute of a tag against those before it.
     if attribute_pairs(text) > ATTRIBUTE_PAIRS {
-        return Err(Refusal::TooMuch);
+        return Err(Refusal::TooMuchToRead);
     }
     let xml = roxmltree::ParsingOptions { allow_dtd: true, nodes_limit: XML_NODES, ..Default::default() };
     let doc = roxmltree::Document::parse_with_options(text, xml).map_err(|e| match e {
@@ -121,7 +124,7 @@ pub(super) fn read(text: &str, cap: u64, matched: &mut u64) -> Result<usvg::Tree
     }
     // Before simplecss reads the sheets and `style` attributes, here and in usvg.
     if style_units(&doc) > STYLE_UNITS {
-        return Err(Refusal::TooMuch);
+        return Err(Refusal::TooMuchToRead);
     }
     with_sheet(&doc, |sheet| {
         let (_, by_sheet) = elements(&doc, sheet, cap, matched)?;
@@ -1396,7 +1399,8 @@ mod tests {
         assert!(read(&svg(&format!("<style>{}</style>{}", rules(200), rects(2500)))).is_ok());
         // 9,998 rects, the svg and the style come to [`ELEMENTS`], two steps a rule each: the cap.
         assert!(read(&svg(&format!("<style>{}</style>{}", rules(200), rects(9998)))).is_ok());
-        assert_eq!(read(&svg(&format!("<style>{}</style>{}", rules(2000), rects(2000)))).err(), Some(Refusal::TooMuch));
+        // (A sheet this long is under [`STYLE_UNITS`]: it is the steps that refuse it, not its text.)
+        assert_eq!(read(&svg(&format!("<style>{}</style>{}", rules(800), rects(9000)))).err(), Some(Refusal::TooMuch));
         // usvg reads what a `<use>` repeats again for each `<use>`, and matches the rules again: a
         // rect used 1,000 times, under a sheet of 1,000 rules.
         let used = format!(
@@ -1404,7 +1408,7 @@ mod tests {
             r##"<use href="#r"/>"##.repeat(10),
             r##"<use href="#g"/>"##.repeat(100)
         );
-        assert_eq!(read(&svg(&format!("<style>{}</style>{used}", rules(1000)))).err(), Some(Refusal::TooMuch));
+        assert_eq!(read(&svg(&format!("<style>{}</style>{used}", rules(900)))).err(), Some(Refusal::TooMuch));
         assert!(read(&svg(&format!("<style>{}</style>{used}", rules(20)))).is_ok());
         // Each descendant in a selector tries every element above: a few of them, 40 levels down.
         let deep = format!("{}<rect width=\"1\" height=\"1\"/>{}", "<g>".repeat(40), "</g>".repeat(40));
@@ -1421,14 +1425,14 @@ mod tests {
         // 40,000 rules (829 KB) took 10 s to read: refused, and never matched.
         let mut matched = 0;
         let sheet = svg(&format!("<style>{}</style><rect width=\"1\" height=\"1\"/>", rules(40_000)));
-        assert_eq!(super::read(&sheet, CSS_STEPS, &mut matched).err(), Some(Refusal::TooMuch));
+        assert_eq!(super::read(&sheet, CSS_STEPS, &mut matched).err(), Some(Refusal::TooMuchToRead));
         assert_eq!(matched, 0, "refused before its rules were matched");
         // One `style` attribute of 20,000 declarations, as long a time.
         let one = svg(&format!(r#"<rect width="1" height="1" style="{}"/>"#, declarations(20_000)));
-        assert_eq!(read(&one).err(), Some(Refusal::TooMuch));
+        assert_eq!(read(&one).err(), Some(Refusal::TooMuchToRead));
         // The bound is on all of them together: each of these costs little.
         let many = svg(&(0..3000).map(|_| format!(r#"<rect width="1" height="1" style="{}"/>"#, declarations(100))).collect::<String>());
-        assert_eq!(read(&many).err(), Some(Refusal::TooMuch));
+        assert_eq!(read(&many).err(), Some(Refusal::TooMuchToRead));
         // An icon's own: 200 rules, a few declarations a `style`, a comment as long as can be.
         assert!(read(&svg(&format!("<style>{}</style><rect width=\"1\" height=\"1\"/>", rules(200)))).is_ok());
         assert!(read(&svg(&format!(r#"<rect width="1" height="1" style="{}"/>"#, declarations(10)))).is_ok());
@@ -1439,7 +1443,7 @@ mod tests {
         let edge = (1..).find(|n| units(*n) > STYLE_UNITS).unwrap();
         let rect = r#"<rect width="1" height="1"/>"#;
         assert!(read(&svg(&format!("<style>{}</style>{rect}", rules(edge - 1)))).is_ok());
-        assert_eq!(read(&svg(&format!("<style>{}</style>{rect}", rules(edge)))).err(), Some(Refusal::TooMuch));
+        assert_eq!(read(&svg(&format!("<style>{}</style>{rect}", rules(edge)))).err(), Some(Refusal::TooMuchToRead));
     }
 
     /// An element's attributes are read within a bound before roxmltree reads them, which checks
@@ -1447,14 +1451,14 @@ mod tests {
     #[test]
     fn an_elements_attributes_are_read_within_their_bound() {
         let attributes = |n: usize| (0..n).map(|i| format!(r#" a{i}="1""#)).collect::<String>();
-        assert_eq!(read(&svg(&format!(r#"<rect width="1" height="1"{}/>"#, attributes(100_000)))).err(), Some(Refusal::TooMuch));
+        assert_eq!(read(&svg(&format!(r#"<rect width="1" height="1"{}/>"#, attributes(100_000)))).err(), Some(Refusal::TooMuchToRead));
         // A dozen on each of thousands, and a few dozen on one, are an icon's.
         let rects = (0..9000).map(|_| r#"<rect width="1" height="1" x="1" y="1" fill="red"/>"#).collect::<String>();
         assert!(read(&svg(&rects)).is_ok());
         assert!(read(&svg(&format!(r#"<rect width="1" height="1"{}/>"#, attributes(40)))).is_ok());
         // The `=` of the text between tags counts too, which only ever makes it count more.
         assert!(read(&svg(&format!("<desc>{}</desc>", "a=b ".repeat(1000)))).is_ok());
-        assert_eq!(read(&svg(&format!("<desc>{}</desc>", "a=b ".repeat(5000)))).err(), Some(Refusal::TooMuch));
+        assert_eq!(read(&svg(&format!("<desc>{}</desc>", "a=b ".repeat(5000)))).err(), Some(Refusal::TooMuchToRead));
         // The bound is on the tags: a `<` in a value isn't XML that reads.
         assert_eq!(read(&svg(&format!(r#"<rect width="1" height="1" a="<"{}/>"#, attributes(100)))).err(), Some(Refusal::NotSvg));
     }
