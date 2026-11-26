@@ -1134,6 +1134,14 @@ fn every_corpus_file_reads() {
                 report.notes
             );
         }
+        if path.to_string_lossy().contains("symbol-svg-marker-") {
+            assert!(
+                report.notes.iter().any(|n| n.text.starts_with("SVG markers, drawn as circles")),
+                "{}: {:?}",
+                path.display(),
+                report.notes
+            );
+        }
     }
     let projects = files("generated/qgs", &["qgs", "qgz"]);
     assert_eq!(projects.len(), 38, "project corpus changed: {projects:?}");

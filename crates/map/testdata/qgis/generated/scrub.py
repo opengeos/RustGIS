@@ -1,7 +1,7 @@
 """Removes what ties the generated projects to the machine that wrote them: the user QGIS records
 as their author (`saveUser`, `saveUserFull`, the metadata's `<author>`) and the absolute paths a
-few settings keep (a relation's or an atlas's layer source), made relative to the project. Run by `generate.py` after
-it writes; also runs on its own: `python3 scrub.py OUT`.
+few settings keep (a relation's or an atlas's layer source), made relative to the project. Run by
+`generate.py` after it writes; also runs on its own: `python3 scrub.py OUT`.
 """
 import os
 import re

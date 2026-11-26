@@ -771,6 +771,7 @@ def svg_markers():
     p = new_project()
     for name, make in styles.items():
         symbol = marker_symbol(make)
+        # An SVG marker layer has no opacity of its own, as a raster one has: the symbol's.
         if name == "opacity":
             symbol.setOpacity(0.5)
         vl = layer("points")
