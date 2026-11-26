@@ -155,12 +155,14 @@ fn candidate(n: u64) -> String {
 }
 
 /// The box is sized by the lines drawn, not by the line breaking the sheet uses for other texts,
-/// which measures a line's advance (in the serif, its ink). Which names the two count differently
-/// depends on the installed fonts, so each style's name is searched for here.
+/// which measures a line's advance (in the serif, its ink). Which names the two count differently,
+/// if any, depends on the installed fonts: each style's box is checked on `LONG` and on a name that
+/// tells them apart where one turns up, and some style must find one.
 #[test]
 fn a_wrapped_map_title_is_sized_for_its_drawn_lines() {
     let mut s = world();
     let extent = json!([-46.8, -11.6, -38.5, -2.2]);
+    let mut told_apart = false;
     // Each style, and what its title's box holds besides the text (1.5 mm for a classic one on A4).
     for (style, pad) in [("classic", 1.5), ("banner", 0.0), ("panel", 0.0), ("editorial", 0.0)] {
         // The sheet titled `name`: its title's box width, size, face and alignment.
@@ -181,19 +183,26 @@ fn a_wrapped_map_title_is_sized_for_its_drawn_lines() {
             let by_the_page = crate::render::layout::wrapped_lines(name, w, size, bold, font, align);
             (by_the_page.len() > 1 && by_the_sheet.len() != by_the_page.len()).then_some(by_the_page.len())
         };
+        // The lines the sheet's title is drawn in, which its box must be sized for.
+        let sized_as_drawn = |s: &Session| {
+            assert!(wraps(s, 0, "Title"), "{style}");
+            let lines = drawn_lines(s, 0, "Title");
+            assert_eq!(sized_lines(s, 0, "Title", pad), lines.len(), "{style}: {lines:?}");
+            lines
+        };
         // A name is screened against the box `LONG` gets and then checked on its own sheet, so only the
         // likely ones need a sheet.
         let long_box = titled(&mut s, LONG);
-        let found = (0..20_000).map(candidate).filter(|name| breaks_differ(name, long_box).is_some()).any(|name| {
+        sized_as_drawn(&s);
+        told_apart |= (0..20_000).map(candidate).filter(|name| breaks_differ(name, long_box).is_some()).any(|name| {
             let title = titled(&mut s, &name);
             let Some(counted) = breaks_differ(&name, title).filter(|_| wraps(&s, 0, "Title")) else { return false };
-            let lines = drawn_lines(&s, 0, "Title");
+            let lines = sized_as_drawn(&s);
             assert_eq!(lines.len(), counted, "{style}: {lines:?}");
-            assert_eq!(sized_lines(&s, 0, "Title", pad), lines.len(), "{style}: {lines:?}");
             true
         });
-        assert!(found, "{style}: no name found that the sheet and the page break differently in the installed fonts");
     }
+    assert!(told_apart, "no style found a name that the sheet and the page break differently in the installed fonts");
 }
 
 /// A column of sources is one element: one `{map}` source too wide for it wraps the element, the
