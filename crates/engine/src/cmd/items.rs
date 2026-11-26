@@ -1298,8 +1298,12 @@ struct Mesh {
     skipped: usize,
     /// Holes left out because they have fewer than 3 vertices, so their areas stay solid.
     holes_dropped: usize,
-    /// Polygons and points of zero height left out of STL, which holds solids, not flat sheets.
+    /// Polygons and points of zero height left out of STL, which holds solids, not flat sheets,
+    /// that had an area or a point to lose.
     flat: usize,
+    /// Every feature of zero height STL left out, with an area or not: what a layer of them alone
+    /// is refused for.
+    flat_seen: usize,
     /// Features whose height field isn't a finite number, so they took the default height.
     default_heights: usize,
     /// Features left out, as a place of each can't be given in longitude/latitude.
@@ -1308,6 +1312,9 @@ struct Mesh {
     layer: String,
     /// Line parts left out because they have a single vertex.
     short_lines: usize,
+    /// Every line part of two vertices or more, with a length or not: what a layer of lines alone
+    /// is refused for in STL.
+    lines_seen: usize,
 }
 
 impl Orient {
@@ -1463,6 +1470,7 @@ fn layer_mesh(s: &Session, p: &Value, keep_lines: bool) -> Result<Mesh, String> 
                 _ => true,
             };
             mesh.flat += usize::from(shaped);
+            mesh.flat_seen += 1;
             continue;
         }
         let before = mesh.vertices;
@@ -1540,7 +1548,9 @@ fn layer_mesh(s: &Session, p: &Value, keep_lines: bool) -> Result<Mesh, String> 
                         continue;
                     }
                     // A part with all its vertices in one place has no length to lose.
-                    mesh.lines += usize::from(part.first().is_some_and(|f| part.iter().any(|c| c != f)));
+                    let long = part.first().is_some_and(|f| part.iter().any(|c| c != f));
+                    mesh.lines += usize::from(long);
+                    mesh.lines_seen += 1;
                     if !mesh.keep_lines {
                         continue;
                     }
@@ -1581,10 +1591,10 @@ fn layer_mesh(s: &Session, p: &Value, keep_lines: bool) -> Result<Mesh, String> 
         }
     }
     if mesh.vertices == 0 {
-        if mesh.flat > 0 && !mesh.keep_lines {
+        if mesh.flat_seen > 0 && !mesh.keep_lines {
             return Err("nothing to export: every polygon and point has zero height, and STL holds solids, not flat sheets".into());
         }
-        if mesh.lines + mesh.short_lines > 0 && !mesh.keep_lines {
+        if mesh.lines_seen + mesh.short_lines > 0 && !mesh.keep_lines {
             return Err("nothing to export: STL holds polygons and points, not lines".into());
         }
         return Err("nothing to export".into());
