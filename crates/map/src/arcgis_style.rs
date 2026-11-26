@@ -496,7 +496,7 @@ fn symbol(s: &Value, g: GeometryType, picture: Option<Rgba>, pictures: &mut Pict
                 Ok(p) => {
                     let wide = s.get("width").and_then(Value::as_f64).is_some_and(|w| w.is_finite() && w > 0.0);
                     let height = s.get("height").filter(|h| !h.is_null());
-                    let flat = height.and_then(Value::as_f64).is_some_and(|h| h <= 0.0);
+                    let flat = height.and_then(Value::as_f64).is_some_and(|h| h == 0.0);
                     let sized_by = if wide {
                         if flat {
                             notes.add("picture markers of no height, drawn as tall as their image is");
@@ -815,10 +815,13 @@ mod tests {
         let (s, text) = styled_pms(json!(15), json!(0));
         assert_eq!(s.size, 15.0);
         assert_eq!(text, "picture markers of no height, drawn as tall as their image is");
-        // A height above 0 says nothing of the kind.
-        let (s, text) = styled_pms(json!(15), json!(18));
-        assert_eq!(s.size, 15.0);
-        assert!(text.is_empty(), "{text}");
+        // A height above 0 says nothing of the kind; nor does one below 0 or not a number, which a width
+        // makes no use of.
+        for height in [json!(18), json!(-4), json!("18")] {
+            let (s, text) = styled_pms(json!(15), height.clone());
+            assert_eq!(s.size, 15.0, "height {height}");
+            assert!(text.is_empty(), "height {height}: {text}");
+        }
     }
 
     #[test]

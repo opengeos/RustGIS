@@ -894,7 +894,7 @@ fn marker(layers: &[(Node, Props)], reference: Option<f64>, still: bool, layer: 
 /// Whether image path `file` names a network share (`\\host\share`, `//host/share`), which isn't
 /// opened: looking one up can sign in to the host, and a project may be opened on Windows, where
 /// `//` is one (as `paths::is_absolute_local` refuses it on every platform).
-pub(super) fn network_share(file: &str) -> bool {
+fn network_share(file: &str) -> bool {
     file.len() > 1 && file.chars().take(2).all(|c| c == '\\' || c == '/')
 }
 
@@ -940,7 +940,7 @@ pub(super) fn read_images(root: Node, dir: &str, read: &mut ReadImage, report: &
             // project chose (as an archive on one isn't opened either).
             Err("whose image is on a network share, which RustGIS doesn't open")
         // (A `file:` address is a web address only as written: `%3A%2F%2F` in a decoded name is a name.)
-        } else if path.contains("://") && (!address || file.contains("://")) {
+        } else if path.contains("://") && (!address || file.trim_start_matches("file:").trim_start_matches('/').contains("://")) {
             Err("whose image is at a web address, which RustGIS doesn't fetch")
         } else if super::is_drive_relative(&path) {
             Err("whose image file is relative to a drive's working folder, which no project folder tells")
