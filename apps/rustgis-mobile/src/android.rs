@@ -51,10 +51,17 @@ fn android_main(android: AndroidApp) {
     let folders = set_folders(&android);
     let phone = Phone::new(&android);
     // Before anything plans a job: the limits follow what Android allows, with the browser's
-    // floors.
-    let unsaid = phone.as_ref().is_ok_and(|phone| !phone.plan_memory());
+    // floors. Without the activity's Java half nothing says what that is, and the stand-in
+    // figure keeps this a phone.
+    let said = match &phone {
+        Ok(phone) => phone.plan_memory(),
+        Err(_) => {
+            rustgis_engine::data::memory::set_phone(shell::MEMORY_UNSAID, || None);
+            false
+        }
+    };
     let mut app = shell::front_end(folders.as_deref());
-    if unsaid {
+    if !said {
         shell::say_memory_unsaid(&mut app);
     }
     // The app's external files folder (`/sdcard/Android/data/org.rustgis.mobile/files`), where

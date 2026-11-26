@@ -1618,7 +1618,8 @@ fn union_all<'a>(polys: impl IntoIterator<Item = &'a geo::Polygon<f64>>) -> Mult
 const MAX_BUFFER_VERTICES: usize = 2_000_000;
 /// Retained ordinary output/selector storage, separate from overlay complexity. Temporary
 /// geometry on each worker and the already loaded input are additional to this allowance. The
-/// browser's budget, and the fewest bytes [`max_buffer_bytes`] allows on the desktop.
+/// browser's budget, and the fewest bytes [`max_buffer_bytes`] allows on the desktop (a phone:
+/// [`BROWSER_BUFFER_BYTES`]).
 const MAX_BUFFER_BYTES: usize = if cfg!(target_arch = "wasm32") { BROWSER_BUFFER_BYTES } else { 512 << 20 };
 /// The budget in the browser, and the fewest bytes [`max_buffer_bytes`] allows on a phone.
 const BROWSER_BUFFER_BYTES: usize = 128 << 20;

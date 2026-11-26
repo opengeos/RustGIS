@@ -405,9 +405,6 @@ mod tests {
         }
     }
 
-    /// A scene of the same view after one layer was restyled takes the other's mesh, shared
-    /// with the last scene, and tessellates the restyled one again: the same commands, vertex for
-    /// vertex, as a scene drawn with nothing kept.
     /// A scene stopped by a memory warning may still be drawing: what it makes after the release
     /// isn't kept, and a scene begun once it is done keeps again.
     #[test]
@@ -423,6 +420,9 @@ mod tests {
         assert!(kept_bytes() > 0);
     }
 
+    /// A scene of the same view after one layer was restyled takes the other's mesh, shared
+    /// with the last scene, and tessellates the restyled one again: the same commands, vertex for
+    /// vertex, as a scene drawn with nothing kept.
     #[test]
     fn a_layer_that_looks_the_same_keeps_its_mesh() {
         clear();
