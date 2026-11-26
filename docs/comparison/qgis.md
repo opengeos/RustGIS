@@ -111,8 +111,9 @@ The same World Atlas data, styled the same way, in each app.
   advanced digitizing with constraints, topological editing and geometry checkers. RustGIS
   creates, moves, rotates, scales, splits and merges features with snapping and templates,
   and moves, inserts and deletes vertices. On the desktop, a GeoPackage or PostGIS layer
-  loaded for editing saves its edits back to its source table, with row-conflict checks;
-  other edits stay in the project until exported.
+  loaded for editing writes its edits back to its source table with Edit › Save to
+  GeoPackage or Save to PostGIS, with row-conflict checks; saving the project doesn't.
+  Edits not yet written back, and edits to any other layer, stay in the project until exported.
 - **Processing.** RustGIS has built-in spatial joins, geodesic buffers, A5 grids, IDW,
   ordinary kriging and shortest paths on line networks, plus the optional
   1,000+ GeoLibre/Whitebox suite. QGIS combines its native algorithms with GDAL, GRASS
