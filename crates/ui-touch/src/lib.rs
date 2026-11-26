@@ -2340,7 +2340,8 @@ mod tests {
         let mut held = Held::new();
         held.raise(Sheet::Layers, "Layers");
         for i in 0..3 {
-            held.app.session.notify(format!("Toast {i}"), false);
+            // Several lines each: taller than a one-line toast.
+            held.app.session.notify(format!("Toast {i}\nline 2\nline 3\nline 4"), false);
         }
         // A toast's first frame measures it, unseen.
         held.frame(Vec::new());

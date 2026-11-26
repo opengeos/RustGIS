@@ -1808,16 +1808,20 @@ pub fn notices(app: &mut RustGisApp, ctx: &egui::Context) {
     ctx.request_repaint_after(std::time::Duration::from_millis(250));
     let screen = ctx.content_rect();
     // A shell with its own interface has its bars below the map, the work strip's Cancel among
-    // them: the toasts stand at the map's foot, clear of them, as many of the last three as the
-    // map above it has room for (one at least, at the top, when a tall sheet leaves it none).
+    // them: the toasts stand at the map's foot, clear of them, each on the one before by its own
+    // height, as many of the last three as the map above has room for (the newest always, at the
+    // top when a tall sheet leaves the map none).
     let over_map = app.chrome.and(app.map.view_rect).map(|(map, _)| map.max.y);
-    let foot = over_map.unwrap_or(screen.max.y).max(screen.min.y + 84.0);
-    let room = over_map.map_or(3, |_| (((foot - screen.min.y - 84.0) / 52.0).floor() as usize + 1).min(3));
-    let mut y = foot - 40.0;
-    for toast in app.map.toasts.iter_mut().rev().take(room) {
+    let mut y = over_map.unwrap_or(screen.max.y).max(screen.min.y + 84.0) - 40.0;
+    for (i, toast) in app.map.toasts.iter_mut().rev().take(3).enumerate() {
+        // A one-line toast's height: one that wouldn't fit below the top waits for room.
+        if i > 0 && y - 44.0 < screen.min.y {
+            break;
+        }
         // Keyed by the notice, not the slot, so a selection stays with its text as toasts come and go.
         let shown = egui::Area::new(egui::Id::unique(("toast", toast.id)))
-            .fixed_pos(pos2(screen.max.x - 380.0, y - 44.0))
+            .pivot(egui::Align2::LEFT_BOTTOM)
+            .fixed_pos(pos2(screen.max.x - 380.0, y))
             .order(egui::Order::Tooltip)
             .show(ctx, |ui| {
                 egui::Frame::NONE
@@ -1838,7 +1842,7 @@ pub fn notices(app: &mut RustGisApp, ctx: &egui::Context) {
         if shown.response.contains_pointer() {
             toast.at = now;
         }
-        y -= 52.0;
+        y = shown.response.rect.min.y - 8.0;
     }
 }
 
