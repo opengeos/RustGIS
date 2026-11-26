@@ -89,38 +89,44 @@ pub fn matches(text: &str, query: &str, case: bool, whole: bool) -> Found {
 /// (the last, `back`) when none is current. None when there are no matches.
 pub fn step(len: usize, current: Option<usize>, back: bool) -> Option<usize> {
     let last = len.checked_sub(1)?;
-    Some(match (current, back) {
-        (None, false) => 0,
-        (None, true) => last,
-        (Some(c), false) => {
-            if c.min(last) == last {
-                0
-            } else {
-                c + 1
-            }
-        }
-        (Some(c), true) => {
-            if c.min(last) == 0 {
+    Some(match current.map(|c| c.min(last)) {
+        None => {
+            if back {
                 last
             } else {
-                c.min(last) - 1
+                0
             }
         }
+        Some(c) => (c + if back { last } else { 1 }) % len,
     })
 }
 
 /// The index of the first match at or after the character `from`, else the first (it goes round).
 pub fn first_from(found: &Found, from: usize) -> Option<usize> {
-    let at = found.ranges.iter().position(|r| r.start >= from);
-    at.or(if found.ranges.is_empty() { None } else { Some(0) })
+    let at = found.ranges.partition_point(|r| r.start < from);
+    (!found.ranges.is_empty()).then_some(if at < found.ranges.len() { at } else { 0 })
 }
 
-/// `text` with the characters in `range` replaced by `with`.
-pub fn replace_one(text: &str, range: Range<usize>, with: &str) -> String {
-    let n = text.chars().count();
-    let (start, end) = (range.start.min(n), range.end.min(n));
-    let end = end.max(start);
-    text.chars().take(start).chain(with.chars()).chain(text.chars().skip(end)).collect()
+/// `text` with the characters of each of `ranges` (in order, apart from each other) replaced by
+/// `with`.
+pub fn replace(text: &str, ranges: &[Range<usize>], with: &str) -> String {
+    /// `s` cut after its first `n` characters.
+    fn after(s: &str, n: usize) -> (&str, &str) {
+        let byte = s.char_indices().nth(n).map_or(s.len(), |(byte, _)| byte);
+        s.split_at_checked(byte).unwrap_or((s, ""))
+    }
+    let mut out = String::with_capacity(text.len());
+    // What is left of the text, and the character it starts at.
+    let (mut rest, mut at) = (text, 0);
+    for r in ranges {
+        let (kept, from) = after(rest, r.start.saturating_sub(at));
+        out.push_str(kept);
+        out.push_str(with);
+        rest = after(from, r.end.saturating_sub(r.start)).1;
+        at = r.end.max(r.start);
+    }
+    out.push_str(rest);
+    out
 }
 
 /// `new` in place of `script`, as one step of the box's Undo; the same text records none.
@@ -129,22 +135,6 @@ fn write(ctx: &egui::Context, box_id: egui::Id, script: &mut String, new: String
         crate::analysispane::keep_for_undo_of(ctx, box_id, script);
         *script = new;
     }
-}
-
-/// `text` with every match of `found` replaced by `with`.
-pub fn replace_all(text: &str, found: &Found, with: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut chars = text.chars();
-    let mut at = 0;
-    for r in &found.ranges {
-        out.extend(chars.by_ref().take(r.start.saturating_sub(at)));
-        out.push_str(with);
-        // The matched characters are skipped.
-        chars.by_ref().take(r.end.saturating_sub(r.start)).for_each(drop);
-        at = r.end.max(r.start);
-    }
-    out.extend(chars);
-    out
 }
 
 /// The most characters of a query, and of a replacement: what each field takes, and so of a
@@ -202,13 +192,10 @@ pub struct Bar {
     case: bool,
     /// Only whole words match.
     whole: bool,
-    /// The match the next and previous go from, an index of `found`.
-    current: Option<usize>,
-    /// Where a new search starts picking its match: the cursor when the bar opened, the match last
-    /// stepped to, or the end of a replacement.
+    /// The current match is the first from this character: where the cursor was when the bar
+    /// opened or the script was last edited, the match last stepped to, or the end of a
+    /// replacement.
     anchor: usize,
-    /// Pick the match at the anchor when the matches are next worked out.
-    reseek: bool,
     /// Scroll the current match into view when it is next painted.
     scroll: bool,
     /// Put the focus in the query field, its text selected.
@@ -238,26 +225,24 @@ impl Bar {
         self.focus.is_some_and(|(_, p)| p + 1 == pass)
     }
 
-    /// The matches of `script`, worked out again if it, the query or a toggle changed since, and the
-    /// current one picked: called wherever the matches are used, so they are never of an older
-    /// text. `cursor`: the box's cursor, where a current match lost to an edit of the text is
-    /// picked again.
+    /// The matches of `script`, worked out again if it, the query or a toggle changed since:
+    /// called wherever the matches are used, so they are never of an older text. `cursor`: the
+    /// box's cursor, where the current match is picked from once the script is edited.
     fn refresh(&mut self, script: &str, cursor: usize) {
         let key = (egui::util::hash(script), self.query.text.clone(), self.case, self.whole);
         if self.key.as_ref() != Some(&key) {
+            // The text changed under the bar (typed in the box): the matches shifted.
+            if self.key.as_ref().is_some_and(|old| old.0 != key.0) {
+                self.anchor = cursor;
+            }
             self.found = matches(script, &self.query.text, self.case, self.whole);
             self.key = Some(key);
-            if !self.reseek {
-                // The text changed under the bar (typed in the box): the matches shifted, so the
-                // current one is the first from the cursor, where the edit is. Not scrolled to.
-                self.current = first_from(&self.found, cursor);
-            }
         }
-        if self.reseek {
-            self.current = first_from(&self.found, self.anchor);
-            self.scroll = self.current.is_some();
-            self.reseek = false;
-        }
+    }
+
+    /// The match the next and previous go from, an index of `found`.
+    fn current(&self) -> Option<usize> {
+        first_from(&self.found, self.anchor)
     }
 
     /// The bar closed. What it found goes with it (up to 10,000 ranges), and is worked out again on
@@ -271,7 +256,6 @@ impl Bar {
 
     /// The bar moved to the match `at` of the found ones.
     fn go(&mut self, at: Option<usize>) {
-        self.current = at;
         if let Some(r) = at.and_then(|i| self.found.ranges.get(i)) {
             self.anchor = r.start;
             self.scroll = true;
@@ -279,22 +263,16 @@ impl Bar {
     }
 }
 
-#[derive(Clone, Copy, PartialEq)]
+/// What a key or a button of the box and its bar does.
+#[derive(Clone, Copy, PartialEq, Debug)]
 enum Action {
+    Find,
+    FindAndReplace,
     Next,
     Previous,
     Replace,
     ReplaceAll,
     Close,
-}
-
-/// What a key of the box and its bar does.
-#[derive(Clone, Copy, PartialEq, Debug)]
-enum Does {
-    Find,
-    FindAndReplace,
-    Next,
-    Previous,
 }
 
 /// A shortcut of the box and its bar: Ctrl or ⌘ held (`command`), Alt and Shift, as given, and the
@@ -305,10 +283,10 @@ struct Chord {
     alt: bool,
     shift: bool,
     key: egui::Key,
-    does: Does,
+    does: Action,
 }
 
-const fn chord(command: bool, alt: bool, shift: bool, key: egui::Key, does: Does) -> Chord {
+const fn chord(command: bool, alt: bool, shift: bool, key: egui::Key, does: Action) -> Chord {
     Chord { command, alt, shift, key, does }
 }
 
@@ -318,13 +296,16 @@ const fn chord(command: bool, alt: bool, shift: bool, key: egui::Key, does: Does
 /// Ctrl+Alt is AltGr, and AltGr+F types a letter on many layouts.
 fn chords(mac: bool) -> [Chord; 4] {
     use egui::Key;
-    let replace =
-        if mac { chord(true, true, false, Key::F, Does::FindAndReplace) } else { chord(true, false, false, Key::H, Does::FindAndReplace) };
+    let replace = if mac {
+        chord(true, true, false, Key::F, Action::FindAndReplace)
+    } else {
+        chord(true, false, false, Key::H, Action::FindAndReplace)
+    };
     [
-        chord(true, false, false, Key::F, Does::Find),
+        chord(true, false, false, Key::F, Action::Find),
         replace,
-        chord(false, false, true, Key::F3, Does::Previous),
-        chord(false, false, false, Key::F3, Does::Next),
+        chord(false, false, true, Key::F3, Action::Previous),
+        chord(false, false, false, Key::F3, Action::Next),
     ]
 }
 
@@ -354,7 +335,7 @@ fn here(ctx: &egui::Context, box_id: egui::Id, bar: &Bar) -> bool {
 /// The bar closed from itself (`select`: the cursor goes where the search was, the current match
 /// selected, in the box) or from the box, whose cursor stays; the keyboard goes to the box.
 fn dismiss(ctx: &egui::Context, box_id: egui::Id, bar: &mut Bar, select: bool) {
-    if let Some(r) = bar.current.and_then(|i| bar.found.ranges.get(i)).filter(|_| select) {
+    if let Some(r) = bar.current().and_then(|i| bar.found.ranges.get(i)).filter(|_| select) {
         use egui::text::{CCursor, CCursorRange};
         crate::widgets::set_cursor_range(ctx, box_id, CCursorRange::two(CCursor::new(r.start), CCursor::new(r.end)));
     }
@@ -376,7 +357,7 @@ fn escape(ui: &egui::Ui, box_id: egui::Id, script: &str, bar: &mut Bar) {
 
 /// The chords the box and its bar take now: the next and previous match only with the bar `open`.
 fn taken_now(mac: bool, open: bool) -> impl Iterator<Item = Chord> {
-    chords(mac).into_iter().filter(move |c| open || !matches!(c.does, Does::Next | Does::Previous))
+    chords(mac).into_iter().filter(move |c| open || !matches!(c.does, Action::Next | Action::Previous))
 }
 
 /// Before the box: the shortcuts pressed in the box or the bar ([`chords`]). Finding opens the bar,
@@ -390,11 +371,11 @@ pub fn keys(ui: &egui::Ui, box_id: egui::Id, script: &str, bar: &mut Bar) {
         if !chord.take(ui) {
             continue;
         }
-        let stepping = matches!(chord.does, Does::Next | Does::Previous);
+        let stepping = matches!(chord.does, Action::Next | Action::Previous);
         let range = crate::widgets::cursor_range(ui.ctx(), box_id);
         if stepping {
             bar.refresh(script, range.map_or(bar.anchor, |r| r.primary.index.0));
-            bar.go(step(bar.found.ranges.len(), bar.current, chord.does == Does::Previous));
+            bar.go(step(bar.found.ranges.len(), bar.current(), chord.does == Action::Previous));
             continue;
         }
         if let Some(r) = range.filter(|_| ui.memory(|m| m.has_focus(box_id))) {
@@ -410,8 +391,8 @@ pub fn keys(ui: &egui::Ui, box_id: egui::Id, script: &str, bar: &mut Bar) {
             bar.anchor = a;
         }
         bar.open = true;
-        bar.replace_open |= chord.does == Does::FindAndReplace;
-        bar.reseek = true;
+        bar.replace_open |= chord.does == Action::FindAndReplace;
+        bar.scroll = true;
         bar.focus_query = true;
     }
 }
@@ -568,7 +549,7 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
                         Some(Toggle::Word) => bar.whole = !bar.whole,
                         None => {}
                     }
-                    bar.reseek |= toggled.is_some();
+                    bar.scroll |= toggled.is_some();
                     used |= toggled.is_some();
                     if std::mem::take(&mut bar.focus_query) {
                         ui.memory_mut(|m| m.request_focus(query_id));
@@ -576,14 +557,14 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
                         crate::widgets::set_cursor_range(ui.ctx(), query_id, CCursorRange::two(CCursor::new(0), end));
                     }
                     if query.changed() {
-                        (bar.reseek, edited) = (true, true);
+                        (bar.scroll, edited) = (true, true);
                         said.extend(bar.query.written().map(|n| left_out(Which::Find, n)));
                     }
                     let shift = ui.input(|i| i.modifiers.shift);
                     if query.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                         todo = Some(if shift { Action::Previous } else { Action::Next });
                     }
-                    let place = match (bar.query.text.is_empty(), bar.current) {
+                    let place = match (bar.query.text.is_empty(), bar.current()) {
                         (true, _) => String::new(),
                         (false, _) if total == 0 => tl!("No results").to_string(),
                         (false, current) => {
@@ -622,7 +603,7 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
                             edited = true;
                             said.extend(bar.replace.written().map(|n| left_out(Which::Replace, n)));
                         }
-                        let can = !running && bar.current.is_some();
+                        let can = !running && bar.current().is_some();
                         let wait = tl!("Wait for the run to finish").to_string();
                         let (one_say, all_say) = (tl!("Replace (Enter)").to_string(), tl!("Replace All").to_string());
                         // Off, the hover says why: a run, or nothing to replace.
@@ -657,9 +638,6 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
                         {
                             todo = Some(Action::ReplaceAll);
                         }
-                        if (replace.has_focus() || replace.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                            todo = Some(Action::Close);
-                        }
                     });
                 }
                 // Each note with its field: the Replace one only while its row shows.
@@ -689,20 +667,20 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
     // What was typed in the fields this frame, before it is acted on.
     bar.refresh(script, cursor);
     match todo {
-        Some(Action::Next) => bar.go(step(bar.found.ranges.len(), bar.current, false)),
-        Some(Action::Previous) => bar.go(step(bar.found.ranges.len(), bar.current, true)),
+        Some(Action::Next) => bar.go(step(bar.found.ranges.len(), bar.current(), false)),
+        Some(Action::Previous) => bar.go(step(bar.found.ranges.len(), bar.current(), true)),
         Some(Action::Replace) => {
-            if let Some(r) = bar.current.and_then(|i| bar.found.ranges.get(i)).cloned().filter(|_| !running) {
-                write(ui.ctx(), box_id, script, replace_one(script, r.clone(), &bar.replace.text));
+            if let Some(r) = bar.current().and_then(|i| bar.found.ranges.get(i)).cloned().filter(|_| !running) {
+                write(ui.ctx(), box_id, script, replace(script, std::slice::from_ref(&r), &bar.replace.text));
                 let after = r.start + bar.replace.text.chars().count();
                 crate::widgets::set_cursor_range(ui.ctx(), box_id, CCursorRange::one(CCursor::new(after)));
                 bar.anchor = after;
-                bar.reseek = true;
+                bar.scroll = true;
             }
         }
         Some(Action::ReplaceAll) => {
             if !running && !bar.found.capped && !bar.found.ranges.is_empty() {
-                let new = replace_all(script, &bar.found, &bar.replace.text);
+                let new = replace(script, &bar.found.ranges, &bar.replace.text);
                 // It may not grow the script past what a script file may be: a run adds up to the
                 // matches times the replacement. One already larger may still shrink.
                 if new.len() > crate::SCRIPT_FILE_MAX_BYTES && new.len() > script.len() {
@@ -711,12 +689,12 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
                     write(ui.ctx(), box_id, script, new);
                     crate::widgets::set_cursor_range(ui.ctx(), box_id, CCursorRange::one(CCursor::new(0)));
                     bar.anchor = 0;
-                    bar.reseek = true;
+                    bar.scroll = true;
                 }
             }
         }
         Some(Action::Close) => dismiss(ui.ctx(), box_id, bar, true),
-        None => {}
+        _ => {}
     }
     if todo.is_some() || edited || used {
         // The box was painted before the bar: it shows what changed on the next frame.
@@ -745,6 +723,7 @@ pub fn paint(ui: &egui::Ui, out: &egui::text_edit::TextEditOutput, script: &str,
     let origin = crate::widgets::text_origin(out);
     let painter = ui.painter().with_clip_rect(out.text_clip_rect.intersect(ui.clip_rect()));
     let seen = painter.clip_rect();
+    let current = bar.current();
     let ranges = &bar.found.ranges;
     let mut start = 0;
     for row in &galley.rows {
@@ -757,7 +736,7 @@ pub fn paint(ui: &egui::Ui, out: &egui::text_edit::TextEditOutput, script: &str,
                 let (a, b) = (r.start.max(start) - start, r.end.min(start + shown_chars) - start);
                 let x = |c: usize| row.pos.x + row.x_offset(CharIndex(c)) + origin.x;
                 let rect = egui::Rect::from_x_y_ranges(x(a)..=x(b), y);
-                if bar.current == Some(i) {
+                if current == Some(i) {
                     painter.rect_filled(rect, 2.0, CURRENT);
                     painter.rect_stroke(rect, 2.0, egui::Stroke::new(1.0, CURRENT), egui::StrokeKind::Outside);
                 } else {
@@ -768,7 +747,7 @@ pub fn paint(ui: &egui::Ui, out: &egui::text_edit::TextEditOutput, script: &str,
         start += row.char_count_including_newline().0;
     }
     if std::mem::take(&mut bar.scroll)
-        && let Some(r) = bar.current.and_then(|i| ranges.get(i))
+        && let Some(r) = bar.current().and_then(|i| ranges.get(i))
     {
         let at = egui::text::CCursor { prefer_next_row: true, ..CCursor::new(r.start) };
         ui.scroll_to_rect(galley.pos_from_cursor(at).translate(origin), Some(egui::Align::Center));
@@ -826,14 +805,14 @@ mod tests {
         let altgr = Modifiers { alt: true, ..command };
         for mac in [false, true] {
             let does = |key: Key, m: Modifiers| chords(mac).iter().find(|c| c.key == key && c.is_pressed_with(m)).map(|c| c.does);
-            assert_eq!(does(Key::F, command), Some(Does::Find));
+            assert_eq!(does(Key::F, command), Some(Action::Find));
             assert_eq!(does(Key::F, command | Modifiers::SHIFT), None, "Ctrl+Shift+F is not this box's");
             assert_eq!(does(Key::H, command | Modifiers::SHIFT), None);
-            assert_eq!(does(Key::F, altgr), mac.then_some(Does::FindAndReplace), "AltGr types a letter");
-            assert_eq!(does(Key::H, command), (!mac).then_some(Does::FindAndReplace), "⌘H hides the app");
+            assert_eq!(does(Key::F, altgr), mac.then_some(Action::FindAndReplace), "AltGr types a letter");
+            assert_eq!(does(Key::H, command), (!mac).then_some(Action::FindAndReplace), "⌘H hides the app");
             assert_eq!(does(Key::H, altgr), None);
-            assert_eq!(does(Key::F3, Modifiers::NONE), Some(Does::Next));
-            assert_eq!(does(Key::F3, Modifiers::SHIFT), Some(Does::Previous));
+            assert_eq!(does(Key::F3, Modifiers::NONE), Some(Action::Next));
+            assert_eq!(does(Key::F3, Modifiers::SHIFT), Some(Action::Previous));
             assert_eq!(does(Key::F3, command), None);
             assert_eq!(does(Key::F, Modifiers::NONE), None, "typing an f");
         }
@@ -962,22 +941,22 @@ mod tests {
 
     #[test]
     fn a_replace_leaves_the_rest_alone() {
-        assert_eq!(replace_one("a Cities b", 2..8, "Towns"), "a Towns b");
-        assert_eq!(replace_one("é Cities", 2..8, "Ü"), "é Ü");
+        assert_eq!(replace("a Cities b", std::slice::from_ref(&(2..8)), "Towns"), "a Towns b");
+        assert_eq!(replace("é Cities", std::slice::from_ref(&(2..8)), "Ü"), "é Ü");
         // An empty range is an insertion.
-        assert_eq!(replace_one("abc", 1..1, "X"), "aXbc");
+        assert_eq!(replace("abc", std::slice::from_ref(&(1..1)), "X"), "aXbc");
         // A range past the end is cut to it, not a panic.
-        assert_eq!(replace_one("abc", 2..9, "X"), "abX");
-        assert_eq!(replace_one("abc", 7..9, "X"), "abcX");
+        assert_eq!(replace("abc", std::slice::from_ref(&(2..9)), "X"), "abX");
+        assert_eq!(replace("abc", std::slice::from_ref(&(7..9)), "X"), "abcX");
     }
 
     #[test]
     fn replace_all_takes_every_match_and_not_what_it_adds() {
         let text = "Cities, Cities\nCities";
         let found = matches(text, "Cities", true, false);
-        assert_eq!(replace_all(text, &found, "Cities2"), "Cities2, Cities2\nCities2");
-        assert_eq!(replace_all(text, &found, ""), ", \n");
-        assert_eq!(replace_all("é a é", &matches("é a é", "é", true, false), "ee"), "ee a ee");
-        assert_eq!(replace_all("abc", &Found::default(), "X"), "abc");
+        assert_eq!(replace(text, &found.ranges, "Cities2"), "Cities2, Cities2\nCities2");
+        assert_eq!(replace(text, &found.ranges, ""), ", \n");
+        assert_eq!(replace("é a é", &matches("é a é", "é", true, false).ranges, "ee"), "ee a ee");
+        assert_eq!(replace("abc", &[], "X"), "abc");
     }
 }

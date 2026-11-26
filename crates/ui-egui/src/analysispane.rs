@@ -3224,13 +3224,8 @@ mod tests {
     fn ctrl_f_finds_in_the_script_and_escape_leaves_the_cursor_on_the_match() {
         use egui::{Event, Key, Modifiers};
         use egui_kittest::kittest::Queryable;
-        let mut app = RustGisApp::with_sample();
         let script = "layer.rename {\"layer\": \"Cities\"}\nmap.zoomFull\n# Cities again";
-        app.workflow.script = script.to_string();
-        let mut h = egui_kittest::Harness::builder()
-            .with_size(vec2(900.0, 800.0))
-            .build_ui_state(|ui, app: &mut RustGisApp| script_pane(app, ui, &Tokens::light()), app);
-        h.run();
+        let mut h = find_harness(script);
         let box_id = egui::Id::unique("script_text");
         let cursor = |h: &egui_kittest::Harness<'_, RustGisApp>| {
             crate::widgets::cursor_range(&h.ctx, box_id).map(|r| (r.secondary.index.0, r.primary.index.0))
@@ -3307,22 +3302,7 @@ mod tests {
     fn the_find_query_is_limited_in_length() {
         use egui::{Event, Key, Modifiers};
         use egui_kittest::kittest::Queryable;
-        let mut app = RustGisApp::with_sample();
-        app.workflow.script = "a".repeat(400);
-        let mut fonts = false;
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(900.0, 800.0)).build_ui_state(
-            move |ui, app: &mut RustGisApp| {
-                // The icons draw letters: the fonts first, as the other pane tests do.
-                if !fonts {
-                    crate::theme::install_fonts(ui.ctx(), &[], None);
-                    fonts = true;
-                    return;
-                }
-                script_pane(app, ui, &Tokens::light());
-            },
-            app,
-        );
-        h.run();
+        let mut h = find_harness(&"a".repeat(400));
         let box_id = egui::Id::unique("script_text");
         h.ctx.memory_mut(|m| m.request_focus(box_id));
         h.run();
@@ -3384,27 +3364,14 @@ mod tests {
     #[test]
     fn the_find_chords_are_taken_from_the_browser_while_the_box_or_bar_has_the_focus() {
         use egui::{Key, Modifiers};
-        let mut app = RustGisApp::with_sample();
-        app.workflow.script = "map.zoomFull".to_string();
-        let mut fonts = false;
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(900.0, 800.0)).build_ui_state(
-            move |ui, app: &mut RustGisApp| {
-                // The icons draw letters: the fonts first, as the other pane tests do.
-                if !fonts {
-                    crate::theme::install_fonts(ui.ctx(), &[], None);
-                    fonts = true;
-                    return;
-                }
-                script_pane(app, ui, &Tokens::light());
-            },
-            app,
-        );
-        h.run();
+        let mut h = find_harness("map.zoomFull");
         let box_id = egui::Id::unique("script_text");
         let pressed = |h: &egui_kittest::Harness<'_, RustGisApp>, key: &str, code: &str, alt: bool| {
             h.state().script_find_keys(&h.ctx).takes(key, code, true, alt, false)
         };
         let taken = |h: &egui_kittest::Harness<'_, RustGisApp>, key: &str, code: &str| pressed(h, key, code, false);
+        h.ctx.memory_mut(|m| m.surrender_focus(box_id));
+        h.run();
         assert!(!taken(&h, "f", "KeyF"), "the browser keeps them with the focus elsewhere");
         h.ctx.memory_mut(|m| m.request_focus(box_id));
         h.run();
@@ -3441,22 +3408,7 @@ mod tests {
     fn a_find_query_that_fits_says_nothing() {
         use egui::{Event, Key, Modifiers};
         use egui_kittest::kittest::Queryable;
-        let mut app = RustGisApp::with_sample();
-        app.workflow.script = "a".repeat(400);
-        let mut fonts = false;
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(900.0, 800.0)).build_ui_state(
-            move |ui, app: &mut RustGisApp| {
-                // The icons draw letters: the fonts first, as the other pane tests do.
-                if !fonts {
-                    crate::theme::install_fonts(ui.ctx(), &[], None);
-                    fonts = true;
-                    return;
-                }
-                script_pane(app, ui, &Tokens::light());
-            },
-            app,
-        );
-        h.run();
+        let mut h = find_harness(&"a".repeat(400));
         h.ctx.memory_mut(|m| m.request_focus(egui::Id::unique("script_text")));
         h.run();
         h.key_press_modifiers(Modifiers::COMMAND, Key::F);
@@ -3762,23 +3714,8 @@ mod tests {
     fn the_find_shortcuts_of_a_code_editor_work_in_the_script_box() {
         use egui::{Event, Key, Modifiers};
         use egui_kittest::kittest::Queryable;
-        let mut app = RustGisApp::with_sample();
         let script = "alpha\nbeta cities\ngamma\ncities delta\ncities";
-        app.workflow.script = script.to_string();
-        let mut fonts = false;
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(900.0, 800.0)).build_ui_state(
-            move |ui, app: &mut RustGisApp| {
-                // The icons draw letters: the fonts first, as the other pane tests do.
-                if !fonts {
-                    crate::theme::install_fonts(ui.ctx(), &[], None);
-                    fonts = true;
-                    return;
-                }
-                script_pane(app, ui, &Tokens::light());
-            },
-            app,
-        );
-        h.run();
+        let mut h = find_harness(script);
         let box_id = egui::Id::unique("script_text");
         // Ctrl+Alt+F is AltGr+F on many layouts, a letter to type, outside a Mac, where it is ⌥⌘F: it
         // opens nothing (the key event has `command` set as a platform's has).
@@ -3827,23 +3764,8 @@ mod tests {
     fn replacing_in_the_script_is_one_undo_step_and_waits_for_a_run() {
         use egui::{Event, Key, Modifiers};
         use egui_kittest::kittest::{NodeT, Queryable};
-        let mut app = RustGisApp::with_sample();
         let script = "a Cities b\nCities c";
-        app.workflow.script = script.to_string();
-        let mut fonts = false;
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(900.0, 800.0)).build_ui_state(
-            move |ui, app: &mut RustGisApp| {
-                // The icons draw letters: the fonts first, as the other pane tests do.
-                if !fonts {
-                    crate::theme::install_fonts(ui.ctx(), &[], None);
-                    fonts = true;
-                    return;
-                }
-                script_pane(app, ui, &Tokens::light());
-            },
-            app,
-        );
-        h.run();
+        let mut h = find_harness(script);
         let box_id = egui::Id::unique("script_text");
         let replace_id = box_id.with("find_replace");
         h.ctx.memory_mut(|m| m.request_focus(box_id));
@@ -3929,21 +3851,8 @@ mod tests {
     fn finding_in_a_wrapped_long_script_holds() {
         use egui::{Event, Key, Modifiers};
         use egui_kittest::kittest::{NodeT, Queryable};
-        let mut app = RustGisApp::with_sample();
-        app.workflow.script = format!("# {}\n", "ab ".repeat(40)).repeat(600);
-        let mut fonts = false;
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(260.0, 600.0)).build_ui_state(
-            move |ui, app: &mut RustGisApp| {
-                // The icons draw letters: the fonts first, as the other pane tests do.
-                if !fonts {
-                    crate::theme::install_fonts(ui.ctx(), &[], None);
-                    fonts = true;
-                    return;
-                }
-                script_pane(app, ui, &Tokens::dark());
-            },
-            app,
-        );
+        let mut h = find_harness(&format!("# {}\n", "ab ".repeat(40)).repeat(600));
+        h.set_size(vec2(260.0, 600.0));
         h.run();
         let box_id = egui::Id::unique("script_text");
         h.ctx.memory_mut(|m| m.request_focus(box_id));
