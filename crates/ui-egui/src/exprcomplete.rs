@@ -49,7 +49,8 @@ pub(crate) struct ValuesRead {
     of: usize,
     /// A streamed layer's: its dataset holds the features read for the view.
     pub(crate) view: bool,
-    /// How many of the features read have a value too long to list or of several lines.
+    /// How many of the features read have a value too long to list, with a control character, or too
+    /// large to write in full.
     pub(crate) left_out: usize,
 }
 
@@ -66,7 +67,7 @@ impl ValuesRead {
         let from = self.source();
         let left = (self.left_out > 0).then(|| self.left_out_note());
         match (from, left) {
-            (Some(from), Some(left)) => Some(format!("{from}\n{left}")),
+            (Some(from), Some(left)) => Some(crate::i18n::fmt("{from}\n{left_out}", &[("from", &from), ("left_out", &left)])),
             (from, left) => from.or(left),
         }
     }
@@ -76,11 +77,12 @@ impl ValuesRead {
         let (n, max) = (self.left_out.to_string(), query::VALUE_CHARS.to_string());
         let args = [("n", n.as_str()), ("max", max.as_str())];
         match self.left_out {
-            1 => {
-                crate::i18n::fmt("The value of 1 feature isn't listed: longer than {max} characters, of several lines or too large", &args)
-            }
+            1 => crate::i18n::fmt(
+                "The value of 1 feature isn't listed: longer than {max} characters, with a line break or other control character, or too large",
+                &args,
+            ),
             _ => crate::i18n::fmt(
-                "The values of {n} features aren't listed: longer than {max} characters, of several lines or too large",
+                "The values of {n} features aren't listed: longer than {max} characters, with a line break or other control character, or too large",
                 &args,
             ),
         }
@@ -987,10 +989,12 @@ mod tests {
         assert_eq!(note(40, 40, true).as_deref(), Some("Values of the 40 features read for the view"));
         assert_eq!(note(10_000, 30_000, true).as_deref(), Some("Values of 10000 of the 30000 features read for the view, evenly spread"));
         // Values left out are said, with or without a sample.
-        let left = "The values of 3 features aren't listed: longer than 100 characters, of several lines or too large";
+        let left = "The values of 3 features aren't listed: longer than 100 characters, with a line break or other control character, or too large";
         assert_eq!(
             ValuesRead { read: 4, of: 4, view: false, left_out: 1 }.note().as_deref(),
-            Some("The value of 1 feature isn't listed: longer than 100 characters, of several lines or too large")
+            Some(
+                "The value of 1 feature isn't listed: longer than 100 characters, with a line break or other control character, or too large"
+            )
         );
         assert_eq!(ValuesRead { read: 4, of: 4, view: false, left_out: 3 }.note().as_deref(), Some(left));
         assert_eq!(

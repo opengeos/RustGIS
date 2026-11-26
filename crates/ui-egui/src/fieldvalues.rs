@@ -136,7 +136,7 @@ impl Form {
             let none = crate::i18n::fmt("{field} has no values to list", &[("field", &field_ref(name))]);
             match read.from.left_out {
                 0 => none,
-                _ => format!("{none}. {}", read.from.left_out_note()),
+                _ => crate::i18n::fmt("{none}. {left_out}", &[("none", &none), ("left_out", &read.from.left_out_note())]),
             }
         });
         (Rc::clone(&read.written), read.from)
@@ -240,8 +240,9 @@ pub(crate) fn insert(text: &mut String, field: &str, value: &str, ds: &Dataset, 
         return Err(crate::i18n::fmt("{value} has a % or _, which matches more than itself after LIKE: use = for it", &[("value", value)]));
     }
     let alone = here.as_ref().is_some_and(|c| c.operand && c.compared);
-    if !alone && next == query::Follows::Operator {
-        // `continent▮ = 'Old'`: what follows would compare what is added.
+    // `continent▮ = 'Old'`, `continent = ▮ != 'Old'`: what follows would compare what is added.
+    // A value alone may go before an operator that makes a value of it (`pop_est > ▮ * 2`).
+    if next == query::Follows::Comparison || (!alone && next == query::Follows::Operator) {
         return Err(tl!("Not added: an operator follows the cursor. Put the cursor after it, where its value goes").to_string());
     }
     let put = match &here {
@@ -250,8 +251,8 @@ pub(crate) fn insert(text: &mut String, field: &str, value: &str, ds: &Dataset, 
         Some(c) if !c.operand && c.symbols.contains(&"=") && ends_with_field(&head, field) => format!("= {value}"),
         // `pop_est BETWEEN 1 ▮`: the second end.
         Some(c) if !c.operand && c.keywords == [Kw::And] => format!("AND {value}"),
-        // After a whole clause (`pop_est > 1 ▮`), the comparison joined to it.
-        Some(c) if !c.operand && c.keywords.contains(&Kw::Or) && !c.symbols.contains(&"=") => {
+        // After a whole clause (`pop_est > 1 ▮`, `(pop_est > 1) ▮`), the comparison joined to it.
+        Some(c) if !c.operand && c.keywords.contains(&Kw::Or) && query::parse_fields(&head, ds).is_ok_and(|e| is_condition(&e)) => {
             format!("AND {} = {value}", field_ref(field))
         }
         _ => format!("{} = {value}", field_ref(field)),
@@ -295,8 +296,21 @@ pub(crate) fn insert(text: &mut String, field: &str, value: &str, ds: &Dataset, 
             &[("max", &query::MAX_LEN.to_string())],
         ));
     }
+    // What these rules miss: a clause that read as far as it went doesn't stop reading.
+    let reads = |text: &str| query::complete_at(text, text.chars().count(), ds).is_some();
+    if reads(text) && !reads(&done) {
+        return Err(tl!("Not added: the clause wouldn't read with it there. Put the cursor where a value or a comparison goes").to_string());
+    }
     *text = done;
     Ok(())
+}
+
+/// Whether `e` is a condition, true or false, which `AND` can join another to (`pop_est > 1`),
+/// and not a value that a comparison could still follow (`upper(name)`, `pop_est + 1`).
+fn is_condition(e: &query::Expr) -> bool {
+    use query::Expr as E;
+    !matches!(e, E::Field(_) | E::Lit(_) | E::Var(_) | E::Call(..) | E::Concat(_) | E::Chain(..) | E::Case { .. })
+        || matches!(e, E::Lit(rustgis_engine::data::Value::Bool(_)))
 }
 
 /// What is left of `text` after the quoted text or name that began before it, up to its closing
@@ -389,6 +403,7 @@ mod tests {
             // After a whole clause, the comparison joined to it.
             ("pop_est > 1 ", "continent", "'Asia'", "pop_est > 1 AND continent = 'Asia' "),
             ("pop_est > 1", "continent", "'Asia'", "pop_est > 1 AND continent = 'Asia' "),
+            ("(pop_est > 1) ", "continent", "'Asia'", "(pop_est > 1) AND continent = 'Asia' "),
             // A text begun is replaced by the value.
             ("continent = 'As", "continent", "'Asia'", "continent = 'Asia' "),
             // The field's button was clicked, then Values: the field is there, so only what
@@ -516,6 +531,11 @@ mod tests {
             // An operator after the cursor, where more than the value would go.
             ("continent = 'Old'", Some(9), "continent"),
             ("continent IN ('Old')", Some(9), "continent"),
+            ("continent =  != 'Old'", Some(12), "continent"),
+            // A value after the cursor, though something later doesn't read.
+            ("continent =  'Africa' AND pop_est > #", Some(12), "continent"),
+            // Nothing above refuses it, but the clause would stop reading there.
+            ("(pop_est > 1", None, "continent"),
             // A quote never closed holds the rest of the clause.
             ("continent = 'As AND pop_est > 1", Some(15), "continent"),
             // The field's button clicked after an operator: the field is the value already.

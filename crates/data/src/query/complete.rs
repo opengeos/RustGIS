@@ -166,20 +166,25 @@ pub fn brackets(text: &str) -> Option<(usize, usize)> {
 pub enum Follows {
     /// A value, which a value written there would stand beside (`= ▮'Africa'`, `▮!name!`): a
     /// text or quoted name (finished or not), a number, a sign (a value before `-5` would
-    /// subtract it), a bracket, a variable, or a name that isn't a word coming after a value.
+    /// subtract it), a bracket, a variable, a `CASE`, or a name that isn't a word coming after a
+    /// value.
     Value,
-    /// What takes the value before it as its left side: an operator (`▮= 'Old'`, `▮* 2`, `▮||`)
-    /// or `IS`, `NOT`, `LIKE`, `ILIKE`, `IN`, `BETWEEN`.
+    /// A comparison, which takes the value before it as its left side: a comparison operator
+    /// (`▮= 'Old'`, `▮!= 'Old'`) or `IS`, `NOT`, `LIKE`, `ILIKE`, `IN`, `BETWEEN`.
+    Comparison,
+    /// An operator that makes a value of the one before it (`▮* 2`, `▮|| 'x'`).
     Operator,
-    /// Anything else: nothing, a closing bracket, a comma, `AND`, `OR`, a `CASE` word, or what
-    /// can't be read into words.
+    /// Anything else: nothing, a closing bracket, a comma, `AND`, `OR`, `WHEN`, `THEN`, `ELSE`,
+    /// `END`, or what can't be read into words.
     Other,
 }
 
 /// What `text`, what follows a cursor where a value goes, starts with: its first word read as
-/// the lexer reads it, so `!=` is an operator and `!a!` a name.
+/// the lexer reads it, so `!=` is an operator and `!a!` a name. Where something later can't be
+/// read (`'Africa' AND pop > #`), its first word alone is read.
 pub fn follows(text: &str) -> Follows {
-    let Some(Lexed { toks, open, .. }) = lex_spans(text, true).ok() else { return Follows::Other };
+    let first_word = || text.split_whitespace().next().and_then(|w| lex_spans(w, true).ok());
+    let Some(Lexed { toks, open, .. }) = lex_spans(text, true).ok().or_else(first_word) else { return Follows::Other };
     let left_side = [Kw::Is, Kw::Not, Kw::Like, Kw::Ilike, Kw::In, Kw::Between];
     let joins = [Kw::And, Kw::Or, Kw::When, Kw::Then, Kw::Else, Kw::End];
     let is = |word: &str, kws: &[Kw]| kws.iter().any(|k| k.word().eq_ignore_ascii_case(word));
@@ -187,8 +192,9 @@ pub fn follows(text: &str) -> Follows {
         Some(Tok::Str(_) | Tok::QuotedIdent(_) | Tok::Num(_) | Tok::Var(_) | Tok::LParen | Tok::Arith(Arith::Add | Arith::Sub)) => {
             Follows::Value
         }
-        Some(Tok::Op(_) | Tok::Concat | Tok::Arith(_)) => Follows::Operator,
-        Some(Tok::Ident(word)) if is(&word, &left_side) => Follows::Operator,
+        Some(Tok::Op(_)) => Follows::Comparison,
+        Some(Tok::Concat | Tok::Arith(_)) => Follows::Operator,
+        Some(Tok::Ident(word)) if is(&word, &left_side) => Follows::Comparison,
         Some(Tok::Ident(word)) if is(&word, &joins) => Follows::Other,
         Some(Tok::Ident(_)) => Follows::Value,
         Some(Tok::RParen | Tok::Comma) => Follows::Other,
@@ -385,13 +391,15 @@ mod tests {
             ("@row_number", Follows::Value),
             ("name", Follows::Value),
             ("upper(name)", Follows::Value),
-            (" != 1", Follows::Operator),
-            ("<> 1", Follows::Operator),
-            ("= 'Old'", Follows::Operator),
+            ("CASE WHEN 1 THEN 2 END", Follows::Value),
+            ("'Africa' AND pop > #", Follows::Value),
+            (" != 1", Follows::Comparison),
+            ("<> 1", Follows::Comparison),
+            ("= 'Old'", Follows::Comparison),
+            ("IN ('a')", Follows::Comparison),
+            ("not like 'a%'", Follows::Comparison),
             ("|| 'x'", Follows::Operator),
             ("* 2", Follows::Operator),
-            ("IN ('a')", Follows::Operator),
-            ("not like 'a%'", Follows::Operator),
             ("", Follows::Other),
             (") AND", Follows::Other),
             (", 'b')", Follows::Other),
