@@ -208,32 +208,38 @@ fn text_statistics(e: &rustgis_map::layout::Element) -> bool {
     matches!(&e.kind, rustgis_map::layout::ElementKind::Text { text, .. } if !rustgis_map::layout::stat_tokens(text).is_empty())
 }
 
+/// A text, or a list of texts, with a layer statistic in one of them.
+fn holds_statistic(v: &Value) -> bool {
+    match v {
+        Value::String(t) => !rustgis_map::layout::stat_tokens(t).is_empty(),
+        Value::Array(texts) => texts.iter().any(holds_statistic),
+        _ => false,
+    }
+}
+
+/// [`holds_statistic`] for a list read as one text, its entries joined by `sep`: a token may be split
+/// across them.
+fn holds_statistic_joined(v: &Value, sep: &str) -> bool {
+    match v {
+        Value::Array(texts) => holds_statistic(&Value::String(texts.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(sep))),
+        other => holds_statistic(other),
+    }
+}
+
 /// A layout command that gives a text a layer statistic (#2853), read as a text reads its tokens
 /// ([`rustgis_map::layout::stat_tokens`]): only a text takes `"text"`.
 fn command_uses_text_statistics(id: &str, params: &Value) -> bool {
-    // A text, or a list of them (a publication's `sources`).
-    fn holds(v: &Value) -> bool {
-        match v {
-            Value::String(t) => !rustgis_map::layout::stat_tokens(t).is_empty(),
-            Value::Array(texts) => texts.iter().any(holds),
-            _ => false,
-        }
-    }
     match id {
-        "layout.addElement" | "layout.update" => params.get("text").is_some_and(holds),
+        "layout.addElement" | "layout.update" => params.get("text").is_some_and(holds_statistic),
         // The texts a publication layout is made of, which keep the tokens as they are written.
         "layout.publication" => {
-            // A title, subtitle, note or author is its list joined with a space, as `publication`
-            // reads it; each source, reference and heading is a line of its own.
-            let joined = |sep: &'static str| {
-                move |v: &Value| match v {
-                    Value::Array(texts) => holds(&Value::String(texts.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(sep))),
-                    other => holds(other),
-                }
-            };
-            (["title", "subtitle", "note", "author"].iter().any(|key| params.get(*key).is_some_and(joined(" "))))
-                || (["sources", "reference"].iter().any(|key| params.get(*key).is_some_and(joined("\n"))))
-                || params.get("headings").is_some_and(holds)
+            let joined = |keys: &[&str], sep: &str| keys.iter().any(|k| params.get(*k).is_some_and(|v| holds_statistic_joined(v, sep)));
+            // A title, subtitle, note or author given as a list is joined with a space, the sources
+            // and the reference with a line break, as `publication` reads them; each heading is a
+            // text of its own.
+            joined(&["title", "subtitle", "note", "author"], " ")
+                || joined(&["sources", "reference"], "\n")
+                || params.get("headings").is_some_and(holds_statistic)
         }
         "layout.import" => imported_layout_uses(params, &["{count:", "{sum:", "{mean:", "{min:", "{max:"], text_statistics),
         "script.run" => params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, command_uses_text_statistics)),

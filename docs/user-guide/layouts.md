@@ -497,9 +497,8 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
   layout is made or imported, not when the page is exported. The text, its size (2 to 400 points,
   as text graphics on the map), colour, bold, **Italic** (slanted, as water and ocean names are;
   the built-in fonts have no italic face, so the letters are slanted 12°), **Alignment** (left,
-  center or right within the element) and
-  **Letter spacing** in points
-  (spaced-out names such as O C E A N O, or a negative value to tighten) are the same form a text
+  center or right within the element) and **Letter spacing** in points (spaced-out names such as
+  O C E A N O, or a negative value to tighten) are the same form a text
   on the map has in the pane; Enter ends the text and Shift+Enter starts a new line. Scripts set them with `italic`, `align` and
   `letterSpacing` on `layout.addElement` and `layout.update`. A layout's text also takes a **Font**:
   Sans-serif (the default) or Serif, for a title or a classic atlas look. The serif is one installed
