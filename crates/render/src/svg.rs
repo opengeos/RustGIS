@@ -701,4 +701,44 @@ mod tests {
         let turned = svg(90.0, Some(b));
         assert!(turned.contains(r#"stroke-width="0.265" transform="rotate(90 50 45)"/>"#), "turned about the box's centre: {turned}");
     }
+
+    /// 64-bit FNV-1a over a byte slice.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn fnv(b: &[u8]) -> u64 {
+        b.iter().fold(0xcbf2_9ce4_8422_2325, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3))
+    }
+
+    /// How [`plain_texts_export_as_before`]'s pages were written as SVG and as a vector PDF before
+    /// texts had a block alignment, line spacing or case; in the built-in face.
+    #[cfg(not(target_arch = "wasm32"))]
+    const PINNED_TEXT_SVG: u64 = 0xf2dd_eccc_ab7b_44bc;
+    #[cfg(not(target_arch = "wasm32"))]
+    const PINNED_TEXT_PDF: u64 = 0xf770_433e_0662_5b2e;
+
+    /// The SVG and the vector PDF of a text with none of the block settings are byte for byte main's:
+    /// in a process of its own, told to use the built-in face before any text.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn plain_texts_export_as_before() {
+        if std::env::var_os("RUSTGIS_TEXT_EXPORT_PIN_CHILD").is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "svg::tests::plain_texts_export_as_before", "--nocapture"])
+                .env("RUSTGIS_TEXT_EXPORT_PIN_CHILD", "1")
+                .env("RUSTGIS_BUILTIN_FONTS", "1")
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+            assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"), "the test didn't run in the child process");
+            return;
+        }
+        let info = PageInfo { page: 2, pages: 3, page_name: String::new() };
+        let (mut svg, mut pdf) = (Vec::new(), Vec::new());
+        for l in crate::layout::plain_text_pages() {
+            svg.extend(layout_svg(&l, &mut [], 72.0, &info).unwrap().0.into_bytes());
+            let (drawing, _) = crate::layout::render_drawing(&l, &mut [], 150.0, &info).unwrap();
+            pdf.extend(crate::pdf::write(&[crate::pdf::Page::drawing(drawing, l.width, l.height)], "Plain"));
+        }
+        let (s, p) = (fnv(&svg), fnv(&pdf));
+        assert_eq!((s, p), (PINNED_TEXT_SVG, PINNED_TEXT_PDF), "{s:#x} {p:#x}");
+    }
 }

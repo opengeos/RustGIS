@@ -5055,6 +5055,42 @@ pub fn map_index(maps: &[rustgis_map::Map], name: &str) -> Option<usize> {
     maps.iter().position(|map| map.name.eq_ignore_ascii_case(name))
 }
 
+/// Pages of one text each with none of the block settings, in the combinations main draws: each
+/// alignment, wrapped or not, turned 0, 90, -90 or 33 degrees, spaced 0 or 3 points (bold, and
+/// italic when turned 33), in a box that holds its lines and one that cuts them; and two texts
+/// across the page's right and bottom edges.
+#[cfg(all(test, not(target_arch = "wasm32")))]
+pub(crate) fn plain_text_pages() -> Vec<Layout> {
+    let text = "Population counts\nfrom the 2020 census; boundaries simplified for print\nPage {page} of {pages}";
+    let page = |at: (f64, f64, f64, f64), f: &dyn Fn(&mut ElementKind)| {
+        let mut l = Layout::new("Plain", 120.0, 80.0);
+        let mut kind = ElementKind::text(text, 11.0, Rgba::rgb(0, 0, 0), false);
+        f(&mut kind);
+        l.add("Note", at, kind);
+        l
+    };
+    let mut pages = Vec::new();
+    for align in TextAlign::ALL {
+        for wrap in [false, true] {
+            for turn in [0.0, 90.0, -90.0, 33.0] {
+                for spacing in [0.0, 3.0] {
+                    for h in [40.0, 9.0] {
+                        pages.push(page((10.0, 10.0, 60.0, h), &|k| {
+                            if let ElementKind::Text { align: a, wrap: w, rotation, letter_spacing, italic, bold, .. } = k {
+                                (*a, *w, *rotation, *letter_spacing) = (align, wrap, turn, spacing);
+                                (*italic, *bold) = (turn == 33.0, spacing > 0.0);
+                            }
+                        }));
+                    }
+                }
+            }
+        }
+    }
+    pages.push(page((90.0, 10.0, 60.0, 30.0), &|_| {}));
+    pages.push(page((10.0, 74.0, 60.0, 30.0), &|_| {}));
+    pages
+}
+
 #[expect(clippy::disallowed_methods, reason = "a thread the system refuses fails the test, as it should")]
 #[cfg(test)]
 mod tests {
@@ -9657,6 +9693,12 @@ Elaboração: RustGIS",
         pms.iter().flat_map(|p| p.data().iter()).fold(0xcbf2_9ce4_8422_2325, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3))
     }
 
+    /// 64-bit FNV-1a over one byte slice.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn fnv_bytes(b: &[u8]) -> u64 {
+        b.iter().fold(0xcbf2_9ce4_8422_2325, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3))
+    }
+
     /// A plain scale bar on a white `w` x 60 pixmap, in the default colours.
     #[cfg(not(target_arch = "wasm32"))]
     fn draw_default(style: ScaleBarStyle, units: ScaleUnits, divisions: usize, ground: f64, w: u32, ppp: f64, comma: bool) -> Pixmap {
@@ -9666,6 +9708,44 @@ Elaboração: RustGIS",
         let bar = BarOptions { units, divisions, style, ..BarOptions::default() };
         crate::canvas::with_canvas(&mut pm, |c| scale_bar(c, r, ground, &bar, DEFAULT_COLORS, ppp, comma));
         pm
+    }
+
+    /// How [`plain_texts_draw_as_before`]'s pages drew, and what their cut-off check found, before
+    /// texts had a block alignment, line spacing or case; in the built-in face.
+    #[cfg(not(target_arch = "wasm32"))]
+    const PINNED_TEXT_PIXELS: u64 = 0x0556_a0ef_54c0_2e87;
+    #[cfg(not(target_arch = "wasm32"))]
+    const PINNED_TEXT_LOSSES: u64 = 0x26af_01ce_67e5_7cfd;
+
+    /// A text with none of the block settings draws, and is measured for lines that don't fit and ink
+    /// off the page, exactly as main did, at 96 and 300 dpi: in a process of its own, told to use the
+    /// built-in face before any text.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn plain_texts_draw_as_before() {
+        if std::env::var_os("RUSTGIS_TEXT_PIN_CHILD").is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "layout::tests::plain_texts_draw_as_before", "--nocapture"])
+                .env("RUSTGIS_TEXT_PIN_CHILD", "1")
+                .env("RUSTGIS_BUILTIN_FONTS", "1")
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+            assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"), "the test didn't run in the child process");
+            return;
+        }
+        let info = PageInfo { page: 2, pages: 3, page_name: String::new() };
+        let (mut drawn, mut measured) = (Vec::new(), String::new());
+        for (i, l) in crate::layout::plain_text_pages().iter().enumerate() {
+            for dpi in if i < 8 { &[96.0, 300.0][..] } else { &[96.0][..] } {
+                drawn.push(render(l, &mut [], *dpi, &info).unwrap());
+                measured.push_str(&format!("{:?}\n", text_losses(l, &[], *dpi, &info)));
+            }
+        }
+        // The pages exercise both checks.
+        assert!(measured.contains("below_box: true") && measured.contains("off_page: true"), "{measured}");
+        let losses = fnv_bytes(measured.as_bytes());
+        assert_eq!((fnv(&drawn), losses), (PINNED_TEXT_PIXELS, PINNED_TEXT_LOSSES), "{:#x} {:#x}", fnv(&drawn), losses);
     }
 
     /// How [`scale_bars_without_details_draw_as_before`]'s bars drew before scale bars had details,
