@@ -1446,10 +1446,10 @@ pub(crate) mod tests {
         let ctx = egui::Context::default();
         let mut app = RustGisApp::with_sample();
         let mut config = Config::from_env("custom");
-        // Nothing listens on the discard port: the request fails off the frame and is never read.
-        config.base_url = "http://127.0.0.1:9/v1".into();
         config.model = "test".into();
         app.assistant.loaded = true;
+        // The request goes nowhere: the test is about the draft, not the reply.
+        app.services.http = Some(Box::new(|_, _| {}));
         for (draft, sent, kept) in [("newer draft", "waited", "newer draft"), ("  waited ", "waited", "")] {
             app.assistant.agent = Some(Agent::new(config.clone(), &app.session));
             app.assistant.input = draft.into();
@@ -1462,6 +1462,21 @@ pub(crate) mod tests {
 
     /// A new conversation drops a message still waiting to be sent, so it can't open the next
     /// one; its draft stays in the box.
+    /// Signing out puts a waiting message back only into an empty box: newer typing stays.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn signing_out_keeps_newer_typing() {
+        let mut app = RustGisApp::with_sample();
+        let mut cfg = Config::from_env("custom");
+        for (draft, kept) in [("typed since", "typed since"), ("", "waited")] {
+            app.assistant.queued = Some("waited".into());
+            app.assistant.input = draft.into();
+            assistant::forget_sign_in(&mut app, &mut cfg);
+            assert!(app.assistant.queued.is_none());
+            assert_eq!(app.assistant.input, kept);
+        }
+    }
+
     #[test]
     fn new_conversation_drops_a_waiting_message() {
         let mut app = RustGisApp::with_sample();

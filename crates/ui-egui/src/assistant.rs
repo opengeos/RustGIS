@@ -1059,13 +1059,16 @@ fn revoke_later(app: &mut RustGisApp, revocation: Option<chatgpt::Revocation>, c
 }
 
 /// After signing out or removing the account: no tokens, no catalog, and nothing waiting to be
-/// sent with them (a queued message goes back to the input box, not to the provider).
+/// sent with them (a queued message goes back to an empty input box, not to the provider; text
+/// typed since stays).
 #[cfg(not(target_arch = "wasm32"))]
-fn forget_sign_in(app: &mut RustGisApp, cfg: &mut Config) {
+pub(crate) fn forget_sign_in(app: &mut RustGisApp, cfg: &mut Config) {
     app.assistant.sign_in_read = None;
     app.assistant.models_slot = None;
     app.assistant.catalog_pending = false;
-    if let Some(text) = app.assistant.queued.take() {
+    if let Some(text) = app.assistant.queued.take()
+        && app.assistant.input.trim().is_empty()
+    {
         app.assistant.input = text;
     }
     cfg.key.clear();

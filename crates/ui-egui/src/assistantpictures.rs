@@ -372,6 +372,32 @@ mod tests {
         assert!(ctx.has_requested_repaint(), "a queued message is sent on the next frame");
     }
 
+    /// A message waiting for a picture goes once the picture is read, on the frame's logic alone:
+    /// no composer is drawn (a phone's sheet closed, say).
+    #[test]
+    fn a_message_waiting_for_a_picture_goes_without_the_composer() {
+        let mut app = RustGisApp::with_sample();
+        let mut cfg = rustgis_assistant::Config::from_env("custom");
+        cfg.model = "test".into();
+        app.assistant.agent = Some(rustgis_assistant::Agent::new(cfg, &app.session));
+        app.assistant.loaded = true;
+        app.services.http = Some(Box::new(|_, _| {}));
+        received(&mut app, "map.png", png());
+        for _ in 0..1_000_000 {
+            if app.assistant.pictures.reading.iter().all(|(_, slot)| slot.lock().is_ok_and(|s| s.is_some())) {
+                break;
+            }
+            std::thread::yield_now();
+        }
+        app.assistant.queued = Some("like this".into());
+        crate::assistant::poll(&mut app, &egui::Context::default());
+        assert!(app.assistant.queued.is_none() && !app.assistant.pictures.reading());
+        let Some(rustgis_assistant::provider::Turn::User(_, sent)) = app.assistant.agent.as_ref().unwrap().turns().last() else {
+            panic!("sent")
+        };
+        assert_eq!(sent.len(), 1);
+    }
+
     #[test]
     fn a_picked_picture_goes_with_the_next_message() {
         let mut app = RustGisApp::with_sample();
