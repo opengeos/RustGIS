@@ -13,6 +13,7 @@ mod agentthreads;
 mod analysispane;
 mod approvalcard;
 mod arcgisui;
+pub mod assistant;
 #[cfg(not(target_arch = "wasm32"))]
 mod assistantkeys;
 mod assistantpane;
@@ -1501,7 +1502,7 @@ pub struct RustGisApp {
     pub reports: reportpane::ReportState,
     pub docs: docpanes::DocState,
     /// The AI Assistant's conversation and settings.
-    pub assistant: assistantpane::AssistantState,
+    pub assistant: assistant::AssistantState,
     /// "Let your Agents Control RustGIS" (desktop).
     #[cfg(not(target_arch = "wasm32"))]
     pub connect: connectui::ConnectState,
@@ -1797,7 +1798,7 @@ impl RustGisApp {
             update: update::UpdateState::default(),
             reports: reportpane::ReportState::default(),
             docs: docpanes::DocState::default(),
-            assistant: assistantpane::AssistantState::default(),
+            assistant: assistant::AssistantState::default(),
             fonts_frames: 0,
             frame_start: None,
             applied_theme: None,
@@ -3264,7 +3265,7 @@ impl RustGisApp {
     /// Imports a peer's project without going through User command dispatch or restore memory.
     pub fn open_peer_text(&mut self, text: &str) -> Result<(), String> {
         let report = self.session.open_peer_text(rustgis_engine::Peer::Embedder, text)?;
-        assistantpane::peer_replaced(self);
+        assistant::peer_replaced(self);
         self.ui.web_file = None;
         self.map.deleting = None;
         // A spectral profile's points were read on the old project's rasters.
@@ -7208,7 +7209,7 @@ impl RustGisApp {
         geolibreui::poll(self, ctx);
         pluginsui::poll(self, ctx);
         extensionsui::persist(self);
-        assistantpane::poll(self, ctx);
+        assistant::poll(self, ctx);
         // A project the MCP relay, the assistant or a plugin opened or saved this frame (they run
         // on the session directly) becomes Last Project now, not a frame later the app may not
         // reach.
