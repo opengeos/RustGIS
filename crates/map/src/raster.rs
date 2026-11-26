@@ -398,8 +398,10 @@ impl RasterLayer {
         Self::from_shared(raster, file_name, Arc::new(bytes))
     }
 
-    /// A raster with the file [`rustgis_data::raster::geotiff::write_all`] wrote of it, kept in the
-    /// project: [`RasterLayer::written_file`] gives that file back while neither changes.
+    /// A raster with the file [`rustgis_data::raster::geotiff::write_all`] wrote of it (or
+    /// [`rustgis_data::raster::geotiff::write`] of its first band, the same file when that writes every
+    /// band), kept in the project: [`RasterLayer::written_file`] gives that file back while neither
+    /// changes.
     pub fn from_written(raster: Raster, file_name: impl Into<String>, bytes: Vec<u8>) -> RasterLayer {
         let mut layer = Self::from_bytes(raster, file_name, bytes);
         layer.written = layer.data.as_ref().map(Arc::downgrade).zip(layer.embedded.as_ref().map(Arc::downgrade));

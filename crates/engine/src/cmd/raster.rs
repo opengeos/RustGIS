@@ -287,7 +287,7 @@ fn band(p: &Value, k: &str, r: &Raster) -> Result<Option<usize>, String> {
 /// `zoom` is the adding command's `"zoom"`, as for the layers beside it.
 pub(crate) fn add_overlay(s: &mut Session, name: &str, r: raster::Raster, zoom: Option<bool>) -> CmdResult {
     let tif = raster::geotiff::write(&r, 0).map_err(|e| e.to_string())?;
-    add_raster_after(s, name, RasterLayer::from_bytes(r, format!("{name}.tif"), tif), zoom)
+    add_raster_after(s, name, RasterLayer::from_written(r, format!("{name}.tif"), tif), zoom)
 }
 
 /// Sets how rasters added from now on are drawn when they hold a single band of continuous values
@@ -1287,6 +1287,8 @@ pub(crate) fn export_work(s: &Session, p: &Value) -> Result<super::exports::Work
     let written = s.map().layer(id).and_then(|l| l.raster.as_ref()).and_then(|rl| rl.written_file()).cloned();
     if let Some(bytes) = written.filter(|_| !cog && raster::geotiff::written_bands(&r, bi).len() == r.bands.len()) {
         return Ok(Box::new(move || {
+            // One write of bytes the layer holds, with no look at Cancel inside it: looked at before.
+            rustgis_data::progress::check().map_err(|e| e.to_string())?;
             rustgis_data::io::write_atomic(Path::new(&path), &bytes).map_err(|e| format!("{path}: {e}"))?;
             wrote_geotiff(&r, bi, &path, None, "give \"band\" for another")
         }));
