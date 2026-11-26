@@ -5,13 +5,15 @@
 //! The values are what the completion offers after `"field" = '` (`query::field_values`): read
 //! from an evenly spread sample of at most `query::VALUES_READ` features, a streamed layer's from
 //! the features in view. They are read once, when the list is opened for a field, and kept while
-//! the dialog stays on that layer and field and the layer's rows don't change.
+//! the dialog stays on that layer and field and the layer's rows don't change, and not read
+//! again while the list stays open: it changes only as it opens.
 
+use std::rc::Rc;
 use std::sync::Weak;
 
 use egui::Ui;
 use egui::widgets::text_edit::TextEditState;
-use rustgis_engine::data::query::{self, Completion, FieldValues, Kw, Place};
+use rustgis_engine::data::query::{self, Completion, Kw, Place};
 use rustgis_engine::data::{Dataset, Feature};
 
 use crate::exprcomplete::{ValuesRead, field_ref, fields_key};
@@ -25,6 +27,11 @@ pub struct Form {
     /// The field last clicked, or the cursor was last in, as the layer names it.
     field: Option<String>,
     read: Option<Read>,
+    /// Where the cursor was (a char index) when `field` came from it, and the text it was in: a
+    /// value picked goes there while the text is as it was. A field clicked has none.
+    cursor: Option<(usize, String)>,
+    /// The frame the list was last drawn in: drawn the frame before, it is still the one open.
+    drawn: Option<u64>,
     /// Why there is no list to show, for the dialog to say under the buttons.
     said: Option<String>,
     /// How many times the values were read: once per list opened, not once per frame.
@@ -38,9 +45,11 @@ pub struct Form {
 struct Read {
     rows: Weak<Vec<Feature>>,
     fields: u64,
-    got: FieldValues,
-    /// What the list shows for each value: as the expression writes it.
-    written: Vec<String>,
+    /// Which features they were read from, and how many have a value not listed.
+    from: ValuesRead,
+    /// What the list shows for each value: as the expression writes it. Shared with the list
+    /// each frame it is open, not copied.
+    written: Rc<[String]>,
 }
 
 impl Form {
@@ -51,12 +60,15 @@ impl Form {
             self.layer = layer.to_string();
             self.field = None;
             self.read = None;
+            self.cursor = None;
             self.said = None;
         }
     }
 
-    /// Lists `field` from now on. Another field drops the values read for the last.
+    /// Lists `field` from now on, as one clicked: a value picked is added at the end. Another
+    /// field drops the values read for the last.
     pub(crate) fn choose(&mut self, field: &str) {
+        self.cursor = None;
         if self.field.as_deref() != Some(field) {
             self.field = Some(field.to_string());
             self.read = None;
@@ -69,19 +81,34 @@ impl Form {
     /// chosen, as `query::complete_at` reads it.
     pub(crate) fn follow_box(&mut self, ui: &Ui, id: egui::Id, text: &str, ds: &Dataset) {
         let cursor = TextEditState::load(ui.ctx(), id).and_then(|s| s.cursor.char_range()).map(|r| r.primary.index.0);
-        let field = cursor.and_then(|at| query::complete_at(text, at, ds)).and_then(|c| c.field);
-        if let Some(field) = field.and_then(|i| ds.fields.get(i)) {
-            self.choose(&field.name);
+        let at = cursor.and_then(|at| Some((at, query::complete_at(text, at, ds)?.field?)));
+        let Some((at, field)) = at.and_then(|(at, i)| Some((at, ds.fields.get(i)?))) else {
+            // The cursor is not where a value goes: a value picked goes at the end.
+            self.cursor = None;
+            return;
+        };
+        self.choose(&field.name);
+        // Where the field came from: a value picked goes there (a clause with a gap in it is
+        // filled, not added to).
+        if self.cursor.as_ref().is_none_or(|(was, held)| *was != at || held != text) {
+            self.cursor = Some((at, text.to_string()));
         }
     }
 
-    /// The values of field `field` of `ds`, as written, and where they were read from, read
-    /// unless they are held from the rows and fields `ds` has now. Says why there is nothing to
-    /// list when there is none.
-    fn list(&mut self, ds: &Dataset, field: usize) -> (Vec<String>, ValuesRead) {
-        let (rows, fields) = (ds.features.allocation_key(), fields_key(ds));
-        if !self.read.as_ref().is_some_and(|r| r.fields == fields && r.rows.ptr_eq(&rows)) {
-            self.read = None;
+    /// The values of field `field` of `ds`, as written, and where they were read from. Read as
+    /// the list opens, unless held from the rows and fields `ds` has now; then kept while it stays
+    /// open (`frame`: it was drawn in the frame before), however the rows change under it, so
+    /// what is highlighted and what a screen reader was told stay what Enter takes. Says why there
+    /// is nothing to list when there is none.
+    fn list(&mut self, ds: &Dataset, field: usize, frame: u64) -> (Rc<[String]>, ValuesRead) {
+        let open = self.drawn.is_some_and(|was| was + 1 >= frame);
+        self.drawn = Some(frame);
+        if !open {
+            let (rows, fields) = (ds.features.allocation_key(), fields_key(ds));
+            let held = |r: &Read| r.fields == fields && r.rows.ptr_eq(&rows) && r.from.view == ds.windowed;
+            if !self.read.as_ref().is_some_and(held) {
+                self.read = None;
+            }
         }
         #[cfg(test)]
         let reads = &mut self.reads;
@@ -91,12 +118,30 @@ impl Form {
                 *reads += 1;
             }
             let got = query::field_values(ds, field, query::VALUES_READ);
-            let written = got.values.iter().map(|v| v.written.clone()).collect();
-            Read { rows, fields, got, written }
+            let from = ValuesRead::of(&got, ds);
+            let written = got.values.into_iter().map(|v| v.written).collect();
+            Read { rows: ds.features.allocation_key(), fields: fields_key(ds), from, written }
         });
         let name = ds.fields.get(field).map(|f| f.name.as_str()).unwrap_or_default();
-        self.said = read.written.is_empty().then(|| crate::i18n::fmt("{field} has no values to list", &[("field", &field_ref(name))]));
-        (read.written.clone(), ValuesRead::of(&read.got, ds))
+        self.said = read.written.is_empty().then(|| {
+            let none = crate::i18n::fmt("{field} has no values to list", &[("field", &field_ref(name))]);
+            match read.from.left_out {
+                0 => none,
+                _ => format!("{none}. {}", read.from.left_out_note()),
+            }
+        });
+        (Rc::clone(&read.written), read.from)
+    }
+
+    /// Adds the value picked to `text`: at the cursor the field came from while the text is as it
+    /// was then, else at the end. When it can't be added, the text stays as it is and the box
+    /// says why.
+    pub(crate) fn accept(&mut self, text: &mut String, field: &str, value: &str, ds: &Dataset) {
+        let at = self.cursor.as_ref().filter(|(_, held)| held == text).map(|(at, _)| *at);
+        self.said = insert(text, field, value, ds, at).err();
+        if self.said.is_none() {
+            self.cursor = None;
+        }
     }
 }
 
@@ -112,7 +157,8 @@ pub(crate) fn button(ui: &mut Ui, form: &mut Form, ds: Option<&Dataset>) -> Opti
         }
         return None;
     };
-    let accepted = crate::exprcomplete::values_menu(ui, label, &name, || form.list(ds, field));
+    let frame = ui.ctx().cumulative_frame_nr();
+    let accepted = crate::exprcomplete::values_menu(ui, label, &name, || form.list(ds, field, frame));
     accepted.map(|value| (name, value))
 }
 
@@ -123,40 +169,108 @@ pub(crate) fn said(ui: &mut Ui, form: &Form) {
     }
 }
 
-/// Adds `value` (as the expression writes it) of `field` to the end of the clause `text`, where
-/// `query::complete_at` says the clause stands at its end (`ds` has the fields):
-/// - where a value compared with a field goes (`name = `, `pop >`, `name IN (`, `pop BETWEEN `),
-///   only the value, which `BETWEEN` takes for both ends (`BETWEEN 10 AND 10`, to edit) and a
-///   bracket left open (`IN (`) is closed after;
+/// Adds `value` (as the expression writes it) of `field` to the clause `text`, at char `at` (the
+/// cursor the field came from; the end without one), where `query::complete_at` says the clause
+/// stands there (`ds` has the fields). What follows `at` is kept.
+/// - where a value compared with something goes (`name = `, `pop >`, `upper(name) =`, `name IN (`,
+///   `pop BETWEEN `), only the value, which `BETWEEN` takes for both ends (`BETWEEN 10 AND 10`, to
+///   edit) and a bracket left open (`IN (`) is closed after;
 /// - after a bare `IN` (a list is next), the value as a list of one (`IN ('Asia')`);
+/// - after the field itself, as its button writes it (`continent `), what goes after it
+///   (`= 'Asia'`);
 /// - anywhere else, the comparison with the field (`"Pop Est" = 10`).
 ///
-/// A text or a quoted name begun and left open (`name = 'As`) is replaced by what is added, as the
-/// completion does; a clause that can't be read at all gets the comparison, and the box says why
-/// it doesn't read.
-pub(crate) fn insert(text: &mut String, field: &str, value: &str, ds: &Dataset) {
-    let mut at = at_end(text, ds);
-    if let Some(open) = at.as_ref().filter(|c| c.place != Place::Code) {
-        let keep = text.char_indices().nth(open.word.start).map_or(text.len(), |(i, _)| i);
-        text.truncate(keep);
-        at = at_end(text, ds);
+/// A text or a quoted name begun and left open (`name = 'As`) is replaced by what is added, to its
+/// closing quote, as the completion does; a clause that can't be read at all gets the comparison,
+/// and the box says why it doesn't read.
+///
+/// Nothing is added, and the reason is returned, when the value has a `%` or `_` where a `LIKE`
+/// pattern goes (it would match more than itself) or the clause would pass `query::MAX_LEN`.
+pub(crate) fn insert(text: &mut String, field: &str, value: &str, ds: &Dataset, at: Option<usize>) -> Result<(), String> {
+    let split = at.and_then(|at| text.char_indices().nth(at)).map_or(text.len(), |(i, _)| i);
+    let (before, mut after) = text.split_at(split);
+    let mut head = before.to_string();
+    let mut here = at_end(&head, ds);
+    if let Some(open) = here.as_ref().filter(|c| c.place != Place::Code) {
+        let keep = head.char_indices().nth(open.word.start).map_or(head.len(), |(i, _)| i);
+        // What is left of the text, up to its closing quote, goes with what was typed of it.
+        if let Some(quote) = head.get(keep..).unwrap_or_default().chars().next().filter(|q| matches!(q, '\'' | '"')) {
+            after = after_quote(after, quote);
+        }
+        head.truncate(keep);
+        here = at_end(&head, ds);
     }
-    let put = match &at {
-        Some(c) if c.operand && c.field.is_some() => value.to_string(),
+    if here.as_ref().is_some_and(|c| c.pattern) && value.contains(['%', '_']) {
+        return Err(crate::i18n::fmt("{value} has a % or _, which matches more than itself after LIKE: use = for it", &[("value", value)]));
+    }
+    let put = match &here {
+        Some(c) if c.operand && c.compared => value.to_string(),
         Some(c) if !c.operand && c.symbols == ["("] => format!("({value})"),
+        Some(c) if !c.operand && c.symbols.contains(&"=") && ends_with_field(&head, field) => format!("= {value}"),
         _ => format!("{} = {value}", field_ref(field)),
     };
-    crate::dialogs::add_word(text, &put);
-    // What the value left to finish (the end of the clause is where it was added).
-    let then = at_end(text, ds);
-    if then.as_ref().is_some_and(|c| !c.operand && c.keywords == [Kw::And]) {
+    crate::dialogs::add_word(&mut head, &put);
+    // What was after it, from its first word.
+    let after = after.trim_start();
+    // What the value left to finish (the end of `head` is where it was added).
+    let then = at_end(&head, ds);
+    if then.as_ref().is_some_and(|c| !c.operand && c.keywords == [Kw::And]) && !starts_with_word(after, "and") {
         // `BETWEEN 10` needs `AND` and a second end.
-        crate::dialogs::add_word(text, &format!("AND {value}"));
+        crate::dialogs::add_word(&mut head, &format!("AND {value}"));
     }
-    if at_end(text, ds).is_some_and(|c| c.symbols.contains(&")")) {
-        text.pop();
-        text.push_str(") ");
+    let join = |head: &str| match after.starts_with([')', ',']) {
+        true => format!("{}{after}", head.trim_end()),
+        false => format!("{head}{after}"),
+    };
+    let mut done = join(&head);
+    // A bracket left open is closed, unless what follows it does.
+    if at_end(&head, ds).is_some_and(|c| c.symbols.contains(&")")) && (after.is_empty() || query::parse(&done, ds).is_err()) {
+        head.pop();
+        head.push_str(") ");
+        done = join(&head);
     }
+    if done.chars().count() > query::MAX_LEN {
+        return Err(crate::i18n::fmt(
+            "Not added: the clause would be longer than {max} characters",
+            &[("max", &query::MAX_LEN.to_string())],
+        ));
+    }
+    *text = done;
+    Ok(())
+}
+
+/// What is left of `text` after the quoted text or name that began before it, up to its closing
+/// quote (a doubled quote is a quote in it): none of it when the quote is never closed.
+fn after_quote(text: &str, quote: char) -> &str {
+    let mut chars = text.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
+        if c == quote {
+            if chars.next_if(|&(_, next)| next == quote).is_some() {
+                continue;
+            }
+            return text.get(i + c.len_utf8()..).unwrap_or_default();
+        }
+    }
+    ""
+}
+
+/// Whether `text` starts with the word `word`, letter case aside (not a longer name that starts
+/// with it).
+fn starts_with_word(text: &str, word: &str) -> bool {
+    text.get(..word.len()).is_some_and(|start| start.eq_ignore_ascii_case(word))
+        && !text.get(word.len()..).unwrap_or_default().starts_with(|c: char| c.is_alphanumeric() || c == '_')
+}
+
+/// Whether `text` (trailing space aside) ends with `field` as its button writes it, and not as the
+/// end of a longer name: what a click on the field's button leaves, to go on from.
+fn ends_with_field(text: &str, field: &str) -> bool {
+    let (text, written) = (text.trim_end(), field_ref(field));
+    let (n, len) = (written.chars().count(), text.chars().count());
+    let Some(start) = len.checked_sub(n) else { return false };
+    let at = text.char_indices().nth(start).map_or(text.len(), |(i, _)| i);
+    text.get(at..).is_some_and(|end| end.eq_ignore_ascii_case(&written))
+        && (written.starts_with('"')
+            || !text.get(..at).unwrap_or_default().ends_with(|c: char| c.is_alphanumeric() || matches!(c, '_' | '@' | '$' | '.')))
 }
 
 /// What may go at the end of `text`, where a value is added: read with a space after it, so a
@@ -208,11 +322,21 @@ mod tests {
             ("(pop_est BETWEEN ", "pop_est", "10", "(pop_est BETWEEN 10 AND 10) "),
             // A text begun is replaced by the value.
             ("continent = 'As", "continent", "'Asia'", "continent = 'Asia' "),
+            // The field's button was clicked, then Values: the field is there, so only what
+            // follows it is added.
+            ("continent ", "continent", "'Asia'", "continent = 'Asia' "),
+            ("continent", "continent", "'Asia'", "continent = 'Asia' "),
+            ("pop_est > 1 AND continent ", "continent", "'Asia'", "pop_est > 1 AND continent = 'Asia' "),
+            ("CONTINENT ", "continent", "'Asia'", "CONTINENT = 'Asia' "),
+            // A computed left side has no field to repeat: only the value.
+            ("upper(name) = ", "name", "'PARIS'", "upper(name) = 'PARIS' "),
+            ("upper(name) LIKE ", "name", "'PARIS'", "upper(name) LIKE 'PARIS' "),
+            ("pop_est + 1 BETWEEN ", "pop_est", "10", "pop_est + 1 BETWEEN 10 AND 10 "),
         ];
         let mut wrong = Vec::new();
         for (clause, field, value, expected) in cases {
             let mut text = clause.to_string();
-            insert(&mut text, field, value, &ds);
+            insert(&mut text, field, value, &ds, None).unwrap();
             if text != expected {
                 wrong.push(format!("`{clause}` + {value} wrote `{text}`, not `{expected}`"));
             }
@@ -223,8 +347,107 @@ mod tests {
         assert!(wrong.is_empty(), "{}", wrong.join("\n"));
         // A clause that doesn't read at all gets the comparison, and the box says why.
         let mut text = "pop_est > 1 ) AND".to_string();
-        insert(&mut text, "continent", "'Asia'", &ds);
+        insert(&mut text, "continent", "'Asia'", &ds, None).unwrap();
         assert_eq!(text, "pop_est > 1 ) AND continent = 'Asia' ");
+    }
+
+    /// With the cursor where the field came from, the value goes there and the text after it is
+    /// kept: a gap in the middle of a clause is filled, not the end of it added to.
+    #[test]
+    fn a_value_goes_at_the_cursor_the_field_came_from() {
+        let ds = countries();
+        // (the text, the cursor in chars, the field listed, the value, what the text becomes)
+        let cases = [
+            ("continent =  AND pop_est > 1", 12, "continent", "'Asia'", "continent = 'Asia' AND pop_est > 1"),
+            ("continent IN ( AND pop_est > 1", 14, "continent", "'Asia'", "continent IN ('Asia') AND pop_est > 1"),
+            ("(continent = ) AND pop_est > 1", 13, "continent", "'Asia'", "(continent = 'Asia') AND pop_est > 1"),
+            ("continent IN (, 'Africa')", 14, "continent", "'Asia'", "continent IN ('Asia', 'Africa')"),
+            // `BETWEEN`'s upper end is already there.
+            ("pop_est BETWEEN  AND 5", 16, "pop_est", "10", "pop_est BETWEEN 10 AND 5"),
+            // A text begun is replaced as far as its closing quote, not just up to the cursor.
+            ("continent = 'As' AND pop_est > 1", 15, "continent", "'Asia'", "continent = 'Asia' AND pop_est > 1"),
+            ("continent = 'Af' AND name = 'x'", 15, "continent", "'Asia'", "continent = 'Asia' AND name = 'x'"),
+            // The cursor at the end is the end; past it is the end too.
+            ("continent = ", 12, "continent", "'Asia'", "continent = 'Asia' "),
+            ("continent = ", 99, "continent", "'Asia'", "continent = 'Asia' "),
+        ];
+        let mut wrong = Vec::new();
+        for (clause, at, field, value, expected) in cases {
+            let mut text = clause.to_string();
+            insert(&mut text, field, value, &ds, Some(at)).unwrap();
+            if text != expected {
+                wrong.push(format!("`{clause}` at {at} + {value} wrote `{text}`, not `{expected}`"));
+            }
+            if let Err(e) = query::select(&text, &ds) {
+                wrong.push(format!("`{clause}` at {at} + {value} wrote `{text}`, which doesn't read: {e}"));
+            }
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
+    /// The cursor remembered is the one the field came from, while the text is as it was: typed in
+    /// since, the cursor says nothing and the value goes at the end; a field clicked is the end.
+    #[test]
+    fn the_cursor_is_kept_only_while_the_text_is_as_it_was() {
+        let ds = countries();
+        let text = "continent =  AND pop_est > 1";
+        let mut form = Form { cursor: Some((12, text.to_string())), ..Form::default() };
+        let mut now = text.to_string();
+        form.accept(&mut now, "continent", "'Asia'", &ds);
+        assert_eq!(now, "continent = 'Asia' AND pop_est > 1", "at the cursor");
+        assert!(form.cursor.is_none(), "used");
+        // Typed since: the cursor is not where it was.
+        form.cursor = Some((12, text.to_string()));
+        let mut typed = format!("{text} OR ");
+        form.accept(&mut typed, "continent", "'Asia'", &ds);
+        assert_eq!(typed, "continent =  AND pop_est > 1 OR continent = 'Asia' ", "at the end");
+        // A field clicked leaves the cursor behind.
+        form.cursor = Some((12, text.to_string()));
+        form.choose("name");
+        assert!(form.cursor.is_none());
+    }
+
+    /// A value with a `%` or `_` after `LIKE` would match more than itself: nothing is written, and
+    /// it says why. Anywhere else such a value is written as any other.
+    #[test]
+    fn a_wildcard_value_is_not_written_after_like() {
+        let ds = countries();
+        for (clause, value) in [("name LIKE ", "'a_b'"), ("name NOT LIKE ", "'100%'"), ("name ILIKE", "'x_'"), ("name LIKE 'a", "'a_b'")] {
+            let mut text = clause.to_string();
+            let said = insert(&mut text, "name", value, &ds, None).expect_err(clause);
+            assert_eq!(text, clause, "the draft is left as it was");
+            assert!(said.contains(value) && said.contains('%') && said.contains('='), "{said}");
+        }
+        for (clause, value, expected) in [
+            ("name = ", "'a_b'", "name = 'a_b' "),
+            ("name IN (", "'a_b'", "name IN ('a_b') "),
+            ("name LIKE ", "'abc'", "name LIKE 'abc' "),
+            ("", "'a_b'", "name = 'a_b' "),
+        ] {
+            let mut text = clause.to_string();
+            insert(&mut text, "name", value, &ds, None).unwrap();
+            assert_eq!(text, expected);
+        }
+    }
+
+    /// An insertion that would take the draft past `query::MAX_LEN` leaves it as it is and says so;
+    /// one that reaches the limit exactly is written.
+    #[test]
+    fn a_value_that_would_pass_the_length_limit_is_not_written() {
+        let ds = countries();
+        let fits = format!("{}continent = ", " ".repeat(query::MAX_LEN - 19));
+        let mut text = fits.clone();
+        insert(&mut text, "continent", "'Asia'", &ds, None).unwrap();
+        assert_eq!(text.chars().count(), query::MAX_LEN);
+        assert!(text.ends_with("continent = 'Asia' "));
+        let full = format!(" {fits}");
+        let mut text = full.clone();
+        let said = insert(&mut text, "continent", "'Asia'", &ds, None).expect_err("one char too many");
+        assert_eq!(text, full, "left as it was");
+        assert!(said.contains(&query::MAX_LEN.to_string()), "{said}");
+        // The same with the cursor in the middle.
+        let mut text = format!("{full} AND x");
+        assert!(insert(&mut text, "continent", "'Asia'", &ds, Some(full.chars().count())).is_err());
     }
 
     /// The field a value typed at the cursor is compared with (what `follow_box` lists) is the

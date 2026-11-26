@@ -48,18 +48,37 @@ pub(crate) struct ValuesRead {
     read: usize,
     of: usize,
     /// A streamed layer's: its dataset holds the features read for the view.
-    view: bool,
+    pub(crate) view: bool,
+    /// How many of the features read have a value too long to list or of several lines.
+    pub(crate) left_out: usize,
 }
 
 impl ValuesRead {
     /// Where `got` was read from, in `ds`: a streamed layer's dataset holds the features read for
     /// the view (`Dataset::windowed`).
     pub(crate) fn of(got: &query::FieldValues, ds: &Dataset) -> Self {
-        Self { read: got.read, of: got.of, view: ds.windowed }
+        Self { read: got.read, of: got.of, view: ds.windowed, left_out: got.left_out }
     }
 
-    /// What the help says of where the values come from; None when they are all the layer's.
+    /// What the help says of where the values come from, and of values not listed; None when
+    /// they are all the layer's.
     fn note(self) -> Option<String> {
+        let from = self.from();
+        let left = (self.left_out > 0).then(|| self.left_out_note());
+        match (from, left) {
+            (Some(from), Some(left)) => Some(format!("{from}\n{left}")),
+            (from, left) => from.or(left),
+        }
+    }
+
+    /// That the values of `left_out` features aren't listed, and why.
+    pub(crate) fn left_out_note(self) -> String {
+        let n = self.left_out.to_string();
+        crate::i18n::fmt("The values of {n} features aren't listed: longer than 100 characters, or of several lines", &[("n", &n)])
+    }
+
+    /// Where the values come from; None when they are all the layer's.
+    fn from(self) -> Option<String> {
         let (read, of) = (self.read.to_string(), self.of.to_string());
         let args = [("read", read.as_str()), ("of", of.as_str())];
         match (self.view, self.read < self.of) {
@@ -644,7 +663,7 @@ pub(crate) fn menu(ui: &mut Ui, label: impl Into<egui::WidgetText>, menu: Menu) 
         }
     };
     let describe = |i: usize| catalog.get(i).map(|(_, item)| spoken_item(item, None));
-    let items = || catalog.iter().map(|(s, _)| s.clone()).collect();
+    let items = || catalog.iter().map(|(s, _)| s.clone()).collect::<Vec<_>>();
     let (_, accepted) = crate::completion::menu(ui, label, items, |_| None, describe, true, help);
     find(&accepted?).map(|item| match item {
         Item::Function(f) if f.max > 0 => format!("{}(", f.name),
@@ -661,7 +680,7 @@ pub(crate) fn values_menu(
     ui: &mut Ui,
     label: impl Into<egui::WidgetText>,
     field: &str,
-    values: impl FnOnce() -> (Vec<String>, ValuesRead),
+    values: impl FnOnce() -> (std::rc::Rc<[String]>, ValuesRead),
 ) -> Option<String> {
     // Given with the values, and wanted by the help drawn after them.
     let read = std::cell::Cell::new(None);
@@ -953,15 +972,24 @@ mod tests {
     /// layer's view.
     #[test]
     fn a_values_help_says_what_they_were_read_from() {
-        let note = |read, of, view| ValuesRead { read, of, view }.note();
+        let note = |read, of, view| ValuesRead { read, of, view, left_out: 0 }.note();
         assert_eq!(note(4, 4, false), None);
         assert_eq!(note(10_000, 25_000, false).as_deref(), Some("Values of 10000 of 25000 features, evenly spread"));
         assert_eq!(note(40, 40, true).as_deref(), Some("Values of the 40 features read for the view"));
         assert_eq!(note(10_000, 30_000, true).as_deref(), Some("Values of 10000 of the 30000 features read for the view, evenly spread"));
+        // Values left out are said, with or without a sample.
+        let left = "The values of 3 features aren't listed: longer than 100 characters, or of several lines";
+        assert_eq!(ValuesRead { read: 4, of: 4, view: false, left_out: 3 }.note().as_deref(), Some(left));
+        assert_eq!(
+            ValuesRead { read: 10, of: 20, view: false, left_out: 3 }.note(),
+            Some(format!("Values of 10 of 20 features, evenly spread\n{left}"))
+        );
         let mut streamed = places();
         streamed.windowed = true;
         let offer = offer_at("name = '", 8, &streamed, false).unwrap();
-        assert!(matches!(offer.of.first(), Some(Item::Value(_, field, ValuesRead { read: 5, of: 5, view: true })) if field == "name"));
+        assert!(
+            matches!(offer.of.first(), Some(Item::Value(_, field, ValuesRead { read: 5, of: 5, view: true, left_out: 0 })) if field == "name")
+        );
     }
 
     fn catalog_harness(size: egui::Vec2) -> egui_kittest::Harness<'static, ()> {

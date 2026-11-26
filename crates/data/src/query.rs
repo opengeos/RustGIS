@@ -821,6 +821,8 @@ struct Probe {
     field: Option<usize>,
     /// Whether that value is a `LIKE` / `ILIKE` pattern (`name LIKE ▮`).
     pattern: bool,
+    /// Whether the value at the end is compared, whatever the left side is (`upper(name) = ▮`).
+    compared: bool,
 }
 
 /// How a token is written, for the symbols [`Probe`] notes.
@@ -864,18 +866,19 @@ impl Parser<'_> {
             what(&mut p);
         }
     }
-    /// Notes that a value at the end would be compared with `l`, when `l` is a field.
+    /// Notes that a value at the end would be compared with `l`, and with which field when `l` is
+    /// one.
     fn note_compared(&self, l: &Expr) {
         self.note_compared_as(l, false);
     }
     /// As [`note_compared`](Self::note_compared), the value a `LIKE` pattern when `pattern`.
     fn note_compared_as(&self, l: &Expr, pattern: bool) {
-        if let Expr::Field(f) = l {
-            self.note(self.pos, |p| {
-                p.field = Some(*f);
-                p.pattern = pattern;
-            });
-        }
+        let field = if let Expr::Field(f) = l { Some(*f) } else { None };
+        self.note(self.pos, |p| {
+            p.compared = true;
+            p.field = field;
+            p.pattern = pattern;
+        });
     }
     fn probing(&self) -> bool {
         self.probe.is_some()

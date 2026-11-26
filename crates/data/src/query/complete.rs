@@ -50,6 +50,10 @@ pub struct Completion {
     /// Whether the value typed here is a `LIKE` / `ILIKE` pattern, where `%` and `_` match more
     /// than themselves (`name LIKE '▮`).
     pub pattern: bool,
+    /// Whether a value typed here is the right-hand side of a comparison, `LIKE`, `IN` or
+    /// `BETWEEN`, whatever its left side is: a field ([`field`](Self::field) says which) or
+    /// something computed (`upper(name) = ▮`), which has no field to take values from.
+    pub compared: bool,
 }
 
 /// A call the cursor is in, from [`complete_at`]: its function, which argument (from 0), and
@@ -134,6 +138,7 @@ pub fn complete_at(text: &str, cursor: usize, ds: &Dataset) -> Option<Completion
         call,
         field: probe.field,
         pattern: probe.pattern,
+        compared: probe.compared,
     })
 }
 
@@ -169,6 +174,10 @@ pub struct FieldValues {
     pub read: usize,
     /// How many features the dataset holds: more than `read` when a sample was read.
     pub of: usize,
+    /// How many of the features read have a value left out of `values` for its length (a text or
+    /// float written longer than [`VALUE_CHARS`]) or for breaking a line, for a list of `values`
+    /// to say it isn't all of them.
+    pub left_out: usize,
 }
 
 /// The distinct values field `field` of `ds` holds, read from at most `most` of its features,
@@ -180,15 +189,21 @@ pub fn field_values(ds: &Dataset, field: usize, most: usize) -> FieldValues {
     let step = usize::try_from(crate::source::stride(of as u64, most.max(1))).unwrap_or(usize::MAX);
     let mut seen = std::collections::HashSet::new();
     let mut values = Vec::new();
-    let mut read = 0;
+    let (mut read, mut left_out) = (0, 0);
     for f in ds.features.iter().step_by(step) {
         read += 1;
         let Some(v) = f.attrs.get(field) else { continue };
         if matches!(v, Value::Text(t) if t.chars().nth(VALUE_CHARS).is_some() || t.chars().any(char::is_control)) {
+            left_out += 1;
             continue;
         }
+        let written = literal(v);
         // A float is written in full (`1e300` as 301 digits): too long to list, as a text is.
-        if let Some(written) = literal(v).filter(|w| !matches!(v, Value::Float(_)) || w.len() <= VALUE_CHARS)
+        if matches!(v, Value::Float(_)) && written.as_ref().is_some_and(|w| w.len() > VALUE_CHARS) {
+            left_out += 1;
+            continue;
+        }
+        if let Some(written) = written
             && !seen.contains(&written)
         {
             seen.insert(written.clone());
@@ -198,7 +213,7 @@ pub fn field_values(ds: &Dataset, field: usize, most: usize) -> FieldValues {
     let by_number = ClassText::numeric(values.iter().map(|(t, _)| t));
     values.sort_by(|a, b| if by_number { a.0.cmp(&b.0) } else { a.0.text().cmp(b.0.text()) });
     let values = values.into_iter().map(|(text, written)| FieldValue { written, text: text.into_text() }).collect();
-    FieldValues { values, read, of }
+    FieldValues { values, read, of, left_out }
 }
 
 /// `v` as an expression writes it, to compare a field with: a number as it is (in full, `3.25`,
@@ -311,6 +326,10 @@ mod tests {
         let written = |field| field_values(&d, field, VALUES_READ).values.into_iter().map(|v| v.written).collect::<Vec<_>>();
         let v = field_values(&d, 0, VALUES_READ);
         assert_eq!((v.read, v.of), (9, 9));
+        // The text of two lines and the one too long are counted as left out; null and NaN are no
+        // value to list, not one left out.
+        assert_eq!(v.left_out, 2);
+        assert_eq!(field_values(&d, 1, VALUES_READ).left_out, 2, "1e300 and -1e-300 in full");
         let longest = "x".repeat(VALUE_CHARS);
         assert_eq!(written(0), ["'A'".to_string(), "'b'".to_string(), format!("'{longest}'")], "up to the longest text listed");
         assert_eq!(v.values.first(), Some(&FieldValue { written: "'A'".into(), text: "A".into() }));
@@ -396,6 +415,29 @@ mod tests {
         assert_eq!(at_end("name = 'O''Br").prefix, "O'Br");
         // A value compared with something that isn't a field has no field to take values from.
         assert_eq!(at_end("upper(name) = ").field, None);
+    }
+
+    /// A value is compared whatever its left side is: a field, or something computed that has no
+    /// field to list values of.
+    #[test]
+    fn a_value_compared_with_anything_is_said_compared() {
+        for text in [
+            "name = ",
+            "pop >= ",
+            "name LIKE ",
+            "name IN ('a', ",
+            "pop BETWEEN ",
+            "pop BETWEEN 1 AND ",
+            "upper(name) = ",
+            "upper(name) LIKE '",
+            "pop + 1 BETWEEN ",
+            "pop * 2 IN (",
+        ] {
+            assert!(at_end(text).compared, "{text}");
+        }
+        for text in ["", "pop ", "pop > 5 ", "upper(", "name = 'a' AND ", "pop BETWEEN 1 "] {
+            assert!(!at_end(text).compared, "{text}");
+        }
     }
 
     #[test]
