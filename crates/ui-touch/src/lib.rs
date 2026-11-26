@@ -490,13 +490,23 @@ enum Row {
     Tile(usize),
 }
 
-/// Whether the project has more than one view (maps and layouts) to switch between.
+/// Whether the project has more than one view (maps, layouts and an open ModelBuilder) to switch
+/// between.
 fn has_views(app: &RustGisApp) -> bool {
-    app.session.project.maps.len() + app.session.project.layouts.len() > 1
+    app.session.project.maps.len() + app.session.project.layouts.len() + usize::from(app.mb.open) > 1
+}
+
+/// What a view chip brings into view.
+enum View {
+    Map,
+    Layout,
+    /// ModelBuilder, left open with its model (by Back to the map, say).
+    Model,
 }
 
 /// The project's views, to switch between them where the desktop's tab strip isn't drawn: a chip
-/// for each map, then each layout, the one in view marked. Nothing with one map and no layout.
+/// for each map, then each layout, then ModelBuilder while it is open, the one in view marked.
+/// Nothing with one map, no layout and no ModelBuilder.
 fn views(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     if !has_views(app) {
         return;
@@ -504,33 +514,40 @@ fn views(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     let (project, layout) = (&app.session.project, app.session.active_layout);
     // ModelBuilder, when it is up, covers every view: none is in view, so any chip leaves it.
     let covered = app.mb.shown();
-    // Each view's name, whether it is a layout, and whether it is in view. Read first: a tap
-    // runs a command, which changes them.
-    let mut views: Vec<(String, bool, bool)> = project
+    // Each view's name, what it is, and whether it is in view. Read first: a tap runs a command,
+    // which changes them.
+    let mut views: Vec<(String, View, bool)> = project
         .maps
         .iter()
         .enumerate()
-        .map(|(i, m)| (m.name.clone(), false, !covered && layout.is_none() && i == project.active_map))
+        .map(|(i, m)| (m.name.clone(), View::Map, !covered && layout.is_none() && i == project.active_map))
         .collect();
-    views.extend(project.layouts.iter().enumerate().map(|(i, l)| (l.name.clone(), true, !covered && layout == Some(i))));
+    views.extend(project.layouts.iter().enumerate().map(|(i, l)| (l.name.clone(), View::Layout, !covered && layout == Some(i))));
+    if app.mb.open {
+        let name = rustgis_ui_egui::i18n::fmt("ModelBuilder: {name}", &[("name", app.mb.name.trim())]);
+        views.push((name, View::Model, covered));
+    }
     egui::ScrollArea::horizontal().id_salt("touch_views").show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.set_min_height(TARGET);
-            for (name, is_layout, on) in views {
+            for (name, view, on) in views {
                 let text = RichText::new(&name).size(15.0).color(if on { t.accent_text } else { t.text });
                 let chip = egui::Button::new(text).fill(if on { t.checked } else { t.input }).min_size(Vec2::new(TARGET, TARGET - 8.0));
                 if !ui.add(chip).clicked() || on {
                     continue;
                 }
-                // As the desktop's tab row does: the view chosen comes out from under ModelBuilder.
-                app.mb.active = false;
-                if is_layout {
-                    run(app, "layout.activate", json!({"name": name}));
-                } else {
-                    if app.session.active_layout.is_some() {
-                        run(app, "layout.close", Value::Null);
+                // As the desktop's tab row does: the view chosen comes out from under ModelBuilder,
+                // and ModelBuilder's chip brings its model back as it was left.
+                app.mb.active = matches!(view, View::Model);
+                match view {
+                    View::Model => {}
+                    View::Layout => run(app, "layout.activate", json!({"name": name})),
+                    View::Map => {
+                        if app.session.active_layout.is_some() {
+                            run(app, "layout.close", Value::Null);
+                        }
+                        run(app, "map.activate", json!({"name": name}));
                     }
-                    run(app, "map.activate", json!({"name": name}));
                 }
             }
         });
@@ -2388,6 +2405,13 @@ mod tests {
         assert!(back.max.x <= 411.0, "{back:?}");
         held.touch(&[back.center()]);
         assert!(held.find("France").is_some());
+        // Left open, its model is a view in the Layers sheet, which brings it back as it was.
+        held.raise(Sheet::Layers, "Layers");
+        let chip = held.find("ModelBuilder: Model").unwrap().center();
+        held.touch(&[chip]);
+        assert!(held.app.mb.shown());
+        let back = held.find("Back to the map").unwrap();
+        held.touch(&[back.center()]);
         // Opened over a layout, it still goes back to the map.
         run(&mut held.app, "layout.new", json!({"name": "Sheet A"}));
         run(&mut held.app, "ui.modelBuilder", json!({}));
