@@ -68,6 +68,20 @@ pub(crate) fn reorder_sense(ui: &Ui, reorder: bool) -> Sense {
     if reorder && !ui.input(|i| i.any_touches()) { Sense::click_and_drag() } else { Sense::click() }
 }
 
+fn touched_row() -> egui::Id {
+    egui::Id::NULL.with("reorder_touched_row")
+}
+
+/// After the scroll area `area` of a list of reorderable rows: gives it the drag of a finger that
+/// came down on one of them, so a swipe scrolls the list (#2958).
+pub(crate) fn yield_touch_drag(ctx: &egui::Context, area: egui::Id) {
+    if ctx.data(|d| d.get_temp::<bool>(touched_row())) == Some(true) {
+        ctx.data_mut(|d| d.remove::<bool>(touched_row()));
+        // The id egui gives the drag of a scroll area's content.
+        ctx.set_dragged_id(area.with("area"));
+    }
+}
+
 /// Whether the drag of the row `resp` starts this frame (#2958): with the mouse, when it starts a
 /// drag; with a finger, when it moves after a long press (egui reads the long press as a click of
 /// the context menu and lets go of the row's drag, so the pressed row is kept until the finger
@@ -78,6 +92,11 @@ pub(crate) fn reorder_drag(ui: &Ui, resp: &Response, reorder: bool) -> bool {
     }
     if resp.drag_started_by(egui::PointerButton::Primary) {
         return true;
+    }
+    // A first contact is read with the senses of the frame before, when no finger was down, so
+    // the row owns its drag: noted for the list to take it (`yield_touch_drag`).
+    if resp.is_pointer_button_down_on() && ui.input(|i| i.any_touches() && i.pointer.any_pressed()) {
+        ui.ctx().data_mut(|d| d.insert_temp(touched_row(), true));
     }
     let armed = egui::Id::NULL.with("reorder_long_press");
     let ctx = ui.ctx();

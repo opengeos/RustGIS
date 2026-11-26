@@ -4823,12 +4823,13 @@ fn view_tabs(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     let area = egui::ScrollArea::horizontal().id_salt("view_tabs").max_width(room);
     let tips = [tl!("Scroll the map tabs left"), tl!("Scroll the map tabs right")];
     let mut close = None;
-    crate::ribbon::arrow_scroll_area(&mut tabs_ui, t, "view_tabs", area, tips, |ui| {
+    let strip_area = crate::ribbon::arrow_scroll_area(&mut tabs_ui, t, "view_tabs", area, tips, |ui| {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing = vec2(2.0, 0.0);
             close = view_tab_row(app, ui, t, follow);
         });
     });
+    crate::widgets::yield_touch_drag(ui.ctx(), strip_area);
     // Right after the tabs, or at the strip's right edge once they scroll.
     let x = tabs_ui.min_rect().max.x + 2.0;
     let pr = Rect::from_min_size(pos2(x + 2.0, r.min.y + 6.0), vec2(NEW_TAB_W, 20.0));

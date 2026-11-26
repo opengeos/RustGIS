@@ -745,7 +745,7 @@ fn contents(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         });
     }
     ui.add_space(2.0);
-    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+    let area = egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         let header = ui
             .horizontal(|ui| {
                 ui.add_space(8.0);
@@ -937,6 +937,7 @@ fn contents(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             }
         }
     });
+    crate::widgets::yield_touch_drag(ui.ctx(), area.id);
 }
 
 /// What pasting the copy adds (#491), translated: the copied group(s), or else the layer(s).
@@ -2648,7 +2649,7 @@ fn fill_dragged_row(ui: &Ui, fill: egui::layers::ShapeIdx, dragging: bool, row: 
 
 /// Draws the Browser; toolbox identities use source names so translations can share labels.
 fn catalog(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
-    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+    let area = egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         egui::Frame::NONE.inner_margin(egui::Margin::symmetric(10, 8)).show(ui, |ui| {
             egui::CollapsingHeader::new(egui::RichText::new(tl!("Maps")).font(semibold(12.5))).default_open(true).show(ui, |ui| {
                 let maps: Vec<String> = app.session.project.maps.iter().map(|m| m.name.clone()).collect();
@@ -2863,6 +2864,7 @@ fn catalog(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             }
         });
     });
+    crate::widgets::yield_touch_drag(ui.ctx(), area.id);
 }
 
 fn folder_browser(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
@@ -8520,8 +8522,8 @@ mod tests {
         let button = |pos, pressed| Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
         h.event(Event::PointerMoved(from));
         h.step();
-        h.event(touch(TouchPhase::Start, from));
-        h.event(button(from, true));
+        // As winit sends a first contact: the touch and its press in one frame.
+        h.input_mut().events.extend([touch(TouchPhase::Start, from), button(from, true)]);
         h.step();
         for _ in 0..held {
             h.step();
@@ -8597,6 +8599,57 @@ mod tests {
         assert_eq!(order.first(), Some(&moved), "{order:?} from {original:?}");
         assert_eq!(h.state().session.undo_depth(), 1);
         assert!(h.query_by_label("Labeling Properties…").is_none(), "the menu of the long press is still open");
+    }
+
+    /// #2958: a tap of a finger on a layer row still picks the layer.
+    #[test]
+    fn a_tap_on_a_layer_still_picks_it() {
+        use egui_kittest::kittest::Queryable;
+        let app = RustGisApp::with_sample();
+        let picked = layer(&app, "Rivers");
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 900.0)).with_max_steps(64).build_ui_state(
+            |ui, app: &mut RustGisApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run_steps(6);
+        assert_ne!(h.state().session.active_layer, Some(picked));
+        let at = h.get_by_label("Rivers").rect().center();
+        touch_drag(&mut h, at, at, 0);
+        h.run_steps(3);
+        assert_eq!(h.state().session.active_layer, Some(picked));
+    }
+
+    /// #2958: a swipe over the view tabs scrolls the strip and leaves the maps in their order.
+    #[test]
+    fn a_swipe_over_the_view_tabs_scrolls_and_does_not_reorder_them() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = RustGisApp::with_sample();
+        for i in 0..20 {
+            app.run("map.new", json!({"name": format!("Sheet {i}")})).unwrap();
+        }
+        app.run("map.activate", json!({"name": "Sheet 0"})).unwrap();
+        let names = |app: &RustGisApp| app.session.project.maps.iter().map(|m| m.name.clone()).collect::<Vec<_>>();
+        let original = names(&app);
+        // The Browser, which lists the maps by the same names, closed.
+        app.ui.left = None;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(900.0, 700.0)).with_max_steps(64).build_ui_state(
+            |ui, app: &mut RustGisApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run_steps(8);
+        let from = h.get_by_label("Sheet 1").rect().center();
+        touch_drag(&mut h, from, from - vec2(120.0, 0.0), 0);
+        h.run_steps(3);
+        assert_eq!(names(h.state()), original);
+        assert!(h.get_by_label("Sheet 1").rect().center().x < from.x - 1.0, "the swipe did not scroll the tabs");
     }
 
     /// #2958: a finger held on a layer row without moving opens the row's menu, as today.
