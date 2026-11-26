@@ -3994,7 +3994,11 @@ fn read_zip_layers_budget(file_name: &str, bytes: &[u8], crs: Option<Crs>, budge
             // Every layer of a KML, GPX or other file of several, with its styles, as when it is
             // added by itself, within the allowance.
             read_layers(leaf, &b).and_then(|layers| {
-                charge_retained(layers.iter().map(|l| &l.dataset), leaf, budget)?;
+                // A KML's styles stay with its layers.
+                let styles = layers.iter().flat_map(|l| &l.styles).fold(0usize, |sum, (id, _)| {
+                    sum.saturating_add(std::mem::size_of::<(String, crate::kml::Style)>()).saturating_add(id.capacity())
+                });
+                charge_retained_with(layers.iter().map(|l| &l.dataset), styles, leaf, budget)?;
                 // A KML's ground overlays are pictures drawn beside its file; from a zip, they aren't.
                 if matches!(ext_of(&n).as_str(), "kml" | "kmz")
                     && let Ok((found, undrawn, over_budget)) = crate::kml::ground_overlays(leaf, &b)
@@ -4069,7 +4073,12 @@ fn read_zip_layers_budget(file_name: &str, bytes: &[u8], crs: Option<Crs>, budge
 /// zip's shared `budget` all at once, or refuses the member `name`, taking nothing, when they
 /// don't fit. Its read peaked within the reader's own per-file limit.
 fn charge_retained<'a>(layers: impl IntoIterator<Item = &'a Dataset>, name: &str, budget: &mut usize) -> Result<()> {
-    let cost = layers.into_iter().fold(0usize, |sum, ds| sum.saturating_add(retained_cost(ds)));
+    charge_retained_with(layers, 0, name, budget)
+}
+
+/// [`charge_retained`] with `extra` bytes the layers keep besides their rows (a KML's styles).
+fn charge_retained_with<'a>(layers: impl IntoIterator<Item = &'a Dataset>, extra: usize, name: &str, budget: &mut usize) -> Result<()> {
+    let cost = layers.into_iter().fold(extra, |sum, ds| sum.saturating_add(retained_cost(ds)));
     let allowance = *budget;
     *budget = budget.checked_sub(cost).ok_or_else(|| {
         DataError::Format(format!("{name}: its retained layers exceed the {allowance}-byte remaining memory budget; import a smaller file"))
