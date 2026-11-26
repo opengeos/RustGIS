@@ -344,14 +344,14 @@ struct WebShell {
     embed: Option<Embed>,
     /// The app's Ctrl (⌘) shortcuts, kept current for [`keep_app_shortcuts`].
     taken: TakenKeys,
-    /// [`RustGisApp::shortcuts_fingerprint`] and the length of [`RustGisApp::script_find_keys`]
-    /// when `taken` was last filled.
-    taken_print: Option<(u64, usize)>,
+    /// [`RustGisApp::shortcuts_fingerprint`] and [`RustGisApp::script_find_keys`] when `taken`
+    /// was last filled.
+    taken_print: Option<(u64, Vec<(bool, bool, egui::Key)>)>,
 }
 
 /// The app's Ctrl (⌘) shortcuts as (Alt, Shift, key), [`RustGisApp::command_keys`], and the Script
 /// box's find chords, [`RustGisApp::script_find_keys`], shared with the page's key listener.
-type TakenKeys = Rc<RefCell<(Vec<(bool, bool, egui::Key)>, &'static [(bool, bool, egui::Key)])>>;
+type TakenKeys = Rc<RefCell<(Vec<(bool, bool, egui::Key)>, Vec<(bool, bool, egui::Key)>)>>;
 
 /// The link to the page that embeds the app (`?embed`; see `embed.rs`).
 struct Embed {
@@ -458,10 +458,10 @@ impl WebShell {
     /// them changed.
     fn follow_keys(&mut self, ctx: &egui::Context) {
         let find = RustGisApp::script_find_keys(ctx);
-        let print = (self.app.shortcuts_fingerprint(), find.len());
-        if self.taken_print != Some(print) {
+        let print = (self.app.shortcuts_fingerprint(), find);
+        if self.taken_print.as_ref() != Some(&print) {
+            *self.taken.borrow_mut() = (self.app.command_keys(), print.1.clone());
             self.taken_print = Some(print);
-            *self.taken.borrow_mut() = (self.app.command_keys(), find);
         }
     }
 }

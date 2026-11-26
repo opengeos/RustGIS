@@ -64,6 +64,8 @@ pub struct Workflow {
     script_asking: bool,
     /// When the last Script pane run landed: one waiting behind it started then, not when asked.
     script_landed: Option<web_time::Instant>,
+    /// The Script box's find and replace bar.
+    pub(crate) script_find: crate::scriptfind::Bar,
     /// The project the Script pane's script, results and count are for
     /// ([`rustgis_engine::Session::opened`]); `None` until the pane first shows.
     script_project: Option<u64>,
@@ -2006,6 +2008,8 @@ fn start_over_in_another_project(app: &mut RustGisApp) {
     let opened = app.session.opened;
     if app.workflow.script_project.is_some_and(|p| p != opened) {
         clear_script(app);
+        // The find bar too: its query and replacement were typed for what was closed.
+        app.workflow.script_find = Default::default();
     }
     app.workflow.script_project = Some(opened);
 }
@@ -2285,7 +2289,7 @@ fn script(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, fit: bool) {
     let stopped = stopped_at(app);
     // The find bar (#2996), above the box: Ctrl+F opens it; a replace changes the script here.
     let running = script_running(app);
-    let found = crate::scriptfind::prepare(ui, box_id, &app.workflow.script, app.session.opened);
+    crate::scriptfind::keys(ui, box_id, &app.workflow.script, &mut app.workflow.script_find);
     let before = crate::completion::before(ui, box_id, &app.workflow.script);
     let out = egui::ScrollArea::vertical().id_salt("script_box").max_height(room).auto_shrink([false, true]).show(ui, |ui| {
         let out = egui::TextEdit::multiline(&mut app.workflow.script)
@@ -2297,9 +2301,7 @@ fn script(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, fit: bool) {
             .desired_width(f32::INFINITY)
             .hint_text("map.goToXY {\"lon\": 2.35, \"lat\": 48.85, \"scale\": 5000000}\nselect.byAttributes {\"layer\": \"Cities\", \"where\": \"pop_max > 1000000\"}")
             .show(ui);
-        if let Some(shown) = &found {
-            crate::scriptfind::paint(ui, &out, shown);
-        }
+        crate::scriptfind::paint(ui, &out, &app.workflow.script, &mut app.workflow.script_find);
         // Asked by a click on the error, taken every frame: one that doesn't show the stop (a key
         // typed) drops it, rather than leaving it for a later stop.
         let go = ui.data_mut(|d| d.remove_temp::<bool>(box_id.with("go_to_stopped"))).is_some();
@@ -2327,7 +2329,8 @@ fn script(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, fit: bool) {
     }
     // Over the box's top right, once it is laid out; a replace it makes comes after the box's own
     // keys, so it is not read as what a key did.
-    if let Some(cut) = crate::scriptfind::show(ui, box_id, &mut app.workflow.script, running, out.inner_rect) {
+    let w = &mut app.workflow;
+    for cut in crate::scriptfind::show(ui, box_id, &mut w.script, running, out.inner_rect, &mut w.script_find) {
         app.session.notify(cut, false);
     }
     // Where the box's cursor is (#2831), focused or not, on the right of a row of its own: the
@@ -3396,7 +3399,7 @@ mod tests {
         h.run();
         let box_id = egui::Id::unique("script_text");
         let pressed = |h: &egui_kittest::Harness<'_, RustGisApp>, key: &str, code: &str, alt: bool| {
-            RustGisApp::takes_find_key(crate::scriptfind::browser_keys(&h.ctx), key, code, true, alt)
+            RustGisApp::takes_find_key(&crate::scriptfind::browser_keys(&h.ctx), key, code, true, alt)
         };
         let taken = |h: &egui_kittest::Harness<'_, RustGisApp>, key: &str, code: &str| pressed(h, key, code, false);
         assert!(!taken(&h, "f", "KeyF"), "the browser keeps them with the focus elsewhere");
@@ -3469,20 +3472,33 @@ mod tests {
         h.run();
         h.event(Event::Text("cities".into()));
         h.run();
-        for button in ["Next match (Enter)", "Previous match (Shift+Enter)", "Toggle Replace"] {
+        for button in ["Match Case", "Match Whole Word", "Next match (Enter)", "Previous match (Shift+Enter)", "Toggle Replace"] {
             h.get_by_label(button).click();
             h.run();
             assert!(focused(&h, query_id), "{button}");
         }
+        h.key_press(Key::Enter);
+        h.run();
+        assert!(focused(&h, query_id), "Enter in the query");
         h.ctx.memory_mut(|m| m.request_focus(replace_id));
         h.run();
         h.event(Event::Text("towns".into()));
         h.run();
+        h.key_press(Key::Enter);
+        h.run();
+        assert!(focused(&h, replace_id), "Enter in the replacement");
         for button in ["Replace (Enter)", "Replace All"] {
             h.get_by_label(button).click();
             h.run();
             assert!(focused(&h, replace_id), "{button}");
         }
+        // With nothing left to replace, Enter keeps the field too; Close gives the keyboard to the box.
+        h.key_press(Key::Enter);
+        h.run();
+        assert!(focused(&h, replace_id), "Enter with nothing to replace");
+        h.get_by_label("Close (Esc)").click();
+        h.run();
+        assert!(focused(&h, box_id), "Close");
     }
 
     /// The Replace field's note is shown with its row, not while the row is hidden (#2996).
@@ -3530,6 +3546,14 @@ mod tests {
         h.key_press_modifiers(Modifiers::COMMAND, Key::F);
         h.run();
         assert!(h.query_by_label("1 of 1").is_none() && h.query_by_label("No results").is_none(), "an empty field");
+        // And through Open in Script Pane, which starts the pane over before it is next drawn.
+        h.event(Event::Text("zoom".into()));
+        h.run();
+        h.state_mut().run("project.new", Value::Null).unwrap();
+        let ctx = h.ctx.clone();
+        open_script(h.state_mut(), &ctx, "map.zoomFull".into());
+        h.run();
+        assert!(h.query_by_label("Close (Esc)").is_none(), "closed again");
     }
 
     /// The pane with `script` in it, its fonts installed first (the icons draw letters), and the

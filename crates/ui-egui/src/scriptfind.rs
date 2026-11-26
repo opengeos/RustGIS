@@ -109,14 +109,57 @@ pub fn replace_all(text: &str, found: &Found, with: &str) -> String {
     out
 }
 
-/// The find bar's state, kept in the context under the box's id: it isn't saved with the project.
+/// The most characters of a query, and of a replacement: what each field takes, and so of a
+/// selection that fills the query when the bar opens (a longer one is a passage, not a word to look
+/// for). Each change of the script or the query costs the script's length times the query's, on the
+/// UI thread, and Replace All writes the replacement once per match, up to [`MAX_MATCHES`].
+const FIELD_MAX: usize = 200;
+
+/// A field of the bar: its text, never over [`FIELD_MAX`], and what the last write of it left out.
 #[derive(Clone, Default)]
-struct Bar {
-    /// The project it was used in ([`rustgis_engine::Session::opened`]): another starts it over.
-    project: Option<u64>,
+struct Field {
+    text: String,
+    left_out: usize,
+}
+
+impl Field {
+    /// After any write of the text (typed, pasted or filled from a selection): cut to what the field
+    /// takes, keeping how many characters that left out. Given back when it is news, so a key held
+    /// past the limit is said once, not once a keystroke.
+    fn written(&mut self) -> Option<usize> {
+        let before = self.left_out;
+        self.left_out = 0;
+        if let Some((end, _)) = self.text.char_indices().nth(FIELD_MAX) {
+            self.left_out = self.text[end..].chars().count();
+            self.text.truncate(end);
+        }
+        Some(self.left_out).filter(|n| *n > 0 && *n != before)
+    }
+}
+
+/// Which field, to say what it left out.
+#[derive(Clone, Copy)]
+enum Which {
+    Find,
+    Replace,
+}
+
+/// What a field left out of a longer text, as the bar and Messages say it.
+fn left_out(which: Which, n: usize) -> String {
+    let sentence = match which {
+        Which::Find => "The Find field takes {max} characters: {n} left out",
+        Which::Replace => "The Replace field takes {max} characters: {n} left out",
+    };
+    crate::i18n::fmt(sentence, &[("max", &FIELD_MAX.to_string()), ("n", &n.to_string())])
+}
+
+/// The find bar's state, kept with the Script pane's (and started over with it for another
+/// project): it isn't saved with the project.
+#[derive(Default)]
+pub struct Bar {
     open: bool,
-    query: String,
-    replace: String,
+    query: Field,
+    replace: Field,
     case: bool,
     /// Only whole words match.
     whole: bool,
@@ -127,28 +170,27 @@ struct Bar {
     anchor: usize,
     /// Pick the match at the anchor when the matches are next worked out.
     reseek: bool,
-    /// Scroll the current match into view in the box's next frame.
+    /// Scroll the current match into view when it is next painted.
     scroll: bool,
     /// Put the focus in the query field, its text selected.
     focus_query: bool,
     /// The Replace row is shown.
     replace_open: bool,
-    /// What the last change of each field left out of it, said under the fields: each its own, so
-    /// one field's note stays while its text is cut, whatever the other is given.
-    query_cut: Option<String>,
-    replace_cut: Option<String>,
-    found: std::sync::Arc<Found>,
-    /// What `found` was worked out for: the script's hash, the query and the case.
+    /// The matches [`Bar::refresh`] last worked out: read only after it.
+    found: Found,
+    /// What `found` was worked out for: the script's hash, the query and the toggles.
     key: Option<(u64, String, bool, bool)>,
 }
 
 impl Bar {
-    /// The matches again, if the script, the query or the case changed, and the current one picked.
-    /// `cursor`: the box's cursor, where a current match lost to an edit of the text is picked again.
+    /// The matches of `script`, worked out again if it, the query or a toggle changed since, and the
+    /// current one picked: called wherever the matches are used, so they are never of an older
+    /// text. `cursor`: the box's cursor, where a current match lost to an edit of the text is
+    /// picked again.
     fn refresh(&mut self, script: &str, cursor: usize) {
-        let key = (egui::util::hash(script), self.query.clone(), self.case, self.whole);
+        let key = (egui::util::hash(script), self.query.text.clone(), self.case, self.whole);
         if self.key.as_ref() != Some(&key) {
-            self.found = std::sync::Arc::new(matches(script, &self.query, self.case, self.whole));
+            self.found = matches(script, &self.query.text, self.case, self.whole);
             self.key = Some(key);
             if !self.reseek {
                 // The text changed under the bar (typed in the box): the matches shifted, so the
@@ -163,14 +205,6 @@ impl Bar {
         }
     }
 
-    /// Whether `found` is what `script`, the query and the toggles say now.
-    fn is_current(&self, script: &str) -> bool {
-        let hash = egui::util::hash(script);
-        self.key
-            .as_ref()
-            .is_some_and(|(h, query, case, whole)| *h == hash && *query == self.query && *case == self.case && *whole == self.whole)
-    }
-
     /// The bar moved to the match `at` of the found ones.
     fn go(&mut self, at: Option<usize>) {
         self.current = at;
@@ -181,13 +215,7 @@ impl Bar {
     }
 }
 
-/// What the box draws of the bar: the matches, the current one and whether to scroll to it.
-pub struct Shown {
-    pub found: std::sync::Arc<Found>,
-    pub current: Option<usize>,
-    pub scroll: bool,
-}
-
+#[derive(Clone, Copy, PartialEq)]
 enum Action {
     Next,
     Previous,
@@ -196,82 +224,124 @@ enum Action {
     Close,
 }
 
-/// The room the bar leaves at the box's edges, and the widths it takes: a button's side, what the
-/// count takes, the toggle that shows Replace, and the least and most the bar is wide (a narrower
-/// box has the bar as wide as it is).
+/// What a key of the box and its bar does.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Does {
+    Find,
+    FindAndReplace,
+    Next,
+    Previous,
+}
+
+/// A shortcut of the box and its bar: Ctrl or ⌘ held (`command`), Alt as given, and the key.
+/// A letter takes Shift or not; F3 takes it as given.
+struct Chord {
+    command: bool,
+    alt: bool,
+    shift: bool,
+    key: egui::Key,
+    does: Does,
+}
+
+const fn chord(command: bool, alt: bool, shift: bool, key: egui::Key, does: Does) -> Chord {
+    Chord { command, alt, shift, key, does }
+}
+
+/// The shortcuts of a code editor, the one list the box takes its keys from and the web app keeps
+/// from the browser: Ctrl+F (⌘F) finds; Ctrl+H, ⌥⌘F on a Mac (where ⌘H hides the app), finds with
+/// the Replace row; F3 and Shift+F3 step. Alt is as listed: elsewhere than a Mac, Ctrl+Alt is
+/// AltGr, and AltGr+F types a letter on many layouts.
+fn chords(mac: bool) -> [Chord; 4] {
+    use egui::Key;
+    let replace =
+        if mac { chord(true, true, false, Key::F, Does::FindAndReplace) } else { chord(true, false, false, Key::H, Does::FindAndReplace) };
+    [
+        chord(true, false, false, Key::F, Does::Find),
+        replace,
+        // Shift first: the plain one doesn't take it.
+        chord(false, false, true, Key::F3, Does::Previous),
+        chord(false, false, false, Key::F3, Does::Next),
+    ]
+}
+
+impl Chord {
+    fn is_pressed_with(&self, m: egui::Modifiers) -> bool {
+        let shift = self.key != egui::Key::F3 || m.shift == self.shift;
+        m.command == self.command && m.alt == self.alt && shift
+    }
+
+    /// Takes this chord's presses out of the frame's events, so nothing else sees them.
+    fn take(&self, ui: &egui::Ui) -> bool {
+        ui.input_mut(|i| {
+            let before = i.events.len();
+            i.events.retain(|e| {
+                !matches!(e, egui::Event::Key { key, pressed: true, modifiers, .. }
+                    if *key == self.key && self.is_pressed_with(*modifiers))
+            });
+            before != i.events.len()
+        })
+    }
+}
+
+/// The focus is in the Script box or in a field of its bar: where the shortcuts work.
+fn here(ctx: &egui::Context, box_id: egui::Id) -> bool {
+    let ours = [box_id, box_id.with("find_query"), box_id.with("find_replace")];
+    ctx.memory(|m| m.focused()).is_some_and(|f| ours.contains(&f))
+}
+
+/// Before the box: the shortcuts pressed in the box or the bar ([`chords`]). Finding opens the bar,
+/// with the selection in its field; the next and previous match move an open one.
+pub fn keys(ui: &egui::Ui, box_id: egui::Id, script: &str, bar: &mut Bar) {
+    if !here(ui.ctx(), box_id) {
+        return;
+    }
+    for chord in chords(ui.ctx().os().is_mac()) {
+        let stepping = matches!(chord.does, Does::Next | Does::Previous);
+        if (stepping && !bar.open) || !chord.take(ui) {
+            continue;
+        }
+        let range = crate::widgets::cursor_range(ui.ctx(), box_id);
+        if stepping {
+            bar.refresh(script, range.map_or(bar.anchor, |r| r.primary.index.0));
+            bar.go(step(bar.found.ranges.len(), bar.current, chord.does == Does::Previous));
+            continue;
+        }
+        if let Some(r) = range.filter(|_| ui.memory(|m| m.has_focus(box_id))) {
+            let (a, b) = (r.primary.index.0.min(r.secondary.index.0), r.primary.index.0.max(r.secondary.index.0));
+            let picked: String = script.chars().skip(a).take(b - a).collect();
+            let word = !picked.is_empty() && picked.chars().count() <= FIELD_MAX && !picked.contains(['\n', '\r']);
+            // The same query keeps what it left out of a longer one.
+            if word && bar.query.text != picked {
+                bar.query.text = picked;
+                bar.query.written();
+            }
+            bar.anchor = a;
+        }
+        bar.open = true;
+        bar.replace_open |= chord.does == Does::FindAndReplace;
+        bar.reseek = true;
+        bar.focus_query = true;
+    }
+}
+
+/// The chords with Ctrl or ⌘ the box and its bar take while one of them has the focus, as (Alt,
+/// Shift, key), for the web app to keep from the browser's own Find and History.
+pub fn browser_keys(ctx: &egui::Context) -> Vec<(bool, bool, egui::Key)> {
+    if !here(ctx, egui::Id::unique("script_text")) {
+        return Vec::new();
+    }
+    chords(ctx.os().is_mac()).iter().filter(|c| c.command).map(|c| (c.alt, c.shift, c.key)).collect()
+}
+
+/// The room the bar leaves at the box's edges, and the widths it takes: what the count takes, the
+/// toggle that shows Replace, and the least and most the bar is wide (egui keeps it on screen when
+/// the box is narrower).
 const EDGE: f32 = 8.0;
 const COUNT_WIDTH: f32 = 52.0;
 const TOGGLE_WIDTH: f32 = 16.0;
 const MIN_BAR: f32 = 230.0;
 const MAX_BAR: f32 = 380.0;
 const GAP: f32 = 4.0;
-
-/// The most characters of a query, and of a replacement: what each field takes, and so of a
-/// selection that fills the query when the bar opens (a longer one is a passage, not a word to look
-/// for). Each change of the script or the query costs the script's length times the query's, on the
-/// UI thread, and Replace All writes the replacement once per match, up to [`MAX_MATCHES`].
-const FIELD_MAX: usize = 200;
-
-/// Before the box: Ctrl+F (⌘F) in the box or in the bar opens it, with the selection in its field;
-/// the matches are worked out, and what the box has to draw of them is returned, None while the bar
-/// is closed. The bar itself is drawn over the box once it has been laid out ([`show`]).
-pub fn prepare(ui: &egui::Ui, box_id: egui::Id, script: &str, project: u64) -> Option<Shown> {
-    let id = box_id.with("find");
-    let (query_id, replace_id) = (box_id.with("find_query"), box_id.with("find_replace"));
-    let mut bar: Bar = ui.data_mut(|d| d.get_temp(id)).unwrap_or_default();
-    // Another project starts the bar over, as it starts the pane over.
-    if bar.project != Some(project) {
-        bar = Bar { project: Some(project), ..Bar::default() };
-    }
-    let in_box = ui.memory(|m| m.has_focus(box_id));
-    let in_bar = ui.memory(|m| m.has_focus(query_id) || m.has_focus(replace_id));
-    // Ctrl+F (⌘F) opens the bar; Ctrl+H (⌥⌘F on a Mac, where ⌘H hides the app) opens it with the
-    // Replace row, as a code editor's do. Not with Alt held, but on a Mac for ⌥⌘F: elsewhere
-    // Ctrl+Alt is AltGr, and AltGr+F types a letter on many layouts, which egui's Ctrl+F
-    // pattern would otherwise take as its own.
-    let (here, mac) = (in_box || in_bar, ui.ctx().os().is_mac());
-    let alt = ui.input(|i| i.modifiers.alt);
-    let find = here && !alt && ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::F));
-    let replace = here
-        && ui.input_mut(|i| {
-            (!alt && !mac && i.consume_key(egui::Modifiers::COMMAND, egui::Key::H))
-                || (mac && alt && i.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::ALT, egui::Key::F))
-        });
-    if find || replace {
-        if in_box && let Some(r) = crate::widgets::cursor_range(ui.ctx(), box_id) {
-            let (a, b) = (r.primary.index.0.min(r.secondary.index.0), r.primary.index.0.max(r.secondary.index.0));
-            let picked: String = script.chars().skip(a).take(b - a).collect();
-            if !picked.is_empty() && picked.chars().count() <= FIELD_MAX && !picked.contains(['\n', '\r']) {
-                // A query the selection changes leaves the note about the cut text behind.
-                if bar.query != picked {
-                    bar.query_cut = None;
-                }
-                bar.query = picked;
-            }
-            bar.anchor = a;
-        }
-        bar.open = true;
-        bar.replace_open |= replace;
-        bar.reseek = true;
-        bar.focus_query = true;
-    }
-    if !bar.open {
-        ui.data_mut(|d| d.insert_temp(id, bar));
-        return None;
-    }
-    let cursor = crate::widgets::cursor_range(ui.ctx(), box_id).map_or(bar.anchor, |r| r.primary.index.0);
-    bar.refresh(script, cursor);
-    // F3 and Shift+F3, as in a code editor: the next and the previous match, with the focus where it was.
-    // Shift first: a pattern without Shift may take a press that has it.
-    if (in_box || in_bar) && ui.input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, egui::Key::F3)) {
-        bar.go(step(bar.found.ranges.len(), bar.current, true));
-    } else if (in_box || in_bar) && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F3)) {
-        bar.go(step(bar.found.ranges.len(), bar.current, false));
-    }
-    let shown = Shown { found: bar.found.clone(), current: bar.current, scroll: std::mem::take(&mut bar.scroll) };
-    ui.data_mut(|d| d.insert_temp(id, bar));
-    Some(shown)
-}
 
 /// The toggles inside the right end of the query field `input`, as in a code editor: Match Case
 /// (`Aa`) and Match Whole Word (`ab` under a bracket). Each is `on` or off; the one clicked is
@@ -325,20 +395,20 @@ enum Toggle {
 /// field with Match case inside it, the count and the previous, next and close buttons; and,
 /// under the arrow at its left, a field for what to replace with and the Replace and Replace All
 /// buttons. Does what it's asked: a replace changes `script` as one undo step of the box, which
-/// `running` forbids.
-pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: bool, area: egui::Rect) -> Option<String> {
+/// `running` forbids. Returns what a field left out of a longer text, for Messages.
+pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: bool, area: egui::Rect, bar: &mut Bar) -> Vec<String> {
     use egui::text::{CCursor, CCursorRange};
-    let id = box_id.with("find");
     let (query_id, replace_id) = (box_id.with("find_query"), box_id.with("find_replace"));
-    let mut bar: Bar = ui.data_mut(|d| d.get_temp(id)).unwrap_or_default();
+    // What a field lost this frame, for Messages too.
+    let mut said = Vec::new();
     // Over the box only while it shows: scrolled out of the pane, the bar would float over what is
     // there instead.
     let seen = ui.clip_rect();
     if !bar.open || !seen.intersects(area) {
-        return None;
+        return said;
     }
-    // What a field lost this frame, for Messages too.
-    let mut said = None;
+    let cursor = crate::widgets::cursor_range(ui.ctx(), box_id).map_or(bar.anchor, |r| r.primary.index.0);
+    bar.refresh(script, cursor);
     let total = bar.found.ranges.len();
     let capped = bar.found.capped;
     let width = (area.width() - 2.0 * EDGE).clamp(MIN_BAR, MAX_BAR);
@@ -347,8 +417,8 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
     let margin = 6.0;
     let field = width - 2.0 * margin - 2.0 - TOGGLE_WIDTH - COUNT_WIDTH - 3.0 * crate::widgets::FLAT_BUTTON - 5.0 * GAP;
     let mut todo = None;
-    // The arrow was clicked: the keyboard stays in the query field, as in a code editor.
-    let mut keep_query = false;
+    // A widget of the bar was used, or a field changed.
+    let (mut used, mut edited) = (false, false);
     crate::completion::popup(ui, box_id.with("find_area"), pos, area.height(), |ui| {
         ui.set_width(width - 2.0 * margin - 2.0);
         ui.spacing_mut().item_spacing = egui::vec2(GAP, GAP);
@@ -367,21 +437,17 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
             toggle.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, bar.replace_open, tl!("Toggle Replace")));
             if toggle.on_hover_text(tl!("Toggle Replace")).clicked() {
                 bar.replace_open = !bar.replace_open;
-                keep_query = true;
+                used = true;
             }
             ui.vertical(|ui| {
                 ui.horizontal(|ui| {
                     let query = ui.add(
-                        egui::TextEdit::singleline(&mut bar.query)
+                        egui::TextEdit::singleline(&mut bar.query.text)
                             .id(query_id)
                             .desired_width(field)
                             .margin(egui::Margin { left: 6, right: 54, top: 3, bottom: 3 })
                             .hint_text(tl!("Find")),
                     );
-                    // After the field: it gives the focus up on a click elsewhere, the arrow's too.
-                    if keep_query {
-                        ui.memory_mut(|m| m.request_focus(query_id));
-                    }
                     let toggled = field_toggles(ui, query_id.with("toggle"), query.rect, bar.case, bar.whole);
                     match toggled {
                         Some(Toggle::Case) => bar.case = !bar.case,
@@ -389,32 +455,21 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
                         None => {}
                     }
                     bar.reseek |= toggled.is_some();
-                    if toggled.is_some() {
-                        // As in a code editor, typing goes on in the field.
-                        ui.memory_mut(|m| m.request_focus(query_id));
-                    }
+                    used |= toggled.is_some();
                     if std::mem::take(&mut bar.focus_query) {
                         ui.memory_mut(|m| m.request_focus(query_id));
-                        let end = CCursor::new(bar.query.chars().count());
+                        let end = CCursor::new(bar.query.text.chars().count());
                         crate::widgets::set_cursor_range(ui.ctx(), query_id, CCursorRange::two(CCursor::new(0), end));
                     }
                     if query.changed() {
-                        bar.reseek = true;
-                        let cut = cap(&mut bar.query).map(|n| {
-                            crate::i18n::fmt(
-                                "The Find field takes {max} characters: {n} left out",
-                                &[("max", &FIELD_MAX.to_string()), ("n", &n.to_string())],
-                            )
-                        });
-                        said = say_once(&mut bar.query_cut, cut);
+                        (bar.reseek, edited) = (true, true);
+                        said.extend(bar.query.written().map(|n| left_out(Which::Find, n)));
                     }
                     let shift = ui.input(|i| i.modifiers.shift);
                     if query.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                        // A one-line box lets go of the focus on Enter: keep it for the next.
-                        ui.memory_mut(|m| m.request_focus(query_id));
                         todo = Some(if shift { Action::Previous } else { Action::Next });
                     }
-                    let place = match (bar.query.is_empty(), bar.current) {
+                    let place = match (bar.query.text.is_empty(), bar.current) {
                         (true, _) => String::new(),
                         (false, _) if total == 0 => tl!("No results").to_string(),
                         (false, current) => {
@@ -446,7 +501,7 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
                 if bar.replace_open {
                     ui.horizontal(|ui| {
                         let replace = ui.add(
-                            egui::TextEdit::singleline(&mut bar.replace)
+                            egui::TextEdit::singleline(&mut bar.replace.text)
                                 .id(replace_id)
                                 .desired_width(field)
                                 .margin(egui::Margin { left: 6, right: 6, top: 3, bottom: 3 })
@@ -455,13 +510,8 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
                         // Under the count, the Replace buttons: one match, and all of them.
                         ui.add_space(COUNT_WIDTH + GAP);
                         if replace.changed() {
-                            let cut = cap(&mut bar.replace).map(|n| {
-                                crate::i18n::fmt(
-                                    "The Replace field takes {max} characters: {n} left out",
-                                    &[("max", &FIELD_MAX.to_string()), ("n", &n.to_string())],
-                                )
-                            });
-                            said = say_once(&mut bar.replace_cut, cut);
+                            edited = true;
+                            said.extend(bar.replace.written().map(|n| left_out(Which::Replace, n)));
                         }
                         let can = !running && bar.current.is_some();
                         let wait = tl!("Wait for the run to finish").to_string();
@@ -487,9 +537,8 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
                         if crate::widgets::flat_icon_button(ui, "replace", &one_say, one_hover, can).clicked() {
                             todo = Some(Action::Replace);
                         } else if replace.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                            // A one-line box lets go of the focus on Enter: keep it, for the next replace,
-                            // which is made only when there is one to make.
-                            ui.memory_mut(|m| m.request_focus(replace_id));
+                            // Made only when there is one to make.
+                            used = true;
                             if can {
                                 todo = Some(Action::Replace);
                             }
@@ -504,44 +553,44 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
                         }
                     });
                 }
-                let replace_cut = bar.replace_cut.as_ref().filter(|_| bar.replace_open);
-                for cut in bar.query_cut.iter().chain(replace_cut) {
+                // Each note with its field: the Replace one only while its row shows.
+                let replace = Some(&bar.replace).filter(|_| bar.replace_open);
+                let notes = [(Which::Find, Some(&bar.query)), (Which::Replace, replace)];
+                for (which, field) in notes {
+                    let Some(n) = field.map(|f| f.left_out).filter(|n| *n > 0) else { continue };
+                    let cut = left_out(which, n);
                     ui.label(egui::RichText::new(cut).small().color(ui.visuals().warn_fg_color));
                 }
             });
         });
     });
-    let found = bar.found.clone();
-    // What was found is of the script as it was when the matches were worked out: a key typed in the
-    // box since, in this frame, leaves them for the next.
-    let current_text = bar.is_current(script);
-    // A click on a button takes the keyboard from the field: give it back, as a code editor keeps
-    // it, so Enter, F3 and the shortcuts go on working.
-    let field_for = match todo {
-        Some(Action::Next | Action::Previous) => Some(query_id),
-        Some(Action::Replace | Action::ReplaceAll) => Some(replace_id),
-        _ => None,
-    };
-    if let Some(field) = field_for {
+    // As in a code editor, the keyboard stays in the bar after any of it was used: a click takes
+    // the focus from a field, and so does Enter. Asked here, after the fields are drawn.
+    if (used || todo.is_some()) && todo != Some(Action::Close) {
+        let replacing = matches!(todo, Some(Action::Replace | Action::ReplaceAll));
+        let from_replace = replacing || ui.memory(|m| m.had_focus_last_frame(replace_id));
+        let field = if from_replace && bar.replace_open { replace_id } else { query_id };
         ui.memory_mut(|m| m.request_focus(field));
     }
+    // What was typed in the fields this frame, before it is acted on.
+    bar.refresh(script, cursor);
     match todo {
-        Some(Action::Next) => bar.go(step(total, bar.current, false)),
-        Some(Action::Previous) => bar.go(step(total, bar.current, true)),
-        Some(Action::Replace) if current_text => {
-            if let Some(r) = bar.current.and_then(|i| found.ranges.get(i)).filter(|_| !running) {
+        Some(Action::Next) => bar.go(step(bar.found.ranges.len(), bar.current, false)),
+        Some(Action::Previous) => bar.go(step(bar.found.ranges.len(), bar.current, true)),
+        Some(Action::Replace) => {
+            if let Some(r) = bar.current.and_then(|i| bar.found.ranges.get(i)).cloned().filter(|_| !running) {
                 crate::analysispane::keep_for_undo_of(ui.ctx(), box_id, script);
-                *script = replace_one(script, r.clone(), &bar.replace);
-                let after = r.start + bar.replace.chars().count();
+                *script = replace_one(script, r.clone(), &bar.replace.text);
+                let after = r.start + bar.replace.text.chars().count();
                 crate::widgets::set_cursor_range(ui.ctx(), box_id, CCursorRange::one(CCursor::new(after)));
                 bar.anchor = after;
                 bar.reseek = true;
             }
         }
-        Some(Action::ReplaceAll) if current_text => {
-            if !running && !found.capped && !found.ranges.is_empty() {
+        Some(Action::ReplaceAll) => {
+            if !running && !bar.found.capped && !bar.found.ranges.is_empty() {
                 crate::analysispane::keep_for_undo_of(ui.ctx(), box_id, script);
-                *script = replace_all(script, &found, &bar.replace);
+                *script = replace_all(script, &bar.found, &bar.replace.text);
                 crate::widgets::set_cursor_range(ui.ctx(), box_id, CCursorRange::one(CCursor::new(0)));
                 bar.anchor = 0;
                 bar.reseek = true;
@@ -549,56 +598,22 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
         }
         Some(Action::Close) => {
             bar.open = false;
-            // What it found goes with it (up to 10,000 ranges), and is worked out again on opening.
-            bar.found = Default::default();
-            bar.key = None;
             // The cursor where the search was: the current match, selected, in the box.
-            if let Some(r) = bar.current.and_then(|i| found.ranges.get(i)) {
+            if let Some(r) = bar.current.and_then(|i| bar.found.ranges.get(i)) {
                 crate::widgets::set_cursor_range(ui.ctx(), box_id, CCursorRange::two(CCursor::new(r.start), CCursor::new(r.end)));
             }
+            // What it found goes with it (up to 10,000 ranges), and is worked out again on opening.
+            bar.found = Found::default();
+            bar.key = None;
             ui.memory_mut(|m| m.request_focus(box_id));
         }
-        _ => {}
+        None => {}
     }
-    if todo.is_some() || bar.reseek || !current_text {
-        // What was asked, or a key typed in the box this frame, shows in the box on the next frame.
+    if todo.is_some() || edited || used {
+        // The box was painted before the bar: it shows what changed on the next frame.
         ui.ctx().request_repaint();
     }
-    ui.data_mut(|d| d.insert_temp(id, bar));
     said
-}
-
-/// The chords the Script box and its find bar take while one of them has the focus, as (Alt, Shift,
-/// key) with Ctrl or ⌘ held, for the web app to keep from the browser's own Find and History.
-pub fn browser_keys(ctx: &egui::Context) -> &'static [(bool, bool, egui::Key)] {
-    let box_id = egui::Id::unique("script_text");
-    let ours = [box_id, box_id.with("find_query"), box_id.with("find_replace")];
-    if ctx.memory(|m| m.focused()).is_some_and(|f| ours.contains(&f)) {
-        // On a Mac, ⌥⌘F is the Replace, and ⌘H isn't ours.
-        if ctx.os().is_mac() {
-            &[(false, false, egui::Key::F), (true, false, egui::Key::F)]
-        } else {
-            &[(false, false, egui::Key::F), (false, false, egui::Key::H)]
-        }
-    } else {
-        &[]
-    }
-}
-
-/// Cuts `text` to [`FIELD_MAX`] characters, and says how many it left out, if any.
-fn cap(text: &mut String) -> Option<usize> {
-    let (end, _) = text.char_indices().nth(FIELD_MAX)?;
-    let left = text[end..].chars().count();
-    text.truncate(end);
-    Some(left)
-}
-
-/// Keeps `cut` as the bar's note, and gives it back when it is news: a key held past the limit
-/// says it once, in Messages too, not once a keystroke.
-fn say_once(note: &mut Option<String>, cut: Option<String>) -> Option<String> {
-    let news = cut.clone().filter(|c| note.as_ref() != Some(c));
-    *note = cut;
-    news
 }
 
 /// The fill of a match, and of the current one: amber over the text, translucent, as the stop's
@@ -606,15 +621,19 @@ fn say_once(note: &mut Option<String>, cut: Option<String>) -> Option<String> {
 const MATCH: egui::Color32 = egui::Color32::from_rgba_premultiplied(90, 70, 0, 90);
 const CURRENT: egui::Color32 = egui::Color32::from_rgba_premultiplied(160, 80, 0, 170);
 
-/// Paints the matches over the rows of the laid-out box that show, and, for `scroll`, brings the
-/// current one into view in the enclosing scroll.
-pub fn paint(ui: &egui::Ui, out: &egui::text_edit::TextEditOutput, shown: &Shown) {
+/// Paints the matches over the rows of the laid-out box that show, and, once asked, brings the
+/// current one into view in the enclosing scroll. `script`: the text the box has just laid out.
+pub fn paint(ui: &egui::Ui, out: &egui::text_edit::TextEditOutput, script: &str, bar: &mut Bar) {
     use egui::text::{CCursor, CharIndex};
+    if !bar.open {
+        return;
+    }
+    bar.refresh(script, out.cursor_range.map_or(bar.anchor, |r| r.primary.index.0));
     let galley = &out.galley;
     let origin = crate::widgets::text_origin(out);
     let painter = ui.painter().with_clip_rect(out.text_clip_rect.intersect(ui.clip_rect()));
     let seen = painter.clip_rect();
-    let ranges = &shown.found.ranges;
+    let ranges = &bar.found.ranges;
     let mut start = 0;
     for row in &galley.rows {
         let shown_chars = row.glyphs.len();
@@ -626,7 +645,7 @@ pub fn paint(ui: &egui::Ui, out: &egui::text_edit::TextEditOutput, shown: &Shown
                 let (a, b) = (r.start.max(start) - start, r.end.min(start + shown_chars) - start);
                 let x = |c: usize| row.pos.x + row.x_offset(CharIndex(c)) + origin.x;
                 let rect = egui::Rect::from_x_y_ranges(x(a)..=x(b), y);
-                if shown.current == Some(i) {
+                if bar.current == Some(i) {
                     painter.rect_filled(rect, 2.0, CURRENT);
                     painter.rect_stroke(rect, 2.0, egui::Stroke::new(1.0, CURRENT), egui::StrokeKind::Outside);
                 } else {
@@ -636,8 +655,8 @@ pub fn paint(ui: &egui::Ui, out: &egui::text_edit::TextEditOutput, shown: &Shown
         }
         start += row.char_count_including_newline().0;
     }
-    if shown.scroll
-        && let Some(r) = shown.current.and_then(|i| ranges.get(i))
+    if std::mem::take(&mut bar.scroll)
+        && let Some(r) = bar.current.and_then(|i| ranges.get(i))
     {
         let at = egui::text::CCursor { prefer_next_row: true, ..CCursor::new(r.start) };
         ui.scroll_to_rect(galley.pos_from_cursor(at).translate(origin), Some(egui::Align::Center));
@@ -653,62 +672,56 @@ mod tests {
     }
 
     #[test]
-    fn matches_of_another_script_query_or_toggle_are_not_current() {
-        let mut bar = Bar { query: "cat".into(), ..Bar::default() };
-        bar.refresh("cat dog", 0);
-        assert!(bar.is_current("cat dog"));
-        assert!(!bar.is_current("cat dogs"), "the script changed");
-        // Typed or toggled after the matches were worked out, in the same frame.
-        bar.query.push('s');
-        assert!(!bar.is_current("cat dog"), "the query changed");
-        bar.query.pop();
+    fn the_matches_are_of_the_text_the_query_and_the_toggles_as_they_are() {
+        let mut bar = Bar { open: true, ..Bar::default() };
+        bar.query.text = "cat".into();
+        let count = |bar: &mut Bar, script: &str| {
+            bar.refresh(script, 0);
+            bar.found.ranges.len()
+        };
+        assert_eq!(count(&mut bar, "cat Cat cats"), 3);
+        assert_eq!(count(&mut bar, "cat"), 1, "the script changed");
+        bar.query.text.push('s');
+        assert_eq!(count(&mut bar, "cat Cat cats"), 1, "the query changed");
+        bar.query.text.pop();
         bar.case = true;
-        assert!(!bar.is_current("cat dog"), "Match Case changed");
-        bar.case = false;
+        assert_eq!(count(&mut bar, "cat Cat cats"), 2, "Match Case");
         bar.whole = true;
-        assert!(!bar.is_current("cat dog"), "Match Whole Word changed");
-    }
-
-    /// Scrolled out of the pane, the box has no bar floating where it was.
-    #[cfg(not(target_arch = "wasm32"))]
-    #[test]
-    fn the_bar_is_not_drawn_over_a_box_out_of_view() {
-        use egui_kittest::kittest::Queryable;
-        let box_id = egui::Id::unique("script_text");
-        let mut fonts = false;
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(400.0, 300.0)).build_ui_state(
-            move |ui, area: &mut egui::Rect| {
-                if !fonts {
-                    crate::theme::install_fonts(ui.ctx(), &[], None);
-                    fonts = true;
-                    return;
-                }
-                let open = Bar { open: true, project: Some(0), ..Bar::default() };
-                if ui.data(|d| d.get_temp::<Bar>(box_id.with("find"))).is_none() {
-                    ui.data_mut(|d| d.insert_temp(box_id.with("find"), open));
-                }
-                let mut script = String::new();
-                prepare(ui, box_id, &script, 0);
-                show(ui, box_id, &mut script, false, *area);
-            },
-            egui::Rect::from_min_size(egui::pos2(0.0, 20.0), egui::vec2(380.0, 100.0)),
-        );
-        h.run();
-        h.get_by_label("Close (Esc)");
-        *h.state_mut() = egui::Rect::from_min_size(egui::pos2(0.0, -600.0), egui::vec2(380.0, 100.0));
-        h.run();
-        assert!(h.query_by_label("Close (Esc)").is_none());
+        assert_eq!(count(&mut bar, "cat Cat cats"), 1, "Match Whole Word");
     }
 
     #[test]
-    fn a_cut_is_said_once_while_it_repeats() {
-        let mut note = None;
-        let cut = || Some("1 left out".to_string());
-        assert_eq!(say_once(&mut note, cut()), cut());
-        assert_eq!(say_once(&mut note, cut()), None, "held past the limit");
-        assert_eq!(say_once(&mut note, None), None);
-        assert_eq!(note, None, "a change that fits takes the note away");
-        assert_eq!(say_once(&mut note, cut()), cut(), "said again after");
+    fn a_field_cuts_what_it_cannot_take_and_says_it_once() {
+        let mut field = Field::default();
+        field.text = "é".repeat(FIELD_MAX);
+        assert_eq!((field.written(), field.left_out), (None, 0), "what fits says nothing");
+        field.text.push_str("ab");
+        assert_eq!((field.written(), field.text.chars().count()), (Some(2), FIELD_MAX));
+        field.text.push_str("cd");
+        assert_eq!((field.written(), field.left_out), (None, 2), "held past the limit: said once");
+        field.text.push('c');
+        assert_eq!(field.written(), Some(1), "another count is news");
+        field.text.pop();
+        assert_eq!((field.written(), field.left_out), (None, 0), "a change that fits takes the note away");
+    }
+
+    #[test]
+    fn the_chords_are_one_list_for_the_box_and_the_browser() {
+        use egui::{Key, Modifiers};
+        let command = Modifiers { command: true, ctrl: true, ..Modifiers::default() };
+        let altgr = Modifiers { alt: true, ..command };
+        for mac in [false, true] {
+            let does = |key: Key, m: Modifiers| chords(mac).iter().find(|c| c.key == key && c.is_pressed_with(m)).map(|c| c.does);
+            assert_eq!(does(Key::F, command), Some(Does::Find));
+            assert_eq!(does(Key::F, command | Modifiers::SHIFT), Some(Does::Find), "a letter takes Shift");
+            assert_eq!(does(Key::F, altgr), mac.then_some(Does::FindAndReplace), "AltGr types a letter");
+            assert_eq!(does(Key::H, command), (!mac).then_some(Does::FindAndReplace), "⌘H hides the app");
+            assert_eq!(does(Key::H, altgr), None);
+            assert_eq!(does(Key::F3, Modifiers::NONE), Some(Does::Next));
+            assert_eq!(does(Key::F3, Modifiers::SHIFT), Some(Does::Previous));
+            assert_eq!(does(Key::F3, command), None);
+            assert_eq!(does(Key::F, Modifiers::NONE), None, "typing an f");
+        }
     }
 
     #[test]

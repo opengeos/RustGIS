@@ -1665,7 +1665,7 @@ impl RustGisApp {
     /// The Ctrl (⌘) chords the Script box and its find bar take while one of them has the focus, as
     /// (Alt, Shift, key), none otherwise: with [`Self::command_keys`], what the web app keeps from
     /// the browser's own shortcuts.
-    pub fn script_find_keys(ctx: &egui::Context) -> &'static [(bool, bool, egui::Key)] {
+    pub fn script_find_keys(ctx: &egui::Context) -> Vec<(bool, bool, egui::Key)> {
         scriptfind::browser_keys(ctx)
     }
 
