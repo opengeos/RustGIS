@@ -9821,20 +9821,24 @@ mod download_service_tests {
     fn feature_download_says_numbers_written_as_null() {
         use rustgis_engine::data::{Dataset, Field, FieldType, Geometry, GeometryType, Value};
         use rustgis_engine::geom::Coord;
-        for accept in [true, false] {
+        // A NaN accepted, a NaN refused, and finite numbers only (nothing to say).
+        for (accept, first) in [(true, f64::NAN), (false, f64::NAN), (true, 2.5)] {
             let download: Box<dyn Fn(&str, Vec<u8>) -> Result<(), String>> =
                 if accept { Box::new(|_, _| Ok(())) } else { Box::new(|_, _| Err("browser rejected download".into())) };
             let mut app = RustGisApp::with_sample().with_services(Services { download: Some(download), ..Default::default() });
             let mut ds = Dataset::new("Gauges", GeometryType::Point, vec![Field::new("level", FieldType::Double)]);
-            ds.push(Some(Geometry::Point(Coord::new(1.0, 2.0))), vec![Value::Float(f64::NAN)]);
+            ds.push(Some(Geometry::Point(Coord::new(1.0, 2.0))), vec![Value::Float(first)]);
             ds.push(Some(Geometry::Point(Coord::new(3.0, 4.0))), vec![Value::Float(1.5)]);
             let id = app.session.map_mut().add_dataset(ds);
             let mark = app.session.notice_mark();
-            let _ = app.run("ui.exportLayer", json!({"layer": id, "format": "geojson"}));
+            let run = app.run("ui.exportLayer", json!({"layer": id, "format": "geojson"}));
+            if accept {
+                run.unwrap();
+            }
             let said: Vec<_> =
                 app.session.notices_since(mark).iter().filter(|n| n.text.contains("written as null")).map(|n| n.loss()).collect();
-            let expected = if accept { vec![Some(rustgis_engine::data::loss::LossCode::DroppedValue)] } else { vec![] };
-            assert_eq!(said, expected, "accepted: {accept}");
+            let expected = if accept && first.is_nan() { vec![Some(rustgis_engine::data::loss::LossCode::DroppedValue)] } else { vec![] };
+            assert_eq!(said, expected, "accepted: {accept}, first: {first}");
         }
     }
 
