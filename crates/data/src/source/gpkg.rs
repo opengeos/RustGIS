@@ -531,13 +531,16 @@ impl FeatureSource for GpkgSource {
                 let step = usize::try_from(stride(out.matched, limit)).unwrap_or(usize::MAX);
                 let mut st = conn.prepare(&format!("SELECT id {filter}")).map_err(err)?;
                 // A row error (a corrupt page) fails the read rather than truncating it quietly.
-                let picked: Vec<i64> = st
+                let mut picked: Vec<i64> = st
                     .query_map(args, |r| r.get(0))
                     .map_err(err)?
                     .step_by(step.max(1))
                     .take(limit)
                     .collect::<rusqlite::Result<_>>()
                     .map_err(err)?;
+                // The index lists them in its own order. Fetched by ascending id, they come in
+                // the table's, as a whole read gives them: the order the map draws them in.
+                picked.sort_unstable();
                 out.complete = step == 1;
                 for chunk in picked.chunks(CHUNK) {
                     let marks = vec!["?"; chunk.len()].join(",");

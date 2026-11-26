@@ -1091,6 +1091,32 @@ fn geopackage_reprojects_and_uses_its_rtree() {
     assert!(open_path(&p2, Some("missing")).is_err());
 }
 
+/// A read through the R-tree gives its features in the table's order, as a whole read does,
+/// though the index lists them in another: the map draws them in it, each over the ones before.
+#[test]
+fn geopackage_view_reads_keep_the_tables_order() {
+    // Places scattered against the ids, in more than one fetch of them.
+    let mut ds = Dataset::new("scattered", GeometryType::Point, vec![]);
+    for i in 0..1200u32 {
+        let at = i * 719 % 1200;
+        ds.push(Some(Geometry::Point(Coord::new(f64::from(at % 40), f64::from(at / 40)))), vec![]);
+    }
+    let p = dir().join("scattered.gpkg");
+    crate::io::write_path(&ds, &p).unwrap();
+    let src = open_path(&p, None).unwrap();
+    assert!(src.info().indexed);
+    let read =
+        |extent, limit| -> Vec<u64> { src.read(&Request { extent, limit, own: None }).unwrap().features.iter().map(|f| f.id).collect() };
+    let whole = read(None, 10_000);
+    assert_eq!(whole.len(), 1200);
+    let all = Some(Extent::new(-1.0, -1.0, 41.0, 31.0));
+    assert_eq!(read(all, 10_000), whole);
+    // A sample of them: every other one the index lists.
+    let sample = read(all, 700);
+    assert_eq!(sample.len(), 600);
+    assert!(sample.is_sorted());
+}
+
 /// The browser's GeoPackage reader (pure Rust) gives what SQLite gives, without the R-tree.
 #[test]
 fn geopackage_in_memory() {
