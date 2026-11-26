@@ -158,7 +158,7 @@ pub(crate) fn text_origin(out: &egui::text_edit::TextEditOutput) -> egui::Vec2 {
     (out.galley_pos - egui::vec2(out.galley.rect.left(), 0.0)).to_vec2()
 }
 
-/// A flat icon button for a code editor's own bars (find, and what comes next): `size` square, no
+/// A flat icon button for a code editor's own bars (find, and what comes next): [`FLAT_BUTTON`] square, no
 /// border, its icon drawn in code and a hover fill. `label` is what a screen
 /// reader says; `hover` the tooltip. Off, it takes no click.
 pub(crate) fn flat_icon_button(ui: &mut Ui, icon: &str, label: &str, hover: &str, enabled: bool) -> Response {

@@ -166,11 +166,13 @@ enum Which {
 
 /// What a field left out of a longer text, as the bar and Messages say it.
 fn left_out(which: Which, n: usize) -> String {
-    let sentence = match which {
-        Which::Find => "The Find field takes {max} characters: {n} left out",
-        Which::Replace => "The Replace field takes {max} characters: {n} left out",
-    };
-    crate::i18n::fmt(sentence, &[("max", &FIELD_MAX.to_string()), ("n", &n.to_string())])
+    let (max, n) = (FIELD_MAX.to_string(), n.to_string());
+    let args = [("max", max.as_str()), ("n", n.as_str())];
+    // Each sentence a literal where it is formatted, for the translators to find.
+    match which {
+        Which::Find => crate::i18n::fmt("The Find field takes {max} characters: {n} left out", &args),
+        Which::Replace => crate::i18n::fmt("The Replace field takes {max} characters: {n} left out", &args),
+    }
 }
 
 /// The find bar's state, kept with the Script pane's (and started over with it for another
