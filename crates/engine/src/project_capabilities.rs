@@ -106,12 +106,7 @@ impl Project {
         }
         // A presentation's map page draws its title over its map frame, where a layer statistic is
         // filled in (#2853); the title of a page with no map frame is drawn as written.
-        if !required.contains(&"layout-text-statistics")
-            && self.presentations.iter().flat_map(|p| &p.pages).any(|page| {
-                matches!(page.kind, rustgis_map::presentation::PageKind::Map { .. })
-                    && !rustgis_map::layout::stat_tokens(&page.title).is_empty()
-            })
-        {
+        if !required.contains(&"layout-text-statistics") && self.presentations.iter().any(presentation_uses_text_statistics) {
             required.push("layout-text-statistics");
         }
         // A coordinate system whose PROJ definition, which an older reader reads, doesn't place
@@ -218,6 +213,14 @@ fn text_statistics(e: &rustgis_map::layout::Element) -> bool {
     matches!(&e.kind, rustgis_map::layout::ElementKind::Text { text, .. } if !rustgis_map::layout::stat_tokens(text).is_empty())
 }
 
+/// A presentation with a layer statistic in the title of a map page, which draws it over its map
+/// frame (#2853); the title of a page with no map frame is drawn as written.
+fn presentation_uses_text_statistics(p: &rustgis_map::presentation::Presentation) -> bool {
+    p.pages.iter().any(|page| {
+        matches!(page.kind, rustgis_map::presentation::PageKind::Map { .. }) && !rustgis_map::layout::stat_tokens(&page.title).is_empty()
+    })
+}
+
 /// A text, or a list of texts, with a layer statistic in one of them.
 fn holds_statistic(v: &Value) -> bool {
     match v {
@@ -254,7 +257,16 @@ fn command_uses_text_statistics(id: &str, params: &Value) -> bool {
         // A map page's title, which the page draws over its map frame; `updatePage` doesn't say the
         // kind of the page it changes, so a title with a token counts.
         "presentation.mapPage" | "presentation.updatePage" => params.get("title").is_some_and(holds_statistic),
-        "layout.import" => imported_layout_uses(params, &["{count:", "{sum:", "{mean:", "{min:", "{max:"], text_statistics),
+        // A layout file, read as `layout.import` reads it, which `report.existingTemplate` also does.
+        "layout.import" | "report.existingTemplate" => {
+            imported_layout_uses(params, &["{count:", "{sum:", "{mean:", "{min:", "{max:"], text_statistics)
+        }
+        "presentation.import" => params
+            .get("text")
+            .and_then(Value::as_str)
+            .filter(|t| ["{count:", "{sum:", "{mean:", "{min:", "{max:"].iter().any(|key| t.contains(key)) || t.contains('\\'))
+            .and_then(|t| serde_json::from_str::<rustgis_map::presentation::Presentation>(t).ok())
+            .is_some_and(|p| presentation_uses_text_statistics(&p)),
         "script.run" => params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, command_uses_text_statistics)),
         _ => false,
     }
@@ -2636,6 +2648,8 @@ mod tests {
             ("layout.publication", json!({"extent": [-1, -1, 1, 1], "reference": ["{sum:Sites:vis", "its}"]}), true),
             ("layout.publication", json!({"extent": [-1, -1, 1, 1], "headings": ["{count:New", "York}"]}), false),
             ("layout.import", json!({"text": layout}), true),
+            // A report section's template is a layout file read as `layout.import` reads it.
+            ("report.existingTemplate", json!({"text": layout}), true),
         ] {
             let script = format!("{id} {params}");
             for value in [
@@ -2659,6 +2673,7 @@ mod tests {
         let map_page =
             |title: &str| json!({"title": title, "kind": {"type": "map", "map": "World", "center": {"x": 0, "y": 0}, "widthM": 1000}});
         let blank_page = |title: &str| json!({"title": title, "kind": {"type": "blank", "text": "", "background": [255, 255, 255, 255]}});
+        let presentation = |page: Value| json!({"name": "P", "width": 297, "height": 210, "pages": [page]}).to_string();
         let base = serde_json::to_value(Project::default()).unwrap();
         for (page, required) in [(map_page("{count:Sites}"), true), (map_page("Sites"), false), (blank_page("{count:Sites}"), false)] {
             let mut document = base.clone();
@@ -2672,6 +2687,9 @@ mod tests {
             ("presentation.mapPage", json!({"title": "Sites"}), false),
             ("presentation.updatePage", json!({"page": 0, "title": "{sum:Sites:visits}"}), true),
             ("presentation.blankPage", json!({"title": "{count:Sites}"}), false),
+            ("presentation.import", json!({"text": presentation(map_page("{count:Sites}"))}), true),
+            ("presentation.import", json!({"text": presentation(map_page("Sites"))}), false),
+            ("presentation.import", json!({"text": presentation(blank_page("{count:Sites}"))}), false),
         ] {
             let script = format!("{id} {params}");
             for value in [
