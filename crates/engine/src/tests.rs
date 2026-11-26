@@ -97,6 +97,9 @@ mod elevation_tiles;
 #[path = "tests/layout_files.rs"]
 mod layout_files;
 
+#[path = "tests/layout_title.rs"]
+mod layout_title;
+
 #[path = "tests/sde_connections.rs"]
 mod sde_connections;
 
@@ -3456,16 +3459,26 @@ fn a_scripts_error_says_where_it_stopped() {
     assert_eq!(stop(&mut s, "script.run {}", "line 1: "), Some((1, None)));
     // JSON that doesn't read: the column of its error in the line, after indentation and `id=`.
     assert_eq!(stop(&mut s, "map.zoomFull\n  layer.rename= {\"layer\": }", "line 2: "), Some((2, Some(27))));
+    // The same after characters past ASCII, counted as characters, not bytes.
+    assert_eq!(stop(&mut s, "layer.rename {\"layer\": \"é\", \"name\": }", "line 1: "), Some((1, Some(37))));
     // Counted in characters: `á` is two bytes.
     assert_eq!(stop(&mut s, "layer.rename {\"name\": \"Bogotá\", }", "line 1: "), Some((1, Some(33))));
     // JSON cut short: its last character, never past the line.
     assert_eq!(stop(&mut s, "layer.rename {\"name\": ", "line 1: "), Some((1, Some(21))));
+    // The file goes when the test ends, whether or not an assert failed first (`stop` asserts too).
+    struct RemoveOnDrop(std::path::PathBuf);
+    impl Drop for RemoveOnDrop {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
     // An edit to a layer read in place.
-    let path = grid_fgb("script-stopped-at", 4);
-    let mut streamed = with_streamed(&path);
+    // `streamed` is declared after `path`, so it drops first and releases the file before it is removed
+    // (a file still open can't be removed on Windows): keep this order.
+    let path = RemoveOnDrop(grid_fgb("script-stopped-at", 4));
+    let mut streamed = with_streamed(&path.0);
     let script = "edit.enable {\"on\": true}\nedit.addFeature {\"layer\": \"Streamed\", \"geometry\": {\"type\": \"Point\", \"coordinates\": [1, 2]}}";
     assert_eq!(stop(&mut streamed, script, "line 2: "), Some((2, None)));
-    let _ = std::fs::remove_file(path);
     // Errors that name no line of the script.
     let long = "map.zoomFull\n".repeat(crate::cmd::workflows::MAX_SCRIPT_LINES + 1);
     let e = s.run("script.run", &json!({"script": long})).unwrap_err();
@@ -47334,8 +47347,13 @@ fn a_streamed_export_counts_the_rows_it_could_not_read() {
         let mark = s.notice_mark();
         let exported = s.run("share.exportLayer", &json!({"layer": id, "path": fixture.dir.join(format!("out.{ext}"))})).unwrap();
         assert_eq!(exported["features"].as_u64(), Some(3), "{ext}");
-        let notices: Vec<_> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
-        assert!(notices.iter().any(|n| n.contains("1 rows couldn't be read")), "{ext}: {notices:?}");
+        let notices: Vec<_> = s.notices_since(mark).iter().map(|n| (n.text.clone(), n.loss())).collect();
+        assert!(
+            notices
+                .iter()
+                .any(|(n, loss)| n.contains("1 row couldn't be read") && *loss == Some(rustgis_data::loss::LossCode::DroppedFeature)),
+            "{ext}: {notices:?}"
+        );
     }
 }
 
@@ -58389,7 +58407,7 @@ fn a_layer_read_from_a_file_says_whether_it_and_the_file_are_in_step() {
 /// is for a legend elsewhere, or when the texts would need a taller box.
 #[test]
 fn the_footer_lines_up_with_a_legend_at_the_right() {
-    use crate::cmd::layout::align_footer;
+    use crate::cmd::layout::{Broken, align_footer};
     use rustgis_map::layout::{ElementKind, FontFamily, TextAlign};
     let text = |t: &str, size: f64| ElementKind::Text {
         text: t.into(),
@@ -58422,19 +58440,19 @@ fn the_footer_lines_up_with_a_legend_at_the_right() {
             ("Reference".to_string(), (109.5, 255.5, 83.0, 3.0), text("UTM zone 24S", 7.0)),
         ]
     };
+    fn column(lines: &[&str]) -> Broken {
+        Broken::from(lines.iter().map(|l| l.to_string()).collect::<Vec<_>>())
+    }
     // One line each however wide; the reference in three under 70 mm.
     let short = |_: f64, _: f64, _: f64| {
         vec![
-            ("Sources", vec!["SOURCES".to_string()], vec!["Boundaries: IBGE".to_string()]),
-            ("Reference", vec!["REFERENCE".to_string()], vec!["UTM zone 24S".to_string()]),
+            ("Sources", column(&["SOURCES"]), column(&["Boundaries: IBGE"])),
+            ("Reference", column(&["REFERENCE"]), column(&["UTM zone 24S"])),
         ]
     };
     let long = |tw: f64, _: f64, _: f64| {
         let n = if tw < 70.0 { 3 } else { 1 };
-        vec![
-            ("Sources", vec!["SOURCES".to_string()], vec!["IBGE".to_string()]),
-            ("Reference", vec!["REFERENCE".to_string()], vec!["UTM".to_string(); n]),
-        ]
+        vec![("Sources", column(&["SOURCES"]), column(&["IBGE"])), ("Reference", column(&["REFERENCE"]), column(&vec!["UTM"; n]))]
     };
     let rect = |around: &[(String, (f64, f64, f64, f64), ElementKind)], name: &str| around.iter().find(|e| e.0 == name).unwrap().1;
     // A legend from 60 % of the frame to its right edge: the right column starts there.
@@ -58445,7 +58463,7 @@ fn the_footer_lines_up_with_a_legend_at_the_right() {
     assert_eq!(rect(&around, "Reference Heading").0, 125.5);
     assert_eq!(rect(&around, "Reference").2, 67.0);
     // Elsewhere: at 30 %, short of the right edge, or texts needing a taller box.
-    type Sections = dyn Fn(f64, f64, f64) -> Vec<(&'static str, Vec<String>, Vec<String>)>;
+    type Sections = dyn Fn(f64, f64, f64) -> Vec<(&'static str, Broken, Broken)>;
     let cases: [((f64, f64, f64, f64), &Sections); 3] =
         [((69.0, 200.0, 126.0, 40.0), &short), ((123.0, 200.0, 20.0, 40.0), &short), ((123.0, 200.0, 72.0, 40.0), &long)];
     for (legend, sections) in cases {

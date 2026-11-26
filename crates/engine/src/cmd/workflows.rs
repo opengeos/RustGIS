@@ -1582,14 +1582,11 @@ pub fn script_error_at(script: &str, error: &str) -> Option<(usize, Option<usize
 /// [`crate::script_line`] reads it; `None` when it reads or there is none. serde counts its column
 /// in bytes from the JSON's start.
 fn json_error_column(line: &str) -> Option<usize> {
-    let (_, rest) = crate::parameters::split_script_id(line.trim());
-    let json = rest.trim();
+    let (_, json, start) = crate::parameters::script_parts(line);
     if json.is_empty() {
         return None;
     }
     let e = serde_json::from_str::<Value>(json).err()?;
-    // `rest` ends where the trimmed line does.
-    let start = line.trim_end().len() - rest.trim_start().len();
     let mut at = (start + e.column().saturating_sub(1)).min(line.len());
     while !line.is_char_boundary(at) {
         at -= 1;
@@ -2675,7 +2672,7 @@ pub(crate) fn convert_work(s: &Session, p: &Value) -> Result<super::exports::Wor
                 notes.extend(result.text.notes(&ds.fields, &path));
             }
             if result.skipped > 0 {
-                notes.push(format!("{path}: {} rows couldn't be read and were left out", result.skipped));
+                notes.push(super::whole::unread_note(&path, result.skipped));
             }
             notes.extend(rustgis_data::io::unplaced_export_note(&path, &ds.name, result.unplaced, rustgis_data::raster::Crs::LonLat));
             notes.extend(
@@ -2712,7 +2709,7 @@ pub(crate) fn convert_work(s: &Session, p: &Value) -> Result<super::exports::Wor
             super::share::coalesce_read_zm(&mut notes, &path, &ds, &unreadable);
             rustgis_data::io::write_atomic(std::path::Path::new(&path), text.as_bytes()).map_err(|e| format!("{path}: {e}"))?;
             if unreadable.rows > 0 {
-                notes.push(format!("{path}: {} rows couldn't be read and were left out", unreadable.rows));
+                notes.push(super::whole::unread_note(&path, unreadable.rows));
             }
             notes.extend(super::share::read_notes(&path, &ds.name, &unreadable));
             (notes, rustgis_data::export::numbers_written_as_null(&ds.features, &ds.fields, format), report)
