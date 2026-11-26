@@ -407,7 +407,7 @@ mod tests {
         h.state_mut().run("ui.pane.format", json!({})).unwrap();
         h.run_steps(2);
         let said: Vec<String> = h.state().session.notices_since(mark).iter().map(|n| n.text.clone()).collect();
-        assert!(said.iter().any(|t| t.contains("2000")), "{said:?}");
+        assert!(said.iter().any(|t| t.contains("characters: a graphic's text takes at most 2000")), "{said:?}");
     }
 
     /// A text field focused but not edited has nothing pending: switching map says nothing of it (#2987).
