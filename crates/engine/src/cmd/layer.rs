@@ -2797,7 +2797,12 @@ pub(crate) fn add_layers(s: &mut Session, p: &Value, file_name: &str, bytes: &[u
     let lower = file_name.to_ascii_lowercase();
     let kml = lower.ends_with(".kml") || lower.ends_with(".kmz");
     // A KML's ground overlays (pictures) are raster layers, added after its placemarks.
-    let overlays = if kml && ps(p, "layer").is_none() { ground_overlays(s, file_name, bytes, local_file) } else { Vec::new() };
+    // Past the size a KML is read within, it is refused below without being scanned first.
+    let overlays = if kml && ps(p, "layer").is_none() && bytes.len() as u64 <= rustgis_data::io::BYTES_FLOOR {
+        ground_overlays(s, file_name, bytes, local_file)
+    } else {
+        Vec::new()
+    };
     // A DXF drawing: its coordinate system (it never says) and one of its own layers.
     let dxf = rustgis_data::dxf::is_dxf_name(file_name);
     let reads = match crs.filter(|_| landxml) {
