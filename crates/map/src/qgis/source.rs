@@ -598,7 +598,8 @@ fn file_url_path(url: &str) -> Option<&str> {
 /// A `file:` address's path (see [`file_url_path`]) decoded as any address's parts are; `None` for any
 /// other address and for one with a host.
 pub(super) fn file_address_path(url: &str) -> Option<String> {
-    file_url_path(url).map(rustgis_data::address::percent_decode)
+    // Trimmed: what `absolute` trims after the checks must not decide them (`%20%2F%2Fhost` is `//host`).
+    file_url_path(url).map(|path| rustgis_data::address::percent_decode(path).trim().to_string())
 }
 
 /// A tile archive's path: a `file://` address (`file:../x` when relative) as its path, a relative
