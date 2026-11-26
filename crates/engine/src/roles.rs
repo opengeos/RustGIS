@@ -197,31 +197,31 @@ fn object(id: &str, value: &Value, depth: usize, config_depth: usize, registered
                 let clean = sql_secrets_removed(s);
                 (clean != s).then_some(Value::String(clean))
             })
-        } else if ADDRESS.contains(&k.as_str()) || address_like(v) {
-            if v.is_object() && registered && (role == Some(Role::Configuration) || CONFIG.contains(&k.as_str())) {
-                object("", v, depth, config_depth + 1, true, report)
-            } else {
-                // String leaves are cleaned below; opaque shapes keep their meaning.
-                unchecked |= match v {
-                    Value::Object(_) => suspicious(v),
-                    Value::Array(a) => a.iter().any(|v| !v.is_string() && suspicious(v)),
-                    _ => false,
-                };
-                match query_name
-                    .zip(v.as_str())
-                    .map(|(name, s)| crate::render::rustgis_tiles::logins::without_query_parameter(s, name))
-                    .filter(|stripped| Some(stripped.as_str()) != v.as_str())
-                {
-                    // The same object names its login parameter, registered or not.
-                    Some(stripped) => {
-                        report.withheld = report.withheld.saturating_add(1);
-                        Some(address(&Value::String(stripped.clone()), report).unwrap_or(Value::String(stripped)))
-                    }
-                    None => address(v, report),
-                }
+        } else if registered && (role == Some(Role::Configuration) || CONFIG.contains(&k.as_str())) && (v.is_object() || v.is_array()) {
+            match v {
+                Value::Object(_) => object("", v, depth, config_depth + 1, true, report),
+                Value::Array(a) => config_array(a, depth, config_depth + 1, report),
+                _ => None,
             }
-        } else if registered && (role == Some(Role::Configuration) || CONFIG.contains(&k.as_str())) && v.is_object() {
-            object("", v, depth, config_depth + 1, true, report)
+        } else if ADDRESS.contains(&k.as_str()) || address_like(v) {
+            // String leaves are cleaned below; opaque shapes keep their meaning.
+            unchecked |= match v {
+                Value::Object(_) => suspicious(v),
+                Value::Array(a) => a.iter().any(|v| !v.is_string() && suspicious(v)),
+                _ => false,
+            };
+            match query_name
+                .zip(v.as_str())
+                .map(|(name, s)| crate::render::rustgis_tiles::logins::without_query_parameter(s, name))
+                .filter(|stripped| Some(stripped.as_str()) != v.as_str())
+            {
+                // The same object names its login parameter, registered or not.
+                Some(stripped) => {
+                    report.withheld = report.withheld.saturating_add(1);
+                    Some(address(&Value::String(stripped.clone()), report).unwrap_or(Value::String(stripped)))
+                }
+                None => address(v, report),
+            }
         } else {
             unchecked |= suspicious(v);
             None
@@ -237,6 +237,36 @@ fn object(id: &str, value: &Value, depth: usize, config_depth: usize, registered
         report.unchecked = report.unchecked.saturating_add(1);
     }
     replacement.map(Value::Object)
+}
+
+/// Cleans a structured configuration array (for example `legend` entries of strings and objects)
+/// within the shared configuration depth bound.
+fn config_array(a: &[Value], depth: usize, config_depth: usize, report: &mut Report) -> Option<Value> {
+    if config_depth >= 8 {
+        return invalid(&Value::Array(a.to_vec()), report);
+    }
+    let mut changed = None;
+    let mut unchecked = false;
+    for (i, item) in a.iter().enumerate() {
+        let clean = match item {
+            Value::Object(_) => object("", item, depth, config_depth + 1, true, report),
+            Value::String(_) if address_like(item) => address(item, report),
+            Value::Array(inner) => config_array(inner, depth, config_depth + 1, report),
+            _ => {
+                unchecked |= suspicious(item);
+                None
+            }
+        };
+        if let Some(clean) = clean.filter(|clean| clean != item)
+            && let Some(slot) = changed.get_or_insert_with(|| a.to_vec()).get_mut(i)
+        {
+            *slot = clean;
+        }
+    }
+    if unchecked {
+        report.unchecked = report.unchecked.saturating_add(1);
+    }
+    changed.map(Value::Array)
 }
 
 /// Recognition precedes parsing, including malformed wrappers and differently cased prefixes.
@@ -256,6 +286,9 @@ fn address_like(v: &Value) -> bool {
                 "postgres:",
                 "postgresql:",
                 "pg:",
+                "mysql:",
+                "mariadb:",
+                "mssql:",
             ]
             .iter()
             .any(|p| s.get(..p.len()).is_some_and(|s| s.eq_ignore_ascii_case(p)))

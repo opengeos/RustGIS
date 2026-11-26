@@ -25,6 +25,12 @@ fn tile_range(start: f64, end: f64, n: u32) -> (u32, u32) {
 
 /// Raster pixels are rendered with the same style and resampling as the map.
 pub fn export(layer: &RasterLayer, min_zoom: u8, max_zoom: u8, opacity: f32) -> Result<Vec<u8>, String> {
+    export_with_anonymous(layer, layer.anonymous, min_zoom, max_zoom, opacity)
+}
+
+/// [`export`], also honoring the parent [`rustgis_map::Layer::anonymous`] flag so in-place COG
+/// reads match the map render path even when only the layer flag is set.
+pub fn export_with_anonymous(layer: &RasterLayer, anonymous: bool, min_zoom: u8, max_zoom: u8, opacity: f32) -> Result<Vec<u8>, String> {
     if min_zoom > max_zoom || max_zoom > 16 {
         return Err("zoom range must satisfy 0 <= minZoom <= maxZoom <= 16".into());
     }
@@ -91,7 +97,14 @@ pub fn export(layer: &RasterLayer, min_zoom: u8, max_zoom: u8, opacity: f32) -> 
                 let place = raster::Place::Flat(&Flat::Mercator, "EPSG:3857");
                 let stats = stats.as_deref().map(Vec::as_slice);
                 let mut image = Pixmap::new(TILE_SIZE, TILE_SIZE).ok_or("couldn't allocate a raster tile")?;
-                match layer.path.as_deref().filter(|_| layer.reads_in_place()) {
+                let address = layer.path.as_deref().filter(|_| layer.reads_in_place()).map(|a| {
+                    if anonymous || layer.anonymous {
+                        std::borrow::Cow::Owned(crate::rustgis_tiles::s3::anonymous(a))
+                    } else {
+                        std::borrow::Cow::Borrowed(a)
+                    }
+                });
+                match address.as_deref() {
                     // Read in place: at the tile's level, once its parts have arrived (natively;
                     // the browser draws what has).
                     Some(address) => {

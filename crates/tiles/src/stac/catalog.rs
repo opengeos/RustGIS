@@ -543,6 +543,12 @@ fn collection_item(v: &Value, from: &str) -> Option<Value> {
 /// them off the frame): the walk, finished.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn walk_blocking(root: &str, filter: Filter, limit: usize) -> Walk {
+    walk_blocking_with(root, filter, limit, false)
+}
+
+/// [`walk_blocking`], suppressing implicit S3 and web-service credentials when `anonymous` is true.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn walk_blocking_with(root: &str, filter: Filter, limit: usize, anonymous: bool) -> Walk {
     let mut w = Walk::new(root, filter, limit);
     loop {
         // A few documents at a time, each on its own thread.
@@ -552,8 +558,9 @@ pub fn walk_blocking(root: &str, filter: Filter, limit: usize) -> Walk {
         }
         let read = |u: String, public: bool| {
             let ceiling = if public { crate::address::Reach::Public } else { crate::address::Reach::Local };
+            let fetch_u = if anonymous { crate::s3::anonymous(&u) } else { u.clone() };
             let r = crate::cache::download_blocking_with_origin_within(
-                &u,
+                &fetch_u,
                 crate::cache::MAX_DOWNLOAD,
                 std::time::Duration::from_secs(60),
                 &[],

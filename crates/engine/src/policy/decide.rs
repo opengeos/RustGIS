@@ -90,6 +90,9 @@ fn kind(s: &Session, k: &Kind, node: &Node) -> Decision {
             if own { Deny } else { kind(s, within, node) }
         }
         Kind::Plugin { pin, within } => {
+            if is_plugin_blocked_database_command(node.id()) {
+                return Deny;
+            }
             let m = &pin.0.manifest;
             let own = node.effects.iter().all(|e| match e {
                 Edits => m.has(Permission::Edit),
@@ -148,6 +151,9 @@ fn refusal(s: &Session, k: &Kind, n: &Node) -> String {
         ),
         Kind::Plugin { pin, .. } => {
             let m = &pin.0.manifest;
+            if is_plugin_blocked_database_command(n.id()) {
+                return format!("{} cannot run '{}' (plugins can't access databases or run SQL)", m.name, n.id());
+            }
             if let Op::Tool(tool) = &n.op
                 && tool.plugin().is_some_and(|p| p.0.manifest.id != m.id)
             {
@@ -185,4 +191,21 @@ fn refusal(s: &Session, k: &Kind, n: &Node) -> String {
             reason(n.effects)
         ),
     }
+}
+
+/// Direct database and SQL commands are excluded from plugins even when a plugin holds `files`
+/// and `network` permissions: they can use the user's live PostGIS session, reach local database
+/// hosts outside HTTP address checks, or run DuckDB SQL.
+fn is_plugin_blocked_database_command(id: &str) -> bool {
+    matches!(
+        id,
+        "pg.tables"
+            | "pg.addLayer"
+            | "pg.discardEdits"
+            | "info.databaseTables"
+            | "layer.addDatabase"
+            | "sql.query"
+            | "sql.schema"
+            | "layer.addSql"
+    )
 }

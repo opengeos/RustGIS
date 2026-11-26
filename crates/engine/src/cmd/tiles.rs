@@ -10,15 +10,18 @@ use serde_json::{Value, json};
 use super::{b, f, ps};
 use crate::{CmdResult, CommandSpec as C, Session};
 
+/// Durable-output parameter roles for tile commands: `legend` holds structured URL configuration.
+const TILE_ROLES: &[crate::ParamRole] = &[crate::ParamRole { key: "legend", role: crate::Role::Configuration }];
+
 /// Registers commands for tile-layer sources, drawing properties, coverage and celestial bodies.
 pub fn commands() -> Vec<C> {
     vec![
-        C::new("map.addTiles", "Add Tile Layer", "Home › Add", add).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Network)).params(
+        C::new("map.addTiles", "Add Tile Layer", "Home › Add", add).roles(TILE_ROLES).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Network)).params(
             r#"{"url": "https://…/{z}/{x}/{y}.png" | vector tiles ".pbf" or TileJSON | MapLibre style.json | a PMTiles archive (web address or file path) | an MBTiles file path, "kind"?: "raster"|"vector"|"style"|"pmtiles"|"mbtiles" (guessed from the url), "name"?: text, "bounds"?: [west, south, east, north] (longitude/latitude coverage, when known), "attribution"?: text, "minZoom"?: number, "maxZoom"?: number, "tileSize"?: 256|512 (1024 too for a WMS or map service asked for in Web Mercator by its tiles' box: their pictures are asked for that size), "singleImage"?: bool (a WMS or map service: one picture of the view instead of tiles, so symbols and labels aren't cut at tile edges; tiles on the globe, a tilted map or a projection the service doesn't offer; by default on for one, unless tileSize is given), "tms"?: bool, "subdomains"?: [text], "layers"?: [vector tile layer names, drawn in colours of their own], "styleLayers"?: [MapLibre style layers drawing vector tiles instead (their source is the tiles')], "opacity"?: 0–1, "blend"?: "normal"|"multiply"|"screen"|"overlay"|"darken"|"lighten"|"difference" (how it combines with what is beneath), "resampling"?: "nearest"|"bilinear" (picture tiles drawn at a size other than their own: each pixel a block, or blended, the default), "overlay"?: bool (on top of the map's layers, as every new layer goes; without it a basemap, under them; one with the same address and role is replaced when it has the same name or the same look), "top"?: bool (on top of the map's layers, as a layer added as data goes; by default an overlay's place), "replace"?: bool (removes the other tile basemaps, not overlays), "id"?: catalog id, "view"?: bool (a MapLibre style: go to the place, zoom, bearing and pitch its root properties give, once it loads), "start"?, "end"?: dates a url with date placeholders ({date:YYYY-MM-DD}, {YYYY}) spans, turning the time slider on (or, when it is on, setting its span), "unit"?, "interval"?, "dates"?: its steps (as in time.set), "legend"?: "the web address of its legend picture (PNG or JPEG)" | [address | {"url": address, "minScale"?: scale denominator, "maxScale"?: one (the scales it is for, from minScale up to below maxScale)}] (at most 16; the Layers pane shows the one for the map's scale under the layer; service.add gives a WMS or WMTS layer its service's), "connection"?: "the id of the saved web-service connection it comes from (as service.add): the tile layer records it, and its tiles are read with its login"}"#,
         ),
         C::new("map.removeTiles", "Remove Tile Layer", "Home › Add", remove).roles(&[]).effects(crate::policy::Effects::NONE)
             .params(r#"{"name"?: text, "index"?: number, "id"?: catalog id} (removes every tile layer when none is given)"#),
-        C::new("map.setTiles", "Tile Layer Properties", "Home › Add", set).inputs(set_inputs).roles(&[]).effects(crate::policy::Effects::NONE).params(
+        C::new("map.setTiles", "Tile Layer Properties", "Home › Add", set).inputs(set_inputs).roles(TILE_ROLES).effects(crate::policy::Effects::NONE).params(
             r#"{"name"?: text | "index"?: number (0 = top) | "id"?: catalog id, "visible"?: bool, "opacity"?: 0–1, "blend"?: "normal"|"multiply"|"screen"|"overlay"|"darken"|"lighten"|"difference", "resampling"?: "nearest"|"bilinear" (how picture tiles are drawn at a size other than their own: each pixel a block, or blended, the default), "move"?: "up"|"down"|"top"|"bottom" (past the next layer in the drawing order of all the map's layers, a feature or raster layer too), "to"?: number (its place in that order among the other layers, 0 = top; the Layers pane lists it), "rename"?: text, "bands"?: [red, green, blue] | [band] (a cloud-optimised GeoTIFF's bands shown, from 1; [] for its own), "range"?: [low, high] (the values shown from black to full colour; null: each band's 2nd–98th percentile), "dequantize"?: "aef" (AlphaEarth's quantised embeddings) | "none", "legend"?: as map.addTiles's, or null for none, "hiddenLayers"?: [source layer name] (vector tiles' source layers not drawn or identified, as map.tiles's sourceLayers names them; replaces the list, [] or null for none), "singleImage"?: bool (as map.addTiles's), "tileSize"?: 256|512|1024 (a WMS or map service asked for in Web Mercator: its tiles' size)}"#,
         ),
         C::new("map.tiles", "Tile Layers", "Home › Add", |s, _| Ok(list(s, !s.policy_user()))).inputs(listing_inputs).roles(&[]).effects(crate::policy::Effects::NONE).view(),
@@ -607,9 +610,24 @@ pub(crate) fn listing_reach(map: &rustgis_map::Map) -> crate::policy::Effects {
         .fold(crate::policy::Effects::NONE, |reach, tile| reach.union(tile_source_reach(tile)))
 }
 
-/// Setting a COG look checks its header; the command's returned list also reads archive names.
+/// Whether `map.setTiles` attaches or replaces legend URLs (as opposed to leaving them alone or
+/// clearing them with `null`, `""` or `[]`).
+pub(crate) fn sets_legend(p: &Value) -> bool {
+    match p.get("legend") {
+        None | Some(Value::Null) => false,
+        Some(Value::String(s)) => !s.trim().is_empty(),
+        Some(Value::Array(a)) => !a.is_empty(),
+        Some(_) => true,
+    }
+}
+
+/// Setting a COG look checks its header, setting a legend adds network URLs, and the command's
+/// returned list also reads archive names.
 pub(crate) fn set_reach(input: &super::InputContext<'_>, p: &Value) -> crate::policy::Effects {
     let mut reach = listing_reach(input.map());
+    if sets_legend(p) {
+        reach = reach.with(crate::policy::Effect::Network);
+    }
     if matches!(cog_look(p), Ok(Some(_)))
         && let Some(tile) = find(input, p).ok().flatten().and_then(|i| input.map().tiles.get(i))
         && tile.kind == TileKind::Cog
@@ -749,7 +767,7 @@ pub(crate) fn cog_tiles_to_rasters(m: &mut rustgis_map::Map) {
         }
         // Read with the project's other rasters read in place (see `project::read_in_place`), in
         // its look once it lands.
-        let rl = RasterLayer::unread_in_place(file).with_look(address_look(&look)).from_tiles_dropping(dropped);
+        let rl = RasterLayer::unread_in_place(file).with_anonymous(t.anonymous).with_look(address_look(&look)).from_tiles_dropping(dropped);
         // A name another layer has: numbered, as a layer added is.
         let mut name = t.name.clone();
         let mut nth = 1;

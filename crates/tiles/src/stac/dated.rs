@@ -318,7 +318,15 @@ pub fn search(root: &str, filter: &Filter, period: (&str, &str), max_items: usiz
 
 /// [`search`], waiting for each document (the command line, and the app's `stac.addCube`).
 pub fn search_blocking(root: &str, filter: &Filter, period: (&str, &str), max_items: usize) -> Result<Found, String> {
-    search(root, filter, period, max_items, &|u| crate::cache::download_blocking(u))
+    search_blocking_with(root, filter, period, max_items, false)
+}
+
+/// [`search_blocking`], suppressing implicit S3 and web-service credentials when `anonymous` is true.
+pub fn search_blocking_with(root: &str, filter: &Filter, period: (&str, &str), max_items: usize, anonymous: bool) -> Result<Found, String> {
+    search(root, filter, period, max_items, &|u| {
+        let fetch_u = if anonymous { crate::s3::anonymous(u) } else { u.to_string() };
+        crate::cache::download_blocking(&fetch_u)
+    })
 }
 
 #[cfg(test)]

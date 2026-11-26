@@ -751,6 +751,18 @@ pub fn open_connection(s: &mut Session, c: &Connection) -> Result<(), String> {
     Ok(())
 }
 
+/// Marks an outbound fetch address anonymous when `anonymous` is set, preventing implicit S3
+/// signing and Earthdata/Copernicus/ArcGIS sign-in tokens on that request without altering the
+/// plain URL kept in layers or parameters.
+#[cfg_attr(target_arch = "wasm32", expect(dead_code, reason = "blocking fetches are desktop only"))]
+pub(crate) fn fetch_url(anonymous: bool, url: &str) -> String {
+    if anonymous && !crate::render::rustgis_tiles::s3::split_anonymous(url).1 {
+        crate::render::rustgis_tiles::s3::anonymous(url)
+    } else {
+        url.to_string()
+    }
+}
+
 pub fn request_params<'a>(s: &mut Session, p: &'a Value) -> Result<std::borrow::Cow<'a, Value>, String> {
     let Some(url) = p.get("url").and_then(Value::as_str) else { return Ok(std::borrow::Cow::Borrowed(p)) };
     let id = match p.get("connection") {
@@ -760,8 +772,15 @@ pub fn request_params<'a>(s: &mut Session, p: &'a Value) -> Result<std::borrow::
         Some(_) => return Err(CONNECTION_TEXT.into()),
     };
     if id.is_none() && (s.web_logins.anonymous || p.get("anonymous").and_then(Value::as_bool) == Some(true)) {
-        // An address bound to a login is no authority for it here either.
-        let plain = logins::inner(url);
+        // An address bound to a web login or saved S3 connection is no authority for it here either.
+        let mut plain = url;
+        for _ in 0..8 {
+            let next = rustgis_data::s3_address::inner(logins::inner(plain));
+            if next == plain {
+                break;
+            }
+            plain = next;
+        }
         if plain == url {
             return Ok(std::borrow::Cow::Borrowed(p));
         }
@@ -1299,6 +1318,9 @@ pub(crate) fn tag(s: &mut Session, params: &Value, before: Before, out: &Value) 
             added.insert(l.id);
             if anonymous || l.anonymous {
                 l.anonymous = true;
+                if let Some(rl) = l.raster.as_mut() {
+                    rl.anonymous = true;
+                }
                 l.connection.clear();
                 continue;
             }

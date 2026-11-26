@@ -2427,7 +2427,7 @@ impl Inputs for MapInputs<'_> {
         let layer = map.layer_by_name(layer).ok_or_else(|| format!("no raster layer named '{layer}'"))?;
         let raster = layer.raster.as_ref().ok_or_else(|| format!("no raster layer named '{}'", layer.name))?;
         let opacity = map.layer_opacity(layer);
-        crate::render::raster_export::export(raster, min_zoom, max_zoom, opacity)
+        crate::render::raster_export::export_with_anonymous(raster, layer.anonymous, min_zoom, max_zoom, opacity)
     }
     fn dataset(&self, layer: &str) -> Option<&Dataset> {
         // (A standalone table converted for the run is had by its number, [`table_key`].)

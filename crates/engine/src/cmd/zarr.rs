@@ -83,13 +83,13 @@ pub fn is_absent(error: &str) -> bool {
 /// is left out. Also says how many were refused with 403, so a store that refuses everything
 /// (access denied) isn't taken for an empty one.
 #[cfg(not(target_arch = "wasm32"))]
-fn fetch(root: &str, keys: &[String]) -> Result<(HashMap<String, Vec<u8>>, usize), String> {
-    fetch_items(root, &keys.iter().map(|k| (k.clone(), k.clone())).collect::<Vec<_>>())
+fn fetch(root: &str, keys: &[String], anonymous: bool) -> Result<(HashMap<String, Vec<u8>>, usize), String> {
+    fetch_items(root, &keys.iter().map(|k| (k.clone(), k.clone())).collect::<Vec<_>>(), anonymous)
 }
 
 /// Fetches bytes of a store's files ([`zarr::Part`]s, by range), each kept by its id, as [`fetch`].
 #[cfg(not(target_arch = "wasm32"))]
-fn fetch_parts(root: &str, parts: &[zarr::Part]) -> Result<(HashMap<String, Vec<u8>>, usize), String> {
+fn fetch_parts(root: &str, parts: &[zarr::Part], anonymous: bool) -> Result<(HashMap<String, Vec<u8>>, usize), String> {
     use crate::render::rustgis_tiles::cache::{RANGE, TAIL};
     let items: Vec<(String, String)> = parts
         .iter()
@@ -101,18 +101,18 @@ fn fetch_parts(root: &str, parts: &[zarr::Part]) -> Result<(HashMap<String, Vec<
             (p.id.clone(), format!("{}{at}", p.key))
         })
         .collect();
-    fetch_items(root, &items)
+    fetch_items(root, &items, anonymous)
 }
 
 /// Fetches what a slice's plan reads: its whole files, its bytes of files, then (a window of a
 /// sharded variable) the shards' chunks their indexes give. A file refused (HTTP 403) is counted.
 #[cfg(not(target_arch = "wasm32"))]
-fn fetch_plan(root: &str, store: &zarr::Store, plan: &zarr::Plan) -> Result<(HashMap<String, Vec<u8>>, usize), String> {
-    let (mut got, mut forbidden) = fetch(root, &plan.keys)?;
-    let (parts, f) = fetch_parts(root, &plan.parts)?;
+fn fetch_plan(root: &str, store: &zarr::Store, plan: &zarr::Plan, anonymous: bool) -> Result<(HashMap<String, Vec<u8>>, usize), String> {
+    let (mut got, mut forbidden) = fetch(root, &plan.keys, anonymous)?;
+    let (parts, f) = fetch_parts(root, &plan.parts, anonymous)?;
     got.extend(parts);
     let inner = zarr::inner_parts(store, plan, &got).map_err(|e| crate::sources::message_with_address(root, &e.to_string()))?;
-    let (chunks, g) = fetch_parts(root, &inner)?;
+    let (chunks, g) = fetch_parts(root, &inner, anonymous)?;
     got.extend(chunks);
     forbidden += f + g;
     Ok((got, forbidden))
@@ -120,7 +120,7 @@ fn fetch_plan(root: &str, store: &zarr::Store, plan: &zarr::Plan) -> Result<(Has
 
 /// [`fetch`] of `(id, file)` pairs: each file (a key, with a byte range's mark) kept by its id.
 #[cfg(not(target_arch = "wasm32"))]
-fn fetch_items(root: &str, keys: &[(String, String)]) -> Result<(HashMap<String, Vec<u8>>, usize), String> {
+fn fetch_items(root: &str, keys: &[(String, String)], anonymous: bool) -> Result<(HashMap<String, Vec<u8>>, usize), String> {
     use std::sync::Mutex;
     let out = Mutex::new(HashMap::new());
     let forbidden = std::sync::atomic::AtomicUsize::new(0);
@@ -149,7 +149,8 @@ fn fetch_items(root: &str, keys: &[(String, String)]) -> Result<(HashMap<String,
                 }
                 // A missing file is an expected answer here (see `is_absent`), not a failure:
                 // one omission note replaces its 404/403 diagnostics; real failures still say why.
-                let got = crate::render::rustgis_tiles::cache::download_blocking_omitting_at(&format!("{root}/{k}"), &[404, 403], store);
+                let target = crate::service_logins::fetch_url(anonymous, &format!("{root}/{k}"));
+                let got = crate::render::rustgis_tiles::cache::download_blocking_omitting_at(&target, &[404, 403], store);
                 match got {
                     Ok(b) => {
                         let len = b.len() as u64;
@@ -229,7 +230,7 @@ mod transport_tests {
             }
             flag.load(SeqCst)
         });
-        let worker = std::thread::spawn(move || cache::with_still(still, || super::fetch(&root, &["a/0.0".into()])));
+        let worker = std::thread::spawn(move || cache::with_still(still, || super::fetch(&root, &["a/0.0".into()], false)));
         let held = entry.recv_timeout(Duration::from_secs(10)).is_ok();
         live.store(false, SeqCst);
         let _ = release.send(());
@@ -258,7 +259,7 @@ mod transport_tests {
         listener.set_nonblocking(true).unwrap();
         let root = format!("http://{}/held.zarr", listener.local_addr().unwrap());
         cache::restrict_to_public(&root);
-        let result = super::fetch(&root, &["zarr.json".into()]);
+        let result = super::fetch(&root, &["zarr.json".into()], false);
         assert_eq!(listener.accept().map(|_| ()).unwrap_err().kind(), std::io::ErrorKind::WouldBlock, "a file of the store was asked for");
         assert!(result.is_err(), "{result:?}");
     }
@@ -271,8 +272,8 @@ const MEMBER_ROUNDS: usize = 3;
 
 /// A store's metadata from its web address ([`read_store`]).
 #[cfg(not(target_arch = "wasm32"))]
-fn store_at(url: &str, variable: &str) -> Result<zarr::Store, String> {
-    read_store(url, variable).map(|(store, _)| store)
+fn store_at(url: &str, variable: &str, anonymous: bool) -> Result<zarr::Store, String> {
+    read_store(url, variable, anonymous).map(|(store, _)| store)
 }
 
 /// A store's metadata from its web address, and whether it holds only what was found from
@@ -280,9 +281,9 @@ fn store_at(url: &str, variable: &str) -> Result<zarr::Store, String> {
 /// [`zarr::lists_no_arrays`]) has them found by name from `variable` ([`zarr::member_keys`]), in up
 /// to [`MEMBER_ROUNDS`] rounds; with no `variable`, that is refused.
 #[cfg(not(target_arch = "wasm32"))]
-fn read_store(url: &str, variable: &str) -> Result<(zarr::Store, bool), String> {
+fn read_store(url: &str, variable: &str, anonymous: bool) -> Result<(zarr::Store, bool), String> {
     let keys: Vec<String> = zarr::METADATA_KEYS.iter().map(|k| k.to_string()).collect();
-    let (got, forbidden) = fetch(url, &keys)?;
+    let (got, forbidden) = fetch(url, &keys, anonymous)?;
     // Every metadata file refused: access is denied, not a store without metadata.
     if got.is_empty() && forbidden > 0 {
         return Err(crate::sources::message_with_address(url, "access denied (HTTP 403)"));
@@ -302,7 +303,7 @@ fn read_store(url: &str, variable: &str) -> Result<(zarr::Store, bool), String> 
             if next.is_empty() {
                 break;
             }
-            let (found, refused) = fetch(url, &next)?;
+            let (found, refused) = fetch(url, &next, anonymous)?;
             // The variable's own files refused: access is denied. Later rounds' coordinates may
             // just not exist, which S3 answers with 403 too (`is_absent`).
             if round == 0 && refused > 0 && found.is_empty() {
@@ -335,15 +336,16 @@ fn read_store(url: &str, variable: &str) -> Result<(zarr::Store, bool), String> 
 /// as Float64), each file a download of at most 60 s. A store whose root lists no arrays is read
 /// in up to [`MEMBER_ROUNDS`] more rounds of metadata files ([`store_at`]), each at most
 /// `zarr::member_keys`' 163 names (one or two files each), fetched several at a time.
-fn info(_s: &mut Session, p: &Value) -> CmdResult {
+fn info(s: &mut Session, p: &Value) -> CmdResult {
     #[cfg(target_arch = "wasm32")]
     {
-        let _ = p;
+        let _ = (s, p);
         Err("in the web app, open Zarr stores with Home › Add › Add Data › Zarr…".into())
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let (root, store, mut v) = info_of(p)?;
+        let anonymous = s.web_logins.is_anonymous() || b(p, "anonymous") == Some(true);
+        let (root, store, mut v) = info_of(p, anonymous)?;
         // A bbox: the window of cells it is in a variable's grid, for layer.addZarr's cells.
         if let Some(asked) = asked_window(p)? {
             // Cells are given to layer.addZarr, which checks them against the grid; here only a
@@ -353,7 +355,7 @@ fn info(_s: &mut Session, p: &Value) -> CmdResult {
             }
             let mut sel = zarr::Selection { variable: ps(p, "variable").map(str::trim).unwrap_or("").to_string(), ..Default::default() };
             pick_variable(&store, &mut sel)?;
-            let cut = place_window(&root, &store, &mut sel, Some(asked))?;
+            let cut = place_window(&root, &store, &mut sel, Some(asked), anonymous)?;
             let w = sel.window.unwrap_or_default();
             v["window"] = serde_json::json!({"variable": sel.variable, "cells": [w.x0, w.y0, w.x1, w.y1], "notes": cut});
         }
@@ -363,7 +365,7 @@ fn info(_s: &mut Session, p: &Value) -> CmdResult {
 
 /// [`info`] of the store a command names: its root, metadata and what it holds.
 #[cfg(not(target_arch = "wasm32"))]
-fn info_of(p: &Value) -> Result<(String, zarr::Store, Value), String> {
+fn info_of(p: &Value, anonymous: bool) -> Result<(String, zarr::Store, Value), String> {
     match source(p)? {
         Source::Dir(d) => {
             let store = zarr::read_metadata(Path::new(&d)).map_err(|e| format!("{d}: {e}"))?;
@@ -388,8 +390,8 @@ fn info_of(p: &Value) -> Result<(String, zarr::Store, Value), String> {
             Ok((d, store, v))
         }
         Source::Url(u) => {
-            let store = store_at(&u, ps(p, "variable").unwrap_or(""))?;
-            let (chunks, _) = fetch(&u, &zarr::info_keys(&store))?;
+            let store = store_at(&u, ps(p, "variable").unwrap_or(""), anonymous)?;
+            let (chunks, _) = fetch(&u, &zarr::info_keys(&store), anonymous)?;
             let v = zarr::info(&store, &chunks);
             Ok((u, store, v))
         }
@@ -456,7 +458,13 @@ fn asked_window(p: &Value) -> Result<Option<Asked>, String> {
 /// store at `root`). What is said of it: a box reaching past the grid, read only within it; a box
 /// within one cell along an axis, read as two there.
 #[cfg(not(target_arch = "wasm32"))]
-fn place_window(root: &str, store: &zarr::Store, sel: &mut zarr::Selection, asked: Option<Asked>) -> Result<Vec<String>, String> {
+fn place_window(
+    root: &str,
+    store: &zarr::Store,
+    sel: &mut zarr::Selection,
+    asked: Option<Asked>,
+    anonymous: bool,
+) -> Result<Vec<String>, String> {
     let at = |e: rustgis_data::DataError| crate::sources::message_with_address(root, &e.to_string());
     match asked {
         None => Ok(Vec::new()),
@@ -465,7 +473,7 @@ fn place_window(root: &str, store: &zarr::Store, sel: &mut zarr::Selection, aske
             Ok(Vec::new())
         }
         Some(Asked::Bbox(bbox)) => {
-            let coords = store_files(root, &zarr::window_keys(store, &sel.variable).map_err(at)?)?;
+            let coords = store_files(root, &zarr::window_keys(store, &sel.variable).map_err(at)?, anonymous)?;
             let (w, cut, widened) = zarr::window_of(store, &sel.variable, &coords, bbox).map_err(at)?;
             sel.window = Some(w);
             // A window's ends are exclusive; the text gives the last column and row read.
@@ -531,7 +539,7 @@ pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
         Source::Dir(d) => {
             let store = zarr::read_metadata(Path::new(&d)).map_err(|e| format!("{d}: {e}"))?;
             pick_variable(&store, &mut sel)?;
-            let cut = place_window(&d, &store, &mut sel, asked)?;
+            let cut = place_window(&d, &store, &mut sel, asked, false)?;
             let mut r = zarr::read_dir_in(&store, Path::new(&d), &sel.label(), crs).map_err(|e| format!("{d}: {e}"))?;
             r.lost.extend(cut);
             crs_lost(&mut r, crs, &store, &sel.variable);
@@ -558,11 +566,12 @@ pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
             super::raster::add_raster(s, &name, layer)
         }
         Source::Url(u) => {
-            let store = store_at(&u, &sel.variable)?;
+            let anonymous = s.web_logins.is_anonymous() || b(p, "anonymous") == Some(true);
+            let store = store_at(&u, &sel.variable, anonymous)?;
             pick_variable(&store, &mut sel)?;
-            let cut = place_window(&u, &store, &mut sel, asked)?;
+            let cut = place_window(&u, &store, &mut sel, asked, anonymous)?;
             let plan = zarr::plan(&store, &sel).map_err(|e| crate::sources::message_with_address(&u, &e.to_string()))?;
-            let (chunks, forbidden) = fetch_plan(&u, &store, &plan)?;
+            let (chunks, forbidden) = fetch_plan(&u, &store, &plan, anonymous)?;
             if forbidden > 0 {
                 return Err(crate::sources::message_with_address(
                     &u,
@@ -584,7 +593,17 @@ pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
             // The coordinate system given for a store that doesn't say, kept as a folder's slice
             // keeps it, so a time series read from the layer finds it.
             layer.crs = crs.map(str::to_string);
-            super::raster::add_raster(s, &name, layer)
+            let out = super::raster::add_raster(s, &name, layer)?;
+            if anonymous
+                && let Some(id) = s.active_layer
+                && let Some(l) = s.map_mut().layer_mut(id)
+            {
+                l.anonymous = true;
+                if let Some(rl) = l.raster.as_mut() {
+                    rl.anonymous = true;
+                }
+            }
+            Ok(out)
         }
     }
 }
@@ -617,25 +636,27 @@ fn is_web(store: &str) -> bool {
 }
 
 /// A web store kept by [`cached_store`]: its address, the variable its arrays were found from (for
-/// a store whose root lists no arrays; `None` for one that lists them all), and its metadata.
+/// a store whose root lists no arrays; `None` for one that lists them all), whether it was read
+/// anonymously, and its metadata.
 #[cfg(not(target_arch = "wasm32"))]
-type CachedStore = (String, Option<String>, std::sync::Arc<zarr::Store>);
+type CachedStore = (String, Option<String>, bool, std::sync::Arc<zarr::Store>);
 
 /// A web store's metadata, from the run's cache when it was read before. A store whose root lists
 /// no arrays holds only those found from the variable it was read for, so it is taken from the
 /// cache only for that same variable, and each variable read of it is kept beside the others
 /// (among the last four kept): a nested `g/v` read first doesn't stand in for the root's `v`.
 #[cfg(not(target_arch = "wasm32"))]
-fn cached_store(url: &str, variable: &str) -> Result<std::sync::Arc<zarr::Store>, String> {
+fn cached_store(url: &str, variable: &str, anonymous: bool) -> Result<std::sync::Arc<zarr::Store>, String> {
     let wanted = variable.trim().trim_matches('/');
-    let fits = |(u, found_from, _): &&CachedStore| u == url && found_from.as_deref().is_none_or(|v| v == wanted);
-    if let Some((_, _, st)) = stores().lock().ok().and_then(|c| c.iter().find(fits).cloned()) {
+    let fits =
+        |(u, found_from, anon, _): &&CachedStore| u == url && *anon == anonymous && found_from.as_deref().is_none_or(|v| v == wanted);
+    if let Some((_, _, _, st)) = stores().lock().ok().and_then(|c| c.iter().find(fits).cloned()) {
         return Ok(st);
     }
-    let (st, partial) = read_store(url, variable)?;
+    let (st, partial) = read_store(url, variable, anonymous)?;
     let st = std::sync::Arc::new(st);
     if let Ok(mut c) = stores().lock() {
-        c.push((url.to_string(), partial.then(|| wanted.to_string()), st.clone()));
+        c.push((url.to_string(), partial.then(|| wanted.to_string()), anonymous, st.clone()));
         let excess = c.len().saturating_sub(4);
         c.drain(..excess);
     }
@@ -665,6 +686,13 @@ pub(crate) fn slice_key(zt: &ZarrTime, i: usize) -> String {
     format!("{}\u{0}{}\u{0}{}\u{0}{changed}\u{0}{}", zt.store, zt.selection(i), zt.crs.as_deref().unwrap_or(""), zt.read_generation)
 }
 
+/// The cache key of a slice, separating anonymous reads from authenticated ones.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn slice_key_for(zt: &ZarrTime, i: usize, anonymous: bool) -> String {
+    let key = slice_key(zt, i);
+    if anonymous { format!("{key}\u{0}anon") } else { key }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn is_kept(key: &str) -> bool {
     slices().lock().is_ok_and(|c| c.iter().any(|(k, _)| k == key))
@@ -688,11 +716,11 @@ static READ_AHEAD_THREADS: std::sync::atomic::AtomicUsize = std::sync::atomic::A
 /// Reads the two steps after `i` in the background, those neither kept nor already being read,
 /// on at most [`MAX_READ_AHEAD`] threads: a thread more is skipped (the next step starts one).
 #[cfg(not(target_arch = "wasm32"))]
-fn read_ahead(zt: ZarrTime, i: usize) {
+fn read_ahead(zt: ZarrTime, i: usize, anonymous: bool) {
     use std::sync::atomic::Ordering;
     let keys: Vec<(usize, String)> = (i + 1..zt.dates.len())
         .take(2)
-        .map(|j| (j, slice_key(&zt, j)))
+        .map(|j| (j, slice_key_for(&zt, j, anonymous)))
         .filter(|(_, k)| !is_kept(k) && !ahead_failed(k) && reading_ahead().lock().is_ok_and(|mut r| r.insert(k.clone())))
         .collect();
     if keys.is_empty() {
@@ -734,7 +762,7 @@ fn read_ahead(zt: ZarrTime, i: usize) {
             let _diagnostic_scope = capture.enter();
             let _done = Done(keys.iter().map(|(_, k)| k.clone()).collect());
             for (n, (j, k)) in keys.iter().enumerate() {
-                let ok = read_step(&zt, *j, k.clone()).is_ok();
+                let ok = read_step_with(&zt, *j, k.clone(), anonymous).is_ok();
                 // Not read ahead again (each follow would): the slider reaching it reads it off the
                 // frame, and says why it fails.
                 if !ok && let Ok(mut f) = failed_ahead().lock() {
@@ -782,17 +810,23 @@ fn wait_for_read_ahead(key: &str) {
 
 /// Step `i`, once a read ahead of it has finished, so it isn't fetched twice.
 #[cfg(not(target_arch = "wasm32"))]
-fn read_waiting(zt: &ZarrTime, i: usize) -> Result<std::sync::Arc<raster::Raster>, String> {
+fn read_waiting(zt: &ZarrTime, i: usize, anonymous: bool) -> Result<std::sync::Arc<raster::Raster>, String> {
     // One key for the wait and the read: a store rewritten between them is read once.
-    let key = slice_key(zt, i);
+    let key = slice_key_for(zt, i, anonymous);
     wait_for_read_ahead(&key);
-    read_step(zt, i, key)
+    read_step_with(zt, i, key, anonymous)
 }
 
 /// Step `i` of a following layer's variable, kept as `key` (its [`slice_key`]), from the kept
 /// slices or read now.
 #[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(not(test), expect(dead_code, reason = "unit tests call read_step directly"))]
 pub(crate) fn read_step(zt: &ZarrTime, i: usize, key: String) -> Result<std::sync::Arc<raster::Raster>, String> {
+    read_step_with(zt, i, key, false)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_step_with(zt: &ZarrTime, i: usize, key: String, anonymous: bool) -> Result<std::sync::Arc<raster::Raster>, String> {
     use crate::render::rustgis_tiles::cache;
     let still = cache::current_still();
     cache::check_still(&still)?;
@@ -801,7 +835,8 @@ pub(crate) fn read_step(zt: &ZarrTime, i: usize, key: String) -> Result<std::syn
         return Ok(r);
     }
     let r = std::sync::Arc::new(
-        read_slice(zt, i)?.ok_or_else(|| crate::sources::message_with_address(&zt.store, &format!("step {i} has no data written")))?,
+        read_slice_with(zt, i, anonymous)?
+            .ok_or_else(|| crate::sources::message_with_address(&zt.store, &format!("step {i} has no data written")))?,
     );
     // Validate outside shared locks: a predicate may consult other runtime state.
     cache::check_still(&still)?;
@@ -826,17 +861,17 @@ pub(crate) fn kept_slice(key: &str) -> Option<std::sync::Arc<raster::Raster>> {
 
 /// Step `i` of a following layer's variable, read from its store (no slice kept).
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn read_slice(zt: &ZarrTime, i: usize) -> Result<Option<raster::Raster>, String> {
+pub(crate) fn read_slice_with(zt: &ZarrTime, i: usize, anonymous: bool) -> Result<Option<raster::Raster>, String> {
     if rustgis_map::paths::is_project_relative(&zt.store) {
         return Err(rustgis_map::paths::unknown_folder(&zt.store));
     }
     let sel = zt.selection(i);
     let crs = zt.crs.as_deref().map(str::trim).filter(|c| !c.is_empty());
     let (read, st) = if is_web(&zt.store) {
-        let st = cached_store(&zt.store, &zt.variable)?;
+        let st = cached_store(&zt.store, &zt.variable, anonymous)?;
         let plan = zarr::plan(&st, &zarr::Selection::parse(&sel)).map_err(|e| e.to_string())?;
         // A window's coordinates and, in shards, only its chunks, by range.
-        let (chunks, forbidden) = fetch_plan(&zt.store, &st, &plan)?;
+        let (chunks, forbidden) = fetch_plan(&zt.store, &st, &plan, anonymous)?;
         // A chunk refused (HTTP 403) isn't one never written: it's said, not read as fill.
         if forbidden > 0 {
             return Err(crate::sources::message_with_address(
@@ -874,7 +909,7 @@ pub(crate) fn relink_following(
     if !store.variables().iter().any(|v| v.path == zt.variable) {
         return Err(format!("{full} has no variable '{}': choose the store the layer was added from", zt.variable));
     }
-    let coords = store_files(full, &zarr::coordinate_keys(&store, &zt.variable))?;
+    let coords = store_files(full, &zarr::coordinate_keys(&store, &zt.variable), false)?;
     let (dim, dates) =
         zarr::time_axis(&store, &zt.variable, &coords).ok_or_else(|| format!("{full}: {} no longer has a time axis", zt.variable))?;
     if dim != zt.dim || !dates.iter().all(|d| d.is_finite()) || !dates.windows(2).all(|w| w[0] < w[1]) {
@@ -931,7 +966,7 @@ pub(crate) fn relink_following(
     let window = slider.map(rustgis_map::time::TimeSlider::window);
     let want = zt.step_for(window);
     let i = want.unwrap_or(0);
-    let r = read_step(&zt, i, slice_key(&zt, i))?;
+    let r = read_step_with(&zt, i, slice_key(&zt, i), false)?;
     rl.validate_replacement(&r, full)?;
     zt.shown = want;
     let mut new = rl.clone();
@@ -951,16 +986,17 @@ const FAILED_KEPT: usize = 16;
 #[derive(Default)]
 pub(crate) struct ReadWaits {
     layers: HashMap<(u64, u64), std::sync::Arc<PendingRead>>,
-    shared: HashMap<(String, String, Option<String>), std::sync::Weak<PendingRead>>,
+    shared: HashMap<(String, String, Option<String>, bool), std::sync::Weak<PendingRead>>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 impl ReadWaits {
     /// Retains a move's owner while queued; layers on the same owned slice share its completion.
-    fn for_layer(&mut self, owner: (u64, u64), zt: &ZarrTime, i: usize) -> std::sync::Arc<PendingRead> {
+    fn for_layer(&mut self, owner: (u64, u64), zt: &ZarrTime, i: usize, anonymous: bool) -> std::sync::Arc<PendingRead> {
         use std::sync::Arc;
         if let Some(read) = self.layers.get(&owner)
             && read.step == i
+            && read.anonymous == anonymous
             && read.zt.store == zt.store
             && read.zt.crs == zt.crs
             && read.zt.selection(i) == zt.selection(i)
@@ -968,7 +1004,7 @@ impl ReadWaits {
         {
             return read.clone();
         }
-        let selection = (zt.store.clone(), zt.selection(i), zt.crs.clone());
+        let selection = (zt.store.clone(), zt.selection(i), zt.crs.clone(), anonymous);
         let still = crate::render::rustgis_tiles::cache::current_still();
         let read = self
             .shared
@@ -979,7 +1015,7 @@ impl ReadWaits {
                 (None, None) => true,
                 _ => false,
             })
-            .unwrap_or_else(|| Arc::new(PendingRead::new(zt, i, still)));
+            .unwrap_or_else(|| Arc::new(PendingRead::new(zt, i, still, anonymous)));
         self.shared.insert(selection, Arc::downgrade(&read));
         self.layers.insert(owner, read.clone());
         read
@@ -1007,6 +1043,7 @@ struct PendingRead {
     zt: ZarrTime,
     step: usize,
     key: String,
+    anonymous: bool,
     still: Option<crate::render::rustgis_tiles::cache::Still>,
     capture: rustgis_data::diagnostics::Capture,
     started: std::sync::atomic::AtomicBool,
@@ -1016,11 +1053,12 @@ struct PendingRead {
 #[cfg(not(target_arch = "wasm32"))]
 impl PendingRead {
     /// Captures at the initial move, even when all worker slots are occupied.
-    fn new(zt: &ZarrTime, step: usize, still: Option<crate::render::rustgis_tiles::cache::Still>) -> Self {
+    fn new(zt: &ZarrTime, step: usize, still: Option<crate::render::rustgis_tiles::cache::Still>, anonymous: bool) -> Self {
         Self {
             zt: zt.clone(),
             step,
-            key: slice_key(zt, step),
+            key: slice_key_for(zt, step, anonymous),
+            anonymous,
             still,
             capture: rustgis_data::diagnostics::Capture::current(),
             started: std::sync::atomic::AtomicBool::new(false),
@@ -1050,7 +1088,7 @@ impl PendingRead {
     fn read(&self) -> Result<std::sync::Arc<raster::Raster>, String> {
         crate::render::rustgis_tiles::cache::with_optional_still(self.still.clone(), || {
             let _diagnostic_scope = self.capture.enter();
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| read_step(&self.zt, self.step, self.key.clone())))
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| read_step_with(&self.zt, self.step, self.key.clone(), self.anonymous)))
                 .unwrap_or_else(|_| Err(format!("{}: reading step {} failed unexpectedly", self.zt.store, self.step)))
         })
     }
@@ -1174,6 +1212,7 @@ pub(crate) fn follow_time_now(s: &mut Session) {
 fn follow(s: &mut Session, wait: bool) {
     #[cfg(not(target_arch = "wasm32"))]
     {
+        let anonymous = s.web_logins.is_anonymous();
         let mut errors = Vec::new();
         let mut ahead = Vec::new();
         let mut waiting = std::collections::HashSet::new();
@@ -1186,6 +1225,7 @@ fn follow(s: &mut Session, wait: bool) {
             for l in &mut m.layers {
                 let owner = (map, l.instance_id());
                 let name = l.name.clone();
+                let layer_anonymous = anonymous || l.anonymous;
                 let Some(rl) = l.raster.as_mut() else { continue };
                 let Some(zt) = rl.time_zarr.as_mut() else { continue };
                 let want = zt.step_for(window);
@@ -1201,7 +1241,7 @@ fn follow(s: &mut Session, wait: bool) {
                     }
                     // Consume this layer's original completion, including its lifetime at landing.
                     Some(i) if !wait => {
-                        let read = s.zarr_reads.for_layer(owner, zt, i);
+                        let read = s.zarr_reads.for_layer(owner, zt, i, layer_anonymous);
                         let result = observed.entry(std::sync::Arc::as_ptr(&read)).or_insert_with(|| read.poll()).clone();
                         // The shared observation does not replace the lifetime check at delivery.
                         let result = result.map(|r| crate::render::rustgis_tiles::cache::check_still(&read.still).and(r));
@@ -1210,7 +1250,7 @@ fn follow(s: &mut Session, wait: bool) {
                                 rl.data = Some(r);
                                 zt.shown = Some(i);
                                 if is_web(&zt.store) {
-                                    ahead.push((zt.clone(), i, read.still.clone()));
+                                    ahead.push((zt.clone(), i, read.still.clone(), layer_anonymous));
                                 }
                             }
                             Some(Err(e)) => {
@@ -1221,17 +1261,17 @@ fn follow(s: &mut Session, wait: bool) {
                             None => {
                                 waiting.insert(owner);
                                 if is_web(&zt.store) {
-                                    ahead.push((zt.clone(), i, read.still.clone()));
+                                    ahead.push((zt.clone(), i, read.still.clone(), layer_anonymous));
                                 }
                             }
                         }
                     }
-                    Some(i) => match read_waiting(zt, i) {
+                    Some(i) => match read_waiting(zt, i, layer_anonymous) {
                         Ok(r) => {
                             rl.data = Some(r);
                             zt.shown = Some(i);
                             if is_web(&zt.store) {
-                                ahead.push((zt.clone(), i, crate::render::rustgis_tiles::cache::current_still()));
+                                ahead.push((zt.clone(), i, crate::render::rustgis_tiles::cache::current_still(), layer_anonymous));
                             }
                         }
                         Err(e) => {
@@ -1261,8 +1301,8 @@ fn follow(s: &mut Session, wait: bool) {
             };
             s.notify(text, true);
         }
-        for (zt, i, still) in ahead {
-            crate::render::rustgis_tiles::cache::with_optional_still(still, || read_ahead(zt, i));
+        for (zt, i, still, layer_anonymous) in ahead {
+            crate::render::rustgis_tiles::cache::with_optional_still(still, || read_ahead(zt, i, layer_anonymous));
         }
     }
     #[cfg(target_arch = "wasm32")]
@@ -1289,6 +1329,7 @@ fn add_following(s: &mut Session, p: &Value, asked: Option<Asked>) -> CmdResult 
         if let Some(c) = &crs {
             Crs::parse(c)?;
         }
+        let anonymous = s.web_logins.is_anonymous() || b(p, "anonymous") == Some(true);
         let (root, store, chunks) = match src {
             Source::Dir(d) => {
                 let store = zarr::read_metadata(Path::new(&d)).map_err(|e| format!("{d}: {e}"))?;
@@ -1314,15 +1355,18 @@ fn add_following(s: &mut Session, p: &Value, asked: Option<Asked>) -> CmdResult 
                 (full, std::sync::Arc::new(store), chunks)
             }
             Source::Url(u) => {
-                let store = cached_store(&u, &sel.variable)?;
+                let store = cached_store(&u, &sel.variable, anonymous)?;
                 (u, store, HashMap::new())
             }
         };
         pick_variable(&store, &mut sel)?;
         // A window: every step reads only its cells (and in shards only their chunks it needs).
-        let window_notes = place_window(&root, &store, &mut sel, asked)?;
-        let chunks =
-            if chunks.is_empty() && is_web(&root) { fetch(&root, &zarr::coordinate_keys(&store, &sel.variable))?.0 } else { chunks };
+        let window_notes = place_window(&root, &store, &mut sel, asked, anonymous)?;
+        let chunks = if chunks.is_empty() && is_web(&root) {
+            fetch(&root, &zarr::coordinate_keys(&store, &sel.variable), anonymous)?.0
+        } else {
+            chunks
+        };
         let (dim, dates) = zarr::time_axis(&store, &sel.variable, &chunks).ok_or_else(|| {
             format!(
                 "{} has no time dimension (a coordinate with CF units, such as \"days since 2001-01-01\", or of whole years, such as 2017)",
@@ -1387,7 +1431,8 @@ fn add_following(s: &mut Session, p: &Value, asked: Option<Asked>) -> CmdResult 
         zt.repair();
         // The first step read before the slider is touched, so a store that can't be read leaves
         // the map as it was.
-        let first = read_step(&zt, 0, slice_key(&zt, 0)).map_err(|e| crate::sources::message_with_address(&root, &e))?;
+        let first = read_step_with(&zt, 0, slice_key_for(&zt, 0, anonymous), anonymous)
+            .map_err(|e| crate::sources::message_with_address(&root, &e))?;
         // The slider, on over the variable's dates when it is off.
         if s.map().time.is_none() {
             let dates: Vec<Value> = zt.dates.iter().map(|d| serde_json::json!(d)).collect();
@@ -1397,7 +1442,8 @@ fn add_following(s: &mut Session, p: &Value, asked: Option<Asked>) -> CmdResult 
         let want = zt.step_for(window);
         // The first slice the layer shows sets its style; with no step in the window, the first step's.
         let r = match want {
-            Some(i) if i != 0 => read_step(&zt, i, slice_key(&zt, i)).map_err(|e| crate::sources::message_with_address(&root, &e))?,
+            Some(i) if i != 0 => read_step_with(&zt, i, slice_key_for(&zt, i, anonymous), anonymous)
+                .map_err(|e| crate::sources::message_with_address(&root, &e))?,
             _ => first,
         };
         let mut layer = RasterLayer::from_path((*r).clone(), root.clone());
@@ -1432,6 +1478,15 @@ fn add_following(s: &mut Session, p: &Value, asked: Option<Asked>) -> CmdResult 
         });
         layer.time_zarr = Some(zt);
         let mut out = super::raster::add_raster(s, &name, layer)?;
+        if anonymous
+            && let Some(id) = s.active_layer
+            && let Some(l) = s.map_mut().layer_mut(id)
+        {
+            l.anonymous = true;
+            if let Some(rl) = l.raster.as_mut() {
+                rl.anonymous = true;
+            }
+        }
         let said: Vec<String> = window_notes.into_iter().chain(part).collect();
         for w in &said {
             s.warn(w.clone());
@@ -1456,6 +1511,7 @@ struct SeriesSource {
     period: Option<(u64, usize)>,
     crs: Option<String>,
     read_generation: u64,
+    anonymous: bool,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1472,6 +1528,7 @@ fn series_source(s: &Session, p: &Value) -> Result<SeriesSource, String> {
                 period: Some((zt.offset, zt.dates.len())),
                 crs: zt.crs.clone(),
                 read_generation: zt.read_generation,
+                anonymous: l.anonymous,
             });
         }
         // A slice: its store is its folder, or the address it was read from.
@@ -1487,20 +1544,28 @@ fn series_source(s: &Session, p: &Value) -> Result<SeriesSource, String> {
             period: None,
             crs: rl.crs.clone(),
             read_generation: rustgis_map::raster::next_read_generation(),
+            anonymous: l.anonymous,
         });
     }
     let root = match source(p)? {
         Source::Dir(d) | Source::Url(d) => d,
     };
     let crs = ps(p, "crs").map(str::trim).filter(|c| !c.is_empty()).map(str::to_string);
-    Ok(SeriesSource { root, sel: selection(p), period: None, crs, read_generation: rustgis_map::raster::next_read_generation() })
+    Ok(SeriesSource {
+        root,
+        sel: selection(p),
+        period: None,
+        crs,
+        read_generation: rustgis_map::raster::next_read_generation(),
+        anonymous: false,
+    })
 }
 
 /// A store's metadata, and its files `keys`: a folder's read (files only, bounded), a web
 /// store's fetched.
 #[cfg(not(target_arch = "wasm32"))]
-fn store_files(root: &str, keys: &[String]) -> Result<HashMap<String, Vec<u8>>, String> {
-    store_files_by(root, keys, &mut |_| Ok(()))
+fn store_files(root: &str, keys: &[String], anonymous: bool) -> Result<HashMap<String, Vec<u8>>, String> {
+    store_files_by(root, keys, anonymous, &mut |_| Ok(()))
 }
 
 /// The files of a store read in batches of up to [`SERIES_BATCH`] files, as [`store_files`] reads
@@ -1510,6 +1575,7 @@ fn store_files(root: &str, keys: &[String]) -> Result<HashMap<String, Vec<u8>>, 
 fn store_files_by(
     root: &str,
     keys: &[String],
+    anonymous: bool,
     before: &mut dyn FnMut(usize) -> Result<(), String>,
 ) -> Result<HashMap<String, Vec<u8>>, String> {
     if is_web(root) {
@@ -1519,7 +1585,7 @@ fn store_files_by(
         let mut total = 0u64;
         for batch in keys.chunks(SERIES_BATCH) {
             before(batch.len())?;
-            let (got, forbidden) = fetch(root, batch)?;
+            let (got, forbidden) = fetch(root, batch, anonymous)?;
             // A file refused (HTTP 403) isn't one never written: said, not read as missing.
             if forbidden > 0 {
                 return Err(crate::sources::message_with_address(root, &format!("access denied (HTTP 403) to {forbidden} of its files")));
@@ -1565,6 +1631,7 @@ fn store_files_by(
 fn store_parts(
     root: &str,
     parts: &[zarr::Part],
+    anonymous: bool,
     before: &mut dyn FnMut(usize) -> Result<(), String>,
 ) -> Result<HashMap<String, Vec<u8>>, String> {
     let mut out = HashMap::new();
@@ -1572,7 +1639,7 @@ fn store_parts(
     for batch in parts.chunks(SERIES_BATCH) {
         before(batch.len())?;
         if is_web(root) {
-            let (got, forbidden) = fetch_parts(root, batch)?;
+            let (got, forbidden) = fetch_parts(root, batch, anonymous)?;
             if forbidden > 0 {
                 return Err(crate::sources::message_with_address(root, &format!("access denied (HTTP 403) to {forbidden} of its files")));
             }
@@ -1629,6 +1696,7 @@ pub struct SeriesRun {
     src: SeriesSource,
     start: Option<f64>,
     end: Option<f64>,
+    anonymous: bool,
 }
 
 /// The steps a series has read, for its progress: the reads made of those it plans (the chunks,
@@ -1677,7 +1745,7 @@ impl SeriesRun {
         let check = &mut |_: usize| rustgis_data::progress::check().map_err(|_| "cancelled".to_string());
         check(0)?;
         let store = if is_web(&src.root) {
-            cached_store(&src.root, &src.sel.variable)?
+            cached_store(&src.root, &src.sel.variable, self.anonymous)?
         } else {
             std::sync::Arc::new(zarr::read_metadata(Path::new(&src.root)).map_err(|e| format!("{}: {e}", src.root))?)
         };
@@ -1685,7 +1753,7 @@ impl SeriesRun {
         let var = src.sel.variable.clone();
         let mut keys = zarr::coordinate_keys(&store, &var);
         keys.extend(zarr::map_coordinate_keys(&store, &var));
-        let coords = store_files_by(&src.root, &keys, check)?;
+        let coords = store_files_by(&src.root, &keys, self.anonymous, check)?;
         let (dim, dates) = zarr::time_axis(&store, &var, &coords)
             .ok_or_else(|| format!("{var} has no time dimension (a coordinate with CF units, such as \"days since 2001-01-01\", or of whole years, such as 2017)"))?;
         // A period is found along the axis in order, as following the slider takes it.
@@ -1746,13 +1814,13 @@ impl SeriesRun {
         rustgis_data::progress::begin(count);
         let mut tally = SeriesTally { steps: count, reads: plan.keys.len() + 2 * plan.parts.len(), done: 0, flight: 0, shown: 0 };
         let mut before = |n: usize| tally.before(n);
-        let mut chunks = store_files_by(&src.root, &plan.keys, &mut before)?;
+        let mut chunks = store_files_by(&src.root, &plan.keys, self.anonymous, &mut before)?;
         // A sharded variable: the shards' indexes, then the chunk holding the cell in each.
         if !plan.parts.is_empty() {
-            chunks.extend(store_parts(&src.root, &plan.parts, &mut before)?);
+            chunks.extend(store_parts(&src.root, &plan.parts, self.anonymous, &mut before)?);
             let inner = zarr::series_inner_parts(&store, &plan, &chunks)
                 .map_err(|e| crate::sources::message_with_address(&src.root, &e.to_string()))?;
-            chunks.extend(store_parts(&src.root, &inner, &mut before)?);
+            chunks.extend(store_parts(&src.root, &inner, self.anonymous, &mut before)?);
         }
         // The last batch counted as read once it is, before decoding; cancelled during it, nothing
         // is decoded, so no part of a series is given.
@@ -1791,7 +1859,8 @@ pub fn series_start(s: &Session, p: &Value) -> Result<SeriesRun, String> {
         }
     };
     let (start, end) = (date("start")?, date("end")?);
-    Ok(SeriesRun { lon, lat, src, start, end })
+    let anonymous = s.web_logins.is_anonymous() || b(p, "anonymous") == Some(true) || src.anonymous;
+    Ok(SeriesRun { lon, lat, src, start, end, anonymous })
 }
 
 // --- A summary over time (opengeos/RustGIS#556) ----------------------------------------------------
@@ -1810,6 +1879,7 @@ pub struct ReduceRun {
     steps: Vec<usize>,
     stat: Stat,
     min_valid: f64,
+    anonymous: bool,
     /// The layer's name, and the store and variable to hand the result over with.
     pub name: String,
     pub root: String,
@@ -1842,9 +1912,9 @@ impl ReduceRun {
             }
             // A slice already kept is used; the others are read without being kept, so a long
             // summary doesn't push out the slices a layer following the slider holds.
-            let r = match kept_slice(&slice_key(&self.zt, i)) {
+            let r = match kept_slice(&slice_key_for(&self.zt, i, self.anonymous)) {
                 Some(r) => r,
-                None => match read_slice(&self.zt, i)? {
+                None => match read_slice_with(&self.zt, i, self.anonymous)? {
                     Some(r) => std::sync::Arc::new(r),
                     // A step never written is its fill value: no value for any cell, so it only
                     // lowers the counts (and the step after it still sets the grid).
@@ -1925,7 +1995,7 @@ pub fn reduce_start(s: &Session, p: &Value) -> Result<ReduceRun, String> {
     let min_valid = super::cube::min_share(p)?;
     // The name given, checked before the store is read.
     let given = super::name_given(p, "the output's name", 200)?;
-    let ZarrCube { zt, period } = zarr_cube(s, p)?;
+    let ZarrCube { zt, period, anonymous } = zarr_cube(s, p)?;
     let steps = super::cube::steps(&zt.dates, period, p)?;
     let months = super::cube::months(p)?;
     let (var, dates) = (zt.variable.clone(), &zt.dates);
@@ -1945,7 +2015,7 @@ pub fn reduce_start(s: &Session, p: &Value) -> Result<ReduceRun, String> {
     }
     let name = given.unwrap_or(label);
     let root = zt.store.clone();
-    Ok(ReduceRun { zt, steps, stat, min_valid, name, root, variable: var })
+    Ok(ReduceRun { zt, steps, stat, min_valid, anonymous, name, root, variable: var })
 }
 
 /// A Zarr variable's time axis as a data cube (#579): the store and variable to read, all its
@@ -1954,12 +2024,14 @@ pub fn reduce_start(s: &Session, p: &Value) -> Result<ReduceRun, String> {
 pub struct ZarrCube {
     pub zt: ZarrTime,
     pub period: (usize, usize),
+    pub anonymous: bool,
 }
 
 /// The cube of a Zarr layer, or of the store and variable the parameters name.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn zarr_cube(s: &Session, p: &Value) -> Result<ZarrCube, String> {
     let mut src = series_source(s, p)?;
+    let anonymous = s.web_logins.is_anonymous() || b(p, "anonymous") == Some(true) || src.anonymous;
     // A layer that is a window of its variable: its steps over time would be read whole.
     if src.sel.window.is_some() {
         return Err(format!(
@@ -1968,13 +2040,13 @@ pub fn zarr_cube(s: &Session, p: &Value) -> Result<ZarrCube, String> {
         ));
     }
     let store = if is_web(&src.root) {
-        cached_store(&src.root, &src.sel.variable)?
+        cached_store(&src.root, &src.sel.variable, anonymous)?
     } else {
         std::sync::Arc::new(zarr::read_metadata(Path::new(&src.root)).map_err(|e| format!("{}: {e}", src.root))?)
     };
     pick_variable(&store, &mut src.sel)?;
     let var = src.sel.variable.clone();
-    let coords = store_files(&src.root, &zarr::coordinate_keys(&store, &var))?;
+    let coords = store_files(&src.root, &zarr::coordinate_keys(&store, &var), anonymous)?;
     let (dim, dates) = zarr::time_axis(&store, &var, &coords).ok_or_else(|| {
         format!(
             "{var} has no time dimension (a coordinate with CF units, such as \"days since 2001-01-01\", or of whole years, such as 2017)"
@@ -2004,7 +2076,7 @@ pub fn zarr_cube(s: &Session, p: &Value) -> Result<ZarrCube, String> {
         shown: None,
         read_generation: src.read_generation,
     };
-    Ok(ZarrCube { zt, period })
+    Ok(ZarrCube { zt, period, anonymous })
 }
 
 /// The most cells a summary keeps running totals for (12 to 20 bytes each): 32 million, at most

@@ -129,7 +129,8 @@ pub(super) fn collections(s: &mut Session, p: &Value) -> CmdResult {
         } else {
             stac::collections_url(&api)
         };
-        let fetched = crate::render::rustgis_tiles::cache::download_blocking_with_origin(&url)?;
+        let fetch_url = crate::service_logins::fetch_url(s.web_logins.is_anonymous() || b(p, "anonymous") == Some(true), &url);
+        let fetched = crate::render::rustgis_tiles::cache::download_blocking_with_origin(&fetch_url)?;
         collections_json_from_origin(s, &api, &fetched.bytes, &fetched.origin)
     }
 }
@@ -209,20 +210,21 @@ fn search(s: &mut Session, p: &Value) -> CmdResult {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
+        let anonymous = s.web_logins.is_anonymous() || b(p, "anonymous") == Some(true);
         // A shape goes in the body of a POST, which has no limit that matters; a server that
         // refuses it is asked again in the query, when the shape is short enough for one.
         let (fetched, posted) = if search.intersects.is_some() {
-            let post = stac::search_post_url(&api);
+            let post = crate::service_logins::fetch_url(anonymous, &stac::search_post_url(&api));
             let body = stac::search_body(&search)?.to_string();
             match crate::render::rustgis_tiles::cache::post_json_named_blocking_with_origin(&post, &body) {
                 Ok(fetched) => (fetched, true),
                 Err(e) => {
-                    let url = stac::search_url(&api, &search).map_err(|_| e.clone())?;
+                    let url = crate::service_logins::fetch_url(anonymous, &stac::search_url(&api, &search).map_err(|_| e.clone())?);
                     (crate::render::rustgis_tiles::cache::download_blocking_with_origin(&url).map_err(|_| e)?, false)
                 }
             }
         } else {
-            let url = stac::search_url(&api, &search)?;
+            let url = crate::service_logins::fetch_url(anonymous, &stac::search_url(&api, &search)?);
             (crate::render::rustgis_tiles::cache::download_blocking_with_origin(&url)?, false)
         };
         let bytes = fetched.bytes;
@@ -319,7 +321,8 @@ fn search_static(s: &mut Session, p: &Value, root: &str) -> CmdResult {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let walk = stac::catalog::walk_blocking(root, filter, search.limit);
+        let anonymous = s.web_logins.is_anonymous() || b(p, "anonymous") == Some(true);
+        let walk = stac::catalog::walk_blocking_with(root, filter, search.limit, anonymous);
         let complete = walk.complete();
         let (read, failed) = (walk.reads, walk.failed);
         let (refused, skipped) = (walk.refused(), walk.skipped());
@@ -349,7 +352,7 @@ fn search_static(s: &mut Session, p: &Value, root: &str) -> CmdResult {
 }
 
 /// The item a command names: given whole, or by its address.
-fn item(p: &Value) -> Result<Item, String> {
+fn item(p: &Value, anonymous: bool) -> Result<Item, String> {
     if let Some(v) = p.get("item").filter(|v| v.is_object()) {
         // Given whole (by the assistant or a plugin, maybe from another answer): it came from no
         // address, so its assets may only be public web addresses.
@@ -358,12 +361,13 @@ fn item(p: &Value) -> Result<Item, String> {
     let url = ps(p, "url").map(str::trim).filter(|u| !u.is_empty()).ok_or("give item (a STAC item) or url (an item's address)")?;
     #[cfg(target_arch = "wasm32")]
     {
-        let _ = url;
+        let _ = (url, anonymous);
         Err("in the web app, add STAC assets with Home › Add › Web Data › STAC Search".into())
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        item_downloaded(crate::render::rustgis_tiles::cache::download_blocking_fetched(url)?, url)
+        let fetch_url = crate::service_logins::fetch_url(anonymous, url);
+        item_downloaded(crate::render::rustgis_tiles::cache::download_blocking_fetched(&fetch_url)?, url)
     }
 }
 
@@ -378,7 +382,7 @@ fn item_downloaded(fetched: crate::render::rustgis_tiles::cache::Fetched, reques
 fn add_asset(s: &mut Session, p: &Value) -> CmdResult {
     let bound = crate::service_logins::request_params(s, p)?;
     let p = bound.as_ref();
-    let i = item(p)?;
+    let i = item(p, s.web_logins.is_anonymous() || b(p, "anonymous") == Some(true))?;
     let (key, href) = i.asset_href(ps(p, "asset"))?;
     // Codes for a failed retrieval (JAXA Earth's `dn.error`), which a data cube skips but a
     // single file draws as values: of the asset `asset_href` picked, by the same selector.
@@ -394,6 +398,9 @@ fn add_asset(s: &mut Session, p: &Value) -> CmdResult {
     }
     if let Some(connection) = p.get("connection") {
         add["connection"] = connection.clone();
+    }
+    if b(p, "anonymous") == Some(true) {
+        add["anonymous"] = json!(true);
     }
     let added = super::layer::add_url(s, &add)?;
     match codes {
@@ -521,7 +528,8 @@ pub fn cube_files(s: &mut Session, p: &Value, max_items: usize, mask: Option<&st
         // A static collection has no search: read by its layout, and no pages follow.
         crate::render::rustgis_tiles::address::check(&api, None)?;
         let filter = stac::catalog::Filter::from_search(&search, None)?;
-        let found = stac::dated::search_blocking(&api, &filter, (&day(start), &day(end)), max_items)?;
+        let anonymous = s.web_logins.is_anonymous() || b(p, "anonymous") == Some(true);
+        let found = stac::dated::search_blocking_with(&api, &filter, (&day(start), &day(end)), max_items, anonymous)?;
         // Its items say which collection it is; another name given is a mistake.
         if let Some(other) = found.items.iter().map(|i| i.collection.as_str()).find(|c| !c.is_empty() && *c != collection) {
             return Err(format!("{api} holds {other}, not {collection}"));
@@ -560,7 +568,8 @@ pub fn cube_files(s: &mut Session, p: &Value, max_items: usize, mask: Option<&st
         if read.len() >= MAX_CUBE_PAGES {
             return Err(format!("more than {MAX_CUBE_PAGES} pages of results: take a shorter period or a smaller area"));
         }
-        let bytes = crate::render::rustgis_tiles::cache::download_blocking(&url)?;
+        let fetch_url = crate::service_logins::fetch_url(s.web_logins.is_anonymous() || b(p, "anonymous") == Some(true), &url);
+        let bytes = crate::render::rustgis_tiles::cache::download_blocking(&fetch_url)?;
         let (page, more) = stac::parse_items(&bytes, &url)?;
         read.push(url);
         if page.is_empty() {
@@ -1434,6 +1443,7 @@ fn add_cube(s: &mut Session, p: &Value) -> CmdResult {
                 ));
             }
         }
+        let anonymous = s.web_logins.is_anonymous() || b(p, "anonymous") == Some(true);
         // A range from the files themselves: one for every date and tile, as a range given is.
         let mut sampled = None;
         let range = if !auto {
@@ -1449,7 +1459,7 @@ fn add_cube(s: &mut Session, p: &Value) -> CmdResult {
             ));
             None
         } else {
-            match sample_range(&tiles, &scales, scale, &nodata) {
+            match sample_range(&tiles, &scales, scale, &nodata, anonymous) {
                 Ok(Sample::Range(r)) => {
                     sampled = Some(r);
                     Some((r[0], r[1]))
@@ -1510,7 +1520,11 @@ fn add_cube(s: &mut Session, p: &Value) -> CmdResult {
             let urls: Vec<(f64, String)> = by_day.iter().map(|(d, u)| (*d as f64 * 86_400_000.0, format!("{u}{look}"))).collect();
             let Some((_, first)) = urls.first() else { continue };
             let name = if many { format!("{base} {tile}") } else { base.clone() };
-            let r = match super::layer::add_url(s, &json!({"url": first, "name": name, "cube": true, "connection": p.get("connection")})) {
+            let mut add = json!({"url": first, "name": name, "cube": true, "connection": p.get("connection")});
+            if anonymous {
+                add["anonymous"] = json!(true);
+            }
+            let r = match super::layer::add_url(s, &add) {
                 Ok(r) => r,
                 Err(e) => {
                     undo(s);
@@ -1654,6 +1668,7 @@ fn sample_range(
     scales: &std::collections::HashMap<String, (f64, f64)>,
     scale: Option<(f64, f64)>,
     nodata: &std::collections::HashMap<String, Vec<f64>>,
+    anonymous: bool,
 ) -> Result<Sample, String> {
     use crate::render::rustgis_tiles::{cog, cubes};
     let newest: Vec<&String> = tiles.values().filter_map(|by_day| by_day.values().next_back()).collect();
@@ -1661,7 +1676,8 @@ fn sample_range(
     let picked: Vec<&String> = (0..n.min(SAMPLE_FILES)).filter_map(|i| newest.get(i * n / n.min(SAMPLE_FILES))).copied().collect();
     let mut values = Vec::new();
     for href in picked {
-        let info = cog::info_blocking(href)?;
+        let fetch_href = crate::service_logins::fetch_url(anonymous, href);
+        let info = cog::info_blocking(&fetch_href)?;
         let l = &info.layout;
         if l.palette.is_some() {
             return Ok(Sample::Classes);
@@ -1672,7 +1688,7 @@ fn sample_range(
         };
         let (w, h) = (lv.width.min(SAMPLE_SIDE), lv.height.min(SAMPLE_SIDE));
         let (c0, r0) = ((lv.width - w) / 2, (lv.height - h) / 2);
-        let read = cog::read_values_blocking(&info, href, level, 0, (c0, c0 + w), (r0, r0 + h))?;
+        let read = cog::read_values_blocking(&info, &fetch_href, level, 0, (c0, c0 + w), (r0, r0 + h))?;
         let (k, o) = scales.get(href).copied().or(scale).unwrap_or((1.0, 0.0));
         let fill: Vec<f32> = nodata.get(href).map(|f| f.iter().map(|v| *v as f32).collect()).unwrap_or_default();
         values.extend(read.into_iter().filter(|v| v.is_finite() && !fill.contains(v)).map(|v| f64::from(v) * k + o));

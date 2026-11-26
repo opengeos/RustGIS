@@ -164,8 +164,14 @@ fn normalized_args(tool: &str, arguments: &Value) -> Value {
 
 /// A string argument without its secrets: an address (one word with a scheme, or a database
 /// connection string) loses its password, keys and tokens; `password=…` in a keyword connection
-/// string is withheld. Other text is kept as it is, not cut at a `?` or `#`.
+/// string is withheld; active web logins and `rustgis-s3:` capability wrappers are scrubbed. Other
+/// text is kept as it is, not cut at a `?` or `#`.
 fn redact_string(s: &str) -> String {
+    let s = rustgis_engine::render::rustgis_tiles::logins::scrub(&rustgis_engine::sources::scrub_s3_wrappers(s));
+    redact_string_inner(&s)
+}
+
+fn redact_string_inner(s: &str) -> String {
     let t = s.trim();
     let lower = t.to_ascii_lowercase();
     // A password given as `password=…` or `password: …` (a keyword connection string, quoted or
@@ -259,17 +265,30 @@ fn redact_script(script: &str) -> String {
 /// secret, the passwords, keys and tokens in addresses ([`rustgis_engine::sources::redact`]),
 /// and the same inside a script's lines.
 fn redact(v: Value, depth: usize) -> Value {
+    let redact_bounded = |s: &str| {
+        if s.len() > MAX_ARGS {
+            // Scrub wrappers and active logins before clipping so a secret crossing MAX_ARGS
+            // cannot leave a recognizable prefix behind.
+            let scrubbed = rustgis_engine::render::rustgis_tiles::logins::scrub(&rustgis_engine::sources::scrub_s3_wrappers(s));
+            redact_string_inner(&crate::tools::clip(&scrubbed, MAX_ARGS))
+        } else {
+            redact_string(s)
+        }
+    };
     match v {
-        // A long value (inline GeoJSON) is cut before it's searched, not after.
-        Value::String(s) if s.len() > MAX_ARGS => Value::String(redact_string(&crate::tools::clip(&s, MAX_ARGS))),
-        Value::String(s) => Value::String(redact_string(&s)),
+        Value::String(s) => Value::String(redact_bounded(&s)),
         Value::Array(a) if depth < 16 => Value::Array(a.into_iter().map(|x| redact(x, depth + 1)).collect()),
         Value::Object(o) if depth < 16 => Value::Object(
             o.into_iter()
-                .map(|(k, x)| match (rustgis_engine::data::address::log_sensitive(&k), k.as_str(), x) {
-                    (true, _, _) => (k, json!("[redacted]")),
-                    (false, "script", Value::String(s)) => (k, json!(redact_script(&s))),
-                    (false, _, x) => (k, redact(x, depth + 1)),
+                .map(|(k, x)| {
+                    let sensitive = rustgis_engine::data::address::log_sensitive(&k);
+                    let is_script = k.as_str() == "script";
+                    let safe_k = redact_bounded(&k);
+                    match (sensitive, is_script, x) {
+                        (true, _, _) => (safe_k, json!("[redacted]")),
+                        (false, true, Value::String(s)) => (safe_k, json!(redact_script(&s))),
+                        (false, _, x) => (safe_k, redact(x, depth + 1)),
+                    }
                 })
                 .collect(),
         ),
@@ -507,5 +526,58 @@ mod tests {
         let output = redact_script(&(clean + "layer.rename {\"layer\":\"RGSYNTH_omitted_line\"}"));
         assert!(output.starts_with("# [1 further script line(s) not recorded]\n"));
         assert!(!output.contains("RGSYNTH_omitted_line"));
+    }
+
+    /// Active web-service logins and `rustgis-s3:` capability wrappers are scrubbed from both
+    /// string arguments and tool error replies in the MCP audit log.
+    #[test]
+    fn audit_scrubs_active_logins_and_s3_wrappers() {
+        let mut s = rustgis_engine::Session::new(rustgis_engine::Project::default());
+        s.database_logins.set_store(None);
+        let conn = s
+            .run(
+                "connection.new",
+                &json!({"kind": "wms", "address": "https://audit-active.example.org/wms", "auth": "header", "keyName": "X-Key"}),
+            )
+            .unwrap();
+        let active_secret = "RGSYNTH_active_audit_login_9921";
+        s.run("connection.login", &json!({"id": conn["id"], "apiKey": active_secret})).unwrap();
+
+        let wrapped = "rustgis-s3:0123456789abcdef:22:https://s3.example.org:https://s3.example.org/b/k?token=RGSYNTH_s3_tok_9921";
+        let scrubbed_login = redact_string(&format!("upstream rejected {active_secret}"));
+        assert!(!scrubbed_login.contains(active_secret), "{scrubbed_login}");
+        let scrubbed_s3 = redact_string(&format!("could not read {wrapped}"));
+        assert!(!scrubbed_s3.contains("rustgis-s3:") && !scrubbed_s3.contains("RGSYNTH_s3_tok_9921"), "{scrubbed_s3}");
+
+        let call = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "list_layers", "arguments": {}}});
+        let err = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "isError": true,
+                "content": [{"type": "text", "text": format!("failed on {wrapped} with {active_secret}")}]
+            }
+        });
+        let lines = entries("mcp", &call.to_string(), Some(&err.to_string()), Duration::ZERO, 0);
+        let error_text = lines[0]["error"].as_str().unwrap_or("");
+        assert!(!error_text.contains(active_secret), "{error_text}");
+        assert!(!error_text.contains("rustgis-s3:"), "{error_text}");
+        assert!(!error_text.contains("RGSYNTH_s3_tok_9921"), "{error_text}");
+
+        // Object keys and strings spanning MAX_ARGS also scrub active logins and wrappers.
+        let prefix = "x".repeat(MAX_ARGS - 8);
+        let spanning = format!("{prefix}{active_secret}tail");
+        let redacted = redact(
+            json!({
+                format!("key-{active_secret}-{wrapped}"): "val",
+                "long": spanning,
+            }),
+            0,
+        )
+        .to_string();
+        assert!(!redacted.contains(active_secret), "redacted leaked active login: {redacted}");
+        assert!(!redacted.contains(&active_secret[..8]), "redacted leaked active login prefix: {redacted}");
+        assert!(!redacted.contains("rustgis-s3:"), "redacted leaked s3 wrapper in key: {redacted}");
+        assert!(!redacted.contains("RGSYNTH_s3_tok_9921"), "redacted leaked wrapped token in key: {redacted}");
     }
 }

@@ -75,7 +75,9 @@ pub(crate) fn is_logged(s: &Session, id: &str, params: &Value) -> bool {
 /// each giving up more: texts at that bound and lists at their first [`LOG_LIST_ITEMS`]; then
 /// texts at 512 characters; then the first keys with their short values only.
 pub(crate) fn kept_params(params: &Value) -> Value {
-    let v = redacted(&clip(params, LOG_PARAMS_BYTES, LOG_LIST_ITEMS, 0, true));
+    // Scrub active logins and S3 wrappers before clipping so a secret spanning LOG_PARAMS_BYTES
+    // cannot leave a recognizable prefix behind.
+    let v = redacted(&clip(&scrub_log_value(params.clone(), 0), LOG_PARAMS_BYTES, LOG_LIST_ITEMS, 0, true));
     if serde_json::to_vec(&v).map_or(0, |b| b.len()) <= LOG_PARAMS_BYTES {
         return v;
     }
@@ -125,14 +127,13 @@ pub(crate) fn kept_params(params: &Value) -> Value {
     }
 }
 
-/// An error as the log keeps it: clipped to [`LOG_ERROR_CHARS`] before its secrets are taken out,
-/// so a long one costs little (a secret cut short still follows its name).
+/// An error as the log keeps it: active logins and `rustgis-s3:` wrappers are scrubbed before
+/// clipping to [`LOG_ERROR_CHARS`] so a secret spanning the clip boundary cannot leave a prefix
+/// behind, then other secrets are removed.
 fn kept_error(e: &str) -> String {
-    let e = if e.chars().nth(LOG_ERROR_CHARS).is_some() {
-        format!("{}…", e.chars().take(LOG_ERROR_CHARS).collect::<String>())
-    } else {
-        e.to_string()
-    };
+    let e = scrub_log_text(e);
+    let e =
+        if e.chars().nth(LOG_ERROR_CHARS).is_some() { format!("{}…", e.chars().take(LOG_ERROR_CHARS).collect::<String>()) } else { e };
     crate::cmd::history::redacted_text(&sql_secrets_removed(&e))
 }
 
@@ -199,7 +200,26 @@ fn review_value(v: &Value, depth: usize) -> Result<Value, String> {
 }
 
 fn redacted(v: &Value) -> Value {
-    crate::cmd::history::redacted(&embedded_redacted(v, 0))
+    scrub_log_value(crate::cmd::history::redacted(&embedded_redacted(v, 0)), 0)
+}
+
+/// Removes active login values and runtime capability wrappers from strings and object keys
+/// retained in log parameters. Containers nested to depth 8 or deeper are omitted rather than
+/// serialized so JSON escaping cannot disguise an active credential.
+fn scrub_log_text(t: &str) -> String {
+    crate::render::rustgis_tiles::logins::scrub(&crate::sources::scrub_s3_wrappers(t))
+}
+
+fn scrub_log_value(v: Value, depth: usize) -> Value {
+    match v {
+        Value::String(t) => Value::String(scrub_log_text(&t)),
+        Value::Array(a) if depth < 8 => Value::Array(a.into_iter().map(|x| scrub_log_value(x, depth + 1)).collect()),
+        Value::Object(o) if depth < 8 => {
+            Value::Object(o.into_iter().map(|(k, x)| (scrub_log_text(&k), scrub_log_value(x, depth + 1))).collect())
+        }
+        Value::Array(_) | Value::Object(_) => Value::String("[omitted: nested too deeply]".into()),
+        other => other,
+    }
 }
 
 /// A bounded log-only context check for a short key beside nested connection settings.
@@ -241,7 +261,7 @@ fn embedded_redacted(v: &Value, depth: usize) -> Value {
     match v {
         Value::String(t) => {
             let t = if t.contains('{') { json_in_text_redacted(t) } else { t.clone() };
-            Value::String(sql_secrets_removed(&t))
+            Value::String(crate::sources::scrub_s3_wrappers(&sql_secrets_removed(&t)))
         }
         Value::Array(a) if depth < 8 => Value::Array(a.iter().map(|x| embedded_redacted(x, depth + 1)).collect()),
         Value::Object(o) if depth < 8 => {

@@ -3073,7 +3073,9 @@ impl Session {
         let mut started = false;
         for m in &mut self.project.maps {
             for l in &mut m.layers {
+                let anon = l.anonymous;
                 let Some(rl) = &mut l.raster else { continue };
+                rl.anonymous |= anon;
                 let Some((e, at, failures)) = rl.read_failure() else { continue };
                 let wait = cache::backoff(cache::retry_wait(e, cache::RETRY), failures);
                 if at.elapsed() < wait {

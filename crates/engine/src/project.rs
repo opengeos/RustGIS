@@ -2165,7 +2165,9 @@ pub(crate) fn read_in_place(m: &mut Map) {
         .iter_mut()
         .filter_map(|l| {
             let name = l.name.clone();
+            let anon = l.anonymous;
             let rl = l.raster.as_mut()?;
+            rl.anonymous |= anon;
             (rl.in_place && rl.error.is_none() && !rl.path.as_deref().is_some_and(crate::s3_connections::is_s3_backed))
                 .then_some((name, rl))
         })

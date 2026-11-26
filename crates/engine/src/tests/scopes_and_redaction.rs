@@ -806,3 +806,598 @@ fn an_agent_url_request_cannot_clear_a_document_restriction() {
     assert!(s.run_scoped(scope, &call).is_err());
     assert_eq!(cache::ceiling_for(url), Reach::Public);
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn anonymous_reads_suppress_implicit_s3_and_sign_in_credentials() {
+    if isolate_process_test("tests::scopes_and_redaction::anonymous_reads_suppress_implicit_s3_and_sign_in_credentials") {
+        return;
+    }
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::Mutex;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let base = format!("http://{addr}");
+    let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let read_errors: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let stop = Arc::new(AtomicBool::new(false));
+    let seen_srv = seen.clone();
+    let errs_srv = read_errors.clone();
+    let stop_srv = stop.clone();
+    let server = std::thread::spawn(move || {
+        const MAX_HEADER_BYTES: usize = 16 * 1024;
+        while let Ok((mut stream, _)) = listener.accept() {
+            if stop_srv.load(Ordering::SeqCst) {
+                break;
+            }
+            let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 1024];
+            let mut complete = false;
+            loop {
+                match stream.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        buf.extend_from_slice(&chunk[..n]);
+                        if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                            complete = true;
+                            break;
+                        }
+                        if buf.len() > MAX_HEADER_BYTES {
+                            errs_srv
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .push(format!("oversized request headers ({} bytes)", buf.len()));
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        errs_srv.lock().unwrap_or_else(|e| e.into_inner()).push(format!("header read failed: {e}"));
+                        break;
+                    }
+                }
+            }
+            if !complete {
+                if !stop_srv.load(Ordering::SeqCst) && errs_srv.lock().unwrap_or_else(|e| e.into_inner()).is_empty() {
+                    errs_srv.lock().unwrap_or_else(|e| e.into_inner()).push(format!("incomplete request headers ({} bytes)", buf.len()));
+                }
+                continue;
+            }
+            let req = String::from_utf8_lossy(&buf).into_owned();
+            let first = req.lines().next().unwrap_or("");
+            if first.contains("/__stop") {
+                let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                break;
+            }
+            seen_srv.lock().unwrap_or_else(|e| e.into_inner()).push(req.clone());
+            let (status, body) = if first.contains("list-type=2") {
+                ("200 OK", "<ListBucketResult><IsTruncated>false</IsTruncated></ListBucketResult>")
+            } else if first.contains(".geojson") {
+                ("200 OK", r#"{"type":"FeatureCollection","features":[]}"#)
+            } else {
+                ("404 Not Found", "")
+            };
+            let resp = format!("HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+            let _ = stream.write_all(resp.as_bytes());
+        }
+    });
+
+    let mut s = Session::new(Project::default());
+    s.run(
+        "s3.connect",
+        &json!({
+            "name": "priv-anon-test",
+            "endpoint": base,
+            "buckets": ["priv-bkt-anon"],
+            "accessKeyId": "AKIA_SYNTH_ANON",
+            "secretAccessKey": "SECRET_SYNTH_ANON"
+        }),
+    )
+    .unwrap();
+    s.run(
+        "s3.connect",
+        &json!({
+            "name": "pub-anon-test",
+            "endpoint": base,
+            "buckets": ["pub-bkt-anon"],
+            "anonymous": true
+        }),
+    )
+    .unwrap();
+
+    // Baseline: non-anonymous fetch to the endpoint signs with the active S3 connection's keys.
+    s.run("layer.addUrl", &json!({"url": format!("{base}/priv-bkt-anon/baseline.geojson")})).unwrap();
+    let baseline = std::mem::take(&mut *seen.lock().unwrap_or_else(|e| e.into_inner()));
+    assert!(baseline.iter().any(|r| r.contains("AKIA_SYNTH_ANON")), "baseline request should be signed: {baseline:?}");
+
+    // 1. s3.list under anonymous session must not sign even when another connection shares the endpoint.
+    crate::service_logins::anonymously(&mut s, true, |s| {
+        s.run("s3.list", &json!({"bucket": "pub-bkt-anon"})).unwrap();
+    })
+    .unwrap();
+    let s3_reqs = std::mem::take(&mut *seen.lock().unwrap_or_else(|e| e.into_inner()));
+    assert!(!s3_reqs.is_empty());
+    for r in &s3_reqs {
+        assert!(!r.contains("AKIA_SYNTH_ANON") && !r.to_ascii_lowercase().contains("authorization:"), "s3.list signed anonymously: {r}");
+    }
+
+    // 2. Zarr metadata fetches under anonymous session or explicit anonymous param must not sign.
+    crate::service_logins::anonymously(&mut s, true, |s| {
+        let _ = s.run("raster.zarrInfo", &json!({"url": format!("{base}/priv-bkt-anon/store.zarr")}));
+    })
+    .unwrap();
+    let zarr_reqs = std::mem::take(&mut *seen.lock().unwrap_or_else(|e| e.into_inner()));
+    assert!(!zarr_reqs.is_empty());
+    for r in &zarr_reqs {
+        assert!(!r.contains("AKIA_SYNTH_ANON") && !r.to_ascii_lowercase().contains("authorization:"), "zarr signed anonymously: {r}");
+    }
+    let _ = s.run("raster.zarrInfo", &json!({"url": format!("{base}/priv-bkt-anon/explicit-anon.zarr"), "anonymous": true}));
+    let explicit_zarr_reqs = std::mem::take(&mut *seen.lock().unwrap_or_else(|e| e.into_inner()));
+    assert!(!explicit_zarr_reqs.is_empty());
+    for r in &explicit_zarr_reqs {
+        assert!(
+            !r.contains("AKIA_SYNTH_ANON") && !r.to_ascii_lowercase().contains("authorization:"),
+            "zarr explicit anonymous signed: {r}"
+        );
+    }
+
+    // 2b. Time-following Zarr layers tagged anonymous stay anonymous outside an anonymous scope.
+    {
+        let mut rl = rustgis_map::raster::RasterLayer::unread_in_place(format!("{base}/priv-bkt-anon/follow.zarr"));
+        rl.time_zarr = Some(rustgis_map::raster::ZarrTime {
+            store: format!("{base}/priv-bkt-anon/follow.zarr"),
+            variable: "v".into(),
+            index: vec![],
+            dim: "t".into(),
+            offset: 0,
+            dates: vec![0.0, 86_400_000.0],
+            crs: None,
+            window: None,
+            shown: None,
+            read_generation: rustgis_map::raster::next_read_generation(),
+        });
+        let id = s.map_mut().add_raster("AnonZarr", rl);
+        s.map_mut().layer_mut(id).unwrap().anonymous = true;
+        crate::cmd::zarr::follow_time_now(&mut s);
+        let follow_reqs = std::mem::take(&mut *seen.lock().unwrap_or_else(|e| e.into_inner()));
+        assert!(!follow_reqs.is_empty());
+        for r in &follow_reqs {
+            assert!(
+                !r.contains("AKIA_SYNTH_ANON") && !r.to_ascii_lowercase().contains("authorization:"),
+                "follow_time signed an anonymous Zarr layer: {r}"
+            );
+        }
+    }
+
+    // 3. layer.addUrl under anonymous session must not carry S3 signing headers.
+    crate::service_logins::anonymously(&mut s, true, |s| {
+        s.run("layer.addUrl", &json!({"url": format!("{base}/priv-bkt-anon/points.geojson")})).unwrap();
+    })
+    .unwrap();
+    let url_reqs = std::mem::take(&mut *seen.lock().unwrap_or_else(|e| e.into_inner()));
+    assert!(!url_reqs.is_empty());
+    for r in &url_reqs {
+        assert!(
+            !r.contains("AKIA_SYNTH_ANON") && !r.to_ascii_lowercase().contains("authorization:"),
+            "layer.addUrl signed anonymously: {r}"
+        );
+    }
+
+    // 3b. Deferred in-place COG reads marked anonymous must not carry S3 signing headers.
+    {
+        let mut rl =
+            rustgis_map::raster::RasterLayer::unread_in_place(format!("{base}/priv-bkt-anon/deferred-cog.tif")).with_anonymous(true);
+        let _ = rustgis_map::raster::read_together(&mut [&mut rl], true);
+        let cog_reqs = std::mem::take(&mut *seen.lock().unwrap_or_else(|e| e.into_inner()));
+        assert!(!cog_reqs.is_empty(), "deferred in-place COG should issue an HTTP request");
+        for r in &cog_reqs {
+            assert!(
+                !r.contains("AKIA_SYNTH_ANON") && !r.to_ascii_lowercase().contains("authorization:"),
+                "deferred anonymous COG signed with S3 credentials: {r}"
+            );
+        }
+    }
+
+    // 3c. Non-in-place anonymous S3 raster reload must pass rustgis-anonymous: to fetch_whole
+    // so s3::prepare never signs with an active S3 connection.
+    {
+        let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let cap_cb = captured.clone();
+        rustgis_data::source::remote::set_fetcher(move |url, _want, done| {
+            cap_cb.lock().unwrap_or_else(|e| e.into_inner()).push(url.to_string());
+            done(Err(rustgis_data::source::remote::Failed::Other("captured".into())));
+        });
+        let mut rl = rustgis_map::raster::RasterLayer::unread_in_place("s3://priv-bkt-anon/whole-reload.tif").with_anonymous(true);
+        rl.in_place = false;
+        rl.reload().unwrap();
+        let urls = captured.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(urls.as_slice(), ["rustgis-anonymous:s3://priv-bkt-anon/whole-reload.tif"]);
+        let prep = crate::render::rustgis_tiles::s3::prepare(&urls[0]).unwrap();
+        assert!(!prep.signed && prep.anonymous && prep.headers.is_empty(), "{prep:?}");
+    }
+
+    // 4. request_params strips rustgis-s3: capability wrappers under anonymous mode.
+    let wrapped = rustgis_data::s3_address::bind("0123456789abcdef", "https://s3.example.org", "s3://priv-bkt-anon/key.geojson").unwrap();
+    let p = json!({"url": wrapped});
+    let stripped =
+        crate::service_logins::anonymously(&mut s, true, |s| crate::service_logins::request_params(s, &p).unwrap().into_owned()).unwrap();
+    assert_eq!(stripped["url"], "s3://priv-bkt-anon/key.geojson");
+
+    stop.store(true, Ordering::SeqCst);
+    let _ = std::net::TcpStream::connect(addr);
+    let _ = server.join();
+    let errs = read_errors.lock().unwrap_or_else(|e| e.into_inner());
+    assert!(errs.is_empty(), "mock HTTP server saw incomplete or failed header reads: {errs:?}");
+    let _ = s.run("s3.disconnect", &json!({"name": "priv-anon-test"}));
+    let _ = s.run("s3.disconnect", &json!({"name": "pub-anon-test"}));
+}
+
+#[test]
+fn map_set_tiles_legend_requires_network_and_preserves_existing_tile_layers() {
+    let mut s = Session::new(Project::default());
+    let spec = s.registry.get("map.setTiles").unwrap();
+    for legend in [
+        json!("https://tiles.example.org/legend.png"),
+        json!(["https://tiles.example.org/legend.png"]),
+        json!([{"url": "https://tiles.example.org/legend.png"}]),
+    ] {
+        let effects = command_effects(spec, &json!({"name": "Base", "legend": legend}));
+        assert!(effects.contains(Effect::Network), "map.setTiles with legend must declare Network: {legend}");
+    }
+    for clearing in [json!(null), json!(""), json!([])] {
+        let effects = command_effects(spec, &json!({"name": "Base", "legend": clearing}));
+        assert!(!effects.contains(Effect::Network), "clearing legend must not require Network: {clearing}");
+    }
+
+    s.run(
+        "map.addTiles",
+        &json!({"url": "https://tiles.example.org/{z}/{x}/{y}.png", "name": "Base", "legend": "https://tiles.example.org/orig.png"}),
+    )
+    .unwrap();
+    isolate_plugins();
+    plugin("plug-no-net-legend", &["edit"]);
+    let err =
+        forward(&mut s, "plug-no-net-legend", "map.setTiles", json!({"name": "Base", "legend": "https://tiles.example.org/legend.png"}))
+            .unwrap_err();
+    assert!(err.contains("network"), "{err}");
+    assert_eq!(s.map().tiles.len(), 1, "existing tile layer must be preserved");
+    assert_eq!(s.map().tiles[0].name, "Base");
+    assert_eq!(s.map().tiles[0].legends.len(), 1);
+    assert_eq!(s.map().tiles[0].legends[0].url, "https://tiles.example.org/orig.png");
+
+    // Clearing an existing legend remains allowed for an edit-only plugin.
+    forward(&mut s, "plug-no-net-legend", "map.setTiles", json!({"name": "Base", "legend": null})).unwrap();
+    assert_eq!(s.map().tiles.len(), 1);
+    assert!(s.map().tiles[0].legends.is_empty());
+    rustgis_plugins::unload("plug-no-net-legend");
+}
+
+#[test]
+fn plugin_address_hold_scans_nested_legend_urls_and_bounds_work() {
+    use crate::render::rustgis_tiles::{address::Reach, cache};
+    let mut s = Session::new(Project::default());
+    s.run("map.addTiles", &json!({"url": "https://tiles.example.org/{z}/{x}/{y}.png", "name": "Base"})).unwrap();
+    isolate_plugins();
+    plugin("plug-net-nested", &["edit", "network"]);
+
+    for legend in [
+        json!(["http://127.0.0.1:8080/secret.png"]),
+        json!([{"url": "http://127.0.0.1:8080/secret.png"}]),
+        json!({"url": "http://127.0.0.1:8080/secret.png"}),
+    ] {
+        let err = forward(
+            &mut s,
+            "plug-net-nested",
+            "map.addTiles",
+            json!({"url": "https://tiles.example.org/{z}/{x}/{y}.png", "name": "New", "legend": legend}),
+        )
+        .unwrap_err();
+        assert!(err.contains("this computer or the local network"), "{err}");
+
+        let err = forward(&mut s, "plug-net-nested", "map.setTiles", json!({"name": "Base", "legend": legend})).unwrap_err();
+        assert!(err.contains("this computer or the local network"), "{err}");
+    }
+
+    // Public nested legend is accepted and restricted to public reach.
+    let public_legend = "https://nested-legend-check.example.org/l.png";
+    forward(&mut s, "plug-net-nested", "map.setTiles", json!({"name": "Base", "legend": [{"url": public_legend}]})).unwrap();
+    assert_eq!(cache::ceiling_for(public_legend), Reach::Public);
+
+    // Large numeric, coordinate-pair, and non-address object/ID arrays pass while still scanning strings inside.
+    let mut coords: Vec<Value> = (0..5000).map(|i| json!([f64::from(i) * 0.01, f64::from(i) * -0.01])).collect();
+    forward(
+        &mut s,
+        "plug-net-nested",
+        "map.setTiles",
+        json!({"name": "Base", "legend": [{"url": public_legend}], "extra": coords.clone()}),
+    )
+    .unwrap();
+    let mut features: Vec<Value> = (0..5000).map(|i| json!({"id": format!("feat-{i}"), "name": "parcel"})).collect();
+    forward(
+        &mut s,
+        "plug-net-nested",
+        "map.setTiles",
+        json!({"name": "Base", "legend": [{"url": public_legend}], "features": features.clone()}),
+    )
+    .unwrap();
+    coords.push(json!([0.0, "http://127.0.0.1:8080/hidden.png"]));
+    let err =
+        forward(&mut s, "plug-net-nested", "map.addTiles", json!({"url": "https://tiles.example.org/{z}/{x}/{y}.png", "extra": coords}))
+            .unwrap_err();
+    assert!(err.contains("this computer or the local network"), "{err}");
+    features.push(json!({"id": "hidden", "href": "http://127.0.0.1:8080/hidden-feat.png"}));
+    let err = forward(
+        &mut s,
+        "plug-net-nested",
+        "map.addTiles",
+        json!({"url": "https://tiles.example.org/{z}/{x}/{y}.png", "features": features}),
+    )
+    .unwrap_err();
+    assert!(err.contains("this computer or the local network"), "{err}");
+
+    // Exceeding the web-address cap fails closed rather than skipping remaining addresses.
+    let mut pad: Vec<Value> = (0..4100).map(|i| json!(format!("https://tiles.example.org/{i}.png"))).collect();
+    pad.push(json!("http://127.0.0.1:8080/hidden.png"));
+    let err = forward(&mut s, "plug-net-nested", "map.addTiles", json!({"url": "https://tiles.example.org/{z}/{x}/{y}.png", "extra": pad}))
+        .unwrap_err();
+    assert!(err.contains("too complex"), "{err}");
+
+    rustgis_plugins::unload("plug-net-nested");
+}
+
+#[test]
+fn durable_save_scrubs_structured_tile_legends_and_mysql_mssql_addresses() {
+    use crate::project::{Task, TaskStep};
+
+    let leg1 = fixture_marker("leg1");
+    let leg2 = fixture_marker("leg2");
+    let leg3 = fixture_marker("leg3");
+    let leg4 = fixture_marker("leg4");
+    let my_pw = fixture_marker("mypw");
+    let ma_pw = fixture_marker("mapw");
+    let ms_pw = fixture_marker("mspw");
+
+    let mut s = Session::new(Project::default());
+    s.project.tasks.push(Task {
+        name: "TileAndDb".into(),
+        description: String::new(),
+        steps: vec![
+            TaskStep {
+                title: "Add tiles".into(),
+                instructions: String::new(),
+                command: "map.addTiles".into(),
+                params: json!({
+                    "url": "https://tiles.example.org/{z}/{x}/{y}.png",
+                    "legend": [
+                        {"url": format!("https://user:{leg1}@tiles.example.org/l1.png?token={leg2}"), "minScale": 1000},
+                        format!("https://tiles.example.org/l2.png?api_key={leg3}")
+                    ]
+                }),
+            },
+            TaskStep {
+                title: "Set legend".into(),
+                instructions: String::new(),
+                command: "map.setTiles".into(),
+                params: json!({
+                    "name": "Base",
+                    "legend": {"url": format!("https://tiles.example.org/l3.png?token={leg4}")}
+                }),
+            },
+            TaskStep {
+                title: "Db links".into(),
+                instructions: String::new(),
+                command: "info.databaseTables".into(),
+                params: json!({
+                    "target": format!("mysql://ann:{my_pw}@db.example.org:3306/gis"),
+                    "secondary": format!("mariadb://ann:{ma_pw}@db.example.org:3306/gis"),
+                    "archive": format!("mssql://ann:{ms_pw}@db.example.org:1433/gis")
+                }),
+            },
+        ],
+    });
+
+    let (saved, _) = s.project.saved_text(None).unwrap();
+    for secret in [&leg1, &leg2, &leg3, &leg4, &my_pw, &ma_pw, &ms_pw] {
+        assert!(!saved.contains(secret.as_str()), "saved project leaked {secret}: {saved}");
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn project_log_scrubs_active_logins_and_s3_wrappers() {
+    if isolate_process_test("tests::scopes_and_redaction::project_log_scrubs_active_logins_and_s3_wrappers") {
+        return;
+    }
+    let active_secret = fixture_marker("projlog_active");
+    let s3_tok = fixture_marker("projlog_s3tok");
+    let mut s = Session::new(Project::default());
+    s.database_logins.set_store(None);
+    let conn = s
+        .run(
+            "connection.new",
+            &json!({"kind": "wms", "address": "https://log-scrub.example.org/wms", "auth": "header", "keyName": "X-Key"}),
+        )
+        .unwrap();
+    s.run("connection.login", &json!({"id": conn["id"], "apiKey": active_secret})).unwrap();
+
+    let wrapped = format!("rustgis-s3:0123456789abcdef:22:https://s3.example.org:https://s3.example.org/b/k?token={s3_tok}");
+    let logged = crate::log_params(&json!({
+        "note": format!("server rejected {active_secret}"),
+        "url": wrapped,
+    }))
+    .into_log_value()
+    .to_string();
+    assert!(!logged.contains(&active_secret), "log_params leaked active login: {logged}");
+    assert!(!logged.contains("rustgis-s3:"), "log_params leaked s3 wrapper: {logged}");
+    assert!(!logged.contains(&s3_tok), "log_params leaked wrapped query token: {logged}");
+
+    // An active login spanning LOG_PARAMS_BYTES (4096) in params must be scrubbed before clipping.
+    let param_pad = "p".repeat(crate::project_log::LOG_PARAMS_BYTES - 8);
+    let clipped_param = crate::log_params(&json!({
+        "note": format!("{param_pad}{active_secret}tail"),
+    }))
+    .into_log_value()
+    .to_string();
+    assert!(!clipped_param.contains(&active_secret), "clipped log_params leaked active login: {clipped_param}");
+    assert!(!clipped_param.contains(&active_secret[..8]), "clipped log_params leaked active login prefix: {clipped_param}");
+
+    // Deeply nested containers (depth >= 8) must omit contents so active logins (including ones
+    // with quotes or backslashes that JSON escaping would alter) and S3 wrappers cannot survive.
+    let quoted_secret = format!("pa\"ss\\word_{}", fixture_marker("deep_quoted"));
+    let conn2 = s
+        .run(
+            "connection.new",
+            &json!({"kind": "wms", "address": "https://log-scrub-quoted.example.org/wms", "auth": "header", "keyName": "X-Key"}),
+        )
+        .unwrap();
+    s.run("connection.login", &json!({"id": conn2["id"], "apiKey": quoted_secret})).unwrap();
+
+    let mut deep = json!({ format!("k-{active_secret}"): format!("{active_secret} {quoted_secret} {wrapped}") });
+    for _ in 0..10 {
+        deep = json!({"nested": [deep]});
+    }
+    let deep_logged = crate::log_params(&deep).into_log_value().to_string();
+    let escaped_quoted = serde_json::to_string(&quoted_secret).unwrap();
+    let escaped_inner = &escaped_quoted[1..escaped_quoted.len() - 1];
+    assert!(!deep_logged.contains(&active_secret), "deep log_params leaked active login: {deep_logged}");
+    assert!(!deep_logged.contains(&quoted_secret), "deep log_params leaked quoted login: {deep_logged}");
+    assert!(!deep_logged.contains(escaped_inner), "deep log_params leaked JSON-escaped quoted login: {deep_logged}");
+    assert!(!deep_logged.contains("rustgis-s3:"), "deep log_params leaked s3 wrapper: {deep_logged}");
+    assert!(!deep_logged.contains(&s3_tok), "deep log_params leaked wrapped token: {deep_logged}");
+    let (kept_deep, partial) = crate::project_log::kept_and_partial(&deep);
+    assert!(partial, "deeply nested omitted container must mark params partial: {kept_deep}");
+
+    // Failed command errors recorded in the session log must also scrub active logins and wrappers.
+    assert!(
+        s.run("layer.rename", &json!({"layer": format!("missing {active_secret} {wrapped}")})).is_err(),
+        "renaming a missing layer must fail to exercise error logging"
+    );
+    let entry = s.log.entries().last().unwrap();
+    let err = entry.error.as_deref().unwrap_or("");
+    assert!(!err.contains(&active_secret), "session log error leaked active login: {err}");
+    assert!(!err.contains("rustgis-s3:"), "session log error leaked s3 wrapper: {err}");
+    assert!(!err.contains(&s3_tok), "session log error leaked wrapped token: {err}");
+
+    // An active login spanning the error clip boundary must be scrubbed before truncation.
+    let pad = "a".repeat(1985);
+    assert!(
+        s.run("layer.rename", &json!({"layer": format!("{pad}{active_secret}tail")})).is_err(),
+        "renaming a missing padded layer must fail to exercise clipped error logging"
+    );
+    let entry = s.log.entries().last().unwrap();
+    let clipped_err = entry.error.as_deref().unwrap_or("");
+    assert!(!clipped_err.contains(&active_secret), "clipped error leaked active login: {clipped_err}");
+    assert!(!clipped_err.contains(&active_secret[..8]), "clipped error leaked active login prefix: {clipped_err}");
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn earthdata_status_guards_keychain_restore_by_scope_and_opt_in() {
+    if isolate_process_test("tests::scopes_and_redaction::earthdata_status_guards_keychain_restore_by_scope_and_opt_in") {
+        return;
+    }
+    use crate::render::rustgis_tiles::earthdata;
+    use rustgis_data::secrets::{MemorySecrets, Secret, SecretStore};
+
+    let store = Arc::new(MemorySecrets::new());
+    store.save(earthdata::ACCOUNT, &Secret::new("synthetic-earthdata-keychain-token")).unwrap();
+    earthdata::set_token(None).unwrap();
+    earthdata::set_secret_store(Some(store));
+    assert!(!earthdata::has_token());
+
+    let mut s = Session::new(Project::default());
+    assert!(!s.saved_secrets_opted_in);
+
+    // Non-opted-in native user session must not restore from keychain.
+    let st = s.run("earthdata.status", &json!({})).unwrap();
+    assert_eq!(st["token"], json!(false));
+    assert!(!earthdata::has_token());
+
+    // Plugin, agent, and assistant scopes must never restore from keychain even if opted in.
+    s.saved_secrets_opted_in = true;
+    isolate_plugins();
+    plugin("plug-earthdata-ro", &["edit", "network", "files"]);
+    let st = forward(&mut s, "plug-earthdata-ro", "earthdata.status", json!({})).unwrap();
+    assert_eq!(st["token"], json!(false));
+    assert!(!earthdata::has_token());
+    rustgis_plugins::unload("plug-earthdata-ro");
+
+    let st = s.run_scoped(agent_scope(AgentAccess::Allow, "ed-ro"), &Call::command("earthdata.status", json!({}))).unwrap();
+    assert_eq!(st["token"], json!(false));
+    assert!(!earthdata::has_token());
+
+    let (asst, _) = assistant_scope(7711);
+    let st = s.run_scoped(asst, &Call::command("earthdata.status", json!({}))).unwrap();
+    assert_eq!(st["token"], json!(false));
+    assert!(!earthdata::has_token());
+
+    // Opted-in native user session DOES restore from keychain.
+    let st = s.run("earthdata.status", &json!({})).unwrap();
+    assert_eq!(st["token"], json!(true));
+    assert!(earthdata::has_token());
+
+    let _ = earthdata::logout();
+    earthdata::set_secret_store(None);
+}
+
+#[test]
+fn layout_arrangement_mutations_require_reserved_while_listing_is_read_only() {
+    let mut s = Session::new(Project::default());
+    let spec = s.registry.get("layout.arrangement").unwrap();
+    assert!(!command_effects(spec, &json!({})).contains(Effect::Reserved));
+    for mutation in [json!({"save": "Atlas", "arrangement": "classic"}), json!({"remove": "Atlas"}), json!({"favourite": "mirrored"})] {
+        assert!(command_effects(spec, &mutation).contains(Effect::Reserved), "expected Reserved for {mutation}");
+    }
+
+    isolate_plugins();
+    plugin("plug-layout-arr", &["edit", "files", "network"]);
+    // Listing stays allowed.
+    forward(&mut s, "plug-layout-arr", "layout.arrangement", json!({})).unwrap();
+    // Mutating global preferences is denied for plugins.
+    for mutation in [json!({"save": "Atlas", "arrangement": "classic"}), json!({"remove": "Atlas"}), json!({"favourite": "mirrored"})] {
+        assert!(forward(&mut s, "plug-layout-arr", "layout.arrangement", mutation.clone()).is_err(), "{mutation}");
+        assert!(
+            s.run_scoped(agent_scope(AgentAccess::Allow, "arr-agent"), &Call::command("layout.arrangement", mutation.clone())).is_err()
+        );
+        let (asst, _) = assistant_scope(7712);
+        assert!(matches!(s.review(&asst, &Call::command("layout.arrangement", mutation)), Outcome::NeedsApproval(_)));
+    }
+    let (asst, _) = assistant_scope(7713);
+    assert!(matches!(s.review(&asst, &Call::command("layout.arrangement", json!({}))), Outcome::Allowed));
+    rustgis_plugins::unload("plug-layout-arr");
+}
+
+#[test]
+fn plugins_cannot_run_database_or_sql_commands() {
+    let mut s = Session::new(Project::default());
+    isolate_plugins();
+    plugin("plug-db-blocked", &["edit", "files", "network"]);
+    // Commands without a pre-condition reach policy::decide directly through Bridge::command.
+    for (cmd, params) in [
+        ("pg.discardEdits", json!({})),
+        ("info.databaseTables", json!({"database": "/tmp/a.duckdb"})),
+        ("layer.addDatabase", json!({"database": "/tmp/a.duckdb"})),
+        ("sql.query", json!({"sql": "SELECT 1"})),
+        ("sql.schema", json!({"database": "/tmp/a.duckdb"})),
+        ("layer.addSql", json!({"sql": "SELECT ST_Point(0, 0) AS g"})),
+    ] {
+        let err = forward(&mut s, "plug-db-blocked", cmd, params).unwrap_err();
+        assert!(err.contains("databases or run SQL"), "{cmd}: unexpected error: {err}");
+    }
+    // Commands with `.when(need_connection)` are also explicitly denied by policy authorization for plugins.
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let pkg =
+            rustgis_plugins::Package::from_zip(&rustgis_plugins::testing::package("plug-db-blocked-auth", &["edit", "files", "network"]))
+                .unwrap();
+        let loaded = rustgis_plugins::load(pkg, "test").unwrap();
+        for (cmd, params) in [("pg.tables", json!({})), ("pg.addLayer", json!({"table": "public.roads"}))] {
+            let err = s.as_session_plugin(loaded.clone(), |s| s.authorize(cmd, &params)).unwrap().err().expect("expected refusal");
+            assert!(err.contains("databases or run SQL"), "{cmd}: unexpected refusal: {err}");
+        }
+        rustgis_plugins::unload("plug-db-blocked-auth");
+    }
+    rustgis_plugins::unload("plug-db-blocked");
+}

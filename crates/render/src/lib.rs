@@ -5292,8 +5292,14 @@ fn render_frame(
                     water: lake_light.as_deref(),
                 };
                 // Read in place: the part in view, at the level the view needs.
-                let address = rl.path.as_deref().filter(|_| rl.reads_in_place());
-                let mut draw_it = |pm: &mut Pixmap, opacity: f32| match address {
+                let address = rl.path.as_deref().filter(|_| rl.reads_in_place()).map(|a| {
+                    if layer.anonymous || rl.anonymous {
+                        std::borrow::Cow::Owned(rustgis_tiles::s3::anonymous(a))
+                    } else {
+                        std::borrow::Cow::Borrowed(a)
+                    }
+                });
+                let mut draw_it = |pm: &mut Pixmap, opacity: f32| match address.as_deref() {
                     // Drawn from less than the view needs (a coarser level, tiles that couldn't be
                     // read): shown, and said with the tile errors.
                     Some(a) => match raster::draw_in_place(pm, a, data, &rl.style, stats, view, opacity, full_res_rasters, place, light) {

@@ -64,8 +64,15 @@ pub(super) fn declared(spec: &CommandSpec, params: &Value) -> Effects {
     if spec.id == "layout.publication" && params.get("coverage").is_some_and(|v| !v.is_null()) {
         effects = effects.with(Effect::Files);
     }
+    // Changing the favourite or saved publication-layout arrangements mutates app-wide preferences.
+    if spec.id == "layout.arrangement" && ["save", "remove", "favourite"].iter().any(|k| params.get(*k).is_some_and(|v| !v.is_null())) {
+        effects = effects.with(Effect::Reserved);
+    }
     if spec.id == "map.addTiles" {
         effects = effects.union(crate::cmd::tiles::add_reach(params));
+    }
+    if spec.id == "map.setTiles" && crate::cmd::tiles::sets_legend(params) {
+        effects = effects.with(Effect::Network);
     }
     if spec.id == "layer.addDataBytes" && crate::cmd::raster::bytes_is_jpeg2000(params) {
         effects = effects.with(Effect::Files);

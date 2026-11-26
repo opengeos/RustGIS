@@ -110,6 +110,10 @@ pub struct RasterLayer {
     /// [`RasterLayer::dropped_unsaid`]).
     #[serde(skip)]
     dropped: Vec<&'static str>,
+    /// Runtime flag mirroring [`crate::Layer::anonymous`]: in-place COG overview and tile reads
+    /// suppress implicit S3 and web-service credentials when true.
+    #[serde(skip)]
+    pub anonymous: bool,
 }
 
 /// Called once with a cloud-optimised GeoTIFF's overview, or why it couldn't be read.
@@ -333,6 +337,7 @@ impl RasterLayer {
             lost_said: false,
             look_lost: None,
             dropped: Vec::new(),
+            anonymous: false,
         })
     }
 
@@ -383,6 +388,7 @@ impl RasterLayer {
             lost_said: false,
             look_lost: None,
             dropped: Vec::new(),
+            anonymous: false,
         }
     }
 
@@ -421,6 +427,7 @@ impl RasterLayer {
             lost_said: false,
             look_lost: None,
             dropped: Vec::new(),
+            anonymous: false,
         }
     }
 
@@ -465,6 +472,24 @@ impl RasterLayer {
             lost_said: false,
             look_lost: None,
             dropped: Vec::new(),
+            anonymous: false,
+        }
+    }
+
+    /// Marks the raster layer as read without implicit S3 or saved web-service credentials.
+    pub fn with_anonymous(mut self, anonymous: bool) -> RasterLayer {
+        self.anonymous = anonymous;
+        self
+    }
+
+    /// The address passed to the COG reader: wrapped with `rustgis-anonymous:` when `self.anonymous`
+    /// is set so lazy overview and tile reads do not sign with an active S3 or web-service login.
+    pub fn fetch_address(&self) -> Option<std::borrow::Cow<'_, str>> {
+        let path = self.path.as_deref()?;
+        if self.anonymous && !path.starts_with("rustgis-anonymous:") {
+            Some(std::borrow::Cow::Owned(format!("rustgis-anonymous:{path}")))
+        } else {
+            Some(std::borrow::Cow::Borrowed(path))
         }
     }
 
@@ -523,8 +548,9 @@ impl RasterLayer {
         let land = slot.clone();
         self.opening = Some(slot);
         self.read_still = still.clone();
+        let fetch = self.fetch_address().unwrap_or(std::borrow::Cow::Borrowed(&address));
         reader(
-            &address,
+            &fetch,
             Box::new(move |result| {
                 *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(remote::check_still(&still).and(result.map(Arc::new)));
                 crate::source::wake();
@@ -650,6 +676,7 @@ impl RasterLayer {
                 .next()
                 .unwrap_or("raster.tif")
                 .to_string();
+            let fetch_path = self.fetch_address().unwrap_or(std::borrow::Cow::Borrowed(path)).into_owned();
             let placement = self.placement;
             // A PDF's page, read again from the download.
             let page = self.subdataset.clone();
@@ -659,7 +686,7 @@ impl RasterLayer {
             self.data = None;
             self.opening = Some(slot);
             rustgis_data::source::remote::fetch_whole(
-                path,
+                &fetch_path,
                 Box::new(move |result| {
                     let result = remote::check_still(&still)
                         .and(result.map_err(|e| match e {
@@ -896,6 +923,7 @@ impl RasterLayer {
             lost_said: _,
             look_lost: _,
             dropped: _,
+            anonymous: _,
         } = self;
         if *in_place || *tiled || opening.is_some() || read_still.is_some() || self.casts_shadows() {
             return None;
@@ -2602,6 +2630,7 @@ impl RasterLayer {
             lost_said: _,
             look_lost: _,
             dropped: _,
+            anonymous: _,
         } = self;
         let mut out = Vec::new();
         if let Some(p) = path {
@@ -3587,5 +3616,17 @@ mod tests {
         rl.data = Some(Arc::new(r));
         let CastShadows::Unavailable(why) = rl.sky_view(true, (0, 1), || {}) else { panic!("said") };
         assert!(why.contains("sky visibility") && why.contains("read in place"), "{why}");
+    }
+
+    #[test]
+    fn anonymous_fetch_address_wraps_plain_and_is_idempotent() {
+        let plain = RasterLayer::unread_in_place("s3://bucket/scene.tif");
+        assert_eq!(plain.fetch_address().as_deref(), Some("s3://bucket/scene.tif"));
+
+        let anon = RasterLayer::unread_in_place("s3://bucket/scene.tif").with_anonymous(true);
+        assert_eq!(anon.fetch_address().as_deref(), Some("rustgis-anonymous:s3://bucket/scene.tif"));
+
+        let already = RasterLayer::unread_in_place("rustgis-anonymous:s3://bucket/scene.tif").with_anonymous(true);
+        assert_eq!(already.fetch_address().as_deref(), Some("rustgis-anonymous:s3://bucket/scene.tif"));
     }
 }

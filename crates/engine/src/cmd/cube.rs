@@ -184,9 +184,9 @@ impl TimeCube for ZarrCube {
         // many dates doesn't push out the slices a layer following the slider holds. A step
         // never written is `None`: no value that date, as the Zarr summary takes it.
         let zt = &self.0.zt;
-        let r = match super::zarr::kept_slice(&super::zarr::slice_key(zt, i)) {
+        let r = match super::zarr::kept_slice(&super::zarr::slice_key_for(zt, i, self.0.anonymous)) {
             Some(r) => r,
-            None => match super::zarr::read_slice(zt, i)? {
+            None => match super::zarr::read_slice_with(zt, i, self.0.anonymous)? {
                 Some(r) => Arc::new(r),
                 None => return Ok(None),
             },

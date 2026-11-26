@@ -312,7 +312,10 @@ fn reopen_where(s: &mut Session, which: impl Fn(&str) -> bool) -> Counts {
         }
     }
     let mut in_place = Vec::new();
-    for raster in s.project.maps.iter_mut().flat_map(|m| m.layers.iter_mut()).filter_map(|l| l.raster.as_mut()) {
+    for l in s.project.maps.iter_mut().flat_map(|m| m.layers.iter_mut()) {
+        let anon = l.anonymous;
+        let Some(raster) = l.raster.as_mut() else { continue };
+        raster.anonymous |= anon;
         if raster.data.is_none() && raster.time_zarr.is_none() && raster.path.as_deref().is_some_and(&which) {
             if raster.in_place {
                 in_place.push(raster);

@@ -24,10 +24,19 @@ pub fn commands() -> Vec<C> {
         C::new("earthdata.logout", "Forget Earthdata Login Token", "Home › Add › Web Data › NASA Earthaccess", logout).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Reserved))
             .view()
             .params("{} — forgets the token for the session, deletes the one remembered on this computer and empties the download cache (what was read with it)"),
-        C::new("earthdata.status", "Earthdata Login Status", "Home › Add › Web Data › NASA Earthaccess", |_s, _p| {
-            // Asked for: the token remembered on this computer is read, if it wasn't.
-            earthdata::restore();
-            earthdata::forget_if_expired();
+        C::new("earthdata.status", "Earthdata Login Status", "Home › Add › Web Data › NASA Earthaccess", |s, _p| {
+            // Only a native user session may restore from the keychain (when saved secrets are
+            // enabled) or mutate process-wide expiry state; other scopes get a read-only status.
+            // Without opt-in, skip expiry cleanup when the token is remembered in the keychain so
+            // an unopted session does not delete a keychain entry.
+            if s.policy_user() {
+                if s.saved_secrets_opted_in {
+                    earthdata::restore();
+                }
+                if s.saved_secrets_opted_in || !earthdata::is_remembered() {
+                    earthdata::forget_if_expired();
+                }
+            }
             Ok(status())
         }).roles(&[]).effects(crate::policy::Effects::NONE)
         .view()
@@ -92,26 +101,28 @@ pub fn collections_query(p: &Value) -> Result<String, String> {
     Ok(earthdata::collections_url(keyword, short, b(p, "cloudHosted").unwrap_or(false), limit, page))
 }
 
-fn collections(_s: &mut Session, p: &Value) -> CmdResult {
+fn collections(s: &mut Session, p: &Value) -> CmdResult {
     let url = collections_query(p)?;
-    let bytes = answer_or_fetch(p, &url)?;
+    let anonymous = s.web_logins.is_anonymous() || b(p, "anonymous") == Some(true);
+    let bytes = answer_or_fetch(p, &url, anonymous)?;
     let found = earthdata::parse_collections(&bytes)?;
     Ok(json!({"count": found.len(), "collections": found.iter().map(earthdata::collection_json).collect::<Vec<_>>()}))
 }
 
 /// The collection a short name means: its cloud-hosted, newest version.
-fn resolve(short: &str) -> Result<Collection, String> {
+fn resolve(short: &str, anonymous: bool) -> Result<Collection, String> {
     let url = earthdata::collections_url("", Some(short), false, 50, 1);
-    let found = earthdata::parse_collections(&fetch(&url)?)?;
+    let found = earthdata::parse_collections(&fetch(&url, anonymous)?)?;
     earthdata::best(&found, short).cloned().ok_or_else(|| format!("NASA's CMR has no collection named {short}"))
 }
 
 /// The granule search a command names: its address and the collection's concept id.
 pub fn granules_query(s: &Session, p: &Value) -> Result<String, String> {
     let collection = ps(p, "collection").map(str::trim).filter(|c| !c.is_empty());
+    let anonymous = s.web_logins.is_anonymous() || b(p, "anonymous") == Some(true);
     let collection = match (collection, ps(p, "shortName").map(str::trim).filter(|c| !c.is_empty())) {
         (Some(c), _) => c.to_string(),
-        (None, Some(short)) => resolve(short)?.id,
+        (None, Some(short)) => resolve(short, anonymous)?.id,
         (None, None) => return Err("give collection (a concept id earthdata.collections lists) or shortName".into()),
     };
     // Where the map is, unless asked for everywhere.
@@ -122,7 +133,8 @@ pub fn granules_query(s: &Session, p: &Value) -> Result<String, String> {
 
 fn granules(s: &mut Session, p: &Value) -> CmdResult {
     let url = granules_query(s, p)?;
-    let bytes = answer_or_fetch(p, &url)?;
+    let anonymous = s.web_logins.is_anonymous() || b(p, "anonymous") == Some(true);
+    let bytes = answer_or_fetch(p, &url, anonymous)?;
     let found = earthdata::parse_granules(&bytes)?;
     let mut out = json!({"count": found.len(), "granules": found.iter().map(earthdata::granule_json).collect::<Vec<_>>()});
     if b(p, "footprints").unwrap_or(true) {
@@ -138,19 +150,19 @@ fn granules(s: &mut Session, p: &Value) -> CmdResult {
 }
 
 /// The answer the app fetched, or the one fetched now.
-fn answer_or_fetch(p: &Value, url: &str) -> Result<Vec<u8>, String> {
+fn answer_or_fetch(p: &Value, url: &str, anonymous: bool) -> Result<Vec<u8>, String> {
     match ps(p, "answer") {
         Some(a) => Ok(a.as_bytes().to_vec()),
-        None => fetch(url),
+        None => fetch(url, anonymous),
     }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn fetch(url: &str) -> Result<Vec<u8>, String> {
-    crate::render::rustgis_tiles::cache::download_blocking(url)
+fn fetch(url: &str, anonymous: bool) -> Result<Vec<u8>, String> {
+    crate::render::rustgis_tiles::cache::download_blocking(&crate::service_logins::fetch_url(anonymous, url))
 }
 
 #[cfg(target_arch = "wasm32")]
-fn fetch(_url: &str) -> Result<Vec<u8>, String> {
+fn fetch(_url: &str, _anonymous: bool) -> Result<Vec<u8>, String> {
     Err("in the web app, search NASA Earthdata with Home › Add › Web Data › NASA Earthaccess".into())
 }
