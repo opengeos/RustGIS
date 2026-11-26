@@ -112,9 +112,12 @@ impl Phone {
         }
     }
 
-    /// Whether Back, taken from the system, came since this was last asked.
+    /// Whether Back, taken from the system, came since this was last asked. A refusal is logged,
+    /// as `takes_back`'s is, and counts as no Back.
     pub fn take_back(&self) -> bool {
-        self.java(|env, activity| env.call_method(activity, jni_str!("takeBack"), jni_sig!(() -> boolean), &[])?.z()).unwrap_or(false)
+        self.java(|env, activity| env.call_method(activity, jni_str!("takeBack"), jni_sig!(() -> boolean), &[])?.z())
+            .inspect_err(|e| log::warn!("{e}"))
+            .unwrap_or(false)
     }
 
     /// Whether a picker for opening is on the screen and hasn't answered.
