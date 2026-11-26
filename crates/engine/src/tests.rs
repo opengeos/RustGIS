@@ -2108,7 +2108,7 @@ fn a_streamed_layer_says_its_view_reads_notes_once() {
         };
         let expected: &[&str] = if nan {
             &[
-                "roads: 1 shape(s) have a coordinate that isn't a number under a bounding box that is one: they're left out of the read, but the layer's extent and its index still take in their stored boxes",
+                "roads: 1 shape(s) have a coordinate that isn't a number under a bounding box that is one: they have no geometry to read, but the layer's extent and its index still take in their stored boxes",
             ]
         } else {
             &[]

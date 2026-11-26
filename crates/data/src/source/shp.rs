@@ -312,6 +312,7 @@ impl ShpSource {
         let (mut skipped, mut unread_dates, mut null_text, mut boxed_off, mut not_utf8) = (0, Vec::new(), Vec::new(), 0u64, Vec::new());
         let mut nonfinite = Vec::new();
         let mut deleted = 0usize;
+        let mut kept_no_number = 0usize;
         // The same directory, ordering, extent rules and read-only scan fallback as sampled
         // reads, with no interaction row cap. The index visits records without materializing
         // their directory or the complete feature collection in memory.
@@ -320,6 +321,7 @@ impl ShpSource {
         crate::progress::begin(self.info.count.and_then(|n| usize::try_from(n).ok()).unwrap_or(0));
         let mut each = |i: u32, place: Place| -> Result<()> {
             crate::progress::step(1)?;
+            let mut no_number = false;
             if u64::from(place.len) > MAX_RECORD {
                 skipped += 1;
                 return Ok(());
@@ -331,14 +333,15 @@ impl ShpSource {
                 return Ok(());
             }
             let geometry = match parse_shape(&buf) {
-                // A coordinate that isn't a number (NaN or infinite) has no place: the record is
-                // left out and counted, as one that can't be converted (#1985). One under a stored
-                // box the index takes ([`index::usable`]) is counted apart too, as the index framed
-                // it by that box; a backwards one it can't frame, and counts as unboxed instead.
+                // A coordinate that isn't a number (NaN or infinite) has no place: the record keeps
+                // its attributes without its geometry, as a whole read keeps it (#1985, #2032
+                // C2f), and is counted where it is read. One under a stored box the index takes
+                // ([`index::usable`]) is counted apart too, as the index framed it by that box; a
+                // backwards one it can't frame, and counts as unboxed instead.
                 Ok(Some(g)) if !g.is_finite() => {
-                    skipped += 1;
                     boxed_off += u64::from(index::usable(record_box(&buf, u64::from(place.len))));
-                    return Ok(());
+                    no_number = true;
+                    None
                 }
                 Ok(Some(g)) => {
                     // A box the index took as stored (one in order) that misses part of the shape.
@@ -382,6 +385,7 @@ impl ShpSource {
             } else {
                 vec![Value::Null; self.table.columns.len()]
             };
+            kept_no_number += usize::from(no_number);
             chunks.push(Feature { id: u64::from(i) + 1, geometry, attrs })
         };
         let (matched, complete) = match numbered {
@@ -402,6 +406,7 @@ impl ShpSource {
             null_text,
             notes: boxed_off_note(boxed_off, false, late)
                 .into_iter()
+                .chain(kept_no_number_note(kept_no_number, false))
                 .chain(deleted_note(deleted, false).map(crate::loss::Note::from))
                 .chain(nonfinite_note(&self.info.fields, &nonfinite, false))
                 .collect(),
@@ -451,6 +456,7 @@ impl FeatureSource for ShpSource {
         let (mut skipped, mut unread_dates, mut null_text, mut boxed_off, mut not_utf8) = (0, Vec::new(), Vec::new(), 0u64, Vec::new());
         let mut nonfinite = Vec::new();
         let mut deleted = 0usize;
+        let mut kept_no_number = 0usize;
         // An extent the file's system couldn't bound (#1925) has no boxes for the index to sample
         // by: every record is visited, tested, and the matches sampled as they come.
         let late = req.extent.is_some() && bounds.is_none();
@@ -462,6 +468,7 @@ impl FeatureSource for ShpSource {
             if late {
                 crate::progress::step(1)?;
             }
+            let mut no_number = false;
             if u64::from(place.len) > MAX_RECORD {
                 skipped += 1;
                 return Ok(());
@@ -472,14 +479,15 @@ impl FeatureSource for ShpSource {
                 return Ok(());
             }
             let geometry = match parse_shape(&buf) {
-                // A coordinate that isn't a number (NaN or infinite) has no place: the record is
-                // left out and counted, as one that can't be converted (#1985). One under a stored
-                // box the index takes ([`index::usable`]) is counted apart too, as the index framed
-                // it by that box; a backwards one it can't frame, and counts as unboxed instead.
+                // A coordinate that isn't a number (NaN or infinite) has no place: the record keeps
+                // its attributes without its geometry, as a whole read keeps it (#1985, #2032
+                // C2f), and is counted where it is read. One under a stored box the index takes
+                // ([`index::usable`]) is counted apart too, as the index framed it by that box; a
+                // backwards one it can't frame, and counts as unboxed instead.
                 Ok(Some(g)) if !g.is_finite() => {
-                    skipped += 1;
                     boxed_off += u64::from(index::usable(record_box(&buf, u64::from(place.len))));
-                    return Ok(());
+                    no_number = true;
+                    None
                 }
                 Ok(Some(g)) => match self.reproject.place(g, req) {
                     Some(placed) => Some(placed),
@@ -522,9 +530,11 @@ impl FeatureSource for ShpSource {
                 vec![Value::Null; self.table.columns.len()]
             };
             let f = Feature { id: u64::from(i) + 1, geometry, attrs };
+            // A late read is one by area, which gives no feature without geometry.
             if late {
                 sample.keep(f)
             } else {
+                kept_no_number += usize::from(no_number);
                 features.push(f)
             }
             Ok(())
@@ -548,6 +558,7 @@ impl FeatureSource for ShpSource {
             // visits the whole layer, so its count is of the layer.
             notes: boxed_off_note(boxed_off, !late && !complete, late)
                 .into_iter()
+                .chain(kept_no_number_note(kept_no_number, !late && !complete))
                 .chain(deleted_note(deleted, !late && !complete).map(crate::loss::Note::from))
                 // The values a late read decodes are of the records its sample keeps (geometry checks
                 // aside), so its count is of a sample whenever the sample isn't the whole layer.
@@ -594,12 +605,12 @@ impl FeatureSource for ShpSource {
     }
 }
 
-/// Says how many shapes a read left out for a coordinate that isn't a number while their stored
-/// box is one the index takes (finite and in order, [`index::usable`]): [`record_box`] doesn't read
+/// Says how many shapes a read found with a coordinate that isn't a number, which have no geometry
+/// to read ([`kept_no_number_note`]), while their stored box is one the index takes (finite and in order, [`index::usable`]): [`record_box`] doesn't read
 /// the points, so the layer's extent and its index still take in those boxes. A backwards stored
 /// box over such a point isn't counted here: the index can't frame it from the points, so it's
-/// left out of the extent and counted with the shapes that have no usable box. A `sampled` read visited only some of the matches, so its count is of
-/// the shapes it read, not of the layer. A `late` read (an area the layer's system couldn't bound,
+/// left out of the extent and counted with the shapes that have no usable box. A `sampled` read
+/// visited only some of the matches, so its count is of the shapes it read, not of the layer. A `late` read (an area the layer's system couldn't bound,
 /// #1925) visited every record and can't place a NaN shape's stored box in the area, so its count
 /// is of the whole layer, and says so.
 fn boxed_off_note(n: u64, sampled: bool, late: bool) -> Vec<crate::loss::Note> {
@@ -614,11 +625,26 @@ fn boxed_off_note(n: u64, sampled: bool, late: bool) -> Vec<crate::loss::Note> {
         format!("{n} shape(s)")
     };
     vec![crate::loss::Note::loss(
-        crate::loss::LossCode::DroppedFeature,
+        crate::loss::LossCode::DroppedGeometry,
         format!(
-            "{what} have a coordinate that isn't a number under a bounding box that is one: they're left out of the read, but the layer's extent and its index still take in their stored boxes"
+            "{what} have a coordinate that isn't a number under a bounding box that is one: they have no geometry to read, but the layer's extent and its index still take in their stored boxes"
         ),
     )]
+}
+
+/// Says how many shapes with a coordinate that isn't a number a read gave without geometry,
+/// keeping their attributes, in the words a whole read says it with
+/// ([`crate::io`]'s Shapefile reader); of those read when the read is `sampled`.
+fn kept_no_number_note(n: usize, sampled: bool) -> Option<crate::loss::Note> {
+    let what = match n {
+        0 => return None,
+        n if sampled => format!("{n} of the shapes read (a sample of the layer, which may hold more)"),
+        n => format!("{n} shape(s)"),
+    };
+    Some(crate::loss::Note::loss(
+        crate::loss::LossCode::DroppedGeometry,
+        format!("{what} have a coordinate that isn't a number (NaN or infinite): their features are kept without geometry"),
+    ))
 }
 
 /// The numbers in the `.dbf` that aren't finite, read as empty ([`crate::io::nonfinite_note`]); a
