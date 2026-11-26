@@ -4629,8 +4629,8 @@ pub fn line_pitch_mm(size: f64) -> f64 {
 
 /// The part of a text element's box (pixels, from its top-left corner) [`text_block`] inks, a line's
 /// height more each way: across, its lines as each is aligned (past the box where one overruns
-/// it); down, its lines, or the box and the line [`text_block`] still draws past it. `None` when
-/// it has no line.
+/// it); down, its lines from where its block starts ([`block_shift`]), or the box and the line
+/// [`text_block`] still draws past it. `None` when it has no line.
 fn text_area(r: Rect, s: &str, size: f32, style: TextStyle, ppp: f64) -> Option<Rect> {
     let px = size.clamp(2.0, 400.0) * 1.33 * ppp as f32;
     let spacing = style.spacing * 1.33 * ppp as f32;
@@ -4650,7 +4650,7 @@ fn text_area(r: Rect, s: &str, size: f32, style: TextStyle, ppp: f64) -> Option<
     let shift = block_shift(style.valign, f64::from(r.height()), f64::from(px), usize::from(lines), f64::from(style.line_spacing)) as f32;
     let block = (1.0 + (f32::from(lines) - 1.0) * style.line_spacing) * px * 1.25;
     let down = (r.height() + px).min(shift + block);
-    (lines > 0).then(|| Rect::from_ltrb(x0 - px, -px, x1 + px, down + px)).flatten()
+    (lines > 0).then(|| Rect::from_ltrb(x0 - px, shift - px, x1 + px, down + px)).flatten()
 }
 
 /// Draws with `draw` (given the box to draw in and how many of the page's pixels one of its own
