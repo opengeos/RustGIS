@@ -422,13 +422,14 @@ pub fn bare_vn2000_error(text: &str) -> String {
 /// `xy_grids`, `z_grids`, `gridlist`…), so a grid key PROJ adds later is refused too.
 fn validate_proj_string(proj4: &str) -> Result<(), String> {
     for token in proj4.split_whitespace() {
-        let t = token.trim_start_matches('+');
-        let (key, val) = t.split_once('=').unwrap_or((t, ""));
-        if proj_key_refused(key, val) {
-            return Err(format!("parameter '+{t}' is not allowed in coordinate system definition"));
-        }
-        if val.contains("..") || val.contains('/') || val.contains('\\') {
-            return Err("file path in parameter is not allowed in coordinate system definition".into());
+        for part in token.trim_start_matches('+').split('+') {
+            let (key, val) = part.split_once('=').unwrap_or((part, ""));
+            if proj_key_refused(key, val) {
+                return Err(format!("parameter '+{part}' is not allowed in coordinate system definition"));
+            }
+            if val.contains("..") || val.contains('/') || val.contains('\\') {
+                return Err("file path in parameter is not allowed in coordinate system definition".into());
+            }
         }
     }
     Ok(())
@@ -440,8 +441,12 @@ fn validate_proj_string(proj4: &str) -> Result<(), String> {
 pub(crate) fn proj_key_refused(key: &str, val: &str) -> bool {
     let key = key.trim().to_ascii_lowercase();
     key.contains("grid")
-        || ["init", "file", "catalog", "step"].contains(&key.as_str())
-        || (key == "proj" && val.trim().eq_ignore_ascii_case("pipeline"))
+        || ["init", "file", "catalog", "step", "model"].contains(&key.as_str())
+        || (key == "proj"
+            && matches!(
+                val.trim().to_ascii_lowercase().as_str(),
+                "pipeline" | "defmodel" | "tinshift" | "gridshift" | "hgridshift" | "vgridshift" | "xyzgridshift"
+            ))
 }
 
 impl Crs {
@@ -3453,7 +3458,17 @@ mod tests {
             "+proj=utm +zone=33 +gridlist=x",
             "+proj=pipeline +step +proj=utm +zone=33",
             "+PROJ=Pipeline +step +proj=utm +zone=33",
+            "+proj=merc nadgrids=foo.gsb",
+            "+proj=merc+nadgrids=foo.gsb",
+            "+proj=defmodel +model=foo.json",
+            "+proj=tinshift",
+            "+proj=hgridshift",
+            "+proj=vgridshift",
+            "+proj=xyzgridshift",
+            "+proj=gridshift",
+            "+proj=utm +zone=33 +model=foo.json",
         ] {
+            assert!(validate_proj_string(bad).is_err(), "{bad}");
             assert!(Crs::parse(bad).is_err(), "{bad}");
         }
         // A file's own definition may carry `+nadgrids=@null` (Web Mercator as GDAL writes it).

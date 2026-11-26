@@ -55,6 +55,20 @@ pub(crate) fn destination(
     Ok(normalized)
 }
 
+/// Returns the Copernicus Data Space authorization header only when the request is neither
+/// bare (signed S3 or explicitly anonymous) nor already carrying a service login.
+pub(crate) fn copernicus_authorization(bare: bool, has_login: bool, url: &str) -> Option<String> {
+    if bare || has_login { None } else { rustgis_ui_egui::rustgis_engine::render::rustgis_tiles::copernicus::authorization(url) }
+}
+
+/// Formats a disallowed AI provider URL error with any address credentials redacted.
+pub(crate) fn disallowed_assistant_url_error(url: &str) -> String {
+    rustgis_ui_egui::rustgis_engine::data::diagnostics::message_with_address(
+        url,
+        "only HTTPS addresses, or plain HTTP on this computer or network, are allowed",
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -100,6 +114,27 @@ mod tests {
         let error = fetch_error("https://status.example/tile?token=synthetic", "couldn't reach it".into(), true);
         assert!(!error.contains("synthetic"));
         assert!(cache::http_status(&error).is_none());
+    }
+
+    #[test]
+    fn copernicus_authorization_omits_bare_and_login_requests() {
+        use rustgis_ui_egui::rustgis_engine::render::rustgis_tiles::copernicus;
+        copernicus::logout();
+        let sent = copernicus::sending();
+        let body = br#"{"access_token":"synthetic-web-tok","expires_in":1800,"refresh_token":"ref"}"#;
+        copernicus::login_answer(&sent, "user@example.invalid", 200, body).unwrap();
+        let data = "https://download.dataspace.copernicus.eu/odata/v1/Products(abc)/$value";
+        assert_eq!(copernicus_authorization(false, false, data).as_deref(), Some("Bearer synthetic-web-tok"));
+        assert_eq!(copernicus_authorization(true, false, data), None);
+        assert_eq!(copernicus_authorization(false, true, data), None);
+        copernicus::logout();
+    }
+
+    #[test]
+    fn disallowed_assistant_url_error_redacts_secrets() {
+        let err = disallowed_assistant_url_error("http://example.org/v1/models?key=super-secret-key");
+        assert!(!err.contains("super-secret-key"), "{err}");
+        assert!(err.contains("only HTTPS addresses"), "{err}");
     }
 
     fn poll<F: Future + ?Sized>(f: Pin<&mut F>) -> Poll<F::Output> {

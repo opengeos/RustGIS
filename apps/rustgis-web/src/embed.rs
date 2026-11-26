@@ -44,6 +44,11 @@ pub enum Msg {
     Run { id: Value, command: String, params: Value },
 }
 
+/// Whether a `MessageEvent` origin identifies a real embedding page (never empty or opaque `"null"`).
+pub fn valid_origin(origin: &str) -> bool {
+    !origin.is_empty() && origin != "null"
+}
+
 /// Reads a message from the page; anything else (another script's messages) is `None`.
 pub fn parse(v: &Value) -> Option<Msg> {
     match v.get("rustgis")?.as_str()? {
@@ -470,6 +475,14 @@ mod tests {
         // Another visit starts empty.
         let (load_again, _) = visit_prefs();
         assert_eq!(load_again("assistant_model_openai"), None);
+    }
+
+    #[test]
+    fn valid_origin_rejects_empty_and_opaque_null() {
+        assert!(!valid_origin(""));
+        assert!(!valid_origin("null"));
+        assert!(valid_origin("https://example.org"));
+        assert!(valid_origin("http://127.0.0.1:8888"));
     }
 
     #[test]

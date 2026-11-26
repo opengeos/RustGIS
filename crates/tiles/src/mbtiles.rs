@@ -60,8 +60,10 @@ pub fn check(archive: &str) -> Result<(), String> {
         };
     }
     let p = archive.strip_prefix("file://").unwrap_or(archive);
-    let drive = p.as_bytes().get(1) == Some(&b':') && p.as_bytes().first().is_some_and(u8::is_ascii_alphabetic);
-    let share = p.starts_with("\\\\") || p.starts_with("//") || (archive.starts_with("file://") && !p.starts_with('/'));
+    let drive = p.as_bytes().get(1) == Some(&b':')
+        && p.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
+        && matches!(p.as_bytes().get(2), Some(b'/' | b'\\'));
+    let share = matches!(p.as_bytes(), [b'/' | b'\\', b'/' | b'\\', ..]) || (archive.starts_with("file://") && !p.starts_with('/'));
     if share || !(p.starts_with('/') || drive) || p.chars().any(char::is_control) || p.len() > 4096 {
         return Err(format!("'{p}': an MBTiles file is given by its full path on this computer"));
     }
@@ -606,10 +608,21 @@ mod tests {
         }
         assert!(check("/data/a.mbtiles").is_ok());
         assert!(check("C:\\data\\a.MBTiles").is_ok());
+        assert!(check("C:/data/a.mbtiles").is_ok());
         assert!(check("upload:a.mbtiles").is_ok());
-        for bad in
-            ["a.mbtiles", "/data/a.pmtiles", "\\\\server\\share\\a.mbtiles", "file://server/a.mbtiles", "upload:", "https://x/a.mbtiles"]
-        {
+        for bad in [
+            "a.mbtiles",
+            "/data/a.pmtiles",
+            "\\\\server\\share\\a.mbtiles",
+            "//server/share/a.mbtiles",
+            "/\\server/share/x.mbtiles",
+            "\\/server/share/x.mbtiles",
+            "file:///\\server/share/x.mbtiles",
+            "C:relative.mbtiles",
+            "file://server/a.mbtiles",
+            "upload:",
+            "https://x/a.mbtiles",
+        ] {
             assert!(check(bad).is_err(), "{bad}");
         }
         assert_eq!(template("upload:x"), "mbtiles:{z}/{x}/{y}@upload:x");

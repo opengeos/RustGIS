@@ -93,6 +93,7 @@ pub fn portal_base(input: &str) -> Result<String, String> {
     }
     let (origin, path) =
         split(raw).ok_or_else(|| rustgis_data::diagnostics::message_with_address(raw, "a portal is given by its https:// address"))?;
+    crate::address::check(&origin, None)?;
     if origin == "https://arcgis.com" {
         return Ok(ONLINE.to_string());
     }
@@ -863,6 +864,7 @@ mod native {
             // A token request is never redirected: a redirect would replay the code or the refresh token.
             ureq::Agent::config_builder()
                 .tls_config(rustgis_data::http::tls_config())
+                .proxy(None)
                 .http_status_as_error(!forms)
                 .timeout_global(Some(REQUEST_TIMEOUT))
                 .user_agent(concat!("RustGIS/", env!("CARGO_PKG_VERSION"), " (+https://rustgis.app)"))
@@ -871,6 +873,21 @@ mod native {
                 .build()
                 .into()
         })
+    }
+
+    /// Reads at most `max` decoded bytes from `reader`, refusing larger payloads.
+    fn read_limited(reader: impl Read, max: usize) -> Result<Vec<u8>, String> {
+        let mut buf = Vec::new();
+        reader.take(max as u64 + 1).read_to_end(&mut buf).map_err(|e| e.to_string())?;
+        if buf.len() > max {
+            return Err(format!("larger than {max} bytes"));
+        }
+        Ok(buf)
+    }
+
+    /// Bounds both wire and decoded bytes (when gzip expands them) to `max`.
+    fn read_bounded(mut body: ureq::Body, max: usize) -> Result<Vec<u8>, String> {
+        read_limited(body.with_config().limit(max as u64 + 2).reader(), max)
     }
 
     /// POSTs a form; a refusal's answer (an OAuth `error`, often with HTTP 400) is returned for
@@ -891,7 +908,7 @@ mod native {
         if status >= 500 {
             return Err(format!("the portal answered HTTP {status}"));
         }
-        resp.into_body().with_config().limit(1 << 20).read_to_vec().map_err(|e| e.to_string())
+        read_bounded(resp.into_body(), 1 << 20)
     }
 
     /// Request preparation (including TLS setup) can wait; the final send has its own check.
@@ -912,7 +929,7 @@ mod native {
             .header("Accept", "application/json")
             .call()
             .map_err(|e| e.to_string())?;
-        resp.into_body().with_config().limit(4 << 20).read_to_vec().map_err(|e| e.to_string())
+        read_bounded(resp.into_body(), 4 << 20)
     }
 
     /// Starts signing in to `portal` (blank: ArcGIS Online) with an OAuth app's `client_id`:
@@ -1176,6 +1193,17 @@ mod native {
         assert!(revoke_all_with(refuse, vec![r(), r()]).is_err_and(|unsent| unsent == vec![r(), r()]));
         assert!(revoke_all_with(|_| Ok(()), vec![r()]).is_ok());
         assert!(revoke_all_with(refuse, Vec::new()).is_ok());
+    }
+
+    #[cfg(test)]
+    #[test]
+    fn bounded_body_reader_and_proxy_configuration() {
+        assert!(agent(true).config().proxy().is_none());
+        assert!(agent(false).config().proxy().is_none());
+        assert_eq!(read_limited(std::io::Cursor::new(vec![b'a'; 16]), 16).unwrap().len(), 16);
+        assert!(read_limited(std::io::Cursor::new(vec![b'a'; 17]), 16).unwrap_err().contains("larger than 16"));
+        // An unbounded stream stops at max + 1 bytes instead of allocating indefinitely.
+        assert!(read_limited(std::io::repeat(b'x'), 64).unwrap_err().contains("larger than 64"));
     }
 
     /// The request line's target of an HTTP request.

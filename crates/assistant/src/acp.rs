@@ -749,16 +749,16 @@ impl Session {
 /// Where a program is on the PATH (with Windows' extensions: `.exe`, `.cmd`, `.bat`), if anywhere.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn find_program(program: &str) -> Option<std::path::PathBuf> {
-    find_program_in(program, &std::env::var_os("PATH")?, &std::env::current_dir().ok()?)
+    find_program_in(program, &std::env::var_os("PATH")?)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn find_program_in(program: &str, path: &std::ffi::OsStr, cwd: &std::path::Path) -> Option<std::path::PathBuf> {
+fn find_program_in(program: &str, path: &std::ffi::OsStr) -> Option<std::path::PathBuf> {
     let exts: &[&str] = if cfg!(windows) { &[".exe", ".cmd", ".bat"] } else { &[""] };
-    std::env::split_paths(path).filter(|p| !p.as_os_str().is_empty()).find_map(|dir| {
-        let dir = if dir.is_absolute() { dir } else { cwd.join(dir) };
-        exts.iter().map(|e| dir.join(format!("{program}{e}"))).find(|p| p.is_absolute() && runnable(p))
-    })
+    // Absolute entries only: an empty or relative one would resolve against the current folder.
+    std::env::split_paths(path)
+        .filter(|p| p.is_absolute())
+        .find_map(|dir| exts.iter().map(|e| dir.join(format!("{program}{e}"))).find(|p| p.is_absolute() && runnable(p)))
 }
 
 /// A file the shell would run: on Unix, one with an execute bit.
@@ -838,7 +838,7 @@ mod mode_tests {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod lookup_tests {
     #[test]
-    fn relative_path_entries_are_resolved_before_the_agents_work_directory_changes() {
+    fn relative_and_empty_path_entries_are_ignored() {
         let root = tempfile::tempdir().unwrap();
         let tools = root.path().join("tools");
         std::fs::create_dir_all(&tools).unwrap();
@@ -850,19 +850,22 @@ mod lookup_tests {
             // Not executable: not found, as the shell wouldn't run it.
             std::fs::set_permissions(&file, PermissionsExt::from_mode(0o644)).unwrap();
             let path = std::env::join_paths([tools.as_path()]).unwrap();
-            assert!(super::find_program_in("test-agent", &path, root.path()).is_none());
+            assert!(super::find_program_in("test-agent", &path).is_none());
             std::fs::set_permissions(&file, PermissionsExt::from_mode(0o755)).unwrap();
         }
-        let path = std::env::join_paths([std::path::Path::new(""), std::path::Path::new("tools")]).unwrap();
-        let found = super::find_program_in("test-agent", &path, root.path()).unwrap();
+        // Absolute PATH entries are found.
+        let abs_path = std::env::join_paths([tools.as_path()]).unwrap();
+        let found = super::find_program_in("test-agent", &abs_path).unwrap();
         assert!(found.is_absolute());
-        assert_eq!(std::fs::canonicalize(&found).unwrap(), std::fs::canonicalize(file).unwrap());
+        assert_eq!(std::fs::canonicalize(&found).unwrap(), std::fs::canonicalize(&file).unwrap());
+        // Empty and relative PATH entries are ignored, even if they point to an executable.
+        let rel_path = std::env::join_paths([std::path::Path::new(""), std::path::Path::new("."), std::path::Path::new("tools")]).unwrap();
+        assert!(super::find_program_in("test-agent", &rel_path).is_none());
         let empty = std::env::join_paths([std::path::Path::new("")]).unwrap();
         let current = root.path().join(if cfg!(windows) { "dot-only.exe" } else { "dot-only" });
         std::fs::write(&current, b"program").unwrap();
-        // Executable, so only the empty PATH entry keeps it from being found.
         #[cfg(unix)]
         std::fs::set_permissions(&current, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
-        assert!(super::find_program_in("dot-only", &empty, root.path()).is_none());
+        assert!(super::find_program_in("dot-only", &empty).is_none());
     }
 }

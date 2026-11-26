@@ -86,9 +86,19 @@ fn portal_bases() {
     assert_eq!(portal_base("https://gis.example.org/portal/sharing/rest?f=json").unwrap(), "https://gis.example.org/portal");
     assert_eq!(portal_base("https://gis.example.org:7443/arcgis/home/").unwrap(), "https://gis.example.org:7443/arcgis");
     assert_eq!(portal_base("https://gis.example.org:443/portal").unwrap(), "https://gis.example.org/portal");
-    // Tokens travel to the portal: never over plain HTTP, never with user info.
-    for bad in ["http://gis.example.org/portal", "https://user@gis.example.org/portal", "https://", "https://gis.example.org:x/", "ftp://a"]
-    {
+    assert_eq!(portal_base("https://127.0.0.1:7443/portal").unwrap(), "https://127.0.0.1:7443/portal");
+    // Tokens travel to the portal: never over plain HTTP, never with user info, never to forbidden hosts.
+    for bad in [
+        "http://gis.example.org/portal",
+        "https://user@gis.example.org/portal",
+        "https://",
+        "https://gis.example.org:x/",
+        "ftp://a",
+        "https://169.254.169.254/portal",
+        "https://metadata.google.internal/portal",
+        "https://0.0.0.0/portal",
+        "https://100.100.100.200/portal",
+    ] {
         assert!(portal_base(bad).is_err(), "{bad}");
     }
     assert!(is_online("https://myorg.maps.arcgis.com") && is_online(ONLINE) && !is_online("https://gis.example.org/portal"));

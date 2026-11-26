@@ -632,6 +632,7 @@ pub use native::{Restored, authorization_fresh, login, restore};
 
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
+    use std::io::Read;
     use std::sync::{Mutex, OnceLock};
     use std::time::Duration;
 
@@ -641,11 +642,12 @@ mod native {
 
     /// The agent for token requests: never redirected (a redirect would replay the password or
     /// the refresh token), an error status answered for the caller to read.
-    fn agent() -> &'static ureq::Agent {
+    pub(crate) fn agent() -> &'static ureq::Agent {
         static A: OnceLock<ureq::Agent> = OnceLock::new();
         A.get_or_init(|| {
             ureq::Agent::config_builder()
                 .tls_config(rustgis_data::http::tls_config())
+                .proxy(None)
                 .http_status_as_error(false)
                 .timeout_global(Some(REQUEST_TIMEOUT))
                 .user_agent(concat!("RustGIS/", env!("CARGO_PKG_VERSION"), " (+https://rustgis.app)"))
@@ -656,13 +658,23 @@ mod native {
         })
     }
 
+    /// Reads at most `max` decoded bytes from a response body, bounding compressed expansion too.
+    fn read_bounded(mut body: ureq::Body, max: usize) -> Result<Vec<u8>, String> {
+        let mut buf = Vec::new();
+        body.with_config().limit(max as u64 + 2).reader().take(max as u64 + 1).read_to_end(&mut buf).map_err(|e| e.to_string())?;
+        if buf.len() > max {
+            return Err(format!("larger than {max} bytes"));
+        }
+        Ok(buf)
+    }
+
     /// POSTs a form; its status and answer. The error never quotes the form.
     fn post_form(url: &str, body: &str, still: &Option<crate::cache::Still>) -> Result<(u16, Vec<u8>), String> {
         let req = agent().post(url).header("Content-Type", "application/x-www-form-urlencoded").header("Accept", "application/json");
         crate::cache::check_still(still)?;
         let resp = req.send(body).map_err(|e| format!("couldn't reach Copernicus Data Space's sign-in: {e}"))?;
         let status = resp.status().as_u16();
-        let bytes = resp.into_body().with_config().limit(1 << 20).read_to_vec().map_err(|e| e.to_string())?;
+        let bytes = read_bounded(resp.into_body(), 1 << 20)?;
         Ok((status, bytes))
     }
 

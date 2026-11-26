@@ -328,5 +328,6 @@ mod native {
         super::super::native::finish(&slot, Err("again".into()));
         assert_eq!(received.recv().unwrap(), Ok(("test-token".to_string(), Some(FUTURE))));
         assert!(received.try_recv().is_err(), "done is called once");
+        assert!(super::super::native::AGENT.config().proxy().is_none());
     }
 }

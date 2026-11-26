@@ -221,9 +221,10 @@ mod native {
 
     /// One agent, made once (its TLS setup reads the system's certificates). It never follows a
     /// redirect, which would replay the password; keeps no connection; has no cookie jar.
-    static AGENT: LazyLock<ureq::Agent> = LazyLock::new(|| {
+    pub(super) static AGENT: LazyLock<ureq::Agent> = LazyLock::new(|| {
         ureq::Agent::config_builder()
             .tls_config(rustgis_data::http::tls_config())
+            .proxy(None)
             .http_status_as_error(false)
             .timeout_global(Some(Duration::from_secs(DEADLINE_SECS)))
             .user_agent(concat!("RustGIS/", env!("CARGO_PKG_VERSION"), " (+https://rustgis.app)"))

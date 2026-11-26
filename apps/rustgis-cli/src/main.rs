@@ -576,16 +576,10 @@ fn ask(s: &mut Session, args: &[String], saved: Option<&Saved>, env: &Environmen
     let trace = opt(args, "--trace").map(std::path::PathBuf::from);
     let send = |req: &rustgis_assistant::HttpRequest| {
         let r = transport(req);
-        if let Some(path) = &trace {
-            let resp = match &r {
-                Ok(r) => format!("HTTP {}\n{}", r.status, String::from_utf8_lossy(&r.body)),
-                Err(e) => e.to_string(),
-            };
-            let entry = format!("> {} {}\n{}\n< {resp}\n\n", req.method, req.url, req.body.as_deref().unwrap_or(""));
-            let written = std::fs::OpenOptions::new().create(true).append(true).open(path).and_then(|mut f| f.write_all(entry.as_bytes()));
-            if let Err(e) = written {
-                eprintln!("rustgis-cli: {}: {e}", path.display());
-            }
+        if let Some(path) = &trace
+            && let Err(e) = write_trace_entry(path, req, &r)
+        {
+            eprintln!("rustgis-cli: {}: {e}", path.display());
         }
         r
     };
@@ -604,6 +598,28 @@ fn ask(s: &mut Session, args: &[String], saved: Option<&Saved>, env: &Environmen
         return Err("the assistant couldn't finish".into());
     }
     Ok(())
+}
+
+/// Appends one `--trace` exchange with URL credentials redacted and owner-only permissions on Unix.
+fn write_trace_entry(
+    path: &std::path::Path,
+    req: &rustgis_assistant::HttpRequest,
+    r: &Result<rustgis_assistant::HttpResponse, rustgis_assistant::Error>,
+) -> std::io::Result<()> {
+    let resp = match r {
+        Ok(r) => format!("HTTP {}\n{}", r.status, String::from_utf8_lossy(&r.body)),
+        Err(e) => e.to_string(),
+    };
+    let url = rustgis_engine::sources::address_in_message(&req.url);
+    let entry = format!("> {} {url}\n{}\n< {resp}\n\n", req.method, req.body.as_deref().unwrap_or(""));
+    let mut opts = std::fs::OpenOptions::new();
+    opts.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    opts.open(path).and_then(|mut f| f.write_all(entry.as_bytes()))
 }
 
 /// `--attach [PORT]` as `mcp` takes it: the port that follows when it isn't another flag, else
@@ -1308,5 +1324,31 @@ mod tests {
             let _ = ask(&mut s, &args(management), Some(&opted_in), &env);
         }
         assert!(store.accounts().is_empty(), "asked for {:?}", store.accounts());
+    }
+
+    #[test]
+    fn trace_entries_redact_url_secrets_and_set_owner_only_mode() {
+        let dir = std::env::temp_dir().join(format!("rustgis-cli-trace-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let trace = dir.join("trace.log");
+        let req = rustgis_assistant::HttpRequest {
+            method: "POST",
+            url: "https://generativelanguage.googleapis.com/v1beta/models/gemini:generateContent?key=secret-api-key".into(),
+            headers: Vec::new(),
+            body: Some("{}".into()),
+        };
+        let resp = Ok(rustgis_assistant::HttpResponse { status: 200, body: b"ok".to_vec(), headers: Vec::new() });
+        write_trace_entry(&trace, &req, &resp).unwrap();
+        let content = std::fs::read_to_string(&trace).unwrap();
+        assert!(!content.contains("secret-api-key"), "{content}");
+        assert!(content.contains("generativelanguage.googleapis.com"), "{content}");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&trace).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "expected 0600, got {mode:o}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

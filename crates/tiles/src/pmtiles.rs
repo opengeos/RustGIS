@@ -204,10 +204,12 @@ pub fn check_local(archive: &str) -> Result<(), String> {
 /// file in the refusal.
 pub(crate) fn check_local_path(archive: &str, kind: &str, extensions: &[&str]) -> Result<(), String> {
     let p = archive.strip_prefix("file://").unwrap_or(archive);
-    let drive = p.as_bytes().get(1) == Some(&b':') && p.as_bytes().first().is_some_and(u8::is_ascii_alphabetic);
-    // A path on this computer: not a network share (\\server\share, or file://server/…), which a
-    // project could use to make Windows connect to another machine.
-    let share = p.starts_with("\\\\") || p.starts_with("//") || (archive.starts_with("file://") && !p.starts_with('/'));
+    let drive = p.as_bytes().get(1) == Some(&b':')
+        && p.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
+        && matches!(p.as_bytes().get(2), Some(b'/' | b'\\'));
+    // A path on this computer: not a network share (\\server\share, mixed /\ or \/, or
+    // file://server/…), which a project could use to make Windows connect to another machine.
+    let share = matches!(p.as_bytes(), [b'/' | b'\\', b'/' | b'\\', ..]) || (archive.starts_with("file://") && !p.starts_with('/'));
     if share || !(p.starts_with('/') || drive) || p.chars().any(char::is_control) || p.len() > 4096 {
         return Err(format!("'{p}': {kind} is given by its full path on this computer"));
     }
@@ -1894,6 +1896,24 @@ pub(crate) mod tests {
         let (tx, rx) = std::sync::mpsc::channel();
         fetch(url, Box::new(move |r| tx.send(r).unwrap_or_default()));
         rx.recv_timeout(std::time::Duration::from_secs(10)).map_err(|e| e.to_string())?
+    }
+
+    #[test]
+    fn check_local_rejects_mixed_shares_and_drive_relative_paths() {
+        for good in ["/data/a.pmtiles", "C:\\data\\a.pmtiles", "C:/data/a.pmtiles", "file:///data/a.pmtiles"] {
+            assert!(check_local(good).is_ok(), "{good}");
+        }
+        for bad in [
+            "/\\server/share/x.pmtiles",
+            "\\/server/share/x.pmtiles",
+            "\\\\server\\share\\x.pmtiles",
+            "//server/share/x.pmtiles",
+            "file:///\\server/share/x.pmtiles",
+            "C:relative.pmtiles",
+            "relative/x.pmtiles",
+        ] {
+            assert!(check_local(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

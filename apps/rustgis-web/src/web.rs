@@ -292,7 +292,13 @@ pub fn start() {
             match result {
                 Ok(()) => el.remove(),
                 Err(e) => {
-                    el.set_inner_html(&format!("<p>RustGIS failed to start: {e:?}</p><p>A browser with WebGPU or WebGL2 is required.</p>"))
+                    el.set_text_content(None);
+                    for line in [format!("RustGIS failed to start: {e:?}"), "A browser with WebGPU or WebGL2 is required.".into()] {
+                        if let Ok(p) = document.create_element("p") {
+                            p.set_text_content(Some(&line));
+                            let _ = el.append_child(&p);
+                        }
+                    }
                 }
             }
         }
@@ -374,8 +380,12 @@ impl Embed {
             if !e.source().is_some_and(|s| js_sys::Object::is(&s, &from)) {
                 return;
             }
+            let sender = e.origin();
+            if !crate::embed::valid_origin(&sender) {
+                return;
+            }
             let mut origin = o.borrow_mut();
-            if origin.as_deref().is_some_and(|known| known != e.origin()) {
+            if origin.as_deref().is_some_and(|known| known != sender) {
                 return;
             }
             let Some(text) = js_sys::JSON::stringify(&e.data()).ok().and_then(|t| t.as_string()) else {
@@ -385,7 +395,7 @@ impl Embed {
                 return;
             };
             if crate::embed::parse(&value).is_some() {
-                origin.get_or_insert_with(|| e.origin());
+                origin.get_or_insert(sender);
                 q.borrow_mut().push(value);
                 ctx.request_repaint();
             }
@@ -778,7 +788,7 @@ async fn fetch_reached(
                 };
                 // A Copernicus Data Space sign-in's token goes to its data hosts only, as on the
                 // desktop; the request then refuses any redirect, so it never leaves them.
-                let copernicus = if prepared.signed || login.is_some() { None } else { copernicus::authorization(url) };
+                let copernicus = crate::request::copernicus_authorization(bare, login.is_some(), url);
                 // Only the request carries credentials: messages and cache keys keep the original address.
                 let request = arcgis.as_deref().unwrap_or(login_url);
                 // URL parsing in a browser can normalize a numeric or escaped hostname. Judge
@@ -1161,13 +1171,15 @@ async fn http(
     let limit = reply_limit(&req);
     let err = |e: wasm_bindgen::JsValue| format!("{e:?}");
     if !allowed_url(&req.url) {
-        return Err(format!("{}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed", req.url).into());
+        return Err(crate::request::disallowed_assistant_url_error(&req.url).into());
     }
     let window = web_sys::window().ok_or("no window")?;
     let init = web_sys::RequestInit::new();
     init.set_method(req.method);
-    // The API key is never carried on to another address.
+    // The API key is never carried on to another address; no cookies or referrer leave with it.
     init.set_redirect(web_sys::RequestRedirect::Error);
+    init.set_credentials(web_sys::RequestCredentials::Omit);
+    init.set_referrer_policy(web_sys::ReferrerPolicy::NoReferrer);
     let headers = web_sys::Headers::new().map_err(err)?;
     for (k, v) in &req.headers {
         headers.set(k, v).map_err(err)?;

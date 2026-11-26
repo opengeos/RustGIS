@@ -154,6 +154,51 @@ fn a_refused_sign_in_says_why_without_the_password_and_keeps_the_one_before() {
     logout();
 }
 
+fn gzip_bytes(data: &[u8]) -> Vec<u8> {
+    let mut crc = 0xffff_ffffu32;
+    for &b in data {
+        crc ^= u32::from(b);
+        for _ in 0..8 {
+            crc = if crc & 1 != 0 { (crc >> 1) ^ 0xedb8_8320 } else { crc >> 1 };
+        }
+    }
+    let crc = !crc;
+    let mut out = vec![0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 0xff];
+    out.extend(miniz_oxide::deflate::compress_to_vec(data, 6));
+    out.extend_from_slice(&crc.to_le_bytes());
+    out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    out
+}
+
+#[test]
+fn token_responses_bound_decompressed_size_and_bypass_proxies() {
+    let _turn = crate::cache::turn();
+    logout();
+    assert!(native::agent().config().proxy().is_none());
+    // A small gzipped JSON response whose decompressed payload exceeds the 1 MiB limit is rejected.
+    let pad = "a".repeat((1 << 20) + 1024);
+    let big = format!(r#"{{"access_token":"tok","expires_in":1800,"refresh_token":"ref","pad":"{pad}"}}"#);
+    let gz = gzip_bytes(big.as_bytes());
+    assert!(gz.len() < 16 << 10, "compressed payload stays small: {}", gz.len());
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            let _ = read_request(&mut stream);
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Encoding: gzip\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                gz.len()
+            );
+            let _ = stream.write_all(head.as_bytes());
+            let _ = stream.write_all(&gz);
+        }
+    });
+    let err = login_at(&format!("http://{addr}/token"), USER, PASSWORD, None).unwrap_err();
+    let _ = server.join();
+    assert!(err.contains("larger than"), "{err}");
+    assert_eq!(authorization(DATA), None);
+}
+
 /// The web app sends the sign-in itself and lands its answer: kept as a sign-in made here is,
 /// renewed at CDSE's token endpoint, and a refusal or a server error leaves the one before.
 #[test]

@@ -461,6 +461,20 @@ pub fn public_url(url: &str, region: Option<&str>) -> Result<String, String> {
     Ok(object_url(&bucket, &key, at.as_ref()))
 }
 
+/// Whether `r` has the form of an AWS region code (two-letter area, lowercase words, and a
+/// 1-2 digit number, such as `us-east-1`, `ap-southeast-2`, or `us-gov-west-1`).
+fn valid_aws_region(r: &str) -> bool {
+    let parts: Vec<&str> = r.split('-').collect();
+    let Some((number, words)) = parts.split_last() else { return false };
+    let word = |w: &&str| !w.is_empty() && w.bytes().all(|b| b.is_ascii_lowercase());
+    r.len() <= 30
+        && words.len() >= 2
+        && words.first().is_some_and(|a| a.len() == 2)
+        && words.iter().all(word)
+        && (1..=2).contains(&number.len())
+        && number.bytes().all(|b| b.is_ascii_digit())
+}
+
 /// The region an S3 refusal says a bucket is in, when it was asked at the wrong endpoint: a bucket
 /// in a region AWS opts in (af-south-1, Digital Earth Africa's) asked at the global endpoint
 /// ("The af-south-1 location constraint is incompatible…"), or an endpoint named in a redirect
@@ -470,16 +484,7 @@ pub fn public_url(url: &str, region: Option<&str>) -> Result<String, String> {
 pub fn region_in(text: &str) -> Option<String> {
     let region = |r: &str| {
         let r = r.trim_matches(|c: char| !c.is_ascii_alphanumeric());
-        let parts: Vec<&str> = r.split('-').collect();
-        let (number, words) = parts.split_last()?;
-        let word = |w: &&str| !w.is_empty() && w.bytes().all(|b| b.is_ascii_lowercase());
-        (r.len() <= 30
-            && words.len() >= 2
-            && words.first().is_some_and(|a| a.len() == 2)
-            && words.iter().all(word)
-            && (1..=2).contains(&number.len())
-            && number.bytes().all(|b| b.is_ascii_digit()))
-        .then(|| r.to_string())
+        valid_aws_region(r).then(|| r.to_string())
     };
     let constraint = text.split_once(" location constraint").and_then(|(before, _)| before.rsplit(' ').next()).and_then(region);
     constraint.or_else(|| text.split(".s3.").skip(1).find_map(|after| after.split_once(".amazonaws.com").and_then(|(r, _)| region(r))))
@@ -584,7 +589,7 @@ fn bound_target(address: &str) -> Result<(String, Connection), String> {
     } else {
         rest.split_once('/').map(|(_, p)| p).unwrap_or("").split(['?', '#']).next().unwrap_or("").is_empty()
     };
-    let root_region = host.strip_prefix("s3.").and_then(|r| r.strip_suffix(".amazonaws.com"));
+    let root_region = parse_aws_host(host).filter(|p| p.bucket.is_none()).and_then(|p| p.region);
     let (c, granted) = snapshot(bucket.as_deref())?;
     let allowed = match bucket.as_deref() {
         Some(bucket) => c.buckets.iter().any(|b| b == bucket) || granted,
@@ -739,12 +744,53 @@ fn canonical_path(path: &str) -> String {
     path.split('/').map(|part| encode(&rustgis_data::address::percent_decode(part), true)).collect::<Vec<_>>().join("/")
 }
 
+/// A parsed AWS S3 hostname (`*.amazonaws.com`), split from the right.
+struct AwsHost<'a> {
+    bucket: Option<&'a str>,
+    region: Option<&'a str>,
+}
+
+/// Parses a lower-case AWS S3 hostname from the right after stripping `.amazonaws.com`.
+/// Accepts only valid S3 endpoint forms: `s3`, `s3.<region>`, `s3-<region>`, and
+/// `s3.dualstack.<region>`, each optionally preceded by `<bucket>.` passing [`valid_bucket`].
+fn parse_aws_host(host: &str) -> Option<AwsHost<'_>> {
+    let prefix = host.strip_suffix(".amazonaws.com")?;
+    if prefix.is_empty() {
+        return None;
+    }
+    if prefix == "s3" {
+        return Some(AwsHost { bucket: None, region: None });
+    }
+    if let Some(bucket) = prefix.strip_suffix(".s3") {
+        return valid_bucket(bucket).then_some(AwsHost { bucket: Some(bucket), region: None });
+    }
+    let (rest, last) = match prefix.rsplit_once('.') {
+        Some((r, l)) => (Some(r), l),
+        None => (None, prefix),
+    };
+    if let Some(region) = last.strip_prefix("s3-") {
+        if !valid_aws_region(region) {
+            return None;
+        }
+        return match rest {
+            None => Some(AwsHost { bucket: None, region: Some(region) }),
+            Some(bucket) => valid_bucket(bucket).then_some(AwsHost { bucket: Some(bucket), region: Some(region) }),
+        };
+    }
+    if !valid_aws_region(last) {
+        return None;
+    }
+    let before = rest?;
+    if before == "s3" || before == "s3.dualstack" {
+        return Some(AwsHost { bucket: None, region: Some(last) });
+    }
+    let bucket = before.strip_suffix(".s3.dualstack").or_else(|| before.strip_suffix(".s3"))?;
+    valid_bucket(bucket).then_some(AwsHost { bucket: Some(bucket), region: Some(last) })
+}
+
 /// Whether an address (its scheme, its origin and its host, all lower-case) is at AWS S3.
 fn aws_host(scheme: &str, here: &str, host: &str) -> bool {
-    scheme == "https"
-        && here == format!("https://{host}")
-        && host.ends_with(".amazonaws.com")
-        && (host.starts_with("s3.") || host.contains(".s3.") || host.starts_with("s3-") || host.contains(".s3-"))
+    scheme == "https" && here == format!("https://{host}") && parse_aws_host(host).is_some()
 }
 
 /// The region an address at AWS S3 names (`s3.<region>.amazonaws.com`), else `default`. The
@@ -753,17 +799,7 @@ fn aws_region(url: &str, default: &str) -> String {
     let rest = url.split_once("://").map(|(_, r)| r).unwrap_or(url);
     let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
     let host = authority.split(':').next().unwrap_or(authority);
-    let after = host
-        .rsplit_once(".s3.")
-        .map(|(_, a)| a)
-        .or_else(|| host.strip_prefix("s3."))
-        .or_else(|| host.rsplit_once(".s3-").map(|(_, a)| a))
-        .or_else(|| host.strip_prefix("s3-"));
-    after
-        .and_then(|a| a.split('.').next())
-        .filter(|r| !r.is_empty() && *r != "amazonaws" && *r != "dualstack")
-        .map(str::to_string)
-        .unwrap_or_else(|| default.to_string())
+    parse_aws_host(host).and_then(|p| p.region).unwrap_or(default).to_string()
 }
 
 /// The connection whose credentials sign a request to `url`, and the region it is signed for:
@@ -781,7 +817,7 @@ fn signer_for(url: &str) -> Result<Option<(Connection, String)>, String> {
     let host = authority.split(':').next().unwrap_or(authority);
     let aws = aws_host(scheme, &here, host);
     let bucket = aws_bucket(host, rest);
-    let list_region = host.strip_prefix("s3.").and_then(|r| r.strip_suffix(".amazonaws.com"));
+    let list_region = parse_aws_host(host).filter(|p| p.bucket.is_none()).and_then(|p| p.region);
     let path = rest.split_once('/').map(|(_, p)| p).unwrap_or("");
     let list_root = path.split(['?', '#']).next().unwrap_or("").is_empty();
     // Parse before locking; only selected connections are cloned while the registry is held.
@@ -811,18 +847,12 @@ fn signer_for(url: &str) -> Result<Option<(Connection, String)>, String> {
     }))
 }
 
-/// The bucket an AWS S3 address names: its host's first label (virtual-hosted) or its path's
-/// first part (path-style at `s3.<region>.amazonaws.com`).
+/// The bucket an AWS S3 address names: its virtual-hosted prefix or its path's first segment
+/// (path-style at an AWS S3 endpoint).
 fn aws_bucket(host: &str, rest: &str) -> Option<String> {
-    // Virtual-hosted: bucket.s3.amazonaws.com, bucket.s3.<region>.amazonaws.com, or the legacy
-    // bucket.s3-<region>.amazonaws.com.
-    if let Some(b) = host
-        .split_once(".s3.")
-        .map(|(b, _)| b)
-        .or_else(|| host.strip_suffix(".s3.amazonaws.com"))
-        .or_else(|| host.split_once(".s3-").map(|(b, _)| b))
-    {
-        return Some(b.to_string());
+    let parsed = parse_aws_host(host)?;
+    if let Some(bucket) = parsed.bucket {
+        return Some(bucket.to_string());
     }
     let path = rest.split_once('/').map(|(_, p)| p).unwrap_or("");
     path.split(['/', '?', '#']).next().filter(|b| valid_bucket(b)).map(str::to_string)
@@ -1203,6 +1233,54 @@ mod tests {
         // Path style: the first path segment.
         assert_eq!(b("s3-us-west-2.amazonaws.com", "s3-us-west-2.amazonaws.com/data/a.tif").as_deref(), Some("data"));
         assert_eq!(b("s3.amazonaws.com", "s3.amazonaws.com/data/a.tif").as_deref(), Some("data"));
+        // Dualstack virtual-hosted and path-style endpoints.
+        assert_eq!(
+            b("data.s3.dualstack.eu-west-1.amazonaws.com", "data.s3.dualstack.eu-west-1.amazonaws.com/a.tif").as_deref(),
+            Some("data")
+        );
+        assert_eq!(b("s3.dualstack.eu-west-1.amazonaws.com", "s3.dualstack.eu-west-1.amazonaws.com/data/a.tif").as_deref(), Some("data"));
+    }
+
+    #[test]
+    fn aws_host_and_bucket_parsing_rejects_non_s3_and_ambiguous_hosts() {
+        // Non-S3 *.amazonaws.com hosts must be rejected by both aws_host and aws_bucket.
+        for bad in [
+            "s3-foo.us-east-1.elb.amazonaws.com",
+            "bucket.s3.us-east-1.elb.amazonaws.com",
+            "bucket.s3.notaregion.amazonaws.com",
+            "bucket.s3-notaregion.amazonaws.com",
+            "s3.notaregion.amazonaws.com",
+            "s3-foo.amazonaws.com",
+            "ab.s3.amazonaws.com",
+            "s3.s3.amazonaws.com",
+            "my.s3.amazonaws.com.evil.example",
+            "ec2-1-2-3-4.compute-1.amazonaws.com",
+        ] {
+            let origin = format!("https://{bad}");
+            assert!(!aws_host("https", &origin, bad), "{bad}");
+            assert_eq!(aws_bucket(bad, &format!("{bad}/data/a.tif")), None, "{bad}");
+            assert_eq!(bucket_of("", &format!("https://{bad}/data/a.tif")), None, "{bad}");
+        }
+        // Valid S3 endpoints parse from the right: a bucket containing `.s3.` is not truncated
+        // at the leftmost `.s3.`, so a connection for `mine` will not match `mine.s3.other`.
+        assert!(aws_host("https", "https://mine.s3.other.s3.us-west-2.amazonaws.com", "mine.s3.other.s3.us-west-2.amazonaws.com"));
+        assert_eq!(
+            aws_bucket("mine.s3.other.s3.us-west-2.amazonaws.com", "mine.s3.other.s3.us-west-2.amazonaws.com/k").as_deref(),
+            Some("mine.s3.other")
+        );
+        assert_eq!(aws_region("https://mine.s3.other.s3.us-west-2.amazonaws.com/k", "us-east-1"), "us-west-2");
+        assert_eq!(
+            aws_bucket("mine.s3.us-east-1.s3.amazonaws.com", "mine.s3.us-east-1.s3.amazonaws.com/k").as_deref(),
+            Some("mine.s3.us-east-1")
+        );
+        assert_eq!(aws_region("https://mine.s3.us-east-1.s3.amazonaws.com/k", "eu-west-1"), "eu-west-1");
+        assert_eq!(
+            aws_bucket("mine.s3.dualstack.ap-southeast-2.amazonaws.com", "mine.s3.dualstack.ap-southeast-2.amazonaws.com/k").as_deref(),
+            Some("mine")
+        );
+        assert_eq!(aws_region("https://mine.s3.dualstack.ap-southeast-2.amazonaws.com/k", "us-east-1"), "ap-southeast-2");
+        assert_eq!(aws_region("https://s3.dualstack.ap-southeast-2.amazonaws.com/mine/k", "us-east-1"), "ap-southeast-2");
+        assert_eq!(aws_region("https://mine.s3-eu-west-1.amazonaws.com/k", "us-east-1"), "eu-west-1");
     }
 
     fn example() -> Credentials {

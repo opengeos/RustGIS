@@ -15,7 +15,9 @@ pub fn split_password(s: &str) -> Option<(String, Option<String>)> {
     if !is_address(t) {
         return None;
     }
-    split_userinfo_password(t)
+    let (mut public, password) = split_userinfo_password(t)?;
+    crate::address::redact_query(&mut public);
+    Some((public, password))
 }
 
 /// Removes user-info and query passwords without restricting the address's scheme.
@@ -64,7 +66,7 @@ fn query_without_password(s: &str) -> (String, Option<String>) {
     let mut kept = Vec::new();
     for kv in query.split('&').filter(|kv| !kv.is_empty()) {
         let (k, v) = kv.split_once('=').unwrap_or((kv, ""));
-        if k.eq_ignore_ascii_case("password") || k.eq_ignore_ascii_case("pass") {
+        if crate::address::normalized_name(k).is_some_and(|n| n == "password" || n == "pass") {
             password = Some(super::pgconn::percent_decode(v));
         } else {
             kept.push(kv);
@@ -108,6 +110,13 @@ mod tests {
         assert_eq!(s("mysql://h/gis?ssl-ca=/a@b.pem"), ("mysql://h/gis?ssl-ca=/a@b.pem".into(), None));
         assert_eq!(s("mysql://me:p#w?x@h:3306/gis#f"), ("mysql://me@h:3306/gis".into(), Some("p#w?x".into())));
         assert_eq!(s("mysql://me@h/gis?pass=a%26b&ssl-mode=DISABLED"), ("mysql://me@h/gis?ssl-mode=DISABLED".into(), Some("a&b".into())));
+        assert_eq!(
+            s("mysql://me@h/gis?pass%77ord=secret&ssl-mode=REQUIRED"),
+            ("mysql://me@h/gis?ssl-mode=REQUIRED".into(), Some("secret".into()))
+        );
+        assert_eq!(s("mysql://me@h/gis?pa%73s=secret"), ("mysql://me@h/gis".into(), Some("secret".into())));
+        assert_eq!(s("mysql://me@h/gis?token=secret&ssl-mode=REQUIRED"), ("mysql://me@h/gis?ssl-mode=REQUIRED".into(), None));
+        assert_eq!(s("mysql://me@h/gis?pwd=secret&ssl-mode=REQUIRED"), ("mysql://me@h/gis?ssl-mode=REQUIRED".into(), None));
         assert!(split_password("postgres:host=h").is_none());
         assert_eq!(database_name("mysql://me@h:3306/my%20db?x=1").as_deref(), Some("my db"));
         assert_eq!(database_name("mysql://h"), None);

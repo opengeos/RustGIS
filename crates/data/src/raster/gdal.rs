@@ -484,9 +484,13 @@ fn valid_crs(c: &str) -> bool {
     // pipeline, are refused (the same check as for typed definitions).
     let proj = c.starts_with("+proj=")
         && c.chars().all(|ch| ch.is_ascii_alphanumeric() || " +=_.,-".contains(ch))
-        && !c.split('+').any(|kv| {
-            let (k, v) = kv.split_once('=').unwrap_or((kv, ""));
-            super::crs::proj_key_refused(k, v)
+        && c.split_whitespace().all(|token| {
+            token.strip_prefix('+').is_some_and(|rest| {
+                rest.split('+').all(|kv| {
+                    let (k, v) = kv.split_once('=').unwrap_or((kv, ""));
+                    !k.is_empty() && !super::crs::proj_key_refused(k, v)
+                })
+            })
         });
     let urn = up.starts_with("URN:OGC:DEF:CRS:") && c.chars().all(|ch| ch.is_ascii_alphanumeric() || ":._-".contains(ch));
     !c.chars().any(char::is_control) && (code(&up) || wkt || proj || urn)
@@ -749,6 +753,13 @@ mod tests {
             "+proj=pipeline +step +proj=hgridshift +grids=ntv2.gsb",
             "+proj=utm +zone=33 +vgrids=egm96_15.gtx",
             "+proj=deformation +xy_grids=a.tif",
+            "+proj=merc nadgrids=foo.gsb",
+            "+proj=merc+nadgrids=foo.gsb",
+            "+proj=defmodel +model=foo.json",
+            "+proj=tinshift +file=foo.json",
+            "+proj=hgridshift",
+            "GEOGCS[\"WGS 84\",EXTENSION[\"PROJ4\",\"+proj=defmodel +model=foo.json\"]]",
+            "GEOGCS[\"WGS 84\",EXTENSION[\"PROJ4\",\"+proj=merc nadgrids=foo.gsb\"]]",
             "GEOGCS[\"WGS 84\",EXTENSION[\"PROJ4\",\"+proj=longlat +nadgrids=/tmp/grid.gsb\"]]",
             "GEOGCS[\"WGS 84\",extension[\"proj4_grids\",\"ntv2_0.gsb\"]]",
             "PROJCS[\"x\",GEOGCS[\"y\"],\"+geoidgrids=egm96.gtx\"]",
