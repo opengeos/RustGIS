@@ -192,9 +192,10 @@ const MIN_BAR: f32 = 230.0;
 const MAX_BAR: f32 = 380.0;
 const GAP: f32 = 4.0;
 
-/// The most characters of a selection that fill the query when the bar opens: a longer one is a
-/// passage, not a word to look for.
-const PREFILL_MAX: usize = 200;
+/// The most characters of a query: what the field takes, and so of a selection that fills it when
+/// the bar opens (a longer one is a passage, not a word to look for). Each change of the script or
+/// the query costs the script's length times the query's, on the UI thread.
+const QUERY_MAX: usize = 200;
 
 /// Before the box: Ctrl+F (⌘F) in the box or in the bar opens it, with the selection in its field;
 /// the matches are worked out, and what the box has to draw of them is returned, None while the bar
@@ -214,14 +215,14 @@ pub fn prepare(ui: &egui::Ui, box_id: egui::Id, script: &str) -> Option<Shown> {
     let find = here && !alt && ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::F));
     let replace = here
         && ui.input_mut(|i| {
-            (!alt && i.consume_key(egui::Modifiers::COMMAND, egui::Key::H))
+            (!alt && !mac && i.consume_key(egui::Modifiers::COMMAND, egui::Key::H))
                 || (mac && alt && i.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::ALT, egui::Key::F))
         });
     if find || replace {
         if in_box && let Some(r) = crate::widgets::cursor_range(ui.ctx(), box_id) {
             let (a, b) = (r.primary.index.0.min(r.secondary.index.0), r.primary.index.0.max(r.secondary.index.0));
             let picked: String = script.chars().skip(a).take(b - a).collect();
-            if !picked.is_empty() && picked.chars().count() <= PREFILL_MAX && !picked.contains(['\n', '\r']) {
+            if !picked.is_empty() && picked.chars().count() <= QUERY_MAX && !picked.contains(['\n', '\r']) {
                 bar.query = picked;
             }
             bar.anchor = a;
@@ -343,6 +344,7 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
                         egui::TextEdit::singleline(&mut bar.query)
                             .id(query_id)
                             .desired_width(field)
+                            .char_limit(QUERY_MAX)
                             .margin(egui::Margin { left: 6, right: 54, top: 3, bottom: 3 })
                             .hint_text(tl!("Find")),
                     );
@@ -414,7 +416,15 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
                         let can = !running && bar.current.is_some();
                         let wait = tl!("Wait for the run to finish").to_string();
                         let (one_say, all_say) = (tl!("Replace (Enter)").to_string(), tl!("Replace All").to_string());
-                        let one_hover = if running { &wait } else { &one_say };
+                        // Off, the hover says why: a run, or nothing to replace.
+                        let nothing = tl!("Nothing to replace").to_string();
+                        let one_hover = if running {
+                            &wait
+                        } else if !can {
+                            &nothing
+                        } else {
+                            &one_say
+                        };
                         let all_hover = if running {
                             wait.clone()
                         } else if capped {
@@ -424,10 +434,13 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
                         };
                         if crate::widgets::flat_icon_button(ui, "replace", &one_say, one_hover, can).clicked() {
                             todo = Some(Action::Replace);
-                        } else if replace.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && can {
-                            // A one-line box lets go of the focus on Enter: keep it, for the next replace.
+                        } else if replace.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                            // A one-line box lets go of the focus on Enter: keep it, for the next replace,
+                            // which is made only when there is one to make.
                             ui.memory_mut(|m| m.request_focus(replace_id));
-                            todo = Some(Action::Replace);
+                            if can {
+                                todo = Some(Action::Replace);
+                            }
                         }
                         if crate::widgets::flat_icon_button(ui, "replace_all", &all_say, &all_hover, !running && total > 0 && !capped)
                             .clicked()

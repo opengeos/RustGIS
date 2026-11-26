@@ -3292,6 +3292,30 @@ mod tests {
         h.get_by_label("3 of 4");
     }
 
+    /// The query has a length limit, so a pasted one cannot make each change of the script cost its
+    /// length times the script's (#2996): the field takes 200 characters and no more.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn the_find_query_is_limited_in_length() {
+        use egui::{Event, Key, Modifiers};
+        use egui_kittest::kittest::Queryable;
+        let mut app = RustGisApp::with_sample();
+        app.workflow.script = "a".repeat(400);
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(vec2(900.0, 800.0))
+            .build_ui_state(|ui, app: &mut RustGisApp| script_pane(app, ui, &Tokens::light()), app);
+        h.run();
+        let box_id = egui::Id::unique("script_text");
+        h.ctx.memory_mut(|m| m.request_focus(box_id));
+        h.run();
+        h.key_press_modifiers(Modifiers::COMMAND, Key::F);
+        h.run();
+        h.event(Event::Text("a".repeat(400)));
+        h.run();
+        // 200 characters in a script of 400: two matches. All 400 would be one.
+        h.get_by_label("1 of 2");
+    }
+
     /// The editor shortcuts around the find bar (#2996): Ctrl+H opens it with the Replace row, F3 and
     /// Shift+F3 go to the next and the previous match.
     #[cfg(not(target_arch = "wasm32"))]
@@ -3407,6 +3431,13 @@ mod tests {
         h.run();
         assert!(h.get_by_label("Replace All").accesskit_node().is_disabled());
         assert!(h.get_by_label("Replace (Enter)").accesskit_node().is_disabled());
+        // Enter in the Replace field then does nothing, and keeps the focus there.
+        h.ctx.memory_mut(|m| m.request_focus(replace_id));
+        h.run();
+        h.key_press(Key::Enter);
+        h.run();
+        assert!(h.ctx.memory(|m| m.has_focus(replace_id)), "the field keeps the focus");
+        assert_eq!(h.state().workflow.script, script, "and nothing was replaced");
         h.state_mut().workflow.script_started.clear();
         h.run();
         // The current match, the first; the cursor goes after it, the next is current.
