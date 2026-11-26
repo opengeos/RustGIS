@@ -1440,13 +1440,14 @@ fn layer_mesh(s: &Session, p: &Value, keep_lines: bool) -> Result<Mesh, String> 
         let orient = |o: Orient| if below { o.reversed() } else { o };
         // A solid of zero height would be two coincident caps facing apart: STL leaves it out.
         // Counted as lost only when it had an area or a point to give: a polygon whose every outer
-        // ring has fewer than 3 vertices has neither.
+        // ring encloses nothing (fewer than 3 vertices, or all on one line) has neither.
         if !mesh.keep_lines && h == 0.0 && !matches!(&*g, Geometry::Line(_)) {
             let shaped = match &*g {
                 Geometry::Polygon(polys) => polys.iter().any(|rings| {
                     rings.first().is_some_and(|r| {
-                        let n = if r.len() > 1 && r.first() == r.last() { r.len() - 1 } else { r.len() };
-                        n >= 3
+                        // Twice the ring's signed area (the shoelace sum); a closing vertex adds nothing.
+                        let twice: f64 = r.iter().zip(r.iter().cycle().skip(1)).map(|(a, b)| a.x * b.y - b.x * a.y).sum();
+                        twice.is_finite() && twice != 0.0
                     })
                 }),
                 Geometry::MultiPoint(points) => !points.is_empty(),
@@ -1529,7 +1530,8 @@ fn layer_mesh(s: &Session, p: &Value, keep_lines: bool) -> Result<Mesh, String> 
                         mesh.short_lines += usize::from(n == 1);
                         continue;
                     }
-                    mesh.lines += 1;
+                    // A part with all its vertices in one place has no length to lose.
+                    mesh.lines += usize::from(part.first().is_some_and(|f| part.iter().any(|c| c != f)));
                     if !mesh.keep_lines {
                         continue;
                     }

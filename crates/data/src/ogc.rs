@@ -1350,8 +1350,7 @@ const MAX_STYLES: usize = 64;
 /// A WMS layer's legend: its default style's (the one a GetMap with `STYLES=` draws: the one
 /// named `default`, else the first), the first of its `LegendURL`s in a format RustGIS shows.
 fn wms_legend(url: &str, styles: &[Node]) -> Option<Legend> {
-    let style =
-        styles.iter().find(|s| child_text(s, "Name").is_some_and(|n| n.eq_ignore_ascii_case("default"))).or_else(|| styles.first())?;
+    let style = wms_default_style(styles)?;
     children(style, "LegendURL").find_map(|l| {
         if !legend_format(child_text(&l, "Format").as_deref()) {
             return None;
@@ -1362,10 +1361,14 @@ fn wms_legend(url: &str, styles: &[Node]) -> Option<Legend> {
     })
 }
 
-/// Whether a WMS layer's default style ([`wms_legend`]'s) offers any legend picture.
+/// The style a GetMap with `STYLES=` draws: the one named `default`, else the first.
+fn wms_default_style<'s, 'a, 'i>(styles: &'s [Node<'a, 'i>]) -> Option<&'s Node<'a, 'i>> {
+    styles.iter().find(|s| child_text(s, "Name").is_some_and(|n| n.eq_ignore_ascii_case("default"))).or_else(|| styles.first())
+}
+
+/// Whether a WMS layer's default style ([`wms_default_style`]) offers any legend picture.
 fn wms_offers_legend(styles: &[Node]) -> bool {
-    let style = styles.iter().find(|s| child_text(s, "Name").is_some_and(|n| n.eq_ignore_ascii_case("default"))).or_else(|| styles.first());
-    style.is_some_and(|s| children(s, "LegendURL").next().is_some())
+    wms_default_style(styles).is_some_and(|s| children(s, "LegendURL").next().is_some())
 }
 
 /// A service's GetLegendGraphic request for a layer, when its capabilities offer one (the SLD
@@ -1559,20 +1562,21 @@ fn wmts(url: &str, root: &Node) -> Service {
         let default_style = children(&layer, "Style").find(|s| s.attribute("isDefault") == Some("true")).or_else(|| child(&layer, "Style"));
         let style = default_style.and_then(|s| child_text(&s, "Identifier")).unwrap_or_else(|| "default".into());
         // Its default style's legends (WMTS 1.0.0 §7.1.1.1.1), each for the scales it gives.
-        // Those it can't show are lost; of the rest, the first [`MAX_LEGENDS`] are kept.
-        let mut offered = 0usize;
-        let legends: Vec<Legend> = default_style
-            .iter()
-            .flat_map(|s| children(s, "LegendURL"))
-            .inspect(|_| offered += 1)
-            .filter(|l| legend_format(l.attribute("format")))
-            .filter_map(|l| {
-                let url = href(&l).and_then(|h| resolve(url, &h)).filter(|h| is_web(h))?;
-                Some(Legend { url, min_scale: scale_attr(&l, "minScaleDenominator"), max_scale: scale_attr(&l, "maxScaleDenominator") })
-            })
-            .take(MAX_LEGENDS)
-            .collect();
-        let legends_left_out = offered.saturating_sub(legends.len());
+        // The first [`MAX_LEGENDS`] it can show are kept; those it can't, and those past them,
+        // are lost (counted, not held).
+        let (mut legends, mut legends_left_out) = (Vec::new(), 0usize);
+        for l in default_style.iter().flat_map(|s| children(s, "LegendURL")) {
+            let shown =
+                legend_format(l.attribute("format")).then(|| href(&l).and_then(|h| resolve(url, &h)).filter(|h| is_web(h))).flatten();
+            match shown {
+                Some(url) if legends.len() < MAX_LEGENDS => legends.push(Legend {
+                    url,
+                    min_scale: scale_attr(&l, "minScaleDenominator"),
+                    max_scale: scale_attr(&l, "maxScaleDenominator"),
+                }),
+                _ => legends_left_out += 1,
+            }
+        }
         let linked: Vec<String> = children(&layer, "TileMatrixSetLink").filter_map(|l| child_text(&l, "TileMatrixSet")).collect();
         let bbox = child(&layer, "WGS84BoundingBox").and_then(|b| {
             let lo: Vec<f64> = child_text(&b, "LowerCorner")?.split_whitespace().filter_map(|t| t.parse().ok()).collect();
@@ -7972,6 +7976,13 @@ mod tests {
         );
         // The SVG one can't be shown: lost.
         assert_eq!(s.layers[0].legends_left_out, 1);
+        // Past the most it keeps, a picture it could show is lost too, and counted.
+        let many: String =
+            (0..=MAX_LEGENDS).map(|i| format!(r#"<LegendURL format="image/png" xlink:href="https://t.example.org/{i}.png"/>"#)).collect();
+        let crowded = xml
+            .replace(r#"<LegendURL format="image/png" xlink:href="https://t.example.org/near.png" maxScaleDenominator="50000"/>"#, &many);
+        let c = parse("https://t.example.org/1.0.0/WMTSCapabilities.xml", crowded.as_bytes()).unwrap();
+        assert_eq!((c.layers[0].legends.len(), c.layers[0].legends_left_out), (MAX_LEGENDS, 3));
         // The one for the map's scale: up to below the maximum, from the minimum.
         let at = |scale: f64| legends_at(legends, scale).map(|l| l.url.as_str()).collect::<Vec<_>>();
         assert_eq!(at(10_000.0), ["https://t.example.org/near.png"]);

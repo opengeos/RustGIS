@@ -1571,13 +1571,9 @@ fn date_fields_work_from_adding_to_saving() {
         let row =
             s.run("edit.addFeature", &json!({"layer": "Cities", "geometry": here, "template": "Old"})).unwrap()["row"].as_u64().unwrap();
         let notices: Vec<_> = s.notices_since(mark).iter().map(|n| (n.text.clone(), n.loss())).collect();
-        assert_eq!(
-            notices.iter().any(|(n, loss)| n.contains("field 'founded'")
-                && n.contains("kept only its day")
-                && *loss == Some(rustgis_data::loss::LossCode::DroppedTime)),
-            said,
-            "{when}: {notices:?}"
-        );
+        let hits: Vec<_> = notices.iter().filter(|(n, _)| n.contains("field 'founded'") && n.contains("kept only its day")).collect();
+        assert_eq!(!hits.is_empty(), said, "{when}: {notices:?}");
+        assert!(hits.iter().all(|(_, loss)| *loss == Some(rustgis_data::loss::LossCode::DroppedTime)), "{when}: {notices:?}");
         assert_eq!(cell(&s, "Cities", row as usize, "founded"), "2026-03-07");
         s.run("edit.undo", &Value::Null).unwrap();
     }
@@ -54431,8 +54427,10 @@ fn stl_leaves_out_lines_and_skips_flat_triangles_and_says_so() {
         mesh_feature(json!({"type": "LineString", "coordinates": [[0.0, 0.02], [0.01, 0.02]]}), 5.0),
         mesh_feature(json!({"type": "Point", "coordinates": [0.03, 0.02]}), 20.0),
         mesh_feature(json!({"type": "Point", "coordinates": [0.05, 0.02]}), 0.0),
-        // Flat, and with no area to lose: not counted among those left out.
+        // Flat, and with no area to lose (two vertices, and three on one line): not counted among
+        // those left out.
         mesh_feature(json!({"type": "Polygon", "coordinates": [[[0.08, 0.0], [0.09, 0.0], [0.08, 0.0]]]}), 0.0),
+        mesh_feature(json!({"type": "Polygon", "coordinates": [[[0.08, 0.03], [0.09, 0.03], [0.1, 0.03], [0.08, 0.03]]]}), 0.0),
         mesh_feature(
             json!({"type": "Polygon", "coordinates": [[[0.06, 0.0], [0.07, 0.0], [0.070_000_000_01, 0.0], [0.07, 0.01], [0.06, 0.01], [0.06, 0.0]]]}),
             30.0

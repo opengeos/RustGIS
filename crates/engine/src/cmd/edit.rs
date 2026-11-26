@@ -1696,8 +1696,9 @@ fn land_layer_dates(s: &mut Session, p: &Json) -> Option<CmdResult> {
         check_layer_dates(s, id, fi, ty)?;
         let layer = s.map_mut().layer_mut(id).ok_or("no layer")?;
         (layer.dataset.fields, layer.dataset.features) = (output.fields, output.features);
+        // Each with its code, as a table's edit lands.
         for notice in notices {
-            s.notify(notice.text, notice.error);
+            s.relay_notice(notice);
         }
         Ok(answer)
     })())
