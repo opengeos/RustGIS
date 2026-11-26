@@ -280,14 +280,24 @@ pub fn chrome(app: &mut RustGisApp, ui: &mut Ui) {
     });
 }
 
-/// Whether a second finger has been down since the first one went down. Such a gesture is a
+/// Whether a second finger has touched since the first one went down. Such a gesture is a
 /// pinch, though egui counts the first finger's lift as a tap when that finger stayed still.
+/// Read from the touches themselves, as a second finger can come and go between two frames.
 /// Looked at every frame it is to be known for.
 fn pinched(ui: &Ui) -> bool {
     let id = egui::Id::unique("touch_pinched");
-    let (began, several) = ui.input(|i| (i.pointer.primary_pressed(), i.multi_touch().is_some()));
-    let pinched = several || (!began && ui.data(|d| d.get_temp(id)).unwrap_or(false));
-    ui.data_mut(|d| d.insert_temp(id, pinched));
+    let began = ui.input(|i| i.pointer.primary_pressed());
+    // The first finger down since the press, and whether another has touched since.
+    let kept = if began { None } else { ui.data(|d| d.get_temp::<(Option<egui::TouchId>, bool)>(id)) };
+    let (mut first, mut pinched) = kept.unwrap_or_default();
+    ui.input(|i| {
+        for event in &i.events {
+            if let egui::Event::Touch { id: finger, .. } = event {
+                pinched |= *first.get_or_insert(*finger) != *finger;
+            }
+        }
+    });
+    ui.data_mut(|d| d.insert_temp(id, (first, pinched)));
     pinched
 }
 
@@ -2172,6 +2182,24 @@ mod tests {
             self.frame(Vec::new());
         }
 
+        /// A finger held at `still` and lifted, with `second` arriving in one frame between.
+        fn quick_second_finger(&mut self, still: egui::Pos2, second: Vec<egui::Event>) {
+            use egui::TouchPhase::{End, Start};
+            let touch =
+                |phase| egui::Event::Touch { device_id: egui::TouchDeviceId(0), id: egui::TouchId(0), phase, pos: still, force: None };
+            let button = |pressed| egui::Event::PointerButton {
+                pos: still,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            self.frame(vec![touch(Start), egui::Event::PointerMoved(still), button(true)]);
+            self.frame(second);
+            self.frame(vec![touch(End), button(false), egui::Event::PointerGone]);
+            self.time += 1.0;
+            self.frame(Vec::new());
+        }
+
         /// Where `word` is painted.
         fn find(&mut self, word: &str) -> Option<Rect> {
             self.frame(Vec::new()).into_iter().find(|(text, _)| text == word).map(|(_, at)| at)
@@ -2226,6 +2254,17 @@ mod tests {
         assert_ne!(dragged.center, before.center, "the drag panned the map");
         held.pinch(at, at + Vec2::new(40.0, 40.0), at + Vec2::new(120.0, 120.0));
         assert!(held.app.session.map().camera.res < dragged.res, "the pinch zoomed the map");
+        assert_eq!(sheet(&held.ctx), Sheet::Layers);
+        // Nor is a second finger that comes and goes between two frames a tap.
+        let other = |phase| egui::Event::Touch {
+            device_id: egui::TouchDeviceId(0),
+            id: egui::TouchId(1),
+            phase,
+            pos: at + Vec2::new(60.0, 60.0),
+            force: None,
+        };
+        use egui::TouchPhase::{End, Start};
+        held.quick_second_finger(at, vec![other(Start), other(End)]);
         assert_eq!(sheet(&held.ctx), Sheet::Layers);
         // The tap only lowers the sheet: no point is measured from it. The next one is.
         held.touch(&[at]);
@@ -2290,6 +2329,14 @@ mod tests {
         let back = held.find("Back to the map").unwrap();
         assert!(back.max.x <= 411.0, "{back:?}");
         held.touch(&[back.center()]);
+        assert!(held.find("France").is_some());
+        // Opened over a layout, it still goes back to the map.
+        run(&mut held.app, "layout.new", json!({"name": "Sheet A"}));
+        run(&mut held.app, "ui.modelBuilder", json!({}));
+        held.frame(Vec::new());
+        let back = held.find("Back to the map").unwrap();
+        held.touch(&[back.center()]);
+        assert_eq!(held.app.session.active_layout, None);
         assert!(held.find("France").is_some());
     }
 

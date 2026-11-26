@@ -1806,8 +1806,9 @@ pub fn notices(app: &mut RustGisApp, ctx: &egui::Context) {
     ctx.request_repaint_after(std::time::Duration::from_millis(250));
     let screen = ctx.content_rect();
     // A shell with its own interface has its bars below the map, the work strip's Cancel among
-    // them: the toasts stay over the map, clear of them.
-    let over_map = app.chrome.and(app.map.view_rect).map(|(map, _)| map.max.y.max(screen.center().y));
+    // them: the toasts stand at the map's foot, clear of them. Where a tall sheet leaves too
+    // little map for three, they stand near the top.
+    let over_map = app.chrome.and(app.map.view_rect).map(|(map, _)| map.max.y.max(screen.min.y + 200.0));
     let mut y = over_map.unwrap_or(screen.max.y) - 40.0;
     for toast in app.map.toasts.iter_mut().rev().take(3) {
         // Keyed by the notice, not the slot, so a selection stays with its text as toasts come and go.

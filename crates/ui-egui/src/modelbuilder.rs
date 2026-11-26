@@ -665,6 +665,10 @@ fn toolbar(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, problems: &[model::Pro
         // end are past the window's edge: the way back to the map comes first.
         if app.chrome.is_some() && ui.add(egui::Button::new(tl!("Back to the map")).min_size(vec2(0.0, 30.0))).clicked() {
             app.mb.active = false;
+            // Opened over a layout, the layout would show in its place.
+            if app.session.active_layout.is_some() {
+                let _ = app.run("layout.close", serde_json::Value::Null);
+            }
         }
         let (r, _) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::hover());
         icons::paint(ui.painter(), r, "modelbuilder", t.icon, t.accent);
