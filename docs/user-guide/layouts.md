@@ -472,16 +472,15 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
   don't fit when they set a text, its size, font or fallback font, bold, italic, alignment,
   spacing, line spacing, case, wrap or box, or show it, and the Format pane shows the count under
   **Wrap to the box** (a text wrapped past the 200 lines a text draws counts them as "or more"). A
-  text draws
-  200 lines at most, whatever its box: lines past them are said apart, with the advice to split
-  the text into more than one, since a taller box doesn't draw them. A text whose ink crosses the
-  page's edge is said in a notice of its own when one of these commands puts it there, so a text
-  both cut below its box and past the edge is told each: `layout.addElement` and `layout.update` add a text whose ink
-  crosses it, set what its lines or box are, show it, move it (`x`, `y`), turn it (`rotation`) or
-  set its vertical alignment (`valign`), and `layout.duplicateElement` copies it past the edge, and
-  each advises moving it inside the page, resizing it or reducing its size. A move, a turn, an
-  alignment or a copy alone says only that, not the
-  lines again; a text turned within the page, or with no letter or ink to show, says nothing.
+  text draws 200 lines at most, whatever its box: lines past them are said apart, with the advice
+  to split the text into more than one, since a taller box doesn't draw them. A text whose ink
+  crosses the page's edge is said in a notice of its own when one of these commands puts it there,
+  so a text both cut below its box and past the edge is told each: `layout.addElement` and
+  `layout.update` add a text whose ink crosses it, set what its lines or box are, show it, move it
+  (`x`, `y`), turn it (`rotation`) or set its vertical alignment (`valign`), and
+  `layout.duplicateElement` copies it past the edge, and each advises moving it inside the page,
+  resizing it or reducing its size. A move, a turn, an alignment or a copy alone says only that, not
+  the lines again; a text turned within the page, or with no letter or ink to show, says nothing.
   Resizing the page (`layout.page`) measures no text, so a text a smaller page cuts is told only
   by the export and the layout view.
 - **Text** and **Dynamic Text**: `{date}`, `{time}`, `{scale}`, `{map}`, `{crs}`, `{page}`,
@@ -530,6 +529,10 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
   commands, the Format pane and the export notice above say so. Scripts set `"wrap": true` on
   `layout.addElement` and `layout.update`. A project with a wrapped text needs this release or a
   later one to open.
+  Scripts give the family's name: `"font": "Garamond"`, with `"fallback": "serif"` if wanted;
+  `labels.fonts` lists the installed families. The project keeps the name, never a file. A PDF
+  sets its text in the letters' own outlines, so it shows the family wherever it is opened, and
+  the text can still be searched and copied; no font file goes into it.
   **Vertical alignment** puts a text's block of lines at the **Top** of its box (the default, as
   texts always were), in its **Middle**, or at its **Bottom**, its last line on the box's lower
   edge: a caption under a picture, a note at a panel's foot. A block taller than its box is drawn
@@ -545,11 +548,7 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
   a setting put back to its default is no longer saved. A project that uses them can't be opened
   by an older RustGIS, and a layout file (`.rgislayout`) with such a text lists them in its
   header, so an older RustGIS refuses it as well.
-  Scripts give the family's name: `"font": "Garamond"`, with `"fallback": "serif"` if wanted;
-  `labels.fonts` lists the installed families. The project keeps the name, never a file. A PDF
-  sets its text in the letters' own outlines, so it shows the family wherever it is opened, and
-  the text can still be searched and copied; no font file goes into it. **Picture** places a PNG
-  or JPEG.
+  **Picture** places a PNG or JPEG.
 - **Map Series**: one page per feature of an index layer; see [Map series](#map-series) for setup,
   page names, scales and a locator.
 - Click an element to select it, drag to move, drag its handles to resize, and edit it in the
