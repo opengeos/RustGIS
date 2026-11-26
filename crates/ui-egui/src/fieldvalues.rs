@@ -211,7 +211,7 @@ pub(crate) fn insert(text: &mut String, field: &str, value: &str, ds: &Dataset, 
         head.truncate(keep);
         here = at_end(&head, ds);
     }
-    if starts_an_operand(after) {
+    if query::starts_with_value(after) {
         return Err(tl!("Not added: a value follows the cursor already. Put the cursor where none is, or delete that one").to_string());
     }
     if !here.as_ref().is_some_and(|c| c.operand || c.symbols.contains(&"=")) && ends_with_field(&head, field) {
@@ -233,29 +233,34 @@ pub(crate) fn insert(text: &mut String, field: &str, value: &str, ds: &Dataset, 
     crate::dialogs::add_word(&mut head, &put);
     // What was after it, from its first word.
     let after = after.trim_start();
-    // What the value left to finish (the end of `head` is where it was added).
-    let then = at_end(&head, ds);
-    if then.as_ref().is_some_and(|c| !c.operand && c.keywords == [Kw::And]) && !starts_with_word(after, "and") {
-        // `BETWEEN 10` needs `AND` and a second end.
-        crate::dialogs::add_word(&mut head, &format!("AND {value}"));
-    }
     let join = |head: &str| match after.starts_with([')', ',']) {
         true => format!("{}{after}", head.trim_end()),
         false => format!("{head}{after}"),
     };
-    // Each bracket left open is closed after the value, unless what follows closes it
-    // (`(continent = ▮ AND pop_est > 1)`) or the value goes on in it (`IN (▮, 'Africa')`); what
-    // follows doesn't otherwise count (an unfinished clause after it isn't a bracket left open).
-    let missing = match after.starts_with(',') {
+    // What the value left to finish (the end of `head` is where it was added), in the order the
+    // clause asks for it: `BETWEEN 10` needs `AND` and a second end, which `BETWEEN (10` needs once
+    // its bracket is closed. Each bracket left open is closed after the value, unless what follows
+    // closes it (`(continent = ▮ AND pop_est > 1)`) or the value goes on in it
+    // (`IN (▮, 'Africa')`); what follows doesn't otherwise count (an unfinished clause after it
+    // isn't a bracket left open).
+    let opened = |text: &str| query::brackets(text).unwrap_or_default();
+    let mut missing = match after.starts_with(',') {
         true => 0,
-        false => brackets(&head).0.saturating_sub(brackets(after).1),
+        false => opened(&head).0.saturating_sub(opened(after).1),
     };
-    for _ in 0..missing {
-        if !at_end(&head, ds).is_some_and(|c| c.symbols.contains(&")")) {
+    let mut second_end = !starts_with_word(after, "and");
+    loop {
+        let then = at_end(&head, ds);
+        if second_end && then.as_ref().is_some_and(|c| !c.operand && c.keywords == [Kw::And]) {
+            crate::dialogs::add_word(&mut head, &format!("AND {value}"));
+            second_end = false;
+        } else if missing > 0 && then.is_some_and(|c| c.symbols.contains(&")")) {
+            head.pop();
+            head.push_str(") ");
+            missing -= 1;
+        } else {
             break;
         }
-        head.pop();
-        head.push_str(") ");
     }
     let done = join(&head);
     if done.chars().count() > query::MAX_LEN {
@@ -266,44 +271,6 @@ pub(crate) fn insert(text: &mut String, field: &str, value: &str, ds: &Dataset, 
     }
     *text = done;
     Ok(())
-}
-
-/// The brackets `text` leaves open, and those it closes that it didn't open, outside its texts
-/// and quoted names.
-fn brackets(text: &str) -> (usize, usize) {
-    let (mut open, mut unopened, mut quote) = (0usize, 0usize, None);
-    for c in text.chars() {
-        match (quote, c) {
-            // A doubled quote in a text closes it and opens it again, which counts the same.
-            (Some(q), c) if c == q => quote = None,
-            (Some(_), _) => {}
-            (None, '\'' | '"') => quote = Some(c),
-            (None, '(') => open += 1,
-            (None, ')') => match open.checked_sub(1) {
-                Some(n) => open = n,
-                None => unopened += 1,
-            },
-            _ => {}
-        }
-    }
-    (open, unopened)
-}
-
-/// Whether `text` (what follows the cursor a value goes at) starts with a value, which the value
-/// added would stand beside (`= ▮'Africa'`): a text or quoted name, a number or a sign (a value
-/// before `-5` would subtract it), a bracket, or a name that isn't a word coming after a value
-/// (`AND`, `THEN`, `LIKE`…).
-fn starts_an_operand(text: &str) -> bool {
-    let text = text.trim_start();
-    let Some(first) = text.chars().next() else { return false };
-    if matches!(first, '\'' | '"' | '(' | '@' | '$' | '.' | '-' | '+') || first.is_ascii_digit() {
-        return true;
-    }
-    if !(first.is_alphabetic() || first == '_') {
-        return false;
-    }
-    let after_a_value = [Kw::And, Kw::Or, Kw::Not, Kw::Is, Kw::Like, Kw::Ilike, Kw::In, Kw::Between, Kw::When, Kw::Then, Kw::Else, Kw::End];
-    !after_a_value.iter().any(|k| starts_with_word(text, k.word()))
 }
 
 /// What is left of `text` after the quoted text or name that began before it, up to its closing
@@ -390,6 +357,7 @@ mod tests {
             ("pop_est BETWEEN", "pop_est", "10", "pop_est BETWEEN 10 AND 10 "),
             ("pop_est BETWEEN 1 AND", "pop_est", "10", "pop_est BETWEEN 1 AND 10 "),
             ("(pop_est BETWEEN ", "pop_est", "10", "(pop_est BETWEEN 10 AND 10) "),
+            ("pop_est BETWEEN (", "pop_est", "10", "pop_est BETWEEN (10) AND 10 "),
             // A text begun is replaced by the value.
             ("continent = 'As", "continent", "'Asia'", "continent = 'Asia' "),
             // The field's button was clicked, then Values: the field is there, so only what
@@ -476,6 +444,8 @@ mod tests {
             ("((continent =  AND pop_est > 1)", 14, "((continent = 'Asia') AND pop_est > 1)"),
             ("((continent =  AND name <> ')')", 14, "((continent = 'Asia') AND name <> ')')"),
             ("(name <> '(' AND continent = ", 29, "(name <> '(' AND continent = 'Asia') "),
+            ("(continent =  AND !tag)! = 1", 13, "(continent = 'Asia') AND !tag)! = 1"),
+            ("(continent =  AND \"a)\" = 1)", 13, "(continent = 'Asia' AND \"a)\" = 1)"),
         ] {
             let mut text = clause.to_string();
             insert(&mut text, "continent", "'Asia'", &ds, Some(at)).unwrap();
@@ -496,6 +466,7 @@ mod tests {
             ("continent = name", Some(12), "continent"),
             ("pop_est > -5", Some(10), "pop_est"),
             ("pop_est > +5", Some(10), "pop_est"),
+            ("continent = !name!", Some(12), "continent"),
             // The field's button clicked after an operator: the field is the value already.
             ("pop_est > continent ", None, "continent"),
             ("name = continent", None, "continent"),

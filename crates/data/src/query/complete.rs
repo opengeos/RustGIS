@@ -6,7 +6,7 @@
 use std::cell::{OnceCell, RefCell};
 use std::ops::Range;
 
-use super::{FuncSpec, Kw, Lexed, Open, Parser, Probe, Tok, lex_spans};
+use super::{Arith, FuncSpec, Kw, Lexed, Open, Parser, Probe, Tok, lex_spans};
 use crate::value::ClassText;
 use crate::{Dataset, Value};
 
@@ -140,6 +140,40 @@ pub fn complete_at(text: &str, cursor: usize, ds: &Dataset) -> Option<Completion
         pattern: probe.pattern,
         compared: probe.compared,
     })
+}
+
+/// The brackets `text`, a part of an expression, leaves open, and those it closes that it didn't
+/// open, read as the lexer reads it: none in a text or a quoted name (`')'`, `"a)"`, `!a)!`).
+/// `None` when it can't be read into words (as [`complete_at`]); a quote left open at the end
+/// holds the rest.
+pub fn brackets(text: &str) -> Option<(usize, usize)> {
+    let (mut open, mut unopened) = (0usize, 0usize);
+    for t in lex_spans(text, true).ok()?.toks {
+        match t {
+            Tok::LParen => open += 1,
+            Tok::RParen => match open.checked_sub(1) {
+                Some(n) => open = n,
+                None => unopened += 1,
+            },
+            _ => {}
+        }
+    }
+    Some((open, unopened))
+}
+
+/// Whether `text`, what follows a cursor where a value goes, starts with a value that a value
+/// written there would stand beside (`= ▮'Africa'`, `▮!name!`): a text, a quoted name, a number,
+/// a sign (a value before `-5` would subtract it), a bracket, a variable, or a name that isn't a
+/// word coming after a value (`AND`, `THEN`, `LIKE`…). Its first word is read as the lexer reads
+/// it, so `!=` is an operator; what can't be read is no value.
+pub fn starts_with_value(text: &str) -> bool {
+    let first = lex_spans(text, true).ok().and_then(|l| l.toks.into_iter().next());
+    let after_a_value = [Kw::And, Kw::Or, Kw::Not, Kw::Is, Kw::Like, Kw::Ilike, Kw::In, Kw::Between, Kw::When, Kw::Then, Kw::Else, Kw::End];
+    match first {
+        Some(Tok::Str(_) | Tok::QuotedIdent(_) | Tok::Num(_) | Tok::Var(_) | Tok::LParen | Tok::Arith(Arith::Add | Arith::Sub)) => true,
+        Some(Tok::Ident(word)) => !after_a_value.iter().any(|k| k.word().eq_ignore_ascii_case(&word)),
+        _ => false,
+    }
 }
 
 /// The most features [`field_values`] reads of a layer. Where a value compared with a field is
@@ -311,6 +345,22 @@ mod tests {
         ] {
             assert_eq!(literal(&v), None, "{v:?}");
         }
+    }
+
+    /// What follows a cursor is read as the lexer reads it: `!=` is an operator, `!a!` a name, and
+    /// a bracket in a text or quoted name is no bracket.
+    #[test]
+    fn what_follows_is_read_as_the_lexer_reads_it() {
+        for text in ["'a'", " !a b!", "\"a\"", "-5", "+5", "(1)", "@row_number", "name", "upper(name)"] {
+            assert!(starts_with_value(text), "{text}");
+        }
+        for text in ["", " != 1", "<> 1", ") AND", ", 'b')", "AND pop > 1", "then 1", "|| 'x'", "* 2", "#"] {
+            assert!(!starts_with_value(text), "{text}");
+        }
+        assert_eq!(brackets("((a = ')' AND \"b)\" = !c)! "), Some((2, 0)));
+        assert_eq!(brackets(" AND b = 1)) "), Some((0, 2)));
+        assert_eq!(brackets("(a = 'open ("), Some((1, 0)));
+        assert_eq!(brackets("#"), None);
     }
 
     /// A field's values: each once, in Unique Values' order, without what is no literal (null, a

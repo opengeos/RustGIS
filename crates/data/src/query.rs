@@ -35,7 +35,10 @@ mod complete;
 #[cfg(test)]
 mod legacy;
 
-pub use complete::{Call, Completion, FieldValue, FieldValues, Place, VALUE_CHARS, VALUES_READ, complete_at, field_values, literal};
+pub use complete::{
+    Call, Completion, FieldValue, FieldValues, Place, VALUE_CHARS, VALUES_READ, brackets, complete_at, field_values, literal,
+    starts_with_value,
+};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Expr {
