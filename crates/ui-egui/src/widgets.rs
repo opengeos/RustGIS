@@ -60,6 +60,49 @@ impl<T: Copy + Default + PartialEq + Send + Sync + 'static> Dragged<T> {
     }
 }
 
+/// What a row that can be dragged to another place (`reorder`) senses (#2958): clicks, and drags
+/// unless a finger is on the screen. A drag is what the list's own drag-to-scroll gives way to,
+/// so under a finger the row senses clicks only and a swipe scrolls the list; `reorder_drag` arms
+/// the drag by a long press. The mouse of a touch-screen laptop keeps dragging rows.
+pub(crate) fn reorder_sense(ui: &Ui, reorder: bool) -> Sense {
+    if reorder && !ui.input(|i| i.any_touches()) { Sense::click_and_drag() } else { Sense::click() }
+}
+
+/// Whether the drag of the row `resp` starts this frame (#2958): with the mouse, when it starts a
+/// drag; with a finger, when it moves after a long press (egui reads the long press as a click of
+/// the context menu and lets go of the row's drag, so the pressed row is kept until the finger
+/// is up, and the menu closes as the item is taken). Without `reorder` it never does.
+pub(crate) fn reorder_drag(ui: &Ui, resp: &Response, reorder: bool) -> bool {
+    if !reorder {
+        return false;
+    }
+    if resp.drag_started_by(egui::PointerButton::Primary) {
+        return true;
+    }
+    let armed = egui::Id::NULL.with("reorder_long_press");
+    let ctx = ui.ctx();
+    if resp.long_touched() {
+        ctx.data_mut(|d| d.insert_temp(armed, Some(resp.id)));
+        return false;
+    }
+    if ctx.data(|d| d.get_temp::<Option<egui::Id>>(armed)).flatten() != Some(resp.id) {
+        return false;
+    }
+    let (down, moved) = ui.input(|i| {
+        let moved = i.pointer.press_origin().zip(i.pointer.latest_pos()).is_some_and(|(a, b)| (b - a).length() > 8.0);
+        (i.pointer.primary_down(), moved)
+    });
+    if !down {
+        ctx.data_mut(|d| d.insert_temp(armed, None::<egui::Id>));
+        return false;
+    }
+    if moved {
+        ctx.data_mut(|d| d.insert_temp(armed, None::<egui::Id>));
+        egui::Popup::close_all(ctx);
+    }
+    moved
+}
+
 /// Makes the command the caller runs next, for a change of `r`, part of the undo step of the
 /// pointer press making it: a number dragged, or a colour picked in its picker, is one step to
 /// undo however many changes it makes (#1194). A number typed into `r` is a step of its own, even

@@ -4856,7 +4856,7 @@ fn view_tab_row(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, follow: bool) -> 
     let mut map_tabs = Vec::with_capacity(names.len());
     for (i, n) in names.iter().enumerate() {
         let tr = next_view_tab(ui, view_tab_w(ui, n));
-        let resp = ui.interact(tr, egui::Id::unique(("maptab", i)), Sense::click_and_drag());
+        let resp = ui.interact(tr, egui::Id::unique(("maptab", i)), crate::widgets::reorder_sense(ui, true));
         // Painted, so named for screen readers (and tests).
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, n));
         let dragging = drag_tab(ui, &resp, false, n);
@@ -4907,7 +4907,7 @@ fn view_tab_row(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, follow: bool) -> 
     let mut layout_tabs = Vec::with_capacity(layouts.len());
     for (i, n) in layouts.iter().enumerate() {
         let tr = next_view_tab(ui, view_tab_w(ui, n));
-        let resp = ui.interact(tr, egui::Id::unique(("layouttab", i)), Sense::click_and_drag());
+        let resp = ui.interact(tr, egui::Id::unique(("layouttab", i)), crate::widgets::reorder_sense(ui, true));
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, n));
         let dragging = drag_tab(ui, &resp, true, n);
         layout_tabs.push(tr);
@@ -5010,7 +5010,7 @@ struct DraggedTab {
 /// Starts dragging the map or layout tab or row `name` when `resp` starts a drag; whether that one
 /// is being dragged.
 pub(crate) fn drag_tab(ui: &Ui, resp: &egui::Response, layout: bool, name: &str) -> bool {
-    if resp.drag_started_by(egui::PointerButton::Primary) {
+    if crate::widgets::reorder_drag(ui, resp, true) {
         egui::DragAndDrop::set_payload(ui.ctx(), DraggedTab { layout, name: name.to_string() });
     }
     egui::DragAndDrop::payload::<DraggedTab>(ui.ctx()).is_some_and(|d| d.layout == layout && d.name == name)

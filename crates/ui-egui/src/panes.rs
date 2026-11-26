@@ -1337,10 +1337,10 @@ fn layer_group_row(
     let filtering = !q.is_empty();
     ui.push_id(("layer_group", group.id), |ui| {
         let name = row_name(ui, group.name.clone(), semibold(12.5), ui.available_width() - NAME_X - 8.0);
-        let sense = if reorder { Sense::click_and_drag() } else { Sense::click() };
+        let sense = crate::widgets::reorder_sense(ui, reorder);
         let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), name.row_h), sense);
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &group.name));
-        if reorder && resp.drag_started_by(egui::PointerButton::Primary) {
+        if crate::widgets::reorder_drag(ui, &resp, reorder) {
             egui::DragAndDrop::set_payload(ui.ctx(), DraggedLayer(group.id));
         }
         let dragging = egui::DragAndDrop::payload::<DraggedLayer>(ui.ctx()).is_some_and(|d| d.0 == group.id);
@@ -1658,12 +1658,12 @@ fn tile_row(app: &mut RustGisApp, ui: &mut Ui, i: usize, moves: [bool; 2], reord
         shown = format!("{shown}  {note}");
     }
     let name = row_name(ui, shown.clone(), regular(12.5), ui.available_width() - NAME_X - 8.0);
-    let sense = if reorder { Sense::click_and_drag() } else { Sense::click() };
+    let sense = crate::widgets::reorder_sense(ui, reorder);
     let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), name.row_h), sense);
     // Named for screen readers as a layer's row is.
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &tile.name));
     // Dragged to another place in the drawing order, as a layer's row is.
-    if reorder && resp.drag_started_by(egui::PointerButton::Primary) {
+    if crate::widgets::reorder_drag(ui, &resp, reorder) {
         egui::DragAndDrop::set_payload(ui.ctx(), DraggedTile(i));
     }
     let dragging = egui::DragAndDrop::payload::<DraggedTile>(ui.ctx()).is_some_and(|d| d.0 == i);
@@ -2052,12 +2052,12 @@ fn layer_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, scale: f64, reorder: 
     let font = regular(12.5);
     let room = ui.available_width() - NAME_X - badge.as_ref().map_or(8.0, |(_, w)| w + 18.0);
     let name = row_name(ui, shown.clone(), font, room);
-    let sense = if reorder { Sense::click_and_drag() } else { Sense::click() };
+    let sense = crate::widgets::reorder_sense(ui, reorder);
     let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), name.row_h), sense);
     // The icons and the badge line up with the name's first line.
     let cy = r.min.y + 13.0;
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &l.name));
-    if reorder && resp.drag_started_by(egui::PointerButton::Primary) {
+    if crate::widgets::reorder_drag(ui, &resp, reorder) {
         egui::DragAndDrop::set_payload(ui.ctx(), DraggedLayer(l.id));
     }
     let dragging = egui::DragAndDrop::payload::<DraggedLayer>(ui.ctx()).is_some_and(|d| d.0 == l.id);
@@ -2663,7 +2663,7 @@ fn catalog(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                         icons::paint(ui.painter(), r, "map", t.icon, t.accent);
                         let active = i == app.session.project.active_map;
                         // Dragged to another place among the maps, as its tab is (#2829).
-                        let resp = ui.selectable_label(active, m).interact(Sense::drag());
+                        let resp = ui.selectable_label(active, m).interact(crate::widgets::reorder_sense(ui, true));
                         let dragging = crate::mapview::drag_tab(ui, &resp, false, m);
                         if resp.clicked() {
                             let _ = app.run("map.activate", json!({"name": m}));
@@ -2726,7 +2726,7 @@ fn catalog(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                                         .is_some_and(|l| l.name == *n),
                                     n,
                                 )
-                                .interact(Sense::drag());
+                                .interact(crate::widgets::reorder_sense(ui, true));
                             let dragging = crate::mapview::drag_tab(ui, &resp, true, n);
                             if resp.clicked() {
                                 let _ = app.run("layout.activate", json!({"name": n}));
@@ -8510,6 +8510,83 @@ mod tests {
         h.step();
         h.event(button(to, false));
         h.step();
+    }
+
+    /// A finger on `from` that moves through `to` in steps, as winit reports a touch (touch event
+    /// and pointer events together), `held` frames before it starts moving and let go at the end.
+    fn touch_drag(h: &mut egui_kittest::Harness<'_, RustGisApp>, from: egui::Pos2, to: egui::Pos2, held: usize) {
+        use egui::{Event, Modifiers, PointerButton, TouchDeviceId, TouchId, TouchPhase};
+        let touch = |phase, pos| Event::Touch { device_id: TouchDeviceId(1), id: TouchId(1), phase, pos, force: None };
+        let button = |pos, pressed| Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+        h.event(Event::PointerMoved(from));
+        h.step();
+        h.event(touch(TouchPhase::Start, from));
+        h.event(button(from, true));
+        h.step();
+        for _ in 0..held {
+            h.step();
+        }
+        for step in 1..=8 {
+            let pos = from + (to - from) * (step as f32 / 8.0);
+            h.event(touch(TouchPhase::Move, pos));
+            h.event(Event::PointerMoved(pos));
+            h.step();
+        }
+        h.event(touch(TouchPhase::End, to));
+        h.event(button(to, false));
+        h.event(Event::PointerGone);
+        h.step();
+    }
+
+    /// #2958: a swipe of a finger over the layer rows scrolls the list; it does not take the row
+    /// under the finger to another place, as the mouse does.
+    #[test]
+    fn a_swipe_over_the_layers_does_not_reorder_them() {
+        use egui_kittest::kittest::Queryable;
+        let app = RustGisApp::with_sample();
+        let original: Vec<_> = app.session.map().layers.iter().map(|l| l.id).collect();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 900.0)).with_max_steps(64).build_ui_state(
+            |ui, app: &mut RustGisApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run_steps(6);
+        let from = h.get_by_label("Countries").rect().center();
+        let first = h.get_by_label("Cities").rect();
+        touch_drag(&mut h, from, pos2(first.center().x, first.min.y + 2.0), 0);
+        h.run_steps(3);
+        assert_eq!(h.state().session.map().layers.iter().map(|l| l.id).collect::<Vec<_>>(), original);
+        assert_eq!(h.state().session.undo_depth(), 0);
+    }
+
+    /// #2958: a finger held on a layer row and then moved takes the row to another place, as the
+    /// mouse does at once, and the menu the long press opened is gone.
+    #[test]
+    fn a_long_press_then_a_move_reorders_a_layer() {
+        use egui_kittest::kittest::Queryable;
+        let app = RustGisApp::with_sample();
+        let original: Vec<_> = app.session.map().layers.iter().map(|l| l.id).collect();
+        let moved = layer(&app, "Countries");
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 900.0)).with_max_steps(64).build_ui_state(
+            |ui, app: &mut RustGisApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run_steps(6);
+        let from = h.get_by_label("Countries").rect().center();
+        let first = h.get_by_label("Cities").rect();
+        touch_drag(&mut h, from, pos2(first.center().x, first.min.y + first.height() * 0.125), 6);
+        h.run_steps(3);
+        let order: Vec<_> = h.state().session.map().layers.iter().map(|l| l.id).collect();
+        assert_eq!(order.first(), Some(&moved), "{order:?} from {original:?}");
+        assert_eq!(h.state().session.undo_depth(), 1);
+        assert!(h.query_by_label("Zoom to Layer").is_none(), "the menu of the long press is still open");
     }
 
     /// #1321: double-clicking a layer opens its Symbology pane even at 4 frames a second (CPU
