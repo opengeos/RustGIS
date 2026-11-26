@@ -1101,20 +1101,41 @@ fn geopackage_view_reads_keep_the_tables_order() {
         let at = i * 719 % 1200;
         ds.push(Some(Geometry::Point(Coord::new(f64::from(at % 40), f64::from(at / 40)))), vec![]);
     }
-    let p = dir().join("scattered.gpkg");
-    crate::io::write_path(&ds, &p).unwrap();
-    let src = open_path(&p, None).unwrap();
-    assert!(src.info().indexed);
-    let read =
-        |extent, limit| -> Vec<u64> { src.read(&Request { extent, limit, own: None }).unwrap().features.iter().map(|f| f.id).collect() };
-    let whole = read(None, 10_000);
-    assert_eq!(whole.len(), 1200);
-    let all = Some(Extent::new(-1.0, -1.0, 41.0, 31.0));
-    assert_eq!(read(all, 10_000), whole);
-    // A sample of them: every other one the index lists.
-    let sample = read(all, 700);
-    assert_eq!(sample.len(), 600);
-    assert!(sample.is_sorted());
+    // The key a GeoPackage asks for is the rowid. One declared `INT` is a column of its own, here
+    // numbered against the table's order.
+    for key_is_rowid in [true, false] {
+        let p = dir().join(format!("scattered-{key_is_rowid}.gpkg"));
+        crate::io::write_path(&ds, &p).unwrap();
+        if !key_is_rowid {
+            rusqlite::Connection::open(&p)
+                .unwrap()
+                .execute_batch(
+                    "CREATE TABLE rows AS SELECT * FROM scattered;
+                     CREATE TABLE places AS SELECT * FROM rtree_scattered_geom;
+                     DROP TABLE scattered;
+                     CREATE TABLE scattered (fid INT PRIMARY KEY, geom MULTIPOINT);
+                     INSERT INTO scattered (fid, geom) SELECT 1201 - fid, geom FROM rows ORDER BY fid;
+                     DELETE FROM rtree_scattered_geom;
+                     INSERT INTO rtree_scattered_geom SELECT 1201 - id, minx, maxx, miny, maxy FROM places;",
+                )
+                .unwrap();
+        }
+        let src = open_path(&p, None).unwrap();
+        assert!(src.info().indexed);
+        let read = |extent, limit| -> Vec<u64> {
+            src.read(&Request { extent, limit, own: None }).unwrap().features.iter().map(|f| f.id).collect()
+        };
+        let in_order = |ids: &[u64]| ids.is_sorted_by(|a, b| if key_is_rowid { a < b } else { a > b });
+        let whole = read(None, 10_000);
+        assert_eq!(whole.len(), 1200);
+        assert!(in_order(&whole));
+        let all = Some(Extent::new(-1.0, -1.0, 41.0, 31.0));
+        assert_eq!(read(all, 10_000), whole);
+        // A sample of them: every other one.
+        let sample = read(all, 700);
+        assert_eq!(sample.len(), 600);
+        assert!(in_order(&sample));
+    }
 }
 
 /// The browser's GeoPackage reader (pure Rust) gives what SQLite gives, without the R-tree.

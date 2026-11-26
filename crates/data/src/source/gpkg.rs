@@ -29,6 +29,9 @@ pub struct GpkgSource {
     table: String,
     geom: String,
     pk: Option<String>,
+    /// Whether the key isn't the table's rowid (declared `INT PRIMARY KEY`, say, not `INTEGER`),
+    /// so the table's order isn't the key's.
+    rowid_apart: bool,
     rtree: Option<String>,
     reproject: Reproject,
     /// A copy written for a file opened from memory, removed when the source is dropped.
@@ -286,6 +289,10 @@ impl GpkgSource {
                 }
             }
         }
+        // SQLite indexes a primary key that isn't the rowid itself. A table without rowids has
+        // such an index too, and its order is the key's.
+        let rowid_apart = conn.query_row("SELECT 1 FROM pragma_index_list(?1) WHERE origin = 'pk'", [&table], |_| Ok(())).is_ok()
+            && conn.prepare(&format!("SELECT _rowid_ FROM {}", quote(&table))).is_ok();
         // Looked up without regard to case, as SQLite names are; the real name is kept.
         let rtree_name = format!("rtree_{table}_{geom}");
         let rtree: Option<String> = conn
@@ -361,6 +368,7 @@ impl GpkgSource {
             table,
             geom,
             pk,
+            rowid_apart,
             rtree,
             reproject,
             temp: None,
@@ -529,7 +537,15 @@ impl FeatureSource for GpkgSource {
                 let n: i64 = conn.query_row(&format!("SELECT COUNT(*) {filter}"), args, |r| r.get(0)).map_err(err)?;
                 out.matched = u64::try_from(n).unwrap_or(0);
                 let step = usize::try_from(stride(out.matched, limit)).unwrap_or(usize::MAX);
-                let mut st = conn.prepare(&format!("SELECT id {filter}")).map_err(err)?;
+                let (table, key) = (quote(&self.table), quote(pk));
+                // A key apart from the rowid doesn't follow the table's order: the table lists the
+                // ids in it.
+                let ids = if self.rowid_apart {
+                    format!("SELECT {key} FROM {table} WHERE {key} IN (SELECT id {filter}) ORDER BY _rowid_")
+                } else {
+                    format!("SELECT id {filter}")
+                };
+                let mut st = conn.prepare(&ids).map_err(err)?;
                 // A row error (a corrupt page) fails the read rather than truncating it quietly.
                 let mut picked: Vec<i64> = st
                     .query_map(args, |r| r.get(0))
@@ -538,13 +554,16 @@ impl FeatureSource for GpkgSource {
                     .take(limit)
                     .collect::<rusqlite::Result<_>>()
                     .map_err(err)?;
-                // The index lists them in its own order. Fetched by ascending id, they come in
-                // the table's, as a whole read gives them: the order the map draws them in.
-                picked.sort_unstable();
+                // The index lists them in its own order. They are fetched in the table's, as a
+                // whole read gives them: the order the map draws them in.
+                if !self.rowid_apart {
+                    picked.sort_unstable();
+                }
+                let order = if self.rowid_apart { "_rowid_" } else { &key };
                 out.complete = step == 1;
                 for chunk in picked.chunks(CHUNK) {
                     let marks = vec!["?"; chunk.len()].join(",");
-                    let sql = format!("SELECT {} FROM {} WHERE {} IN ({marks})", self.select_list(), quote(&self.table), quote(pk));
+                    let sql = format!("SELECT {} FROM {table} WHERE {key} IN ({marks}) ORDER BY {order}", self.select_list());
                     let mut st = conn.prepare(&sql).map_err(err)?;
                     let mut rows = st.query(params_from_iter(chunk.iter())).map_err(err)?;
                     while let Some(r) = rows.next().map_err(err)? {
