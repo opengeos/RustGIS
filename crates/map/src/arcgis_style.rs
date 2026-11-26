@@ -498,7 +498,7 @@ fn symbol(s: &Value, g: GeometryType, picture: Option<Rgba>, pictures: &mut Pict
                     say_unreadable_sizes(s, notes);
                     let wide = s.get("width").and_then(Value::as_f64).is_some_and(|w| w.is_finite() && w > 0.0);
                     let height = s.get("height").filter(|h| !h.is_null());
-                    let flat = height.and_then(Value::as_f64).is_some_and(|h| h == 0.0);
+                    let flat = height.and_then(Value::as_f64).is_some_and(|h| h <= 0.0);
                     let sized_by = if wide {
                         if flat {
                             notes.add("picture markers of no height, drawn as tall as their image is");
@@ -645,7 +645,7 @@ fn size(v: Option<&Value>, default: f32, notes: &mut Notes) -> f32 {
 fn say_unreadable_sizes(s: &Value, notes: &mut Notes) {
     let unreadable = |k: &str| s.get(k).is_some_and(|v| !v.is_null()) && !s.get(k).and_then(Value::as_f64).is_some_and(f64::is_finite);
     if unreadable("width") || unreadable("height") {
-        notes.add("marker sizes RustGIS can't read, drawn at RustGIS's");
+        notes.add("marker sizes RustGIS can't read, left out");
     }
 }
 
@@ -834,26 +834,30 @@ mod tests {
             let (s, text) = styled_pms(width.clone(), height.clone());
             assert_eq!(s.size, base.size, "width {width}, height {height}");
             assert_eq!(
-                text, "marker sizes RustGIS can't read, drawn at RustGIS's; picture markers with no size, drawn at RustGIS's",
+                text, "marker sizes RustGIS can't read, left out; picture markers with no size, drawn at RustGIS's",
                 "width {width}, height {height}"
             );
         }
         // So is one a width makes no use of, and a width that isn't a number beside a height that is.
         let (s, text) = styled_pms(json!(15), json!("abc"));
         assert_eq!(s.size, 15.0);
-        assert_eq!(text, "marker sizes RustGIS can't read, drawn at RustGIS's");
+        assert_eq!(text, "marker sizes RustGIS can't read, left out");
         let (s, text) = styled_pms(json!("abc"), json!(18));
         assert_eq!(s.size, 18.0);
         assert_eq!(
             text,
-            "marker sizes RustGIS can't read, drawn at RustGIS's; picture markers with no width, drawn with their height as their width"
+            "marker sizes RustGIS can't read, left out; picture markers with no width, drawn with their height as their width"
         );
         // With a width, it is drawn by it, and the height's 0 said.
         let (s, text) = styled_pms(json!(15), json!(0));
         assert_eq!(s.size, 15.0);
         assert_eq!(text, "picture markers of no height, drawn as tall as their image is");
-        // A height above 0 says nothing of the kind; nor does one below 0, which a width makes no use of.
-        for height in [json!(18), json!(-4)] {
+        // A height below 0 is no height either: the width alone draws it, and the height is said.
+        let (s, text) = styled_pms(json!(15), json!(-4));
+        assert_eq!(s.size, 15.0);
+        assert_eq!(text, "picture markers of no height, drawn as tall as their image is");
+        // A height above 0 says nothing of the kind.
+        for height in [json!(18)] {
             let (s, text) = styled_pms(json!(15), height.clone());
             assert_eq!(s.size, 15.0, "height {height}");
             assert!(text.is_empty(), "height {height}: {text}");
@@ -892,7 +896,7 @@ mod tests {
         assert_eq!(s.size, base.size);
         assert_eq!(
             notes.text(),
-            "picture markers whose image isn't a PNG, JPEG or SVG RustGIS reads, drawn as circles; marker sizes RustGIS can't read, drawn at RustGIS's"
+            "picture markers whose image isn't a PNG, JPEG or SVG RustGIS reads, drawn as circles; marker sizes RustGIS can't read, left out"
         );
         // Each side that isn't a number is said, whichever one the circle takes its size from.
         for (width, height, size, text) in [
@@ -900,13 +904,13 @@ mod tests {
                 json!("abc"),
                 json!(18),
                 18.0,
-                "picture markers whose image isn't a PNG, JPEG or SVG RustGIS reads, drawn as circles; marker sizes RustGIS can't read, drawn at RustGIS's",
+                "picture markers whose image isn't a PNG, JPEG or SVG RustGIS reads, drawn as circles; marker sizes RustGIS can't read, left out",
             ),
             (
                 json!(0),
                 json!("abc"),
                 0.0,
-                "picture markers whose image isn't a PNG, JPEG or SVG RustGIS reads, drawn as circles; marker sizes RustGIS can't read, drawn at RustGIS's; picture markers with no size, drawn at RustGIS's",
+                "picture markers whose image isn't a PNG, JPEG or SVG RustGIS reads, drawn as circles; marker sizes RustGIS can't read, left out; picture markers with no size, drawn at RustGIS's",
             ),
         ] {
             let (l, notes) = styled(

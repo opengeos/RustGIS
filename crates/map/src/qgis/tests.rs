@@ -1614,6 +1614,15 @@ fn raster_image_markers_that_cant_be_drawn_are_circles_saying_why() {
         ),
         ("\\\\host\\share\\a.png", "raster image markers whose image is on a network share, which RustGIS doesn't open, drawn as circles"),
         ("//host/share/a.png", "raster image markers whose image is on a network share, which RustGIS doesn't open, drawn as circles"),
+        // A web address written after `file:` is still one, whatever else its form looks like.
+        (
+            "file://https://example.invalid/a.png",
+            "raster image markers whose image is at a web address, which RustGIS doesn't fetch, drawn as circles",
+        ),
+        (
+            "file:https://example.invalid/a.png",
+            "raster image markers whose image is at a web address, which RustGIS doesn't fetch, drawn as circles",
+        ),
         ("file://host/share/a.png", "raster image markers whose image is on a network share, which RustGIS doesn't open, drawn as circles"),
         // A share written so that decoding leaves a space before it, which `absolute` would trim.
         (

@@ -942,6 +942,8 @@ pub(super) fn read_images(root: Node, dir: &str, read: &mut ReadImage, report: &
             Ok(None)
         } else if file.starts_with("attachment:") {
             Err("whose image is kept inside the .qgz project, which RustGIS doesn't read it from")
+        } else if path.contains("://") && (!address || file.trim_start_matches("file:").trim_start_matches('/').contains("://")) {
+            Err("whose image is at a web address, which RustGIS doesn't fetch")
         } else if share || network_share(&path) {
             // Looking a share up can sign in to the host the file names, which a style or
             // project chose (as an archive on one isn't opened either).
@@ -950,8 +952,6 @@ pub(super) fn read_images(root: Node, dir: &str, read: &mut ReadImage, report: &
             // `%3A%2F%2F` in a name is a name, but `absolute` would leave one from the project's folder to
             // the working folder.
             Err("whose image is a relative file name with `://` in it, which RustGIS doesn't read")
-        } else if path.contains("://") && (!address || file.trim_start_matches("file:").trim_start_matches('/').contains("://")) {
-            Err("whose image is at a web address, which RustGIS doesn't fetch")
         } else if super::is_drive_relative(&path) {
             Err("whose image file is relative to a drive's working folder, which no project folder tells")
         } else if super::is_relative(&path) && dir.is_empty() {
