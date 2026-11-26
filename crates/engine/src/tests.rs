@@ -40467,13 +40467,20 @@ fn a_map_page_title_statistic_without_a_figure_is_said() {
     let blank = s.project.presentations[0].pages.len();
     s.run("presentation.blankPage", &Value::Null).unwrap();
     assert_eq!(run(&mut s, "presentation.updatePage", json!({"page": blank, "title": "{count:Nowhere}"})), Vec::<String>::new());
-    // An imported presentation says it once for each map page that holds it.
+    // An imported presentation says each warning once, with how many map pages it is for when
+    // more than one.
     s.run("presentation.new", &json!({"name": "Q", "title": "{count:Nowhere}"})).unwrap();
-    for _ in 0..2 {
-        s.run("presentation.mapPage", &json!({"title": "{count:Nowhere}"})).unwrap();
+    for title in ["{count:Nowhere}", "{count:Nowhere} {count:Elsewhere}"] {
+        s.run("presentation.mapPage", &json!({"title": title})).unwrap();
     }
     let text = serde_json::to_string(&s.project.presentations[1]).unwrap();
-    assert_eq!(run(&mut s, "presentation.import", json!({"text": text})), [nowhere, nowhere]);
+    assert_eq!(
+        run(&mut s, "presentation.import", json!({"text": text})),
+        [
+            format!("{nowhere} (in 2 map pages)"),
+            "{count:Elsewhere} shows as written: the page's map has no layer named 'Elsewhere'".to_string(),
+        ]
+    );
 }
 
 /// The map of a layout's first frame decides its texts' figures (#2853), so a map deleted that a

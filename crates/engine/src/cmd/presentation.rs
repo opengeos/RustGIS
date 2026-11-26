@@ -68,8 +68,18 @@ pub fn commands() -> Vec<C> {
             if let Some(cut) = cut {
                 s.notify(cut, false);
             }
+            // Pages often share a title's figure: each warning once, with its count of pages.
+            let mut said: Vec<(String, usize)> = Vec::new();
             for k in 0..s.project.presentations[i].pages.len() {
-                say_title_statistics(s, i, k);
+                for w in title_statistic_notices(s, i, k) {
+                    match said.iter_mut().find(|(text, _)| *text == w) {
+                        Some((_, pages)) => *pages += 1,
+                        None => said.push((w, 1)),
+                    }
+                }
+            }
+            for (w, pages) in said {
+                s.warn(if pages > 1 { format!("{w} (in {pages} map pages)") } else { w });
             }
             Ok(json!({"presentation": i, "name": name}))
         }).roles(&[crate::ParamRole { key: "text", role: crate::Role::Document(crate::Document::Presentation) }]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files))
@@ -328,14 +338,19 @@ fn update_page(s: &mut Session, p: &Value) -> CmdResult {
     Ok(json!({"page": at}))
 }
 
-/// Says which layer statistics (#2853) in the title of the page `k` of the presentation `i` are
-/// drawn as written, and what each misses: only a map page fills them in, from the map
-/// [`page_layout`] draws it over.
+/// Which layer statistics (#2853) in the title of the page `k` of the presentation `i` are drawn
+/// as written, and what each misses: only a map page fills them in, from the map [`page_layout`]
+/// draws it over. One pass over each layer the title names, as a layout text's notices make, so an
+/// import makes one per map page that holds a figure.
+fn title_statistic_notices(s: &Session, i: usize, k: usize) -> Vec<String> {
+    let Some(page) = s.project.presentations.get(i).and_then(|p| p.pages.get(k)) else { return Vec::new() };
+    let PageKind::Map { map, .. } = &page.kind else { return Vec::new() };
+    rustgis_render::layout::map_statistic_notices(page_map(s, map), "the page's map", &page.title)
+}
+
+/// Warns with each of [`title_statistic_notices`] for one page.
 fn say_title_statistics(s: &mut Session, i: usize, k: usize) {
-    let Some(page) = s.project.presentations.get(i).and_then(|p| p.pages.get(k)) else { return };
-    let PageKind::Map { map, .. } = &page.kind else { return };
-    let said = rustgis_render::layout::map_statistic_notices(page_map(s, map), "the page's map", &page.title);
-    for w in said {
+    for w in title_statistic_notices(s, i, k) {
         s.warn(w);
     }
 }
