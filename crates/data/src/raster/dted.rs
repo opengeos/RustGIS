@@ -258,7 +258,7 @@ fn read_from_limited(file_name: &str, mut source: impl std::io::Read, max: usize
     if east - west > 1.0 + 1e-9 || north - south > 1.0 + 1e-9 || north > 90.0 + 1e-9 || east > 180.0 + 1e-9 {
         return Err(bad("its posts span more than the one-degree cell a DTED file holds"));
     }
-    let mut lost = Vec::new();
+    let mut lost = crate::loss::Notes::new();
     // What the DSI says differently (3.12 d), and what the spec sets for the level (3.9.2).
     let dsi = [
         (digits(bytes, DSI + 273, 4), lat_tenths, "latitude interval"),
@@ -329,7 +329,7 @@ fn read_from_limited(file_name: &str, mut source: impl std::io::Read, max: usize
         Some(other) if !other.trim().is_empty() => {
             lost.push(format!("its horizontal datum is {:?}, not WGS84; it is read as WGS 84", other.trim()));
         }
-        _ => lost.push("it doesn't name its horizontal datum; it is read as WGS 84, as MIL-PRF-89020B sets".into()),
+        _ => lost.push("it doesn't name its horizontal datum; it is read as WGS 84, as MIL-PRF-89020B sets"),
     }
     let surface = match field(bytes, DSI + 141, 3) {
         Some("E96") => "the EGM96 geoid (mean sea level)".to_string(),
@@ -456,7 +456,10 @@ fn read_from_limited(file_name: &str, mut source: impl std::io::Read, max: usize
         lost.push(format!("{extra} bytes after its last column are ignored"));
     }
     if damaged > 0 {
-        lost.push(format!("{} a damaged record header (not the 0xAA sentinel), read as no data", count(damaged)));
+        lost.push(crate::loss::Note::loss(
+            crate::loss::LossCode::DroppedValue,
+            format!("{} a damaged record header (not the 0xAA sentinel), read as no data", count(damaged)),
+        ));
     }
     match misnumbered {
         0 => {}
@@ -477,8 +480,7 @@ fn read_from_limited(file_name: &str, mut source: impl std::io::Read, max: usize
     match twos {
         0 => {}
         1 => lost.push(
-            "1 of its heights was written in two's complement, not the signed magnitude MIL-PRF-89020B sets; it is read as two's complement"
-                .into(),
+            "1 of its heights was written in two's complement, not the signed magnitude MIL-PRF-89020B sets; it is read as two's complement",
         ),
         n => lost.push(format!(
             "{n} of its heights were written in two's complement, not the signed magnitude MIL-PRF-89020B sets; they are read as two's complement"

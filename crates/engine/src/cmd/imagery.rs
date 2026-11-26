@@ -2481,9 +2481,9 @@ impl Tiles {
             .iter()
             .skip(1)
             .filter(|r| r.copyright.is_some() && r.copyright != first.copyright)
-            .map(|r| (r.name.clone(), "its copyright differs from the first input's and is not kept in the mosaic".to_string()))
+            .map(|r| (r.name.clone(), rustgis_data::loss::Note::plain("its copyright differs from the first input's and is not kept in the mosaic")))
             .collect();
-        notes.extend(super::raster::loss_lines(credits).into_iter().map(|n| (n, false)));
+        notes.extend(super::raster::loss_lines(credits).into_iter().map(|n| (n.text, false)));
         // Cells rounded when an input was read may be among those the mosaic keeps.
         out.keep_rounded_marks(rs.iter().map(|r| &**r));
         let other: Vec<&str> =
@@ -2548,7 +2548,7 @@ pub(crate) fn mosaic_rasters_work(s: &Session, p: &Value) -> Result<super::workf
     }
     Ok(Box::new(move || {
         // What reading a file left out is said once they are all read.
-        let mut lost: Vec<(String, String)> = Vec::new();
+        let mut lost: Vec<(String, rustgis_data::loss::Note)> = Vec::new();
         for input in rest {
             rustgis_data::progress::check().map_err(|e| e.to_string())?;
             let r = match input? {
@@ -2561,7 +2561,8 @@ pub(crate) fn mosaic_rasters_work(s: &Session, p: &Value) -> Result<super::workf
             };
             tiles.take(r)?;
         }
-        let mut notes: Notes = super::raster::loss_lines(lost).into_iter().map(|n| (n, false)).collect();
+        // Said as text with the mosaic's other notes: their codes go with a later change.
+        let mut notes: Notes = super::raster::loss_lines(lost).into_iter().map(|n| (n.text, false)).collect();
         let made = (|| -> Result<super::workflows::Made, String> {
             // The inputs are let go of once joined, before the file is written.
             let out = tiles.join(given, &mut notes)?;
