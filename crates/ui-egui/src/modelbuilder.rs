@@ -661,6 +661,11 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
 
 fn toolbar(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, problems: &[model::Problem]) {
     ui.horizontal_centered(|ui| {
+        // A shell with its own interface has no view tabs, and on a phone the buttons at the far
+        // end are past the window's edge: the way back to the map comes first.
+        if app.chrome.is_some() && ui.add(egui::Button::new(tl!("Back to the map")).min_size(vec2(0.0, 30.0))).clicked() {
+            app.mb.active = false;
+        }
         let (r, _) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::hover());
         icons::paint(ui.painter(), r, "modelbuilder", t.icon, t.accent);
         ui.add(egui::TextEdit::singleline(&mut app.mb.name).hint_text(tl!("Untitled model")).desired_width(170.0).font(semibold(13.0)));
