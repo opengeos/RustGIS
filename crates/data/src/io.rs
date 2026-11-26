@@ -3885,6 +3885,8 @@ fn read_zip_layers_budget(file_name: &str, bytes: &[u8], crs: Option<Crs>, budge
     let mut out = Vec::new();
     // Members that couldn't be read are skipped, and said in the first layer's report.
     let mut skipped: Vec<String> = Vec::new();
+    // KML and KMZ members with ground overlays, which aren't drawn from a zip: each, and how many.
+    let mut overlays_left: Vec<(String, usize)> = Vec::new();
     for n in shps {
         if out.len() >= MAX_ZIP_LAYERS {
             skipped.push(format!("{n} (past the {MAX_ZIP_LAYERS}-layer limit)"));
@@ -3978,32 +3980,27 @@ fn read_zip_layers_budget(file_name: &str, bytes: &[u8], crs: Option<Crs>, budge
             // A workbook's first sheet, as a workbook added by itself is read, within the allowance.
             let name = Path::new(leaf).file_stem().and_then(|s| s.to_str()).unwrap_or("sheet");
             crate::sheets::read(&b, name, None, &CsvOptions { crs, ..Default::default() })
-                .and_then(|r| charge_retained(&r.0, leaf, budget).map(|()| plain(vec![r])))
+                .and_then(|r| charge_retained([&r.0], leaf, budget).map(|()| plain(vec![r])))
         } else if let Some(crs) = crs.filter(|_| {
             crate::landxml::is_landxml_name(leaf)
                 || (ext_of(&n) == "xml"
                     && crate::landxml::looks_like_landxml(&String::from_utf8_lossy(b.get(..b.len().min(4096)).unwrap_or(&b))))
         }) {
-            // A LandXML file in the system given, as when it is added by itself with one.
-            crate::landxml::read(leaf, &b, Some(crs)).map(plain)
+            // A LandXML file in the system given, as when it is added by itself with one, within
+            // the allowance.
+            crate::landxml::read(leaf, &b, Some(crs))
+                .and_then(|reads| charge_retained(reads.iter().map(|(ds, _)| ds), leaf, budget).map(|()| plain(reads)))
         } else if is_multi_layer_name(leaf) && !leaf.to_ascii_lowercase().ends_with(".zip") {
             // Every layer of a KML, GPX or other file of several, with its styles, as when it is
             // added by itself, within the allowance.
-            read_layers(leaf, &b).and_then(|mut layers| {
-                for l in &layers {
-                    charge_retained(&l.dataset, leaf, budget)?;
-                }
+            read_layers(leaf, &b).and_then(|layers| {
+                charge_retained(layers.iter().map(|l| &l.dataset), leaf, budget)?;
                 // A KML's ground overlays are pictures drawn beside its file; from a zip, they aren't.
-                if let Some(first) = layers.first_mut()
-                    && matches!(ext_of(&n).as_str(), "kml" | "kmz")
+                if matches!(ext_of(&n).as_str(), "kml" | "kmz")
                     && let Ok((found, undrawn, over_budget)) = crate::kml::ground_overlays(leaf, &b)
+                    && found.len() + undrawn + over_budget > 0
                 {
-                    let overlays = found.len() + undrawn + over_budget;
-                    if overlays > 0 {
-                        first.report.messages.push(format!(
-                            "{leaf}: {overlays} ground overlays (pictures) aren't drawn from inside a zip; unzip it and add the KML to draw them"
-                        ));
-                    }
+                    overlays_left.push((n.clone(), found.len() + undrawn + over_budget));
                 }
                 Ok(layers)
             })
@@ -4048,6 +4045,17 @@ fn read_zip_layers_budget(file_name: &str, bytes: &[u8], crs: Option<Crs>, budge
         };
         return Err(DataError::Format(format!("{file_name}: no supported layers or tables in the archive could be read{why}{hint}")));
     }
+    // One notice for every member's overlays.
+    if let Some(first) = out.first_mut()
+        && !overlays_left.is_empty()
+    {
+        let count: usize = overlays_left.iter().map(|(_, c)| c).sum();
+        let names: Vec<String> = overlays_left.iter().map(|(n, c)| format!("{n} ({c})")).collect();
+        first.report.messages.push(format!(
+            "{file_name}: {count} ground overlays (pictures) aren't drawn from inside a zip, in {}; unzip it and add the KML to draw them",
+            names.join(", ")
+        ));
+    }
     if let Some(first) = out.first_mut()
         && !skipped.is_empty()
     {
@@ -4056,13 +4064,23 @@ fn read_zip_layers_budget(file_name: &str, bytes: &[u8], crs: Option<Crs>, budge
     Ok(out)
 }
 
-/// Takes what a layer read whole keeps (its field names, and each row, its coordinates and values,
-/// twice for the copies made on the way in, as dBASE members are charged) out of a zip's shared `budget`,
-/// refusing the member `name` when it doesn't fit. Its read peaked within the reader's own
-/// per-file limit.
-fn charge_retained(ds: &Dataset, name: &str, budget: &mut usize) -> Result<()> {
+/// Takes what a member's layers read whole keep (their field names, and each row, its coordinates
+/// and values, twice for the copies made on the way in, as dBASE members are charged) out of a
+/// zip's shared `budget` all at once, or refuses the member `name`, taking nothing, when they
+/// don't fit. Its read peaked within the reader's own per-file limit.
+fn charge_retained<'a>(layers: impl IntoIterator<Item = &'a Dataset>, name: &str, budget: &mut usize) -> Result<()> {
+    let cost = layers.into_iter().fold(0usize, |sum, ds| sum.saturating_add(retained_cost(ds)));
+    let allowance = *budget;
+    *budget = budget.checked_sub(cost).ok_or_else(|| {
+        DataError::Format(format!("{name}: its retained layers exceed the {allowance}-byte remaining memory budget; import a smaller file"))
+    })?;
+    Ok(())
+}
+
+/// What a layer read whole keeps, for [`charge_retained`].
+fn retained_cost(ds: &Dataset) -> usize {
     let fields = ds.fields.iter().fold(0usize, |sum, f| sum.saturating_add(std::mem::size_of::<Field>()).saturating_add(f.name.capacity()));
-    let cost = ds.features.iter().fold(fields.saturating_mul(2), |sum, f| {
+    ds.features.iter().fold(fields.saturating_mul(2), |sum, f| {
         let coords = f.geometry.as_ref().map_or(0, |g| g.coord_count().saturating_mul(std::mem::size_of::<crate::Coord>()));
         let row = f.attrs.iter().fold(
             std::mem::size_of::<crate::Feature>()
@@ -4076,12 +4094,7 @@ fn charge_retained(ds: &Dataset, name: &str, budget: &mut usize) -> Result<()> {
             },
         );
         sum.saturating_add(row.saturating_mul(2))
-    });
-    let allowance = *budget;
-    *budget = budget.checked_sub(cost).ok_or_else(|| {
-        DataError::Format(format!("{name}: its retained layer exceeds the {allowance}-byte remaining memory budget; import a smaller file"))
-    })?;
-    Ok(())
+    })
 }
 
 /// The same schema, decoder and numeric declarations for loose tables and Shapefile attributes.
@@ -9041,7 +9054,7 @@ mod tests {
         let alone = read_zip_budget("books.zip", &one, None, &mut { usize::MAX }).unwrap();
         assert_eq!(alone.len(), 1);
         let mut left = 1 << 20;
-        charge_retained(&alone[0].0, "a.xlsx", &mut left).unwrap();
+        charge_retained([&alone[0].0], "a.xlsx", &mut left).unwrap();
         let cost = (1 << 20) - left;
         assert!(cost > 0);
         let zip = crate::zip::write(&[("a.xlsx".into(), book.clone()), ("b.xlsx".into(), book)]).unwrap();
@@ -9053,6 +9066,26 @@ mod tests {
         assert!(clean.iter().all(|(_, report)| report.messages.is_empty()));
     }
 
+    /// A workbook's geometry counts: a sheet whose rows fit without their coordinates is refused
+    /// once a large WKT polygon's coordinates are charged too.
+    #[test]
+    fn a_zipped_workbooks_coordinates_count_against_the_allowance() {
+        let ring: Vec<String> = (0..2000).map(|i| format!("{} {}", i % 7, i / 7)).chain(["0 0".to_string()]).collect();
+        let polygon = format!("POLYGON(({}))", ring.join(","));
+        let book = crate::sheets::xlsx(&[("Sheet1", &[&["id", "wkt"], &["A", &polygon]])]);
+        let zip = crate::zip::write(&[("a.xlsx".into(), book)]).unwrap();
+        let read = read_zip_budget("books.zip", &zip, None, &mut { usize::MAX }).unwrap();
+        assert!(read[0].0.features[0].geometry.as_ref().is_some_and(|g| g.coord_count() > 2000));
+        // The same rows without their geometry, and a little room: not enough for 2,000 coordinates.
+        let mut rows_only = read[0].0.clone();
+        for f in &mut rows_only.features {
+            f.geometry = None;
+        }
+        let allowance = retained_cost(&rows_only) + 1024;
+        let e = read_zip_budget("books.zip", &zip, None, &mut { allowance }).unwrap_err().to_string();
+        assert!(e.contains("a.xlsx") && e.contains("memory budget"), "{e}");
+    }
+
     /// A zipped KML says the ground overlays it doesn't draw, and its layers share the zip's
     /// allowance: two that each fit don't both fit in it.
     #[test]
@@ -9061,15 +9094,28 @@ mod tests {
         let one = crate::zip::write(&[("a.kml".into(), doc.to_vec())]).unwrap();
         let alone = read_zip_budget("trips.zip", &one, None, &mut { usize::MAX }).unwrap();
         assert_eq!(alone.len(), 1);
-        assert!(alone[0].1.messages.iter().any(|m| m.contains("1 ground overlays (pictures) aren't drawn")), "{:?}", alone[0].1.messages);
+        assert!(
+            alone[0].1.messages.iter().any(|m| m.contains("1 ground overlays (pictures) aren't drawn") && m.contains("a.kml (1)")),
+            "{:?}",
+            alone[0].1.messages
+        );
         let mut left = 1 << 20;
-        charge_retained(&alone[0].0, "a.kml", &mut left).unwrap();
+        charge_retained([&alone[0].0], "a.kml", &mut left).unwrap();
         let cost = (1 << 20) - left;
         let zip = crate::zip::write(&[("a.kml".into(), doc.to_vec()), ("b.kml".into(), doc.to_vec())]).unwrap();
         let limited = read_zip_budget("trips.zip", &zip, None, &mut { cost }).unwrap();
         assert_eq!(limited.len(), 1);
         assert!(limited[0].1.messages.iter().any(|m| m.contains("b.kml") && m.contains("memory budget")), "{:?}", limited[0].1.messages);
-        assert_eq!(read_zip_budget("trips.zip", &zip, None, &mut (cost * 2)).unwrap().len(), 2);
+        let both = read_zip_budget("trips.zip", &zip, None, &mut (cost * 2)).unwrap();
+        assert_eq!(both.len(), 2);
+        // One notice for both members' overlays, with the count.
+        let said: Vec<&str> = both.iter().flat_map(|(_, r)| r.messages.texts()).filter(|m| m.contains("ground overlays")).collect();
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(said[0].contains("2 ground overlays") && said[0].contains("a.kml (1)") && said[0].contains("b.kml (1)"), "{said:?}");
+        // A member whose layers don't all fit takes nothing from the allowance.
+        let mut left = cost;
+        assert!(charge_retained([&alone[0].0, &alone[0].0], "two.kml", &mut left).is_err());
+        assert_eq!(left, cost);
         // Without overlays, nothing is said.
         let plain = crate::zip::write(&[("a.gpx".into(), br#"<?xml version="1.0"?><gpx version="1.1" creator="t" xmlns="http://www.topografix.com/GPX/1/1"><wpt lat="1" lon="2"/></gpx>"#.to_vec())]).unwrap();
         assert!(read_zip("p.zip", &plain).unwrap().iter().all(|(_, r)| r.messages.is_empty()));
