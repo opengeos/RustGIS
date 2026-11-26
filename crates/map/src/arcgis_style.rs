@@ -492,7 +492,7 @@ fn symbol(s: &Value, g: GeometryType, picture: Option<Rgba>, pictures: &mut Pict
                 // proportion, which a service draws its symbol at. Without a width above 0, its
                 // height stands in as its width, said, since an image that isn't square is then
                 // drawn that wide, not that tall; with neither (a height of 0 is none), RustGIS's
-                // size does. A height of 0 beside a width is said: ArcGIS draws nothing of it.
+                // size does. A height of 0 beside a width is said: the width alone draws it.
                 Ok(p) => {
                     let wide = s.get("width").and_then(Value::as_f64).is_some_and(|w| w.is_finite() && w > 0.0);
                     let height = s.get("height").filter(|h| !h.is_null());
@@ -502,7 +502,7 @@ fn symbol(s: &Value, g: GeometryType, picture: Option<Rgba>, pictures: &mut Pict
                             notes.add("picture markers of no height, drawn as tall as their image is");
                         }
                         s.get("width")
-                    } else if height.is_some() && !flat {
+                    } else if height.and_then(Value::as_f64).is_some_and(|h| h > 0.0) {
                         notes.add("picture markers with no width, drawn with their height as their width");
                         height
                     } else {
@@ -803,7 +803,10 @@ mod tests {
         };
         let Renderer::Single(base) = layer(GeometryType::Point).renderer else { panic!("a single symbol") };
         // With no width above 0 either, it has no size: RustGIS's.
-        for (width, height) in [(json!(null), json!(0)), (json!(0), json!(0)), (json!(0), json!(-4))] {
+        // (A height that isn't a number can't size it either: said once, as no size.)
+        let cases =
+            [(json!(null), json!(0)), (json!(0), json!(0)), (json!(0), json!(-4)), (json!(null), json!("18")), (json!(0), json!("abc"))];
+        for (width, height) in cases {
             let (s, text) = styled_pms(width.clone(), height.clone());
             assert_eq!(s.size, base.size, "width {width}, height {height}");
             assert_eq!(text, "picture markers with no size, drawn at RustGIS's", "width {width}, height {height}");

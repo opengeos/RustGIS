@@ -939,6 +939,7 @@ pub(super) fn read_images(root: Node, dir: &str, read: &mut ReadImage, report: &
             // Looking a share up can sign in to the host the file names, which a style or
             // project chose (as an archive on one isn't opened either).
             Err("whose image is on a network share, which RustGIS doesn't open")
+        // (A `file:` address is a web address only as written: `%3A%2F%2F` in a decoded name is a name.)
         } else if path.contains("://") && (!address || file.contains("://")) {
             Err("whose image is at a web address, which RustGIS doesn't fetch")
         } else if super::is_drive_relative(&path) {
