@@ -890,8 +890,23 @@ fn services(settings: bool, secrets: Option<Arc<dyn SecretStore>>) -> rustgis_ui
     rustgis_ui_egui::rustgis_assistant::chatgpt::set_secret_store(secrets.clone());
     let mut services = rustgis_ui_egui::Services { secrets, ..Default::default() };
     if settings {
-        services.load_pref = Some(Box::new(|key: &str| read_settings().get(key).and_then(serde_json::Value::as_str).map(str::to_string)));
-        services.save_pref = Some(Box::new(|key: &str, value: &str| settings_saved(rustgis_engine::prefs::write(key, value))));
+        // Read once and kept, as the desktop keeps its snapshot: the Assistant's settings ask for
+        // one every frame they are up. A save that works updates the copy kept.
+        let kept: Arc<Mutex<Option<serde_json::Map<String, serde_json::Value>>>> = Arc::default();
+        let read = kept.clone();
+        services.load_pref = Some(Box::new(move |key: &str| {
+            let mut kept = read.lock().unwrap_or_else(|e| e.into_inner());
+            kept.get_or_insert_with(read_settings).get(key).and_then(serde_json::Value::as_str).map(str::to_string)
+        }));
+        services.save_pref = Some(Box::new(move |key: &str, value: &str| {
+            let result = rustgis_engine::prefs::write(key, value);
+            if result.is_ok()
+                && let Some(settings) = kept.lock().unwrap_or_else(|e| e.into_inner()).as_mut()
+            {
+                settings.insert(key.to_string(), serde_json::Value::String(value.to_string()));
+            }
+            settings_saved(result);
+        }));
     }
     services
 }
