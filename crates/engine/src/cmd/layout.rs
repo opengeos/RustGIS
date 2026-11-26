@@ -5966,7 +5966,7 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
         let restyled = id == basis.bar_id && BAR_FIT_KEYS.iter().any(|k| p.get(*k).is_some());
         // Its frame's centre and map fill the text's tokens and set the bar's ground too.
         (id == basis.frame && given(&["scale", "w", "center", "map"]))
-            || (id == basis.text_id && given(&["text", "size", "bold"]))
+            || (id == basis.text_id && given(&["text", "size", "bold", "case"]))
             || restyled
     });
     // A map frame drawn at another view: its scale bars' lengths and labels change (#2581).
@@ -6028,7 +6028,7 @@ const PLACED_OVER_MAP: [&str; 3] = ["Legend Box", "Locator", "North Arrow"];
 
 /// What a publication's scale bar box is measured from: its frame (id, map, centre, scale, width),
 /// its bar (id, and the bar as it is set: every setting changes its labels or their room) and the
-/// text under the bar (id, text, size, boldness).
+/// text under the bar (id, text, size, boldness, case).
 #[derive(Clone)]
 struct BoxBasis {
     frame: u32,
@@ -6042,15 +6042,16 @@ struct BoxBasis {
     text: String,
     size: f64,
     bold: bool,
+    case: TextCase,
 }
 
 /// The text under a publication's scale bar as the page draws it from `b`: `{scale}` filled as
-/// `layout.publication` fills it, the other tokens from the frame's map.
+/// `layout.publication` fills it, the other tokens from the frame's map, then in its case.
 fn basis_text(l: &Layout, m: &rustgis_map::Map, b: &BoxBasis) -> String {
     let info = crate::render::layout::PageInfo { page: 1, pages: 1, page_name: String::new() };
     let cam = rustgis_map::layout::frame_camera(m, b.center, b.scale, 0.0, 0.0);
     let text = b.text.replace("{scale}", &crate::render::layout::scale_ratio_text(b.scale, l.decimal_comma));
-    crate::render::layout::expand(&text, l, &info, Some((m, cam)))
+    b.case.kept().apply(crate::render::layout::expand(&text, l, &info, Some((m, cam))))
 }
 
 /// The automatic width (mm) of a publication's scale bar box measured from `b`: the one
@@ -6076,7 +6077,7 @@ fn scale_box_basis(s: &Session, li: usize) -> Option<BoxBasis> {
     let l = s.project.layouts.get(li)?;
     let named = |name: &str| l.elements.iter().find(|e| e.name == name);
     let (bar, written) = (named("Scale Bar")?, named("Scale")?);
-    let (ElementKind::ScaleBar { frame, .. }, ElementKind::Text { text, size, bold, .. }) = (&bar.kind, &written.kind) else {
+    let (ElementKind::ScaleBar { frame, .. }, ElementKind::Text { text, size, bold, case, .. }) = (&bar.kind, &written.kind) else {
         return None;
     };
     let fr = l.element(*frame)?;
@@ -6093,6 +6094,7 @@ fn scale_box_basis(s: &Session, li: usize) -> Option<BoxBasis> {
         text: text.clone(),
         size: *size,
         bold: *bold,
+        case: *case,
     })
 }
 
@@ -6118,8 +6120,8 @@ fn frame_view_changed(s: &mut Session, li: usize, frame: u32, basis: Option<&Box
 /// the "Scale Box", the "Scale Bar" of `frame` and the "Scale" under it, as a publication lays
 /// them out (one place, one width, none locked), take the width that bar and the text under it
 /// (its tokens filled as the page draws them, measured as drawn) now need, kept on the side of the
-/// frame they are nearer. A layout without them, with them moved apart, with that text spaced out,
-/// in upper or lower case or in another font, naming a map series page (which differs from page to
+/// frame they are nearer, the text measured in its case. A layout without them, with them moved
+/// apart, with that text spaced out or in another font, naming a map series page (which differs from page to
 /// page), or of a frame other than the first (whose map the page fills the text from) is left as
 /// it is; so is a text longer than the widest box a publication gives. Only a box as wide as
 /// `before` (what it was measured from before the change: its frame, bar and text) is measured
@@ -6138,13 +6140,12 @@ fn refit_scale_box(s: &mut Session, li: usize, before: &BoxBasis) {
     let (Some(m), Some(was)) = (map_of(&now), map_of(before)) else { return };
     let named = |name: &str| l.elements.iter().find(|e| e.name == name);
     let (Some(boxed), Some(bar), Some(text)) = (named("Scale Box"), named("Scale Bar"), named("Scale")) else { return };
-    let (ElementKind::ScaleBar { frame: of, .. }, ElementKind::Text { text: written, letter_spacing, font, font_name, case, .. }) =
+    let (ElementKind::ScaleBar { frame: of, .. }, ElementKind::Text { text: written, letter_spacing, font, font_name, .. }) =
         (&bar.kind, &text.kind)
     else {
         return;
     };
     if *letter_spacing != 0.0
-        || case.kept() != TextCase::None
         || *font != FontFamily::Sans
         || font_name.is_some()
         || (l.series.is_some() && written.contains("{page"))

@@ -12910,32 +12910,48 @@ fn a_publication_scale_box_follows_a_detailed_bar() {
     assert!((boxed(&s) - hand).abs() < 1e-9, "set by hand, kept plain again: {} vs {hand}", boxed(&s));
 }
 
-/// A publication's scale box isn't measured again for a "Scale" text drawn in upper or lower case,
-/// which a box measured for the text as typed would not hold, as it isn't for one spaced out:
-/// its frame drawn at another scale keeps the box's width.
+/// A publication's scale bar box is measured from the text under its bar in the case it is drawn
+/// in: upper case, which widens the line, widens the box, and the box goes back with the case.
 #[test]
-fn a_publication_scale_box_keeps_its_width_for_a_cased_scale_text() {
-    use rustgis_map::layout::ElementKind;
+fn a_publication_scale_box_follows_its_scale_text_into_its_case() {
     let mut s = world();
     s.run("layout.publication", &json!({"profile": "thesis-half", "extent": [-46.8, -11.6, -38.5, -2.2]})).unwrap();
     let li = s.project.layouts.len() - 1;
     let named = |s: &Session, n: &str| s.project.layouts[li].elements.iter().find(|e| e.name == n).unwrap().clone();
-    let frame = s.project.layouts[li].first_frame().unwrap();
     let auto = |s: &Session| crate::cmd::layout::scale_box_auto(s, li).expect("an automatic box");
     let boxed = |s: &Session| named(s, "Scale Box").w;
-    let scale = match &s.project.layouts[li].element(frame).unwrap().kind {
-        ElementKind::MapFrame { scale, .. } => *scale,
+    let text = named(&s, "Scale");
+    let size = match &text.kind {
+        rustgis_map::layout::ElementKind::Text { size, .. } => *size,
         k => panic!("{k:?}"),
     };
-    // Plain, the frame at another scale measures the box again.
-    s.run("layout.update", &json!({"layout": li, "element": frame, "scale": scale * 2.0})).unwrap();
-    assert!((boxed(&s) - auto(&s)).abs() < 0.01, "plain, refitted: {} vs {}", boxed(&s), auto(&s));
-    // In upper case, it keeps its width though the plain text's box would now be another.
-    s.run("layout.update", &json!({"layout": li, "element": named(&s, "Scale").id, "case": "upper"})).unwrap();
-    let kept = boxed(&s);
-    s.run("layout.update", &json!({"layout": li, "element": frame, "scale": scale * 5.0})).unwrap();
-    assert!((auto(&s) - kept).abs() > 0.01, "the plain text's box would change: {} vs {kept}", auto(&s));
-    assert!((boxed(&s) - kept).abs() < 1e-9, "cased, kept: {} vs {kept}", boxed(&s));
+    // The box as the bar alone sets it, and the widest one a publication gives (0.3 of its frame).
+    let bar = boxed(&s);
+    let frame = s.project.layouts[li].first_frame().unwrap();
+    let widest = (s.project.layouts[li].element(frame).unwrap().w * 0.3).max(25.0);
+    assert!(widest - bar > 2.0, "room between the bar's box and the widest: {bar} to {widest}");
+    // A line, measured as the box measures it (a millimetre each side), that in upper case is
+    // wider than the bar and still within the widest box: found by adding narrow letters, so it
+    // holds in any face.
+    let wide = |t: &str| crate::render::report::width_mm(t, size as f32, false) + 2.0;
+    let line = (0..400)
+        .map(|n| format!("{}{}", "a".repeat(20), "i".repeat(n)))
+        .find(|t| wide(&t.to_uppercase()) > bar + 1.0)
+        .expect("a line wider than the bar");
+    let (typed_w, upper_w) = (wide(&line), wide(&line.to_uppercase()));
+    assert!(upper_w < widest - 0.2 && typed_w < upper_w - 0.5, "{typed_w} then {upper_w} in {bar} to {widest}");
+    s.run("layout.update", &json!({"layout": li, "element": text.id, "text": line})).unwrap();
+    let typed = boxed(&s);
+    assert!((typed - auto(&s)).abs() < 0.01 && (typed - typed_w.max(bar)).abs() < 0.01, "as typed: {typed} vs {}", auto(&s));
+    // In upper case the same line is wider, and so is the box, with the bar and the text in it.
+    s.run("layout.update", &json!({"layout": li, "element": text.id, "case": "upper"})).unwrap();
+    let upper = boxed(&s);
+    assert!((upper - upper_w).abs() < 0.01 && upper > typed + 0.4, "upper case widens the box: {upper} vs {upper_w}, typed {typed}");
+    assert!((upper - auto(&s)).abs() < 0.01, "upper, refitted: {upper} vs {}", auto(&s));
+    assert!((named(&s, "Scale").w - upper).abs() < 1e-9 && (named(&s, "Scale Bar").w - upper).abs() < 1e-9);
+    // Back as typed, back to its width.
+    s.run("layout.update", &json!({"layout": li, "element": text.id, "case": "none"})).unwrap();
+    assert!((boxed(&s) - typed).abs() < 0.01, "as typed again: {} vs {typed}", boxed(&s));
 }
 
 /// A layout element refuses a colour, fill or outline its kind doesn't draw, before anything
