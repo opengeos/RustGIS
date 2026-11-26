@@ -134,12 +134,17 @@ pub fn commands() -> Vec<C> {
         ),
         C::new("layout.removeElement", "Delete Element", "Publish › Element", |s, p| {
             let id = element_id(p)?;
+            let named = layouts_naming_a_map(&s.project);
             let l = active(s, p)?;
             // A frame's surrounds go with it: a locked one keeps the frame too.
             if let Some(locked) = l.locked_in_removal(id).map(|e| e.id) {
                 unlocked(l, locked)?;
             }
-            if l.remove(id) { Ok(Value::Null) } else { Err(format!("no element {id}")) }
+            if !l.remove(id) {
+                return Err(format!("no element {id}"));
+            }
+            say_unnamed_maps(s, &named);
+            Ok(Value::Null)
         }).inputs(object_inputs).roles(&[]).effects(crate::policy::Effects::NONE)
         .params(r#"{"layout"?, "element": id}"#),
         C::new("layout.frameZoom", "Zoom Frame", "Publish › Map Frame", frame_zoom).inputs(frame_zoom_inputs).roles(&[]).effects(crate::policy::Effects::NONE).params(
@@ -576,15 +581,33 @@ pub(crate) fn capitals(t: &str) -> String {
     out
 }
 
+/// A publication text broken to its box's width.
+#[derive(Default)]
+pub(crate) struct Broken {
+    /// What its element holds.
+    text: String,
+    /// The lines it is drawn in, which size its box.
+    lines: Vec<String>,
+    /// Whether the element wraps to its box as it is drawn.
+    wrap: bool,
+}
+
+impl From<Vec<String>> for Broken {
+    /// Lines the element holds as they are drawn.
+    fn from(lines: Vec<String>) -> Self {
+        Self { text: lines.join("\n"), lines, wrap: false }
+    }
+}
+
 /// A text element in a publication layout's style: upright, sans, in `align`.
-fn pub_text(text: String, size: f64, color: Rgba, bold: bool, align: TextAlign) -> ElementKind {
+fn pub_text(text: Broken, size: f64, color: Rgba, bold: bool, align: TextAlign) -> ElementKind {
     pub_text_in(text, size, color, bold, align, FontFamily::Sans)
 }
 
 /// [`pub_text`] in `font`.
-fn pub_text_in(text: String, size: f64, color: Rgba, bold: bool, align: TextAlign, font: FontFamily) -> ElementKind {
+fn pub_text_in(broken: Broken, size: f64, color: Rgba, bold: bool, align: TextAlign, font: FontFamily) -> ElementKind {
     ElementKind::Text {
-        text,
+        text: broken.text,
         size,
         color,
         bold,
@@ -594,7 +617,7 @@ fn pub_text_in(text: String, size: f64, color: Rgba, bold: bool, align: TextAlig
         font,
         font_name: None,
         rotation: 0.0,
-        wrap: false,
+        wrap: broken.wrap,
     }
 }
 
@@ -1338,7 +1361,6 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
     // Text is measured as it is drawn: bold as bold, and the tokens the layout fills only when it
     // draws (`{date}`, `{scale}`…) as wide as a typical value of theirs.
     let (map_name, crs) = (s.map().name.clone(), s.map().projection.label());
-    let name_text = map_name.clone();
     let drawn = move |t: &str| {
         // Most text has no token: measured as it is.
         if !t.contains('{') {
@@ -1358,25 +1380,24 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
         .iter()
         .fold(t.to_string(), |t, (token, like)| t.replace(token, like))
     };
-    // `{map}` is one word as wide as the map's name, which the text's lines can't break without
-    // breaking the token. Where the name is wider than the line it is written out instead and wraps
-    // as text, which doesn't follow a rename. The texts written out are kept, and said at the end
-    // if the layout kept one of them: a pass whose lines are dropped for a later one's says nothing.
-    let spelled_out = std::cell::RefCell::new(Vec::<String>::new());
-    let settle = |t: &str, w: f64, name_mm: f64| {
-        let t = fill(t);
-        if t.contains("{map}") && name_mm > w.max(1.0) {
-            let t = t.replace("{map}", &name_text);
-            spelled_out.borrow_mut().push(t.clone());
-            t
+    // A text breaks at spaces, but `{map}` is one word as wide as the map's name. Where a line
+    // holding it is wider than the box with the name in it, the text is stored as it is and its
+    // element wraps to the box when drawn, so it still follows a rename of the map; its box is
+    // sized by the lines the page draws it in, which measures a line's ink.
+    let broken = |t: &str, w: f64, pt: f64, bold: bool, align: TextAlign, font: FontFamily| {
+        let (t, w) = (fill(t), w.max(1.0));
+        let width = |x: &str| match font {
+            FontFamily::Serif => crate::render::report::serif_width_mm(&drawn(x), pt as f32, bold),
+            FontFamily::Sans => crate::render::report::width_mm(&drawn(x), pt as f32, bold),
+        };
+        if t.lines().any(|l| l.contains("{map}") && width(l) > w) {
+            let lines = crate::render::layout::wrapped_lines(&drawn(&t), w, pt, bold, font, align);
+            Broken { text: t, lines, wrap: true }
         } else {
-            t
+            Broken::from(crate::render::report::wrap_with(&t, w, width))
         }
     };
-    let wrap_as = |t: &str, w: f64, pt: f64, bold: bool| {
-        let text = settle(t, w, crate::render::report::width_mm(&name_text, pt as f32, bold));
-        crate::render::report::wrap_with(&text, w.max(1.0), |x| crate::render::report::width_mm(&drawn(x), pt as f32, bold))
-    };
+    let wrap_as = |t: &str, w: f64, pt: f64, bold: bool| broken(t, w, pt, bold, TextAlign::Left, FontFamily::Sans);
     let wrap = |t: &str, w: f64, pt: f64| wrap_as(t, w, pt, false);
     let pitch = crate::render::layout::line_pitch_mm;
     let ink = Rgba::rgb(0x2B, 0x26, 0x20);
@@ -1407,7 +1428,7 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
     // The sources and the reference that have something in them, each its heading in `head_pt` and
     // lines in `body_pt`, `tw` wide. Each one's elements keep their names (`Sources`, `Reference`)
     // whatever its heading reads, the heading filled and wrapped like the rest.
-    let sections = |tw: f64, head_pt: f64, body_pt: f64| -> Vec<(&'static str, Vec<String>, Vec<String>)> {
+    let sections = |tw: f64, head_pt: f64, body_pt: f64| -> Vec<(&'static str, Broken, Broken)> {
         [("Sources", heading(0, "Sources"), &sources), ("Reference", heading(1, "Cartographic reference"), &reference)]
             .into_iter()
             .filter(|(.., texts)| !texts.is_empty())
@@ -1415,7 +1436,17 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
                 // Filled first, so `{projection}` reads in capitals too; the live tokens left keep
                 // their case (wrap_as fills again, which then finds nothing).
                 let head = wrap_as(&capitals(&fill(&head)), tw, head_pt, true);
-                (name, head, texts.iter().flat_map(|t| wrap(t, tw, body_pt)).collect::<Vec<_>>())
+                let parts: Vec<Broken> = texts.iter().map(|t| wrap(t, tw, body_pt)).filter(|b| !b.lines.is_empty()).collect();
+                let text = parts.iter().map(|b| b.text.as_str()).collect::<Vec<_>>().join("\n");
+                // One of them wrapping as drawn wraps their element, so all are measured so.
+                let body = if parts.iter().any(|b| b.wrap) {
+                    let (font, align) = (FontFamily::Sans, TextAlign::Left);
+                    let lines = crate::render::layout::wrapped_lines(&drawn(&text), tw.max(1.0), body_pt, false, font, align);
+                    Broken { text, lines, wrap: true }
+                } else {
+                    Broken { text, lines: parts.into_iter().flat_map(|b| b.lines).collect(), wrap: false }
+                };
+                (name, head, body)
             })
             .collect()
     };
@@ -1451,26 +1482,23 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
                 type Around = Vec<(String, (f64, f64, f64, f64), ElementKind)>;
                 let footer = |around: &mut Around, look: &Look, note_here: bool, boxes_here: bool| -> f64 {
                     let bottom = page_h - m - pad;
-                    let author_lines = author.as_deref().map(|t| wrap(t, iw, small_pt)).unwrap_or_default();
-                    let author_h = author_lines.len() as f64 * pitch(small_pt);
+                    let author_lines =
+                        author.as_deref().map(|t| broken(t, iw, small_pt, false, TextAlign::Right, FontFamily::Sans)).unwrap_or_default();
+                    let author_h = author_lines.lines.len() as f64 * pitch(small_pt);
                     let author_y = bottom - author_h;
-                    if !author_lines.is_empty() {
+                    if !author_lines.lines.is_empty() {
                         around.push((
                             "Author".into(),
                             (x0, author_y, iw, author_h),
-                            pub_text(author_lines.join("\n"), small_pt, look.small, false, TextAlign::Right),
+                            pub_text(author_lines, small_pt, look.small, false, TextAlign::Right),
                         ));
                     }
                     let mut foot = author_y;
                     let note_lines = note.as_deref().filter(|_| note_here).map(|t| wrap(t, iw, body_pt)).unwrap_or_default();
-                    if !note_lines.is_empty() {
-                        let nh = note_lines.len() as f64 * pitch(body_pt);
+                    if !note_lines.lines.is_empty() {
+                        let nh = note_lines.lines.len() as f64 * pitch(body_pt);
                         foot -= nh + 1.5 * k;
-                        around.push((
-                            "Note".into(),
-                            (x0, foot, iw, nh),
-                            pub_text(note_lines.join("\n"), body_pt, look.small, false, TextAlign::Left),
-                        ));
+                        around.push(("Note".into(), (x0, foot, iw, nh), pub_text(note_lines, body_pt, look.small, false, TextAlign::Left)));
                     }
                     if !boxes_here {
                         return foot;
@@ -1481,8 +1509,8 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
                     let cw = (iw - gap * (n - 1.0)) / n;
                     let tw = cw - 2.0 * inner;
                     let columns = sections(tw, head_pt, body_pt);
-                    let heads = columns.iter().map(|(_, h, _)| h.len()).max().unwrap_or(1);
-                    let rows = columns.iter().map(|(.., l)| l.len()).max().unwrap_or(0);
+                    let heads = columns.iter().map(|(_, h, _)| h.lines.len()).max().unwrap_or(1);
+                    let rows = columns.iter().map(|(.., l)| l.lines.len()).max().unwrap_or(0);
                     if rows > 0 {
                         let head_h = heads as f64 * pitch(head_pt);
                         let bh = 2.0 * inner + head_h + rows as f64 * pitch(body_pt);
@@ -1497,16 +1525,12 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
                             let tx = bx + inner;
                             around.push((
                                 format!("{name} Heading"),
-                                (tx, foot + inner, tw, head.len() as f64 * pitch(head_pt)),
-                                pub_text(head.join("\n"), head_pt, look.head, true, TextAlign::Left),
+                                (tx, foot + inner, tw, head.lines.len() as f64 * pitch(head_pt)),
+                                pub_text(head, head_pt, look.head, true, TextAlign::Left),
                             ));
-                            if !lines.is_empty() {
-                                let body = (tx, foot + inner + head_h, tw, lines.len() as f64 * pitch(body_pt));
-                                around.push((
-                                    name.to_string(),
-                                    body,
-                                    pub_text(lines.join("\n"), body_pt, look.body, false, TextAlign::Left),
-                                ));
+                            if !lines.lines.is_empty() {
+                                let body = (tx, foot + inner + head_h, tw, lines.lines.len() as f64 * pitch(body_pt));
+                                around.push((name.to_string(), body, pub_text(lines, body_pt, look.body, false, TextAlign::Left)));
                             }
                         }
                     }
@@ -1536,23 +1560,15 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
                     Style::Classic => {
                         let mut top = m + pad;
                         if let Some(t) = &title {
-                            let lines = wrap_as(t, iw, title_pt, true);
-                            let th = lines.len() as f64 * pitch(title_pt) + 1.5 * k;
-                            around.push((
-                                "Title".into(),
-                                (x0, top, iw, th),
-                                pub_text(lines.join("\n"), title_pt, ink, true, TextAlign::Center),
-                            ));
+                            let lines = broken(t, iw, title_pt, true, TextAlign::Center, FontFamily::Sans);
+                            let th = lines.lines.len() as f64 * pitch(title_pt) + 1.5 * k;
+                            around.push(("Title".into(), (x0, top, iw, th), pub_text(lines, title_pt, ink, true, TextAlign::Center)));
                             top += th;
                         }
                         if let Some(t) = &subtitle {
-                            let lines = wrap(t, iw, sub_pt);
-                            let sh = lines.len() as f64 * pitch(sub_pt) + 1.0 * k;
-                            around.push((
-                                "Subtitle".into(),
-                                (x0, top, iw, sh),
-                                pub_text(lines.join("\n"), sub_pt, soft, false, TextAlign::Center),
-                            ));
+                            let lines = broken(t, iw, sub_pt, false, TextAlign::Center, FontFamily::Sans);
+                            let sh = lines.lines.len() as f64 * pitch(sub_pt) + 1.0 * k;
+                            around.push(("Subtitle".into(), (x0, top, iw, sh), pub_text(lines, sub_pt, soft, false, TextAlign::Center)));
                             top += sh;
                         }
                         let foot = footer(&mut around, &plain, true, true);
@@ -1571,31 +1587,37 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
                         if title.is_some() || subtitle.is_some() {
                             let big = title_pt * 1.2;
                             let t_max = if subtitle.is_some() { 0.42 * iw } else { iw };
-                            let t_lines = title.as_deref().map(|t| wrap_as(t, t_max, big, true)).unwrap_or_default();
+                            let mut t_lines = title.as_deref().map(|t| wrap_as(t, t_max, big, true)).unwrap_or_default();
                             let t_w = t_lines
+                                .lines
                                 .iter()
                                 .map(|x| crate::render::report::width_mm(&drawn(x), big as f32, true))
                                 .fold(0.0, f64::max)
                                 .min(t_max)
                                 .ceil();
-                            let rule = if t_lines.is_empty() { 0.0 } else { 6.0 * k };
+                            // A title that wraps as it is drawn is measured again at the box it got.
+                            if let Some(t) = title.as_deref().filter(|_| t_lines.wrap) {
+                                t_lines = wrap_as(t, t_w, big, true);
+                            }
+                            let rule = if t_lines.lines.is_empty() { 0.0 } else { 6.0 * k };
                             let s_x = x0 + t_w + rule;
                             let s_w = (x0 + iw - s_x).max(20.0 * k);
                             let s_lines = subtitle.as_deref().map(|t| wrap(t, s_w, sub_pt)).unwrap_or_default();
-                            let (t_h, s_h) = (t_lines.len() as f64 * pitch(big), s_lines.len() as f64 * pitch(sub_pt));
+                            let (t_h, s_h) = (t_lines.lines.len() as f64 * pitch(big), s_lines.lines.len() as f64 * pitch(sub_pt));
+                            let (titled, subtitled) = (!t_lines.lines.is_empty(), !s_lines.lines.is_empty());
                             let band_h = t_h.max(s_h) + 2.0 * pad;
                             let mid = m + band_h / 2.0;
                             if !poster {
                                 around.push(("Banner".into(), (m, m, page_w - 2.0 * m, band_h), pub_box(accent, clear, 0.0)));
                             }
-                            if !t_lines.is_empty() {
+                            if titled {
                                 around.push((
                                     "Title".into(),
                                     (x0, mid - t_h / 2.0, t_w, t_h),
-                                    pub_text(t_lines.join("\n"), big, white, true, TextAlign::Left),
+                                    pub_text(t_lines, big, white, true, TextAlign::Left),
                                 ));
                             }
-                            if !t_lines.is_empty() && !s_lines.is_empty() {
+                            if titled && subtitled {
                                 around.push((
                                     "Banner Rule".into(),
                                     (x0 + t_w + rule / 2.0 - 0.5, mid - t_h.max(s_h) / 2.0, 1.0, t_h.max(s_h)),
@@ -1608,11 +1630,11 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
                                     },
                                 ));
                             }
-                            if !s_lines.is_empty() {
+                            if subtitled {
                                 around.push((
                                     "Subtitle".into(),
                                     (s_x, mid - s_h / 2.0, s_w, s_h),
-                                    pub_text(s_lines.join("\n"), sub_pt, Rgba::rgb(0xF2, 0xEE, 0xE6), false, TextAlign::Left),
+                                    pub_text(s_lines, sub_pt, Rgba::rgb(0xF2, 0xEE, 0xE6), false, TextAlign::Left),
                                 ));
                             }
                             top = m + band_h;
@@ -1652,18 +1674,14 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
                         if let Some(t) = &title {
                             let big = title_pt * 1.3;
                             let lines = wrap_as(t, tw, big, true);
-                            let th = lines.len() as f64 * pitch(big);
-                            around.push(("Title".into(), (x0, y, tw, th), pub_text(lines.join("\n"), big, ink, true, TextAlign::Left)));
+                            let th = lines.lines.len() as f64 * pitch(big);
+                            around.push(("Title".into(), (x0, y, tw, th), pub_text(lines, big, ink, true, TextAlign::Left)));
                             y += th;
                         }
                         if let Some(t) = &subtitle {
                             let lines = wrap(t, tw, sub_pt);
-                            let sh = lines.len() as f64 * pitch(sub_pt);
-                            around.push((
-                                "Subtitle".into(),
-                                (x0, y, tw, sh),
-                                pub_text(lines.join("\n"), sub_pt, soft, false, TextAlign::Left),
-                            ));
+                            let sh = lines.lines.len() as f64 * pitch(sub_pt);
+                            around.push(("Subtitle".into(), (x0, y, tw, sh), pub_text(lines, sub_pt, soft, false, TextAlign::Left)));
                             y += sh;
                         }
                         if y > m + pad {
@@ -1710,22 +1728,14 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
                         let mut y = top + ip;
                         if let Some(t) = &title {
                             let lines = wrap_as(t, tw, title_pt, true);
-                            let th = lines.len() as f64 * pitch(title_pt);
-                            around.push((
-                                "Title".into(),
-                                (ix, y, tw, th),
-                                pub_text(lines.join("\n"), title_pt, ink, true, TextAlign::Left),
-                            ));
+                            let th = lines.lines.len() as f64 * pitch(title_pt);
+                            around.push(("Title".into(), (ix, y, tw, th), pub_text(lines, title_pt, ink, true, TextAlign::Left)));
                             y += th + 1.0 * k;
                         }
                         if let Some(t) = &subtitle {
                             let lines = wrap(t, tw, sub_pt);
-                            let sh = lines.len() as f64 * pitch(sub_pt);
-                            around.push((
-                                "Subtitle".into(),
-                                (ix, y, tw, sh),
-                                pub_text(lines.join("\n"), sub_pt, soft, false, TextAlign::Left),
-                            ));
+                            let sh = lines.lines.len() as f64 * pitch(sub_pt);
+                            around.push(("Subtitle".into(), (ix, y, tw, sh), pub_text(lines, sub_pt, soft, false, TextAlign::Left)));
                             y += sh;
                         }
                         if y > top + ip {
@@ -1739,18 +1749,18 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
                         // The sources and the reference, stacked up from the panel's foot.
                         let mut yb = panel_bottom - ip;
                         for (name, head, lines) in sections(tw, head_pt, body_pt).into_iter().rev().filter(|_| !under) {
-                            let (hh, bh) = (head.len() as f64 * pitch(head_pt), lines.len() as f64 * pitch(body_pt));
+                            let (hh, bh) = (head.lines.len() as f64 * pitch(head_pt), lines.lines.len() as f64 * pitch(body_pt));
                             yb -= hh + bh;
                             around.push((
                                 format!("{name} Heading"),
                                 (ix, yb, tw, hh),
-                                pub_text(head.join("\n"), head_pt, accent, true, TextAlign::Left),
+                                pub_text(head, head_pt, accent, true, TextAlign::Left),
                             ));
-                            if !lines.is_empty() {
+                            if !lines.lines.is_empty() {
                                 around.push((
                                     name.to_string(),
                                     (ix, yb + hh, tw, bh),
-                                    pub_text(lines.join("\n"), body_pt, soft, false, TextAlign::Left),
+                                    pub_text(lines, body_pt, soft, false, TextAlign::Left),
                                 ));
                             }
                             yb -= 3.0 * k;
@@ -1777,31 +1787,26 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
                         let gap = 6.0 * k;
                         let cw = (0.3 * iw).max(45.0 * k).min(0.4 * iw);
                         let (mw, cx) = (iw - cw - gap, x0 + iw - cw);
-                        let serif_wrap = |t: &str, w: f64, pt: f64, bold: bool| {
-                            let text = settle(t, w, crate::render::report::serif_width_mm(&name_text, pt as f32, bold));
-                            crate::render::report::wrap_with(&text, w.max(1.0), |x| {
-                                crate::render::report::serif_width_mm(&drawn(x), pt as f32, bold)
-                            })
-                        };
+                        let serif_wrap = |t: &str, w: f64, pt: f64, bold: bool| broken(t, w, pt, bold, TextAlign::Left, FontFamily::Serif);
                         let (big, sub) = (30.0 * k, 13.0 * k);
                         let mut y = m + pad;
                         if let Some(t) = &title {
                             let lines = serif_wrap(t, mw, big, true);
-                            let th = lines.len() as f64 * pitch(big);
+                            let th = lines.lines.len() as f64 * pitch(big);
                             around.push((
                                 "Title".into(),
                                 (x0, y, mw, th),
-                                pub_text_in(lines.join("\n"), big, accent, true, TextAlign::Left, FontFamily::Serif),
+                                pub_text_in(lines, big, accent, true, TextAlign::Left, FontFamily::Serif),
                             ));
                             y += th + 1.0 * k;
                         }
                         if let Some(t) = &subtitle {
                             let lines = serif_wrap(t, mw, sub, false);
-                            let sh = lines.len() as f64 * pitch(sub);
+                            let sh = lines.lines.len() as f64 * pitch(sub);
                             around.push((
                                 "Subtitle".into(),
                                 (x0, y, mw, sh),
-                                pub_text_in(lines.join("\n"), sub, soft, false, TextAlign::Left, FontFamily::Serif),
+                                pub_text_in(lines, sub, soft, false, TextAlign::Left, FontFamily::Serif),
                             ));
                             y += sh;
                         }
@@ -1817,19 +1822,15 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
                         if let Some(hd) = headings.get(2).filter(|h| !h.trim().is_empty()) {
                             let pt = head_pt * 1.2;
                             let lines = wrap_as(&capitals(&fill(hd)), cw, pt, true);
-                            let hh = lines.len() as f64 * pitch(pt);
-                            around.push((
-                                "Column Heading".into(),
-                                (cx, cy, cw, hh),
-                                pub_text(lines.join("\n"), pt, accent, true, TextAlign::Left),
-                            ));
+                            let hh = lines.lines.len() as f64 * pitch(pt);
+                            around.push(("Column Heading".into(), (cx, cy, cw, hh), pub_text(lines, pt, accent, true, TextAlign::Left)));
                             cy += hh + 2.0 * k;
                         }
                         if let Some(t) = &note {
                             let pt = body_pt * 1.15;
                             let lines = wrap(t, cw, pt);
-                            let nh = lines.len() as f64 * pitch(pt);
-                            around.push(("Note".into(), (cx, cy, cw, nh), pub_text(lines.join("\n"), pt, soft, false, TextAlign::Left)));
+                            let nh = lines.lines.len() as f64 * pitch(pt);
+                            around.push(("Note".into(), (cx, cy, cw, nh), pub_text(lines, pt, soft, false, TextAlign::Left)));
                             cy += nh + 4.0 * k;
                         }
                         if fb - cy < 30.0 * k {
@@ -1866,10 +1867,10 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
                 let line = reference.iter().map(|t| fill(t)).collect::<Vec<_>>().join(" · ");
                 // A millimetre in from the paper's edges, which a journal may trim.
                 let lines = wrap(&line, page_w - 2.0, FIGURE_PT);
-                if lines.len() > 1 {
+                if lines.lines.len() > 1 {
                     warnings.push("the reference is wider than the figure: it wraps under the map".into());
                 }
-                let note_h = lines.len() as f64 * pitch(FIGURE_PT) + 1.0;
+                let note_h = lines.lines.len() as f64 * pitch(FIGURE_PT) + 1.0;
                 let fh = if page_h > 0.0 {
                     page_h - note_h
                 } else {
@@ -1886,7 +1887,7 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
                 around.push((
                     "Reference".into(),
                     (1.0, fh + 1.0, page_w - 2.0, note_h - 1.0),
-                    pub_text(lines.join("\n"), FIGURE_PT, ink, false, TextAlign::Left),
+                    pub_text(lines, FIGURE_PT, ink, false, TextAlign::Left),
                 ));
                 (page_w, h, (0.0, 0.0, page_w, fh), None)
             })
@@ -2985,7 +2986,7 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
         placed.push(("scale bar", (sx, sy, w, h)));
         l.add("Scale Box", (sx, sy, w, sh + nh), surround_box(paper));
         l.add("Scale Bar", (sx, sy, w, sh), scale_bar);
-        l.add("Scale", (sx, sy + sh, w, nh), pub_text("{scale}".into(), small_pt, ink, false, TextAlign::Center));
+        l.add("Scale", (sx, sy + sh, w, nh), pub_text(Broken::from(vec!["{scale}".to_string()]), small_pt, ink, false, TextAlign::Center));
     }
     // What placing couldn't avoid: a surround over the map's drawing while a clearly freer corner
     // went to another (more surrounds than free corners), or two overlapping (a frame too small
@@ -3041,20 +3042,6 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
             Ok(()) => coverage_written = json!(path),
             Err(why) => warnings.push(format!("the coverage image isn't written: {why}")),
         }
-    }
-    // A text written out with the map's name (above) is said if the layout kept it, once every
-    // text is placed (the footer's alignment can write one out last). Compared without their line
-    // breaks, as wrapping adds them.
-    let squeeze = |t: &str| t.chars().filter(|c| !c.is_whitespace()).collect::<String>();
-    let written: Vec<String> = spelled_out.borrow().iter().map(|t| squeeze(t)).filter(|t| !t.is_empty()).collect();
-    if l.elements.iter().any(|e| match &e.kind {
-        ElementKind::Text { text, .. } => {
-            let kept = squeeze(text);
-            written.iter().any(|w| kept.contains(w.as_str()))
-        }
-        _ => false,
-    }) {
-        warnings.push("a text with {map} is wider than its box with the map's name in it: the name is written out there, and a rename of the map won't change it".into());
     }
     // Every element by name and id, for `layout.update`.
     let elements = element_list(&l);
@@ -3130,6 +3117,42 @@ fn page(s: &mut Session, p: &Value) -> CmdResult {
     Ok(json!({"width": w, "height": h, "decimal": if l.decimal_comma { "," } else { "." }}))
 }
 
+/// For each layout, whether its `{map}` texts have a map to name: its first map frame shows one.
+pub(crate) fn layouts_naming_a_map(project: &crate::project::Project) -> Vec<bool> {
+    let names = |l: &Layout| {
+        l.first_frame().and_then(|id| l.element(id)).is_some_and(
+            |e| matches!(&e.kind, ElementKind::MapFrame { map, .. } if crate::render::layout::map_index(&project.maps, map).is_some()),
+        )
+    };
+    project.layouts.iter().map(names).collect()
+}
+
+/// Says which `{map}` texts a change left with no map to name, so that `{map}` in them draws empty:
+/// those of the layouts that had one `before` it ([`layouts_naming_a_map`], in the same order).
+pub(crate) fn say_unnamed_maps(s: &mut Session, before: &[bool]) {
+    let after = layouts_naming_a_map(&s.project);
+    let left: Vec<(&str, usize)> = s
+        .project
+        .layouts
+        .iter()
+        .zip(before.iter().zip(after))
+        .filter(|(_, (had, has))| **had && !*has)
+        .map(|(l, _)| {
+            let texts = l.elements.iter().filter(|e| matches!(&e.kind, ElementKind::Text { text, .. } if text.contains("{map}")));
+            (l.name.as_str(), texts.count())
+        })
+        .filter(|(_, n)| *n > 0)
+        .collect();
+    let n: usize = left.iter().map(|(_, n)| n).sum();
+    let whose = match left.as_slice() {
+        [] => return,
+        [(name, _)] => format!("Layout '{name}': {n}"),
+        more => format!("{} layouts: {n}", more.len()),
+    };
+    let (texts, have) = if n == 1 { ("text", "has") } else { ("texts", "have") };
+    s.notify(format!("{whose} {texts} with {{map}} {have} no map frame showing a map to name, so {{map}} draws empty"), false);
+}
+
 /// A sheet's footer of two columns, its right one moved to start where a legend at the right of the
 /// frame (`frame` its left edge and width, page mm) does, when that is between 45 % and 70 % of the
 /// frame's width, so the two line up (#1379). Each column's heading and lines are wrapped again to
@@ -3139,7 +3162,7 @@ pub(crate) fn align_footer(
     around: &mut [(String, Rect, ElementKind)],
     legend: Rect,
     (fx, fw): (f64, f64),
-    sections: &dyn Fn(f64, f64, f64) -> Vec<(&'static str, Vec<String>, Vec<String>)>,
+    sections: &dyn Fn(f64, f64, f64) -> Vec<(&'static str, Broken, Broken)>,
 ) {
     let at = (legend.0 - fx) / fw;
     if !(0.45..=0.70).contains(&at) || legend.0 + legend.2 < fx + 0.9 * fw {
@@ -3163,8 +3186,8 @@ pub(crate) fn align_footer(
     let pitch = crate::render::layout::line_pitch_mm;
     let column = |w: f64, name: &str| sections(w - 2.0 * inner, head_pt, body_pt).into_iter().find(|(n, ..)| *n == name);
     let (Some((_, l_head, l_lines)), Some((_, r_head, r_lines))) = (column(lw, "Sources"), column(rw, "Reference")) else { return };
-    let head_h = l_head.len().max(r_head.len()) as f64 * pitch(head_pt);
-    let rows = l_lines.len().max(r_lines.len());
+    let head_h = l_head.lines.len().max(r_head.lines.len()) as f64 * pitch(head_pt);
+    let rows = l_lines.lines.len().max(r_lines.lines.len());
     if 2.0 * inner + head_h + rows as f64 * pitch(body_pt) > left.3 + 1e-6 {
         return;
     }
@@ -3172,17 +3195,13 @@ pub(crate) fn align_footer(
         let y = left.1;
         for (part, r, text) in [
             (format!("{name} Box"), (x, y, w, left.3), None),
-            (format!("{name} Heading"), (x + inner, y + inner, w - 2.0 * inner, head.len() as f64 * pitch(head_pt)), Some(head.join("\n"))),
-            (
-                name.to_string(),
-                (x + inner, y + inner + head_h, w - 2.0 * inner, lines.len() as f64 * pitch(body_pt)),
-                Some(lines.join("\n")),
-            ),
+            (format!("{name} Heading"), (x + inner, y + inner, w - 2.0 * inner, head.lines.len() as f64 * pitch(head_pt)), Some(head)),
+            (name.to_string(), (x + inner, y + inner + head_h, w - 2.0 * inner, lines.lines.len() as f64 * pitch(body_pt)), Some(lines)),
         ] {
             if let Some(e) = around.iter_mut().find(|(n, ..)| *n == part) {
                 e.1 = r;
-                if let (Some(new), ElementKind::Text { text, .. }) = (text, &mut e.2) {
-                    *text = new;
+                if let (Some(new), ElementKind::Text { text, wrap, .. }) = (text, &mut e.2) {
+                    (*text, *wrap) = (new.text, new.wrap);
                 }
             }
         }

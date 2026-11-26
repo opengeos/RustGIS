@@ -214,6 +214,7 @@ pub fn commands() -> Vec<C> {
                 return Err("a project keeps at least one map".into());
             }
             let i = required_map_at(s,p)?;
+            let named = super::layout::layouts_naming_a_map(&s.project);
             s.project.maps.remove(i);
             // Deleting another map keeps the one in view (a map tab's close button).
             let active = s.project.active_map;
@@ -224,6 +225,7 @@ pub fn commands() -> Vec<C> {
                 s.active_layer = s.map().layers.first().map(|l| l.id);
                 s.table_layer = None;
             }
+            super::layout::say_unnamed_maps(s, &named);
             Ok(Value::Null)
         }).transition(unmodelled_transition).inputs(required_map_inputs).roles(&[]).effects(crate::policy::Effects::NONE)
         .params(r#"{"name": string}"#),
