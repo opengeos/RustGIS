@@ -5881,6 +5881,11 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
     if p.get("text").is_some_and(Value::is_string) {
         say_text_statistics(s, li, id);
     }
+    // The first frame's map decides every text's figures (#2853): another map, which may lack a
+    // layer or a field, says what the layout's texts lose.
+    if given(&["map"]) && s.project.layouts.get(li).is_some_and(|l| l.first_frame() == Some(id)) {
+        say_layout_text_statistics(s, li);
+    }
     // A centre the frame's map can't place (a pole on Web Mercator) is said (#2684).
     if new_center.is_some() || given(&["map"]) {
         let said =

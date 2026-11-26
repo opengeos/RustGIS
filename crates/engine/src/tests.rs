@@ -39987,6 +39987,27 @@ fn layout_text_statistics_without_a_figure_are_said() {
         json!({"extent": [-46.8, -11.6, -38.5, -2.2], "title": "{count:Nowhere}", "sources": ["{count:Countries}"]}),
     );
     assert_eq!(said, ["{count:Nowhere} shows as written: the map of the layout's first frame has no layer named 'Nowhere'"]);
+    // The first frame's map decides every text's figures: another map, which lacks the layer, says
+    // what the layout's texts lose, and another change to the frame says nothing.
+    s.run("map.new", &json!({"name": "Empty"})).unwrap();
+    s.active_layout = Some(0);
+    let frame = s.project.layouts[0].first_frame().unwrap();
+    let rustgis_map::layout::ElementKind::MapFrame { map: home, .. } = s.project.layouts[0].element(frame).unwrap().kind.clone() else {
+        panic!("the first frame is a map frame")
+    };
+    let (_, said) = run(&mut s, "layout.update", json!({"element": frame, "x": 12}));
+    assert_eq!(said, Vec::<String>::new());
+    let (_, said) = run(&mut s, "layout.update", json!({"element": frame, "map": "Empty"}));
+    assert_eq!(
+        said,
+        [
+            "{count:Countries} shows as written: the map of the layout's first frame has no layer named 'Countries'",
+            "{sum:Nowhere:pop} shows as written: the map of the layout's first frame has no layer named 'Nowhere'",
+            "{max:Countries:nosuch} shows as written: the map of the layout's first frame has no layer named 'Countries'",
+        ]
+    );
+    let (_, said) = run(&mut s, "layout.update", json!({"element": frame, "map": home}));
+    assert_eq!(said.len(), 2, "the texts' figures are back, but the two tokens that never had one are said again: {said:?}");
     // So are those of an imported layout, a copy of the first one here.
     let copy = serde_json::to_string(&s.project.layouts[0]).unwrap();
     let (_, said) = run(&mut s, "layout.import", json!({"text": copy}));

@@ -2615,6 +2615,9 @@ mod tests {
     #[test]
     fn text_statistics_capability_follows_saved_layouts_and_commands() {
         use rustgis_map::layout::{ElementKind, Layout};
+        // The fixture the schema check opens lists it.
+        let fixture = Project::from_json(include_str!("../../../schema/fixtures/layout_text_statistics.rgis")).unwrap();
+        assert_eq!(serde_json::to_value(&fixture).unwrap()["requires"], json!(["layout-text-statistics"]));
         let with_text = |text: &str| {
             let mut p = Project::default();
             let mut l = Layout::new("L", 100.0, 100.0);
