@@ -4554,6 +4554,13 @@ pub(crate) fn block_shift(valign: TextVAlign, box_h: f64, px: f64, lines: usize,
     }
 }
 
+/// The lines a wrapped text element (#2346), upright and without letter spacing or a named family,
+/// is drawn in: `s`, its text with the dynamic text filled in, in a box `width` mm wide. For a
+/// caller that sizes the box around the text.
+pub fn wrapped_lines(s: &str, width: f64, size: f64, bold: bool, font: rustgis_map::layout::FontFamily, align: TextAlign) -> Vec<String> {
+    wrapped(s, width, size, text_style(bold, false, font, None, align, 0.0)).lines().map(str::to_string).collect()
+}
+
 /// A colorbar's title's size in points; it is drawn bold.
 pub const COLORBAR_TITLE_PT: f64 = 9.0;
 
