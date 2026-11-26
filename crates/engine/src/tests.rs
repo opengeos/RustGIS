@@ -40020,6 +40020,42 @@ fn layout_text_statistics_without_a_figure_are_said() {
     );
 }
 
+/// The first map frame decides every text's figures (#2853), so what changes which frame is first
+/// says what the texts lose: deleting it, or drawing another frame under it.
+#[test]
+fn layout_text_statistics_are_said_when_the_first_frame_changes() {
+    let mut s = world();
+    s.run("layout.new", &json!({"name": "L"})).unwrap();
+    s.run("layout.addElement", &json!({"kind": "text", "text": "{count:Countries} countries", "x": 10, "y": 10})).unwrap();
+    s.run("map.new", &json!({"name": "Empty"})).unwrap();
+    let li = s.active_layout.unwrap();
+    let first = s.project.layouts[li].first_frame().unwrap();
+    let said = |s: &mut Session, id: &str, p: Value| {
+        let mark = s.notice_mark();
+        s.run(id, &p).unwrap();
+        s.notices_since(mark).iter().map(|n| n.text.as_str().to_string()).filter(|t| t.contains("shows as written")).collect::<Vec<_>>()
+    };
+    // A second frame, of a map with no such layer, drawn first: the first frame is the one that was.
+    let other = s.run("layout.addFrame", &json!({"map": "Empty", "x": 10, "y": 100, "w": 50, "h": 50})).unwrap()["element"]
+        .as_u64()
+        .unwrap() as u32;
+    assert_eq!(s.project.layouts[li].first_frame(), Some(first));
+    assert_eq!(
+        said(&mut s, "layout.arrange", json!({"element": other, "to": "back"})),
+        ["{count:Countries} shows as written: the map of the layout's first frame has no layer named 'Countries'"]
+    );
+    assert_eq!(s.project.layouts[li].first_frame(), Some(other));
+    // Another change of order that leaves the first frame alone says nothing.
+    assert_eq!(said(&mut s, "layout.arrange", json!({"element": first, "to": "front"})), Vec::<String>::new());
+    // The last frame deleted: no map for the figures at all.
+    s.run("layout.removeElement", &json!({"element": other})).unwrap();
+    let mark = s.notice_mark();
+    s.run("layout.removeElement", &json!({"element": first})).unwrap();
+    let told: Vec<String> =
+        s.notices_since(mark).iter().map(|n| n.text.as_str().to_string()).filter(|t| t.contains("shows as written")).collect();
+    assert_eq!(told, ["{count:Countries} shows as written: the layout has no map frame whose map it would read"]);
+}
+
 #[test]
 fn locked_layout_elements_take_no_change_until_unlocked() {
     use rustgis_map::layout::ElementKind;

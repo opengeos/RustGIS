@@ -494,8 +494,8 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
   A layer read in place covers what is loaded, as a chart does, and a warning says so. A token with
   no figure (no such layer or field, a field with no numbers, a raster layer) stays as written, and
   a warning names what is missing. Both warnings come when the text is added or changed, or its
-  layout is made or imported, or when the first map frame is given another map, not when the page
-  is exported. The text, its size (2 to 400 points,
+  layout is made or imported, or when another map frame becomes the first (it is given another map,
+  or the one before it is deleted or drawn over it), not when the page is exported. The text, its size (2 to 400 points,
   as text graphics on the map), colour, bold, **Italic** (slanted, as water and ocean names are;
   the built-in fonts have no italic face, so the letters are slanted 12°), **Alignment** (left,
   center or right within the element) and **Letter spacing** in points (spaced-out names such as

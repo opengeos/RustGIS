@@ -134,12 +134,18 @@ pub fn commands() -> Vec<C> {
         ),
         C::new("layout.removeElement", "Delete Element", "Publish › Element", |s, p| {
             let id = element_id(p)?;
+            let li = index(s, p)?;
             let l = active(s, p)?;
+            let first = l.first_frame();
             // A frame's surrounds go with it: a locked one keeps the frame too.
             if let Some(locked) = l.locked_in_removal(id).map(|e| e.id) {
                 unlocked(l, locked)?;
             }
-            if l.remove(id) { Ok(Value::Null) } else { Err(format!("no element {id}")) }
+            if !l.remove(id) {
+                return Err(format!("no element {id}"));
+            }
+            say_first_frame_change(s, li, first);
+            Ok(Value::Null)
         }).inputs(object_inputs).roles(&[]).effects(crate::policy::Effects::NONE)
         .params(r#"{"layout"?, "element": id}"#),
         C::new("layout.frameZoom", "Zoom Frame", "Publish › Map Frame", frame_zoom).inputs(frame_zoom_inputs).roles(&[]).effects(crate::policy::Effects::NONE).params(
@@ -222,18 +228,21 @@ fn element_id(p: &Value) -> Result<u32, String> {
 fn arrange(s: &mut Session, p: &Value) -> CmdResult {
     let id = element_id(p)?;
     let to = ps(p, "to").and_then(Arrange::from_name).ok_or("to is front, forward, backward or back")?;
+    let li = index(s, p)?;
     let l = active(s, p)?;
     if l.element(id).is_none() {
         return Err(format!("no element {id}"));
     }
     unlocked(l, id)?;
     let before = l.draw_order(id).map(|(i, _)| i);
+    let first = l.first_frame();
     let index = l.arrange(id, to).ok_or_else(|| format!("no element {id}"))?;
     let of = l.elements.len();
     // A move that changes nothing (front for the element already on top) is no step to undo.
     if before == Some(index) {
         s.request_only = true;
     }
+    say_first_frame_change(s, li, first);
     Ok(json!({"element": id, "index": index, "of": of}))
 }
 
@@ -3641,6 +3650,14 @@ fn say_text_fit(s: &mut Session, li: usize, id: u32, lines: bool) {
     };
     for notice in notices {
         s.warn(notice);
+    }
+}
+
+/// What the layout `li`'s texts lose when another frame is the first (#2853), the one whose map they
+/// read their figures from: [`say_layout_text_statistics`] when it isn't `before`.
+fn say_first_frame_change(s: &mut Session, li: usize, before: Option<u32>) {
+    if s.project.layouts.get(li).is_some_and(|l| l.first_frame() != before) {
+        say_layout_text_statistics(s, li);
     }
 }
 

@@ -239,6 +239,9 @@ fn holds_statistic_joined(v: &Value, sep: &str) -> bool {
     }
 }
 
+/// What a layout's JSON holds of a layer statistic (#2853), to read only a file that may have one.
+const STATISTIC_KEYS: [&str; 5] = ["{count:", "{sum:", "{mean:", "{min:", "{max:"];
+
 /// A layout command that gives a text a layer statistic (#2853), read as a text reads its tokens
 /// ([`rustgis_map::layout::stat_tokens`]): only a text takes `"text"`.
 fn command_uses_text_statistics(id: &str, params: &Value) -> bool {
@@ -258,13 +261,11 @@ fn command_uses_text_statistics(id: &str, params: &Value) -> bool {
         // kind of the page it changes, so a title with a token counts.
         "presentation.mapPage" | "presentation.updatePage" => params.get("title").is_some_and(holds_statistic),
         // A layout file, read as `layout.import` reads it, which `report.existingTemplate` also does.
-        "layout.import" | "report.existingTemplate" => {
-            imported_layout_uses(params, &["{count:", "{sum:", "{mean:", "{min:", "{max:"], text_statistics)
-        }
+        "layout.import" | "report.existingTemplate" => imported_layout_uses(params, &STATISTIC_KEYS, text_statistics),
         "presentation.import" => params
             .get("text")
             .and_then(Value::as_str)
-            .filter(|t| ["{count:", "{sum:", "{mean:", "{min:", "{max:"].iter().any(|key| t.contains(key)) || t.contains('\\'))
+            .filter(|t| STATISTIC_KEYS.iter().any(|key| t.contains(key)) || t.contains('\\'))
             .and_then(|t| serde_json::from_str::<rustgis_map::presentation::Presentation>(t).ok())
             .is_some_and(|p| presentation_uses_text_statistics(&p)),
         "script.run" => params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, command_uses_text_statistics)),
