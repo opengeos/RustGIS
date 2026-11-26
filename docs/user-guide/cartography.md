@@ -114,10 +114,9 @@ one past 10,000 elements or 200,000 points of its shapes once each `<use>` is co
 repeats, nor one with a marker on a shape inside another marker (drawn on each of its vertices
 wherever it is), nor one whose style sheets and `style` attributes, or whose elements' attributes,
 take more than some twenty milliseconds to read (a sheet of some 900 short rules, or 4,000
-attributes on one element). An arc is counted as the curves it is drawn with, more the larger
-its radius:
-one of more than 200 curves isn't taken, nor is a circle, an ellipse or a rounded corner whose
-radius is in em or ex, which may come to any size. A radius in % is counted as that share of the
+attributes on one element; a `style` a `<use>` repeats counts each time). An arc is counted as the
+curves it is drawn with, more the larger its radius: one of more than 200 curves isn't taken, nor
+is a circle, an ellipse or a rounded corner whose radius is in em or ex, which may come to any size. A radius in % is counted as that share of the
 largest size the SVG gives itself; such a radius isn't taken either when the SVG's own width or
 height is in em or ex and it has no `viewBox`, or when the width or height of a `<symbol>` or
 `<use>` inside it, or of an `<svg>` inside it with no `viewBox`, is in em or ex or past 100%. An
