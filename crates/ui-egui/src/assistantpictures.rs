@@ -268,7 +268,7 @@ pub fn poll(app: &mut RustGisApp, ui: &Ui, focused: bool) {
 
 /// Takes in the pictures read since it was last asked, and says those that couldn't be
 /// attached; says whether others are still being read.
-fn take_read(app: &mut RustGisApp) -> bool {
+pub(crate) fn take_read(app: &mut RustGisApp) -> bool {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let mut done = Vec::new();

@@ -677,6 +677,11 @@ pub(crate) fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
             save_config(app, &cfg, ctx);
         }
     }
+    // Pictures read off the frame are taken in here, not only by the desktop composer, so a
+    // message waiting for one goes even while no composer is drawn.
+    if crate::assistantpictures::take_read(app) {
+        ctx.request_repaint_after(web_time::Duration::from_millis(100));
+    }
     if let Some(text) = app.assistant.queued.take() {
         send(app, text, ctx);
     }
@@ -793,8 +798,9 @@ pub fn open(app: &mut RustGisApp, ctx: &egui::Context) {
 /// Sends the user's message, with the pictures attached to it, to the selected provider (loading
 /// it the first time), and clears the draft ([`AssistantState::input`]). While the key or a picture
 /// is still being read, the message waits in [`AssistantState::queued`] and goes once it is;
-/// another sent meanwhile takes its place, and the draft is left as it is until then. While the
-/// assistant is busy it isn't sent, and a notice says so.
+/// another sent meanwhile takes its place, and the draft is left as it is until then. Once sent,
+/// the draft is cleared only if it still holds that message: text typed while it waited stays.
+/// While the assistant is busy it isn't sent, and a notice says so.
 pub fn send(app: &mut RustGisApp, text: String, ctx: &egui::Context) {
     ensure_loaded(app, ctx);
     if app.assistant.busy() {
@@ -820,7 +826,9 @@ pub fn send(app: &mut RustGisApp, text: String, ctx: &egui::Context) {
     let session = &app.session;
     let Some(agent) = app.assistant.agent.as_mut() else { return };
     let step = agent.ask_with(&text, app.assistant.pictures.take(), session);
-    app.assistant.input.clear();
+    if app.assistant.input.trim() == text {
+        app.assistant.input.clear();
+    }
     follow(app, step, ctx);
 }
 
@@ -859,11 +867,13 @@ pub fn stop(app: &mut RustGisApp) {
     drop_request(&mut app.assistant);
 }
 
-/// Forgets the conversation, and ends the agent threads it started.
+/// Forgets the conversation, and ends the agent threads it started. A message still waiting to
+/// be sent ([`AssistantState::queued`]) is dropped with it; its draft stays in the box.
 pub fn new_conversation(app: &mut RustGisApp) {
     if let Some(a) = app.assistant.agent.as_mut() {
         a.clear();
     }
+    app.assistant.queued = None;
     drop_request(&mut app.assistant);
     end_threads(app);
 }

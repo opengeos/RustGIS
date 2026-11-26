@@ -1410,6 +1410,69 @@ pub(crate) mod tests {
         assert!(!h.state().assistant.agent.as_ref().unwrap().busy());
     }
 
+    /// A message sent while the assistant is busy is refused with a notice and leaves the draft,
+    /// the conversation and the provider alone; an idle assistant raises no such notice.
+    #[test]
+    fn send_while_busy_is_refused_with_a_notice() {
+        const BUSY: &str = "The assistant is busy";
+        let ctx = egui::Context::default();
+        let mut app = RustGisApp::with_sample();
+        let mut config = Config::from_env("custom");
+        config.model = "test".into();
+        app.assistant.agent = Some(Agent::new(config.clone(), &app.session));
+        app.assistant.loaded = true;
+        app.session.notices.clear();
+        send(&mut app, "   ".into(), &ctx);
+        assert!(app.session.notices.iter().all(|n| !n.text.contains(BUSY)));
+
+        let mut agent = Agent::new(config, &app.session);
+        assert!(matches!(agent.ask("hello", &app.session), Step::Send(_)));
+        let entries = agent.transcript.len();
+        app.assistant.agent = Some(agent);
+        app.assistant.input = "second thoughts".into();
+        send(&mut app, "second thoughts".into(), &ctx);
+        assert_eq!(app.session.notices.iter().filter(|n| n.text.contains(BUSY)).count(), 1);
+        assert_eq!(app.assistant.input, "second thoughts");
+        assert!(app.assistant.queued.is_none());
+        let agent = app.assistant.agent.as_ref().unwrap();
+        assert_eq!(agent.transcript.len(), entries);
+        assert!(app.assistant.history.iter().all(|h| h != "second thoughts"));
+    }
+
+    /// A sent message clears the draft only when the draft still holds it: text typed while a
+    /// message waited (for the key, say) stays in the box.
+    #[test]
+    fn sending_clears_only_the_draft_it_sent() {
+        let ctx = egui::Context::default();
+        let mut app = RustGisApp::with_sample();
+        let mut config = Config::from_env("custom");
+        // Nothing listens on the discard port: the request fails off the frame and is never read.
+        config.base_url = "http://127.0.0.1:9/v1".into();
+        config.model = "test".into();
+        app.assistant.loaded = true;
+        for (draft, sent, kept) in [("newer draft", "waited", "newer draft"), ("  waited ", "waited", "")] {
+            app.assistant.agent = Some(Agent::new(config.clone(), &app.session));
+            app.assistant.input = draft.into();
+            send(&mut app, sent.into(), &ctx);
+            assert_eq!(app.assistant.input, kept);
+            let agent = app.assistant.agent.as_ref().unwrap();
+            assert!(matches!(agent.transcript.first(), Some(Entry::User(t)) if t == sent));
+        }
+    }
+
+    /// A new conversation drops a message still waiting to be sent, so it can't open the next
+    /// one; its draft stays in the box.
+    #[test]
+    fn new_conversation_drops_a_waiting_message() {
+        let mut app = RustGisApp::with_sample();
+        app.assistant.agent = Some(Agent::new(Config::from_env("custom"), &app.session));
+        app.assistant.queued = Some("from before".into());
+        app.assistant.input = "from before".into();
+        assistant::new_conversation(&mut app);
+        assert!(app.assistant.queued.is_none());
+        assert_eq!(app.assistant.input, "from before");
+    }
+
     /// Real pending reviews keep their reach visible while exact requests wait under Details.
     #[test]
     fn compact_approval_details_preserve_frozen_request_and_defaults() {
