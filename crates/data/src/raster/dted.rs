@@ -456,7 +456,11 @@ fn read_from_limited(file_name: &str, mut source: impl std::io::Read, max: usize
     }
     let count = |n: usize| if n == 1 { format!("1 of its {cols} columns has") } else { format!("{n} of its {cols} columns have") };
     if present < cols {
-        lost.push(format!("the file is cut short: {} no heights, read as no data", count(cols - present)));
+        // Heights the file should hold and doesn't: lost.
+        lost.push(crate::loss::Note::loss(
+            crate::loss::LossCode::DroppedValue,
+            format!("the file is cut short: {} no heights, read as no data", count(cols - present)),
+        ));
     } else if let Some(extra) = body_len.checked_sub((cols * record) as u64).filter(|n| *n > 0) {
         lost.push(format!("{extra} bytes after its last column are ignored"));
     }
@@ -773,7 +777,12 @@ mod tests {
         let cut = &bytes[..at(8, rows) + 7];
         let r = read("x.dt2", cut).unwrap();
         assert_eq!(r.value(0, 8, 0), None);
-        assert!(r.lost.iter().any(|l| l == "the file is cut short: 3 of its 11 columns have no heights, read as no data"), "{:?}", r.lost);
+        assert!(
+            r.lost.iter().any(|l| l.text == "the file is cut short: 3 of its 11 columns have no heights, read as no data"
+                && l.loss == Some(crate::loss::LossCode::DroppedValue)),
+            "{:?}",
+            r.lost
+        );
         // Bytes past the last column are said.
         let mut longer = dted("0000000E", "0000000N", (3600, 3600), (11, rows), |_, _| Some(1));
         longer.extend([0; 5]);

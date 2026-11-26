@@ -2566,8 +2566,11 @@ pub(crate) fn mosaic_rasters_work(s: &Session, p: &Value) -> Result<super::workf
             };
             tiles.take(r)?;
         }
-        // Said as text with the mosaic's other notes: their codes go with a later change.
-        let mut notes: Notes = super::raster::loss_lines(lost).into_iter().map(|n| (n.text, false)).collect();
+        // What reading the inputs lost keeps its code: said as a loss; the rest with the mosaic's
+        // other notes.
+        let (coded, plain): (Vec<_>, Vec<_>) = super::raster::loss_lines(lost).into_iter().partition(|n| n.loss.is_some());
+        let mut notes: Notes = plain.into_iter().map(|n| (n.text, false)).collect();
+        let coded_said: Vec<String> = coded.iter().map(|n| n.text.clone()).collect();
         let made = (|| -> Result<super::workflows::Made, String> {
             // The inputs are let go of once joined, before the file is written.
             let out = tiles.join(given, &mut notes)?;
@@ -2579,9 +2582,12 @@ pub(crate) fn mosaic_rasters_work(s: &Session, p: &Value) -> Result<super::workf
             let (written, staged) = wrote.map(|(wrote, file)| (wrote.notes, file)).unzip();
             let written = written.unwrap_or_default();
             // Said with the error should its file not go in place; what the file holds then isn't.
-            let said: Vec<String> = notes.iter().map(|(n, _)| n.clone()).collect();
+            let said: Vec<String> = coded_said.iter().cloned().chain(notes.iter().map(|(n, _)| n.clone())).collect();
             let notes = std::mem::take(&mut notes);
             let then: super::workflows::Then = Box::new(move |s: &mut Session, _: &mut Value| {
+                for note in coded {
+                    s.say(note);
+                }
                 say(s, notes);
                 for note in written {
                     s.say_written(note);
@@ -2593,7 +2599,11 @@ pub(crate) fn mosaic_rasters_work(s: &Session, p: &Value) -> Result<super::workf
                 None => made,
             })
         })();
-        made.map_err(|e| with_notes(e, &notes))
+        made.map_err(|e| {
+            let mut all: Notes = coded_said.iter().map(|n| (n.clone(), false)).collect();
+            all.extend(notes);
+            with_notes(e, &all)
+        })
     }))
 }
 
