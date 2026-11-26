@@ -1279,9 +1279,18 @@ pub(crate) fn export_work(s: &Session, p: &Value) -> Result<super::exports::Work
     {
         return Err(why.replace("a raster layer", "a raster or tile layer"));
     }
-    let (_, r) = get(s, p)?;
+    let (id, r) = get(s, p)?;
     let bi = band(p, "band", &r)?.unwrap_or(0);
     let cog = b(p, "cog") == Some(true);
+    // A raster a command made embeds the GeoTIFF it was written as: a plain export of every band
+    // writes those same bytes, so they are written again rather than encoded again.
+    let written = s.map().layer(id).and_then(|l| l.raster.as_ref()).and_then(|rl| rl.written_file()).cloned();
+    if let Some(bytes) = written.filter(|_| !cog && raster::geotiff::written_bands(&r, bi).len() == r.bands.len()) {
+        return Ok(Box::new(move || {
+            rustgis_data::io::write_atomic(Path::new(&path), &bytes).map_err(|e| format!("{path}: {e}"))?;
+            wrote_geotiff(&r, bi, &path, None, "give \"band\" for another")
+        }));
+    }
     Ok(Box::new(move || write_geotiff(&r, bi, cog, &path)))
 }
 
