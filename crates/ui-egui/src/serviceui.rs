@@ -74,9 +74,9 @@ pub struct Import {
     /// The saved web-service connection to record on imported layers, not a group-plan parameter.
     connection: Option<Value>,
     token: u64,
-    /// The originating map (`dialogs::map_key`), so a deleted, replaced or renamed map cancels the
-    /// import and a moved one doesn't.
-    map: crate::dialogs::MapKey,
+    /// The project and map it started on (`dialogs::MapOwner`), so another project, or a deleted,
+    /// replaced or renamed map, cancels the import and a moved one doesn't.
+    owner: crate::dialogs::MapOwner,
     slot: Slot<Result<Vec<u8>, String>>,
     document: Option<String>,
     current: Option<String>,
@@ -342,7 +342,7 @@ pub fn start(app: &mut RustGisApp, p: &Value, refresh: bool) -> Result<(), Strin
         refresh,
         connection,
         token: app.session.download_started(),
-        map: crate::dialogs::map_key(&app.session),
+        owner: crate::dialogs::MapOwner::of(&app.session),
         slot: Slot::default(),
         document: None,
         current: None,
@@ -466,13 +466,15 @@ impl Import {
 
 pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
     let Some(mut task) = app.ui.service_import.take() else { return };
-    if !app.session.download_is_pending(task.token) {
+    let pending = app.session.download_is_pending(task.token);
+    let moved = !task.owner.holds(&app.session);
+    if !pending || moved {
         app.session.download_failed(task.token);
-        return;
-    }
-    if crate::dialogs::map_key(&app.session) != task.map {
-        app.session.download_failed(task.token);
-        app.session.notify(tl!("The service import was cancelled because the map in view changed or was renamed.").to_string(), false);
+        // Said unless the download was already over for the user's own reason (Cancel): opening
+        // another project puts its downloads aside, so they are never pending here.
+        if moved && (pending || !task.owner.in_project(&app.session)) {
+            app.session.notify(tl!("The service import was cancelled because the map or project in view changed.").to_string(), false);
+        }
         return;
     }
     let landed = task.slot.lock().unwrap_or_else(|e| e.into_inner()).take();
@@ -698,7 +700,7 @@ mod tests {
             refresh: false,
             connection: None,
             token: app.session.download_started(),
-            map: crate::dialogs::map_key(&app.session),
+            owner: crate::dialogs::MapOwner::of(&app.session),
             slot: Slot::default(),
             document: Some("https://example.test/capabilities".into()),
             current: None,
@@ -734,6 +736,15 @@ mod tests {
         app.run("map.activate", json!({"name": "Second"})).unwrap();
         poll(&mut app, &ctx);
         assert_eq!(said(&app, mark), 0);
+        // Another project opened: its download is put aside with the project, so it is no longer
+        // pending here, and that is said all the same.
+        app.run("map.activate", json!({"name": "Second"})).unwrap();
+        let mark = app.session.notice_mark();
+        let import = task(&mut app);
+        app.ui.service_import = Some(import);
+        app.run("project.new", json!({})).unwrap();
+        poll(&mut app, &ctx);
+        assert_eq!(said(&app, mark), 1);
     }
 
     /// An import in flight goes on when its map moves among the maps, and is given up when another
@@ -748,7 +759,7 @@ mod tests {
             refresh: false,
             connection: None,
             token,
-            map: crate::dialogs::map_key(&app.session),
+            owner: crate::dialogs::MapOwner::of(&app.session),
             slot: Slot::default(),
             document: Some("https://example.test/capabilities".into()),
             current: None,
@@ -1071,7 +1082,7 @@ mod tests {
                 refresh: false,
                 connection: None,
                 token: 0,
-                map: (0, String::new()),
+                owner: crate::dialogs::MapOwner::of(&rustgis_engine::Session::new(rustgis_engine::Project::default())),
                 slot: Slot::default(),
                 document: None,
                 current: None,

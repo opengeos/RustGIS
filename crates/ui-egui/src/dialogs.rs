@@ -35,6 +35,11 @@ impl MapOwner {
         Self { project: s.opened, map: map_key(s) }
     }
 
+    /// Whether `s` still has the project open it was made in.
+    pub(crate) fn in_project(&self, s: &Session) -> bool {
+        self.project == s.opened
+    }
+
     /// Whether `s` still has that project open with that map in view (a moved map is the same one).
     pub(crate) fn holds(&self, s: &Session) -> bool {
         let map = s.map();
