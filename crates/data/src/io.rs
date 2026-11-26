@@ -5569,8 +5569,11 @@ pub fn export_losses_notes_in(ds: &Dataset, ext: &str, name_field: Option<usize>
             notes.extend(losses.coordinates_note_in(&ds.fields, target, crs).map(crate::loss::Note::plain));
             notes
         }
-        "kml" | "kmz" => kml_empty_fields_note(ds, target)?.into_iter().chain(kml_blank_names_note(ds, target)?).collect(),
-        "gpx" => gpx_notes(ds, name_field, target),
+        "kml" | "kmz" => {
+            let placed = written_with_geometry(ds)?;
+            kml_empty_fields_note(ds, &placed, target)?.into_iter().chain(kml_blank_names_note(ds, &placed, target)?).collect()
+        }
+        "gpx" => gpx_notes(ds, name_field, target)?,
         _ => Vec::new(),
     };
     notes.extend(text_losses_written(ds, ext, name_field)?.notes(&ds.fields, target));
@@ -5597,7 +5600,7 @@ fn text_losses_written(ds: &Dataset, ext: &str, name_field: Option<usize>) -> Re
 /// KML fields whose name is blank once trimmed, with values in the placemarks written: each is
 /// written as `<Data name="">`, which reading drops, so the column and its values are gone
 /// (#2415). A field with no value written is said by [`kml_empty_fields_note`].
-fn kml_blank_names_note(ds: &Dataset, target: &str) -> Result<Option<crate::loss::Note>> {
+fn kml_blank_names_note(ds: &Dataset, placed: &[bool], target: &str) -> Result<Option<crate::loss::Note>> {
     let blank: Vec<usize> = ds.fields.iter().enumerate().filter(|(_, f)| f.name.trim().is_empty()).map(|(k, _)| k).collect();
     if blank.is_empty() {
         return Ok(None);
@@ -5605,8 +5608,7 @@ fn kml_blank_names_note(ds: &Dataset, target: &str) -> Result<Option<crate::loss
     // One pass over the placemarks written, looking at Cancel as [`kml_empty_fields_note`] does.
     let mut with_value = vec![false; blank.len()];
     let mut values = 0usize;
-    let written = written_with_geometry(ds);
-    for f in ds.features.iter().filter(|f| written(f)) {
+    for f in ds.features.iter().zip(placed).filter(|(_, p)| **p).map(|(f, _)| f) {
         crate::progress::check()?;
         for (has, k) in with_value.iter_mut().zip(&blank) {
             if f.attrs.get(*k).is_some_and(|v| !v.is_null()) {
@@ -5627,22 +5629,29 @@ fn kml_blank_names_note(ds: &Dataset, target: &str) -> Result<Option<crate::loss
     .map(|t| crate::loss::Note::loss(crate::loss::LossCode::DroppedValue, t)))
 }
 
-/// Whether a KML or GPX file of `ds` writes feature `f` with its geometry: it has one, with a
+/// Per feature of `ds`, whether a KML or GPX file of it writes the feature with its geometry: it has one, with a
 /// place in longitude/latitude. The writer leaves out the geometry of a feature held in another
 /// system whose place can't be given there.
-fn written_with_geometry(ds: &Dataset) -> impl Fn(&crate::Feature) -> bool + '_ {
-    let to = ds.lonlat_conversion().ok().filter(|to| !to.is_identity());
-    move |f| f.geometry.as_ref().is_some_and(|g| to.as_ref().is_none_or(|to| Dataset::converted_to_lonlat(to, g).is_some()))
+/// One pass over the features, looking at Cancel between them.
+fn written_with_geometry(ds: &Dataset) -> Result<Vec<bool>> {
+    let to = ds.lonlat_conversion().map_err(DataError::of_conversion)?;
+    let to = (!to.is_identity()).then_some(to);
+    ds.features
+        .iter()
+        .map(|f| {
+            crate::progress::check()?;
+            Ok(f.geometry.as_ref().is_some_and(|g| to.as_ref().is_none_or(|to| Dataset::converted_to_lonlat(to, g).is_some())))
+        })
+        .collect()
 }
 
 /// KML writes ExtendedData only for non-null values of placemarks it writes. Report every
 /// field absent from that output, even when an unwritten feature has a value for it.
-fn kml_empty_fields_note(ds: &Dataset, target: &str) -> Result<Option<crate::loss::Note>> {
+fn kml_empty_fields_note(ds: &Dataset, placed: &[bool], target: &str) -> Result<Option<crate::loss::Note>> {
     let mut written = vec![false; ds.fields.len()];
-    let placemark = written_with_geometry(ds);
-    for f in &ds.features {
+    for (f, placemark) in ds.features.iter().zip(placed) {
         crate::progress::check()?;
-        if placemark(f) {
+        if *placemark {
             for (written, value) in written.iter_mut().zip(&f.attrs) {
                 *written |= !value.is_null();
             }
@@ -5681,10 +5690,9 @@ pub fn gpx_left_out(ds: &Dataset) -> usize {
 /// What a GPX file of `ds` can't hold, each feature named from field `name_field`: other
 /// fields' values, polygons (written as tracks along their outer rings, holes left out) and
 /// multipoints (a waypoint per point). One notice per kind; none for a layer GPX holds whole.
-pub fn gpx_notes(ds: &Dataset, name_field: Option<usize>, target: &str) -> Vec<crate::loss::Note> {
-    // Each feature looked at once: the fields below go over them again.
-    let written = written_with_geometry(ds);
-    let placed: Vec<bool> = ds.features.iter().map(&written).collect();
+pub fn gpx_notes(ds: &Dataset, name_field: Option<usize>, target: &str) -> Result<Vec<crate::loss::Note>> {
+    // Each feature placed once: the fields below go over them again.
+    let placed = written_with_geometry(ds)?;
     let drawn = || ds.features.iter().zip(&placed).filter(|(_, p)| **p).map(|(f, _)| f);
     // Every other field, null everywhere or not: it isn't in the file, so it doesn't come back.
     // Fields with values come first, so the names shown before "and N more" are the ones that lost data.
@@ -5738,7 +5746,7 @@ pub fn gpx_notes(ds: &Dataset, name_field: Option<usize>, target: &str) -> Vec<c
         let what = if multipoints == 1 { "1 multipoint was".to_string() } else { format!("{multipoints} multipoints were") };
         notes.push(crate::loss::Note::plain(format!("{target}: {what} written as a waypoint for each of its points")));
     }
-    notes
+    Ok(notes)
 }
 
 /// Whether [`shapefile_parts_in`] writes a feature with geometry `g` to a layer of type `gt`: one
@@ -7937,7 +7945,7 @@ mod tests {
         // GPX: fields with values aren't written, a lost value; fields empty everywhere aren't
         // either, and lose nothing. Polygons go as their outlines, losing only their holes.
         let mut ds = text_layer(&["name", "note"], &[&[Some("a"), Some("kept")]]);
-        let gpx = |ds: &Dataset| gpx_notes(ds, name_field(ds), "t").into_iter().map(|n| n.loss).collect::<Vec<_>>();
+        let gpx = |ds: &Dataset| gpx_notes(ds, name_field(ds), "t").unwrap().into_iter().map(|n| n.loss).collect::<Vec<_>>();
         assert_eq!(gpx(&ds), [Some(DroppedValue)]);
         ds.features[0].attrs[1] = Value::Null;
         assert_eq!(gpx(&ds), [None]);
@@ -8112,13 +8120,13 @@ mod tests {
         );
         // GPX writes only names: one notice says the other fields, with a value first.
         assert_eq!(
-            gpx_notes(&ds, name_field(&ds), "t").iter().map(crate::loss::Note::as_str).collect::<Vec<_>>(),
+            gpx_notes(&ds, name_field(&ds), "t").unwrap().iter().map(crate::loss::Note::as_str).collect::<Vec<_>>(),
             ["t: GPX holds a name for each feature, so fields weren't written: 'note', 'gone', 'ele'"]
         );
-        assert!(gpx_notes(&ds, name_field(&ds), "t").iter().all(|n| n.loss == Some(crate::loss::LossCode::DroppedValue)));
+        assert!(gpx_notes(&ds, name_field(&ds), "t").unwrap().iter().all(|n| n.loss == Some(crate::loss::LossCode::DroppedValue)));
         let clean = text_layer(&["name"], &[&[Some("a")], &[None]]);
         assert!(text_notes(&clean, "gpx").is_empty());
-        assert!(gpx_notes(&clean, name_field(&clean), "t").is_empty());
+        assert!(gpx_notes(&clean, name_field(&clean), "t").unwrap().is_empty());
         assert!(text_notes(&ds, "geojson").is_empty());
     }
 
@@ -8389,7 +8397,7 @@ mod tests {
         let mut attrs = vec![Value::Null; 5];
         attrs.push(Value::Int(7));
         ds.push(Some(Geometry::Point(Coord::new(1.0, 2.0))), attrs);
-        let notes = gpx_notes(&ds, None, "t.gpx");
+        let notes = gpx_notes(&ds, None, "t.gpx").unwrap();
         assert!(notes[0].contains("written: 'population', 'empty1'") && notes[0].ends_with("and 1 more"), "{notes:?}");
     }
 
