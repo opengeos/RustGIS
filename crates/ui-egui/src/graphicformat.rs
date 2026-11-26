@@ -186,8 +186,14 @@ pub(crate) fn save_draft(app: &mut RustGisApp) {
         app.session.notify(tl!("Text typed for a graphic on another map or project was not saved.").to_string(), false);
         return;
     }
-    let Some(current) = app.session.map().layer(layer).and_then(|l| graphics::label(&l.dataset, row)).map(str::to_string) else {
-        // Its layer was removed, or its row is no longer a text.
+    let Some(current) = app
+        .session
+        .map()
+        .layer(layer)
+        .filter(|l| graphics::kind(&l.dataset, row) == "text")
+        .map(|l| graphics::label(&l.dataset, row).unwrap_or_default().to_string())
+    else {
+        // Its layer was removed, or its row is no longer a text (a text whose text is empty still is one).
         app.session.notify(tl!("Text typed for a graphic that is no longer there was not saved.").to_string(), false);
         return;
     };
@@ -357,6 +363,29 @@ mod tests {
         let said = h.state().session.notices_since(mark).iter().filter(|n| n.text.contains("was not saved")).count();
         assert_eq!(said, 1, "{:?}", h.state().session.notices_since(mark).iter().map(|n| &n.text).collect::<Vec<_>>());
         assert!(h.state().graphic_format.draft.is_none());
+    }
+
+    /// A text graphic whose text is empty (`graphics.style` accepts one) still exists: what is typed for
+    /// it is saved when the pane closes, not reported as gone.
+    #[test]
+    fn a_text_typed_for_a_graphic_with_empty_text_is_saved_not_reported_gone() {
+        let mut app = RustGisApp::with_sample();
+        let added = app.run("graphics.add", json!({"shape": "text", "points": [[10, 50]], "text": "Old"})).unwrap();
+        let (layer, row) = (added["layer"].as_u64().unwrap() as u32, added["row"].as_u64().unwrap() as usize);
+        app.run("select.rows", json!({"layer": layer, "rows": [row]})).unwrap();
+        app.run("graphics.style", json!({"text": ""})).unwrap();
+        let mut h = harness(app);
+        h.run_steps(3);
+        h.query_all_by_role(Role::MultilineTextInput).find(|n| n.value().as_deref() == Some("")).unwrap().focus();
+        h.run_steps(2);
+        h.query_all_by_role(Role::MultilineTextInput).find(|n| n.is_focused()).unwrap().type_text("New");
+        h.run_steps(2);
+        let mark = h.state().session.notice_mark();
+        h.state_mut().run("ui.pane.format", json!({})).unwrap();
+        h.run_steps(2);
+        let label = h.state().session.map().layer(layer).and_then(|l| graphics::label(&l.dataset, row)).map(str::to_string);
+        assert!(label.as_deref().is_some_and(|t| t.contains("New")), "{label:?}");
+        assert!(h.state().session.notices_since(mark).iter().all(|n| !n.text.contains("no longer there")));
     }
 
     /// A text field focused but not edited has nothing pending: switching map says nothing of it (#2987).
