@@ -230,13 +230,28 @@ impl Value {
     }
 
     /// Whether this value, put in a decimal (Double) field, comes out rounded: a whole number past
-    /// 2^53, or a number written as text with more digits than a decimal holds
-    /// ([`double_holds`](crate::io::double_holds): `9007199254740993.0` is, `0.1` and `1e3` aren't).
+    /// 2^53, written as digits (with or without `.0`) and held only exactly, or a number written as
+    /// text with more significant digits than a decimal holds ([`double_holds`](crate::io::double_holds)):
+    /// `9007199254740993.0` and `12345678901234567000.0` are; `0.1`, `1e3` and
+    /// `1.2345678901234567e19`, which says only its 17 digits, aren't.
     pub fn rounds_as_double(&self) -> bool {
         match self {
             // i128 holds both exactly.
             Value::Int(i) => (*i as f64) as i128 != i128::from(*i),
-            Value::Text(t) => t.trim().parse::<f64>().is_ok_and(f64::is_finite) && !crate::io::double_holds(t.trim()),
+            Value::Text(t) => {
+                let t = t.trim();
+                if !t.parse::<f64>().is_ok_and(f64::is_finite) {
+                    return false;
+                }
+                // A whole number written with a decimal point (`12345678901234567000.0`) is held
+                // only exactly, as one written without it is.
+                match t.split_once('.') {
+                    Some((whole, zeros)) if whole.bytes().any(|b| b.is_ascii_digit()) && zeros.bytes().all(|b| b == b'0') => {
+                        !crate::io::double_holds(whole)
+                    }
+                    _ => !crate::io::double_holds(t),
+                }
+            }
             _ => false,
         }
     }
@@ -699,6 +714,18 @@ mod tests {
             assert_eq!(Value::yes_no(text), said, "{text}");
             assert_eq!(Value::parse(text, FieldType::Boolean), Value::Bool(said.unwrap_or_default()), "{text}");
         }
+        for (text, rounded) in [
+            ("9007199254740993.0", true),
+            ("12345678901234567000.0", true),
+            ("12345678901234567890", true),
+            ("9007199254740992.0", false),
+            ("0.1", false),
+            ("1e3", false),
+            ("1.2345678901234567e19", false),
+        ] {
+            assert_eq!(Value::Text(text.into()).rounds_as_double(), rounded, "{text}");
+        }
+        assert!(Value::Int((1 << 53) + 1).rounds_as_double() && !Value::Int(1 << 53).rounds_as_double());
         for text in ["maybe", "2", "on", "yess"] {
             assert_eq!(Value::yes_no(text), None, "{text}");
             assert_eq!(Value::parse(text, FieldType::Boolean), Value::Null, "{text} is neither, not no");

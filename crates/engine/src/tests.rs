@@ -1596,8 +1596,9 @@ fn a_default_its_field_cant_hold_as_given_is_refused_when_set() {
     assert_eq!(err, "field 'flag': 'maybe' isn't a Boolean value");
     assert!(s.map().layer_by_name("Cities").unwrap().design.templates.is_empty(), "a refused template isn't added");
     // Defaults the fields hold as given are kept, and fill new features with nothing to say.
-    s.run("edit.template", &json!({"layer": "Cities", "name": "T", "defaults": {"n": 2.0, "flag": "yes", "x": "9007199254740992.0"}}))
-        .unwrap();
+    s.run("edit.addField", &json!({"layer": "Cities", "name": "note", "type": "text"})).unwrap();
+    let defaults = json!({"n": 2.0, "flag": "yes", "x": "9007199254740992.0", "note": 0.1234567});
+    s.run("edit.template", &json!({"layer": "Cities", "name": "T", "defaults": defaults})).unwrap();
     let mark = s.notice_mark();
     let point = json!({"type": "Point", "coordinates": [0.0, 0.0]});
     let row = s.run("edit.addFeature", &json!({"layer": "Cities", "geometry": point, "template": "T"})).unwrap()["row"].as_u64().unwrap();
@@ -1605,6 +1606,11 @@ fn a_default_its_field_cant_hold_as_given_is_refused_when_set() {
     let ds = &s.map().layer_by_name("Cities").unwrap().dataset;
     let row = row as usize;
     assert_eq!((ds.value(row, ds.field_index("n").unwrap()), ds.value(row, ds.field_index("flag").unwrap())), (&V::Int(2), &V::Bool(true)));
+    assert_eq!(ds.value(row, ds.field_index("note").unwrap()), &V::Text("0.1234567".into()), "in full, not to six places");
+    s.run("edit.undo", &Value::Null).unwrap();
+    s.run("edit.setValue", &json!({"layer": "Cities", "row": 0, "field": "note", "value": 0.1234567})).unwrap();
+    let ds = &s.map().layer_by_name("Cities").unwrap().dataset;
+    assert_eq!(ds.value(0, ds.field_index("note").unwrap()), &V::Text("0.1234567".into()), "edit.setValue too");
     s.run("edit.undo", &Value::Null).unwrap();
     // A subtype's defaults fill a new feature of its code. One saved before defaults were
     // checked, that its field can't hold as given, is left out and said.

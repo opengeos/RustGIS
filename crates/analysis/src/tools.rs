@@ -2838,8 +2838,8 @@ fn symmetrical_difference(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, Stri
 /// typing it into the field would, so text that isn't a number becomes empty in a numeric field.
 /// A number becomes text at full precision, and a fractional one an integer by truncation; one
 /// beyond an integer field's range, or not finite, becomes empty. Text becomes a Boolean as typing
-/// it would ([`Value::yes_no`]): text that isn't a yes/no word is empty, and a whole number is yes
-/// when it isn't 0.
+/// it would ([`Value::yes_no`]): text that isn't one of its words is empty (so is the text `2`),
+/// and a number, not text, that is whole is yes when it isn't 0.
 fn converted(v: &Value, ty: FieldType) -> Value {
     match (v, ty) {
         (Value::Int(_), FieldType::Integer)
@@ -2955,6 +2955,8 @@ fn update_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>) -> Result<ToolR
     let mut losses: Vec<rustgis_data::loss::LossMessage> = Vec::new();
     messages.extend(left_out.notes("Update", &up.name));
     let features = |n: usize| if n == 1 { "1 update feature".to_string() } else { format!("{n} update features") };
+    // The cuts and roundings are said one notice per kind, naming their fields.
+    let (mut cut, mut round): (Vec<(&str, usize)>, Vec<(&str, usize)>) = (Vec::new(), Vec::new());
     for (f, Unfit { nulls: n, days, fractions, rounded }) in ds.fields.iter().zip(unfit) {
         if n > 0 {
             losses.push(rustgis_data::loss::LossMessage {
@@ -2970,22 +2972,31 @@ fn update_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>) -> Result<ToolR
             });
         }
         if fractions > 0 {
-            let their = if fractions == 1 { "its" } else { "their" };
-            losses.push(rustgis_data::loss::LossMessage {
-                code: rustgis_data::loss::LossCode::ChangedTruncated,
-                text: format!("Update: '{}' holds whole numbers, so {} lost {their} fraction", f.name, features(fractions)),
-            });
+            cut.push((&f.name, fractions));
         }
         if rounded > 0 {
-            losses.push(rustgis_data::loss::LossMessage {
-                code: rustgis_data::loss::LossCode::ChangedRounded,
-                text: format!(
-                    "Update: '{}' holds decimals, so the numbers of {} were rounded to the digits it holds",
-                    f.name,
-                    features(rounded)
-                ),
-            });
+            round.push((&f.name, rounded));
         }
+    }
+    let named = |fields: &[(&str, usize)]| {
+        let total: usize = fields.iter().map(|(_, n)| n).sum();
+        let values = if total == 1 { "1 update value".to_string() } else { format!("{total} update values") };
+        let (its, was) = if total == 1 { ("its", "was") } else { ("their", "were") };
+        (values, its, was, fields.iter().map(|(f, _)| format!("'{f}'")).collect::<Vec<_>>().join(", "))
+    };
+    if !cut.is_empty() {
+        let (values, its, _, fields) = named(&cut);
+        losses.push(rustgis_data::loss::LossMessage {
+            code: rustgis_data::loss::LossCode::ChangedTruncated,
+            text: format!("Update: {values} lost {its} fraction in fields that hold whole numbers: {fields}"),
+        });
+    }
+    if !round.is_empty() {
+        let (values, _, was, fields) = named(&round);
+        losses.push(rustgis_data::loss::LossMessage {
+            code: rustgis_data::loss::LossCode::ChangedRounded,
+            text: format!("Update: {values} {was} rounded to the digits a decimal holds, in {fields}"),
+        });
     }
     Ok(ToolResult { losses, output: Output::Layer(out), messages })
 }
@@ -3009,12 +3020,17 @@ impl Unfit {
         // Empty or `<null>` text asks for null: no loss.
         self.nulls += usize::from(c.is_null() && !v.asks_null());
         self.days += usize::from(matches!(v, Value::DateTime(t) if ty == FieldType::Date && !t.is_date()));
-        let decimal = match v {
-            Value::Float(f) => Some(*f),
-            Value::Text(t) if t.trim().parse::<i64>().is_err() => t.trim().parse::<f64>().ok(),
-            _ => None,
+        let fraction = match v {
+            Value::Float(f) => f.fract() != 0.0,
+            // A decimal written out is read from its digits, which a decimal can round away:
+            // `2.0000000000000001` has a fraction, `2.000` hasn't.
+            Value::Text(t) => match t.trim().split_once('.') {
+                Some((_, digits)) if digits.bytes().all(|b| b.is_ascii_digit()) => digits.bytes().any(|b| b != b'0'),
+                _ => t.trim().parse::<i64>().is_err() && t.trim().parse::<f64>().is_ok_and(|f| f.fract() != 0.0),
+            },
+            _ => false,
         };
-        self.fractions += usize::from(matches!(c, Value::Int(_)) && decimal.is_some_and(|f| f.fract() != 0.0));
+        self.fractions += usize::from(matches!(c, Value::Int(_)) && fraction);
         self.rounded += usize::from(ty == FieldType::Double && matches!(c, Value::Float(_)) && v.rounds_as_double());
     }
 }
@@ -14607,9 +14623,9 @@ mod tests {
         assert_eq!(said(&run(&zones))[1..], [] as [&str; 0]);
         zones.push(Some(sq(7.0, 0.0, 1.0)), vec![Value::Float(-2.7), Value::Int((1 << 53) + 1), Value::Text("maybe".into())]);
         let lossy = [
-            "ChangedTruncated: Update: 'n' holds whole numbers, so 1 update feature lost its fraction",
-            "ChangedRounded: Update: 'x' holds decimals, so the numbers of 1 update feature were rounded to the digits it holds",
             "DroppedValue: Update: 'b' is null in 1 update feature, whose value isn't a Boolean value",
+            "ChangedTruncated: Update: 1 update value lost its fraction in fields that hold whole numbers: 'n'",
+            "ChangedRounded: Update: 1 update value was rounded to the digits a decimal holds, in 'x'",
         ];
         let res = run(&zones);
         assert_eq!(said(&res)[1..], lossy);
@@ -14619,11 +14635,11 @@ mod tests {
         // Written as text, the same.
         let fields = vec![Field::new("n", FieldType::Text), Field::new("x", FieldType::Text), Field::new("b", FieldType::Text)];
         let mut zones = Dataset::new("zones", GeometryType::Polygon, fields);
-        zones.push(Some(sq(5.0, 0.0, 1.0)), vec![Value::Text("2".into()), Value::Text("1e3".into()), Value::Text("yes".into())]);
+        zones.push(Some(sq(5.0, 0.0, 1.0)), vec![Value::Text("2.000".into()), Value::Text("1e3".into()), Value::Text("yes".into())]);
         assert_eq!(said(&run(&zones))[1..], [] as [&str; 0]);
         zones.push(
             Some(sq(7.0, 0.0, 1.0)),
-            vec![Value::Text("-2.7".into()), Value::Text("9007199254740993.0".into()), Value::Text("maybe".into())],
+            vec![Value::Text("2.0000000000000001".into()), Value::Text("9007199254740993.0".into()), Value::Text("maybe".into())],
         );
         assert_eq!(said(&run(&zones))[1..], lossy);
     }

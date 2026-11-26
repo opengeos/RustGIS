@@ -788,6 +788,10 @@ pub(crate) fn held_default(field: &str, value: &Value, ty: FieldType) -> Result<
     if non_finite_input(value, ty) {
         return Err(format!("field '{field}' requires a finite number"));
     }
+    // A decimal goes into a text field in full, not as the six places it's shown to.
+    if ty == FieldType::Text && matches!(value, Value::Float(_)) {
+        return Ok(Value::Text(value.to_file_text()));
+    }
     let coerced = coerce(value.clone(), ty);
     if coerced.is_null() && !value.asks_null() {
         return Err(format!("field '{field}': '{value}' isn't a {} value", ty.label()));
@@ -1008,6 +1012,8 @@ fn typed(raw: Json, ty: FieldType) -> Result<Value, String> {
             }
             v => v,
         },
+        // A number goes into a text field in full, not as the six decimals it's shown to.
+        Json::Number(n) if ty == FieldType::Text => Value::Text(Value::from_json(&Json::Number(n)).to_file_text()),
         // So is any other value a date or yes/no field can't hold (`20260305`, `0.5`).
         other => match coerce(Value::from_json(&other), ty) {
             Value::Null if (ty.is_temporal() || ty == FieldType::Boolean) && !other.is_null() => {
