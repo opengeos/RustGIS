@@ -1907,8 +1907,9 @@ bracket: no letter, digit or `_` against the match); the search is plain text, w
 arrow at the bar's left (or Ctrl+H, ⌥⌘F on macOS) shows a second field, for what to replace with,
 and two buttons: Replace changes the current match and Replace All every one, each as one step of
 the box's Undo (Ctrl+Z); both are off while a run is under way, and Replace All is off too when
-there are more matches than the bar keeps (10,000). Escape in its fields, or the close button,
-closes the bar and leaves the current match selected in the box.
+there are more matches than the bar keeps (10,000); one that would make the script larger than 1 MB
+replaces nothing and says so in Messages. Escape in its fields, or the close button, closes the bar
+and leaves the current match selected in the box.
 
 ## ModelBuilder
 

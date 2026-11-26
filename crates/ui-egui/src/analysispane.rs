@@ -3501,6 +3501,31 @@ mod tests {
         assert!(focused(&h, box_id), "Close");
     }
 
+    /// Replace All that would make the script larger than a script file may be is refused, and
+    /// said (#2996): each run could add up to the matches times the replacement.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn replace_all_does_not_grow_the_script_past_its_limit() {
+        use egui::{Event, Key, Modifiers};
+        use egui_kittest::kittest::Queryable;
+        let script = "a ".repeat(6000);
+        let mut h = find_harness(&script);
+        let box_id = egui::Id::unique("script_text");
+        h.key_press_modifiers(Modifiers::COMMAND, Key::H);
+        h.run();
+        h.event(Event::Text("a".into()));
+        h.run();
+        h.ctx.memory_mut(|m| m.request_focus(box_id.with("find_replace")));
+        h.run();
+        h.event(Event::Text("b".repeat(200)));
+        h.run();
+        h.get_by_label("Replace All").click();
+        h.run();
+        assert!(h.state().workflow.script == script, "6000 × 200 characters is over 1 MB");
+        let said = "Replace All would make the script larger than 1 MB: nothing was replaced";
+        assert!(h.state().session.notices.iter().any(|n| n.text == said), "{:?}", h.state().session.notices);
+    }
+
     /// The Replace field's note is shown with its row, not while the row is hidden (#2996).
     #[cfg(not(target_arch = "wasm32"))]
     #[test]

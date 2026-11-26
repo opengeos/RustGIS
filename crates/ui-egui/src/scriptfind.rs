@@ -124,8 +124,8 @@ struct Field {
 
 impl Field {
     /// After any write of the text (typed, pasted or filled from a selection): cut to what the field
-    /// takes, keeping how many characters that left out. Given back when it is news, so a key held
-    /// past the limit is said once, not once a keystroke.
+    /// takes, keeping how many characters that left out. Given back as the field goes from fitting
+    /// to cut, for one notice, not one a keystroke while it stays over; the bar's note counts on.
     fn written(&mut self) -> Option<usize> {
         let before = self.left_out;
         self.left_out = 0;
@@ -133,7 +133,7 @@ impl Field {
             self.left_out = self.text[end..].chars().count();
             self.text.truncate(end);
         }
-        Some(self.left_out).filter(|n| *n > 0 && *n != before)
+        (before == 0 && self.left_out > 0).then_some(self.left_out)
     }
 }
 
@@ -258,7 +258,6 @@ fn chords(mac: bool) -> [Chord; 4] {
     [
         chord(true, false, false, Key::F, Does::Find),
         replace,
-        // Shift first: the plain one doesn't take it.
         chord(false, false, true, Key::F3, Does::Previous),
         chord(false, false, false, Key::F3, Does::Next),
     ]
@@ -395,7 +394,8 @@ enum Toggle {
 /// field with Match case inside it, the count and the previous, next and close buttons; and,
 /// under the arrow at its left, a field for what to replace with and the Replace and Replace All
 /// buttons. Does what it's asked: a replace changes `script` as one undo step of the box, which
-/// `running` forbids. Returns what a field left out of a longer text, for Messages.
+/// `running` forbids. Returns what to say in Messages: what a field left out of a longer text, or
+/// why a replace was refused.
 pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: bool, area: egui::Rect, bar: &mut Bar) -> Vec<String> {
     use egui::text::{CCursor, CCursorRange};
     let (query_id, replace_id) = (box_id.with("find_query"), box_id.with("find_replace"));
@@ -554,7 +554,7 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
                     });
                 }
                 // Each note with its field: the Replace one only while its row shows.
-                let replace = Some(&bar.replace).filter(|_| bar.replace_open);
+                let replace = bar.replace_open.then_some(&bar.replace);
                 let notes = [(Which::Find, Some(&bar.query)), (Which::Replace, replace)];
                 for (which, field) in notes {
                     let Some(n) = field.map(|f| f.left_out).filter(|n| *n > 0) else { continue };
@@ -589,11 +589,18 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
         }
         Some(Action::ReplaceAll) => {
             if !running && !bar.found.capped && !bar.found.ranges.is_empty() {
-                crate::analysispane::keep_for_undo_of(ui.ctx(), box_id, script);
-                *script = replace_all(script, &bar.found, &bar.replace.text);
-                crate::widgets::set_cursor_range(ui.ctx(), box_id, CCursorRange::one(CCursor::new(0)));
-                bar.anchor = 0;
-                bar.reseek = true;
+                let new = replace_all(script, &bar.found, &bar.replace.text);
+                // It may not grow the script past what a script file may be: a run adds up to the
+                // matches times the replacement. One already larger may still shrink.
+                if new.len() > crate::SCRIPT_FILE_MAX_BYTES && new.len() > script.len() {
+                    said.push(tl!("Replace All would make the script larger than 1 MB: nothing was replaced").to_string());
+                } else {
+                    crate::analysispane::keep_for_undo_of(ui.ctx(), box_id, script);
+                    *script = new;
+                    crate::widgets::set_cursor_range(ui.ctx(), box_id, CCursorRange::one(CCursor::new(0)));
+                    bar.anchor = 0;
+                    bar.reseek = true;
+                }
             }
         }
         Some(Action::Close) => {
@@ -692,17 +699,19 @@ mod tests {
 
     #[test]
     fn a_field_cuts_what_it_cannot_take_and_says_it_once() {
-        let mut field = Field::default();
-        field.text = "é".repeat(FIELD_MAX);
+        let mut field = Field { text: "é".repeat(FIELD_MAX), ..Field::default() };
         assert_eq!((field.written(), field.left_out), (None, 0), "what fits says nothing");
         field.text.push_str("ab");
         assert_eq!((field.written(), field.text.chars().count()), (Some(2), FIELD_MAX));
         field.text.push_str("cd");
         assert_eq!((field.written(), field.left_out), (None, 2), "held past the limit: said once");
         field.text.push('c');
-        assert_eq!(field.written(), Some(1), "another count is news");
+        assert_eq!((field.written(), field.left_out), (None, 1), "still cut: the note counts, Messages was told");
         field.text.pop();
         assert_eq!((field.written(), field.left_out), (None, 0), "a change that fits takes the note away");
+        // The pop left room for one: two more are over again by one.
+        field.text.push_str("cd");
+        assert_eq!(field.written(), Some(1), "cut again after fitting: said again");
     }
 
     #[test]
