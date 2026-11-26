@@ -40116,6 +40116,26 @@ fn renaming_a_layer_renames_it_in_a_presentation_map_page_title() {
     assert_eq!(titles, ["World Atlas", "{count:Nations} countries", "{count:Countries} on a blank page"]);
 }
 
+/// The map of a layout's first frame decides its texts' figures (#2853), so a map deleted that a
+/// layout's first frame shows says what its texts lose, as it does for `{map}`; a map no first
+/// frame shows says nothing.
+#[test]
+fn layout_text_statistics_are_said_when_the_first_frames_map_is_deleted() {
+    let mut s = world();
+    s.run("map.new", &json!({"name": "Detail"})).unwrap();
+    s.run("map.new", &json!({"name": "Spare"})).unwrap();
+    s.run("map.activate", &json!({"name": "Detail"})).unwrap();
+    s.run("layout.new", &json!({"name": "L"})).unwrap();
+    s.run("layout.addElement", &json!({"kind": "text", "text": "{count:Countries} countries", "x": 10, "y": 10})).unwrap();
+    let said = |s: &mut Session, name: &str| {
+        let mark = s.notice_mark();
+        s.run("map.remove", &json!({"name": name})).unwrap();
+        s.notices_since(mark).iter().map(|n| n.text.as_str().to_string()).filter(|t| t.contains("shows as written")).collect::<Vec<_>>()
+    };
+    assert_eq!(said(&mut s, "Spare"), Vec::<String>::new());
+    assert_eq!(said(&mut s, "Detail"), ["{count:Countries} shows as written: the map of the layout's first frame is not in the project"]);
+}
+
 #[test]
 fn locked_layout_elements_take_no_change_until_unlocked() {
     use rustgis_map::layout::ElementKind;

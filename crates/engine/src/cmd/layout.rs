@@ -134,10 +134,8 @@ pub fn commands() -> Vec<C> {
         ),
         C::new("layout.removeElement", "Delete Element", "Publish › Element", |s, p| {
             let id = element_id(p)?;
-            let li = index(s, p)?;
             let named = maps_layouts_name(&s.project);
             let l = active(s, p)?;
-            let first = l.first_frame();
             // A frame's surrounds go with it: a locked one keeps the frame too.
             if let Some(locked) = l.locked_in_removal(id).map(|e| e.id) {
                 unlocked(l, locked)?;
@@ -145,7 +143,6 @@ pub fn commands() -> Vec<C> {
             if !l.remove(id) {
                 return Err(format!("no element {id}"));
             }
-            say_first_frame_change(s, li, first);
             say_map_texts(s, &named);
             Ok(Value::Null)
         }).inputs(object_inputs).roles(&[]).effects(crate::policy::Effects::NONE)
@@ -230,7 +227,6 @@ fn element_id(p: &Value) -> Result<u32, String> {
 fn arrange(s: &mut Session, p: &Value) -> CmdResult {
     let id = element_id(p)?;
     let to = ps(p, "to").and_then(Arrange::from_name).ok_or("to is front, forward, backward or back")?;
-    let li = index(s, p)?;
     let named = maps_layouts_name(&s.project);
     let l = active(s, p)?;
     if l.element(id).is_none() {
@@ -238,14 +234,12 @@ fn arrange(s: &mut Session, p: &Value) -> CmdResult {
     }
     unlocked(l, id)?;
     let before = l.draw_order(id).map(|(i, _)| i);
-    let first = l.first_frame();
     let index = l.arrange(id, to).ok_or_else(|| format!("no element {id}"))?;
     let of = l.elements.len();
     // A move that changes nothing (front for the element already on top) is no step to undo.
     if before == Some(index) {
         s.request_only = true;
     }
-    say_first_frame_change(s, li, first);
     // The first map frame is the lowest: sending a frame back, or another forward, can change it.
     say_map_texts(s, &named);
     Ok(json!({"element": id, "index": index, "of": of}))
@@ -3159,8 +3153,14 @@ pub(crate) fn maps_layouts_name(project: &crate::project::Project) -> Vec<Option
 pub(crate) fn say_map_texts(s: &mut Session, before: &[Option<String>]) {
     let after = maps_layouts_name(&s.project);
     let (mut empty, mut moved) = (Vec::new(), Vec::new());
-    for (l, (was, now)) in s.project.layouts.iter().zip(before.iter().zip(&after)) {
+    // The layouts whose first frame shows another map, or none: their texts' layer statistics
+    // (#2853) are read from it.
+    let mut figures = Vec::new();
+    for (i, (l, (was, now))) in s.project.layouts.iter().zip(before.iter().zip(&after)).enumerate() {
         let Some(was) = was else { continue };
+        if now.as_ref().is_none_or(|now| !now.eq_ignore_ascii_case(was)) {
+            figures.push(i);
+        }
         let n = l.elements.iter().filter(|e| matches!(&e.kind, ElementKind::Text { text, .. } if text.contains("{map}"))).count();
         match now {
             _ if n == 0 => {}
@@ -3199,6 +3199,9 @@ pub(crate) fn say_map_texts(s: &mut Session, before: &[Option<String>]) {
     said.extend(notice);
     for text in said {
         s.notify(text, false);
+    }
+    for i in figures {
+        say_layout_text_statistics(s, i);
     }
 }
 
@@ -3737,14 +3740,6 @@ fn first_frame_map(s: &Session, li: usize) -> Option<String> {
     match &l.element(l.first_frame()?)?.kind {
         ElementKind::MapFrame { map, .. } => Some(map.clone()),
         _ => None,
-    }
-}
-
-/// What the layout `li`'s texts lose when another frame is the first (#2853), the one whose map they
-/// read their figures from: [`say_layout_text_statistics`] when it isn't `before`.
-fn say_first_frame_change(s: &mut Session, li: usize, before: Option<u32>) {
-    if s.project.layouts.get(li).is_some_and(|l| l.first_frame() != before) {
-        say_layout_text_statistics(s, li);
     }
 }
 
