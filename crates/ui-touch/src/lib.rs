@@ -502,11 +502,17 @@ fn views(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         return;
     }
     let (project, layout) = (&app.session.project, app.session.active_layout);
+    // ModelBuilder, when it is up, covers every view: none is in view, so any chip leaves it.
+    let covered = app.mb.shown();
     // Each view's name, whether it is a layout, and whether it is in view. Read first: a tap
     // runs a command, which changes them.
-    let mut views: Vec<(String, bool, bool)> =
-        project.maps.iter().enumerate().map(|(i, m)| (m.name.clone(), false, layout.is_none() && i == project.active_map)).collect();
-    views.extend(project.layouts.iter().enumerate().map(|(i, l)| (l.name.clone(), true, layout == Some(i))));
+    let mut views: Vec<(String, bool, bool)> = project
+        .maps
+        .iter()
+        .enumerate()
+        .map(|(i, m)| (m.name.clone(), false, !covered && layout.is_none() && i == project.active_map))
+        .collect();
+    views.extend(project.layouts.iter().enumerate().map(|(i, l)| (l.name.clone(), true, !covered && layout == Some(i))));
     egui::ScrollArea::horizontal().id_salt("touch_views").show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.set_min_height(TARGET);
@@ -516,6 +522,8 @@ fn views(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 if !ui.add(chip).clicked() || on {
                     continue;
                 }
+                // As the desktop's tab row does: the view chosen comes out from under ModelBuilder.
+                app.mb.active = false;
                 if is_layout {
                     run(app, "layout.activate", json!({"name": name}));
                 } else {
@@ -2316,6 +2324,32 @@ mod tests {
             held.touch(&[chip]);
             assert_eq!((held.app.session.project.active_map, held.app.session.active_layout), (map, layout), "{name}");
             assert_eq!(sheet(&held.ctx), Sheet::Layers);
+        }
+        // Over ModelBuilder, the map in view's own chip brings it back out.
+        run(&mut held.app, "ui.modelBuilder", json!({}));
+        held.raise(Sheet::Layers, "Layers");
+        let chip = held.find("Second").unwrap().center();
+        held.touch(&[chip]);
+        assert!(!held.app.mb.shown(), "the map is in view again");
+        assert_eq!((held.app.session.project.active_map, held.app.session.active_layout), (1, None));
+    }
+
+    /// Toasts stand above the map's foot, as many of them as fit there, never over the sheet.
+    #[test]
+    fn toasts_stand_over_the_map_and_off_the_sheet() {
+        let mut held = Held::new();
+        held.raise(Sheet::Layers, "Layers");
+        for i in 0..3 {
+            held.app.session.notify(format!("Toast {i}"), false);
+        }
+        // A toast's first frame measures it, unseen.
+        held.frame(Vec::new());
+        let words = held.frame(Vec::new());
+        let foot = held.app.map.view_rect.unwrap().0.max.y;
+        let toasts: Vec<Rect> = words.iter().filter(|(text, _)| text.starts_with("Toast ")).map(|(_, at)| *at).collect();
+        assert!(!toasts.is_empty(), "the newest is shown");
+        for at in toasts {
+            assert!(at.max.y <= foot, "{at:?} is over the sheet, below {foot}");
         }
     }
 

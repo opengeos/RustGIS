@@ -770,14 +770,16 @@ fn downloads_status(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         [] => {}
         [one] => download_row(ui, t, size, one, &mut cancel),
         many => {
-            // A finger opens the menu too.
-            if size.finger {
-                ui.spacing_mut().interact_size.y = FINGER;
-            }
-            ui.menu_button(crate::i18n::fmt("{n} downloads", &[("n", &many.len().to_string())]), |ui| {
-                for d in many {
-                    ui.horizontal(|ui| download_row(ui, t, size, d, &mut cancel));
+            ui.scope(|ui| {
+                // A finger opens the menu too; what the strip draws after it keeps its own size.
+                if size.finger {
+                    ui.spacing_mut().interact_size.y = FINGER;
                 }
+                ui.menu_button(crate::i18n::fmt("{n} downloads", &[("n", &many.len().to_string())]), |ui| {
+                    for d in many {
+                        ui.horizontal(|ui| download_row(ui, t, size, d, &mut cancel));
+                    }
+                });
             });
         }
     }
@@ -1806,11 +1808,13 @@ pub fn notices(app: &mut RustGisApp, ctx: &egui::Context) {
     ctx.request_repaint_after(std::time::Duration::from_millis(250));
     let screen = ctx.content_rect();
     // A shell with its own interface has its bars below the map, the work strip's Cancel among
-    // them: the toasts stand at the map's foot, clear of them. Where a tall sheet leaves too
-    // little map for three, they stand near the top.
-    let over_map = app.chrome.and(app.map.view_rect).map(|(map, _)| map.max.y.max(screen.min.y + 200.0));
-    let mut y = over_map.unwrap_or(screen.max.y) - 40.0;
-    for toast in app.map.toasts.iter_mut().rev().take(3) {
+    // them: the toasts stand at the map's foot, clear of them, as many of the last three as the
+    // map above it has room for (one at least, at the top, when a tall sheet leaves it none).
+    let over_map = app.chrome.and(app.map.view_rect).map(|(map, _)| map.max.y);
+    let foot = over_map.unwrap_or(screen.max.y).max(screen.min.y + 84.0);
+    let room = over_map.map_or(3, |_| (((foot - screen.min.y - 84.0) / 52.0).floor() as usize + 1).min(3));
+    let mut y = foot - 40.0;
+    for toast in app.map.toasts.iter_mut().rev().take(room) {
         // Keyed by the notice, not the slot, so a selection stays with its text as toasts come and go.
         let shown = egui::Area::new(egui::Id::unique(("toast", toast.id)))
             .fixed_pos(pos2(screen.max.x - 380.0, y - 44.0))
