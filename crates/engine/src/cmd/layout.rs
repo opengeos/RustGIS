@@ -1420,10 +1420,11 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
             FontFamily::Serif => crate::render::report::serif_width_mm(&drawn(x), pt as f32, bold),
             FontFamily::Sans => crate::render::report::width_mm(&drawn(x), pt as f32, bold),
         };
-        // A line with a token that is filled in only when the page is drawn (`{map}`, a layer
-        // statistic whose layer may have a space in its name, #2853), too wide for its box, is kept
-        // whole and wrapped by the page, so no token is broken at a space.
-        if t.lines().any(|l| (l.contains("{map}") || !rustgis_map::layout::stat_tokens(l).is_empty()) && width(l) > w) {
+        // A line with `{map}`, too wide for its box with the name in it, is kept whole and wrapped by
+        // the page, so it still follows a rename of the map. So is any line with a layer statistic
+        // (#2853): its figure is as wide as its data makes it, which is only known when the page is
+        // drawn, and a token whose layer has a space in its name must not be broken at it.
+        if t.lines().any(|l| (l.contains("{map}") && width(l) > w) || !rustgis_map::layout::stat_tokens(l).is_empty()) {
             let lines = crate::render::layout::wrapped_lines(&drawn(&t), w, pt, bold, font, align);
             Broken { text: t, lines, wrap: true }
         } else {

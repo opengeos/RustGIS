@@ -40167,6 +40167,24 @@ fn a_publications_wrapped_text_keeps_its_statistic_tokens_whole() {
     assert!(wrap, "the page wraps it when it draws");
 }
 
+/// A figure's width is only known when the page is drawn, so a publication text with a statistic is
+/// always kept whole and wrapped by the page, even one that fits its box as measured (#2853).
+#[test]
+fn a_publications_text_with_a_statistic_is_wrapped_by_the_page() {
+    use rustgis_map::layout::ElementKind;
+    let mut s = world();
+    let extent = json!([-46.8, -11.6, -38.5, -2.2]);
+    s.run("layout.publication", &json!({"profile": "a4-portrait", "extent": extent, "title": "Area {sum:Countries:pop_est}"})).unwrap();
+    let li = s.active_layout.unwrap();
+    let Some(ElementKind::Text { text, wrap, .. }) =
+        s.project.layouts[li].elements.iter().find(|e| e.name == "Title").map(|e| e.kind.clone())
+    else {
+        panic!("a title text")
+    };
+    assert_eq!(text, "Area {sum:Countries:pop_est}");
+    assert!(wrap, "its figure is as wide as its data makes it, so the page wraps it");
+}
+
 /// A publication measures a text as it is drawn (#2853): a layer statistic token narrower than a
 /// typical figure is measured as one, as `{scale}` and `{date}` are; a longer one, and any other
 /// text, as it is written.
