@@ -3995,11 +3995,16 @@ fn read_zip_layers_budget(file_name: &str, bytes: &[u8], crs: Option<Crs>, budge
             // added by itself, within the allowance.
             // A KML's ground overlays are pictures drawn beside its file; from a zip, they aren't,
             // even in a document of overlays only, which gives no layer.
-            if matches!(ext_of(&n).as_str(), "kml" | "kmz")
-                && let Ok((found, undrawn, over_budget)) = crate::kml::ground_overlays(leaf, &b)
-                && found.len() + undrawn + over_budget > 0
-            {
-                overlays_left.push((n.clone(), found.len() + undrawn + over_budget));
+            if matches!(ext_of(&n).as_str(), "kml" | "kmz") {
+                match crate::kml::ground_overlays(leaf, &b) {
+                    Ok((found, undrawn, over_budget)) if found.len() + undrawn + over_budget > 0 => {
+                        overlays_left.push((n.clone(), found.len() + undrawn + over_budget));
+                    }
+                    Ok(_) => {}
+                    // Overlays that can't even be counted (a KMZ entry too large to expand) are
+                    // said too.
+                    Err(e) => skipped.push(format!("{n}'s ground overlays, which couldn't be counted ({e})")),
+                }
             }
             read_layers(leaf, &b).and_then(|layers| {
                 // A KML's styles stay with its layers.
