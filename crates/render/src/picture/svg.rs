@@ -32,8 +32,9 @@ pub(super) enum Refusal {
     NotSvg,
     /// It has more to draw than the cap given, or more elements than [`ELEMENTS`].
     TooMuch,
-    /// Its style sheets and `style` attributes come to more than [`STYLE_UNITS`], or the attributes
-    /// of its elements to more than [`ATTRIBUTE_PAIRS`]: more to read than the readers do in time.
+    /// Its style sheets and `style` attributes come to more than [`STYLE_UNITS`], the attributes
+    /// of its elements to more than [`ATTRIBUTE_PAIRS`], or an entity of it holds a tag, whose
+    /// expansion no count sees: more to read than the readers do in time.
     TooMuchToRead,
     /// It has more XML nodes than [`XML_NODES`], or nests deeper than [`DEPTH`].
     TooNested,
@@ -108,7 +109,7 @@ pub(super) fn read(text: &str, cap: u64, matched: &mut u64) -> Result<usvg::Tree
     // An entity of a tag expands to tags `attribute_pairs` doesn't see, once for each use (a text
     // entity, as in an Illustrator file's `xmlns` values, is no way round it).
     if rustgis_data::xml::entity_with_markup(text.as_bytes()) {
-        return Err(Refusal::NotSvg);
+        return Err(Refusal::TooMuchToRead);
     }
     // Before roxmltree checks each attribute of a tag against those before it.
     if attribute_pairs(text) > ATTRIBUTE_PAIRS {
@@ -358,15 +359,18 @@ impl simplecss::Element for Stepped<'_, '_> {
 /// declarations (the `;` and `}` that end them, more than they are, never fewer) times its length,
 /// all added up.
 fn style_units(doc: &roxmltree::Document) -> u64 {
-    let mut units = 0u64;
-    for n in doc.descendants() {
-        if n.has_tag_name("style") {
+    doc.descendants().map(style_attribute_units).fold(sheet_units(doc), u64::saturating_add)
+}
+
+/// What reading `doc`'s style sheets comes to, in [`STYLE_UNITS`].
+fn sheet_units(doc: &roxmltree::Document) -> u64 {
+    doc.descendants()
+        .filter(|n| n.has_tag_name("style"))
+        .map(|n| {
             let sheet = sheet_of(n);
-            units = units.saturating_add(declarations(&sheet).saturating_mul(sheet.len() as u64));
-        }
-        units = units.saturating_add(style_attribute_units(n));
-    }
-    units
+            (declarations(&sheet) + 1).saturating_mul(sheet.len() as u64)
+        })
+        .fold(0, u64::saturating_add)
 }
 
 /// The declarations of CSS `text`: the `;` and `}` that end them, more than they are, never fewer.
@@ -448,6 +452,7 @@ fn elements(
         deep: false,
         run_capped: false,
         unread: false,
+        sheet_units: sheet_units(doc),
     };
     let counted = match count_all(doc, &mut counter) {
         // Past the elements written out it is too much for itself, which is known for nothing.
@@ -531,6 +536,8 @@ struct Counter<'a, 's> {
     run_capped: bool,
     /// Whether a count stopped for `style` attributes past [`STYLE_UNITS`] ([`Refusal::TooMuchToRead`]).
     unread: bool,
+    /// What the style sheets come to ([`sheet_units`]), which the copies' `style`s add to.
+    sheet_units: u64,
 }
 
 impl<'a> Counter<'a, '_> {
@@ -581,7 +588,7 @@ impl<'a> Counter<'a, '_> {
             total.height = total.height.max(c.height + 1);
             total.steps = total.steps.saturating_add(c.steps);
             total.style = total.style.saturating_add(c.style);
-            if total.style > STYLE_UNITS {
+            if total.style.saturating_add(self.sheet_units) > STYLE_UNITS {
                 self.unread = true;
                 return None;
             }
@@ -1484,6 +1491,17 @@ mod tests {
         };
         let started = std::time::Instant::now();
         assert_eq!(read(&svg(&group(3000))).err(), Some(Refusal::TooMuchToRead), "in {:?}", started.elapsed());
+        // The sheets and the copies' `style`s are one bound: each under it, together past it.
+        let sheet = "rect{fill:red}".repeat(600);
+        let both = |n: usize| {
+            format!(
+                r##"<style>{sheet}</style><defs><g id="a" style="{}"><rect width="1" height="1"/></g></defs>{}"##,
+                "fill:red;".repeat(300),
+                uses(n)
+            )
+        };
+        assert!(read(&svg(&both(1))).is_ok());
+        assert_eq!(read(&svg(&both(18))).err(), Some(Refusal::TooMuchToRead));
         // An icon's own: a few declarations on a group, used a hundred times.
         let icon = format!(r##"<defs><g id="a" style="fill: red; stroke: blue"><rect width="1" height="1"/></g></defs>{}"##, uses(100));
         assert!(read(&svg(&icon)).is_ok());
@@ -1517,7 +1535,7 @@ mod tests {
         let text = format!(
             r#"<?xml version="1.0"?><!DOCTYPE svg [<!ENTITY t "<rect width='1' height='1'{attributes}/>">]><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">{uses}</svg>"#
         );
-        assert_eq!(read(&text).err(), Some(Refusal::NotSvg));
+        assert_eq!(read(&text).err(), Some(Refusal::TooMuchToRead));
         let of_text = r#"<?xml version="1.0"?><!DOCTYPE svg [<!ENTITY ns_svg "http://www.w3.org/2000/svg"><!ENTITY w '2'>]><svg xmlns="&ns_svg;" viewBox="0 0 10 10"><rect width="&w;" height="&w;"/></svg>"#;
         assert!(read(of_text).is_ok(), "an entity of text is read");
     }
@@ -1556,6 +1574,7 @@ mod tests {
                 deep: false,
                 run_capped: false,
                 unread: false,
+                sheet_units: 0,
             };
             assert!(counter.count(doc.root_element(), 0).is_none());
             assert!(counter.matched <= CSS_STEPS + 1, "{} steps", counter.matched);
