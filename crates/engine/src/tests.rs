@@ -40114,6 +40114,16 @@ fn renaming_a_layer_renames_it_in_a_presentation_map_page_title() {
     let titles: Vec<String> = s.project.presentations[0].pages.iter().map(|p| p.title.clone()).collect();
     // The first page is the title page a new presentation starts with.
     assert_eq!(titles, ["World Atlas", "{count:Nations} countries", "{count:Countries} on a blank page"]);
+    // A title that the new name would take past what a title holds keeps the old name.
+    let long = format!("{}{{count:Nations}}", "x".repeat(480));
+    s.run("presentation.mapPage", &json!({"title": long})).unwrap();
+    let mark = s.notice_mark();
+    s.run("layer.rename", &json!({"layer": "Nations", "name": "The Nations of the whole wide world"})).unwrap();
+    let titles: Vec<String> = s.project.presentations[0].pages.iter().map(|p| p.title.clone()).collect();
+    assert_eq!(titles[1], "{count:The Nations of the whole wide world} countries");
+    assert_eq!(titles[3], long, "past the limit it keeps the old name");
+    let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.as_str().to_string()).collect();
+    assert!(said.iter().any(|n| n.contains("1 presentation title(s) keep the old layer name") && n.contains("500")), "{said:?}");
 }
 
 /// The map of a layout's first frame decides its texts' figures (#2853), so a map deleted that a

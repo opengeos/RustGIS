@@ -7303,6 +7303,7 @@ fn references_follow_layer(s: &mut Session, old: &str, new: &str) {
     }
     // A presentation's map page draws its title over its own map, where a layer statistic is filled
     // in (#2853).
+    let mut titles_too_long = 0usize;
     for page in s.project.presentations.iter_mut().flat_map(|p| &mut p.pages) {
         if matches!(&page.kind, rustgis_map::presentation::PageKind::Map { map, .. } if map.eq_ignore_ascii_case(&map_name)) {
             let renamed = rustgis_map::layout::rename_stat_layers(&page.title, |layer| {
@@ -7310,8 +7311,10 @@ fn references_follow_layer(s: &mut Session, old: &str, new: &str) {
                 replace(&mut name);
                 (name != layer).then_some(name)
             });
-            if let Some(renamed) = renamed {
-                page.title = renamed;
+            match renamed {
+                Some(renamed) if renamed.chars().count() <= rustgis_map::presentation::MAX_TITLE => page.title = renamed,
+                Some(_) => titles_too_long += 1,
+                None => {}
             }
         }
     }
@@ -7354,6 +7357,16 @@ fn references_follow_layer(s: &mut Session, old: &str, new: &str) {
         for image in &mut workspace.images {
             project_reference(image);
         }
+    }
+    if titles_too_long > 0 {
+        s.notify_text(crate::notice_text::NoticeText::format(
+            "{count} presentation title(s) keep the old layer name '{old}' in their statistics: the new name would take them past the {limit} characters a title holds",
+            [
+                ("count", titles_too_long.to_string().into()),
+                ("old", old.to_string().into()),
+                ("limit", rustgis_map::presentation::MAX_TITLE.to_string().into()),
+            ],
+        ), false);
     }
     if texts_too_long > 0 {
         s.notify_text(crate::notice_text::NoticeText::format(
