@@ -674,7 +674,7 @@ impl StripSize {
 }
 
 /// The height of what a finger taps, in points (Android's guidance is 48).
-const FINGER: f32 = 48.0;
+pub(crate) const FINGER: f32 = 48.0;
 /// The width of a finger's strip's Cancel.
 const FINGER_CANCEL: f32 = 88.0;
 

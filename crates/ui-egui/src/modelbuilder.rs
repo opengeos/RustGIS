@@ -663,9 +663,11 @@ fn toolbar(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, problems: &[model::Pro
     ui.horizontal_centered(|ui| {
         // A shell with its own interface has no view tabs, and on a phone the buttons at the far
         // end are past the window's edge: the way back to the map comes first.
-        if app.chrome.is_some() && ui.add(egui::Button::new(tl!("Back to the map")).min_size(vec2(0.0, 30.0))).clicked() {
+        let back = egui::Button::new(tl!("Back to the map")).min_size(vec2(0.0, crate::chrome::FINGER));
+        if app.chrome.is_some() && ui.add(back).clicked() {
             app.mb.active = false;
-            // Opened over a layout, the layout would show in its place.
+            // Opened over a layout, the layout would show in its place. A close that fails is
+            // said by `run`, as any command's failure is.
             if app.session.active_layout.is_some() {
                 let _ = app.run("layout.close", serde_json::Value::Null);
             }
