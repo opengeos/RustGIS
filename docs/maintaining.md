@@ -307,7 +307,10 @@ Projects with a layout text that holds a layer statistic (`{count:Layer}`, `{sum
 refuses them by name instead of printing the token as written. A saved `layout.addElement` or
 `layout.update` whose `text` holds one requires it too, as does a saved `layout.publication` whose
 `title`, `subtitle`, `note`, `sources`, `reference`, `author` or `headings` do, and a saved
-`layout.import` whose `text` has such a text; other braces (`{scale}`, `{foo}`, `{count:}`) need nothing.
+`layout.import` whose `text` has such a text. A presentation's map page draws its title over its map frame, where a
+statistic is filled in, so a saved presentation with one in a map page's title, or a saved
+`presentation.mapPage` or `presentation.updatePage` whose `title` holds one, requires it too; other
+braces (`{scale}`, `{foo}`, `{count:}`) need nothing.
 
 Projects, map files and layer files with a layer or table held in a coordinate system of its own
 (`Dataset::held_in`: a file's system, kept since #2580) save its features in that system, exactly,

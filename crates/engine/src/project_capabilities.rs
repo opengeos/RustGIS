@@ -104,6 +104,16 @@ impl Project {
                 required.push(name);
             }
         }
+        // A presentation's map page draws its title over its map frame, where a layer statistic is
+        // filled in (#2853); the title of a page with no map frame is drawn as written.
+        if !required.contains(&"layout-text-statistics")
+            && self.presentations.iter().flat_map(|p| &p.pages).any(|page| {
+                matches!(page.kind, rustgis_map::presentation::PageKind::Map { .. })
+                    && !rustgis_map::layout::stat_tokens(&page.title).is_empty()
+            })
+        {
+            required.push("layout-text-statistics");
+        }
         // A coordinate system whose PROJ definition, which an older reader reads, doesn't place
         // points as its WKT does (angles in grads, a datum transformation the definition can't
         // hold).
@@ -241,6 +251,9 @@ fn command_uses_text_statistics(id: &str, params: &Value) -> bool {
                 || joined(&["sources", "reference"], "\n")
                 || params.get("headings").is_some_and(holds_statistic)
         }
+        // A map page's title, which the page draws over its map frame; `updatePage` doesn't say the
+        // kind of the page it changes, so a title with a token counts.
+        "presentation.mapPage" | "presentation.updatePage" => params.get("title").is_some_and(holds_statistic),
         "layout.import" => imported_layout_uses(params, &["{count:", "{sum:", "{mean:", "{min:", "{max:"], text_statistics),
         "script.run" => params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, command_uses_text_statistics)),
         _ => false,
@@ -2634,6 +2647,42 @@ mod tests {
                 let saved = serde_json::to_value(Project::from_json(&document.to_string()).unwrap()).unwrap();
                 let expected = if required { json!(["layout-text-statistics"]) } else { Value::Null };
                 assert_eq!(saved["requires"], expected, "{id} {params}");
+            }
+        }
+    }
+
+    /// A presentation's map page draws its title over its map frame, where a layer statistic is
+    /// filled in (#2853), so it is required where it is saved, in a project or a command; the title
+    /// of a page with no map frame, or without a token, needs nothing.
+    #[test]
+    fn text_statistics_capability_follows_presentation_map_pages() {
+        let map_page =
+            |title: &str| json!({"title": title, "kind": {"type": "map", "map": "World", "center": {"x": 0, "y": 0}, "widthM": 1000}});
+        let blank_page = |title: &str| json!({"title": title, "kind": {"type": "blank", "text": "", "background": [255, 255, 255, 255]}});
+        let base = serde_json::to_value(Project::default()).unwrap();
+        for (page, required) in [(map_page("{count:Sites}"), true), (map_page("Sites"), false), (blank_page("{count:Sites}"), false)] {
+            let mut document = base.clone();
+            document["presentations"] = json!([{"name": "P", "width": 297, "height": 210, "pages": [page.clone()]}]);
+            let saved = serde_json::to_value(Project::from_json(&document.to_string()).unwrap()).unwrap();
+            let expected = if required { json!(["layout-text-statistics"]) } else { Value::Null };
+            assert_eq!(saved.get("requires").cloned().unwrap_or(Value::Null), expected, "{page}");
+        }
+        for (id, params, required) in [
+            ("presentation.mapPage", json!({"title": "{count:Sites}"}), true),
+            ("presentation.mapPage", json!({"title": "Sites"}), false),
+            ("presentation.updatePage", json!({"page": 0, "title": "{sum:Sites:visits}"}), true),
+            ("presentation.blankPage", json!({"title": "{count:Sites}"}), false),
+        ] {
+            let script = format!("{id} {params}");
+            for value in [
+                json!([{"name": "Task", "steps": [{"title": "Page", "command": id, "params": params}]}]),
+                json!([{"name": "Script", "steps": [{"title": "Page", "command": "script.run", "params": {"script": script}}]}]),
+            ] {
+                let mut document = base.clone();
+                document["tasks"] = value;
+                let saved = serde_json::to_value(Project::from_json(&document.to_string()).unwrap()).unwrap();
+                let expected = if required { json!(["layout-text-statistics"]) } else { Value::Null };
+                assert_eq!(saved.get("requires").cloned().unwrap_or(Value::Null), expected, "{id} {params}");
             }
         }
     }
