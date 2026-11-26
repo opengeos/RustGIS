@@ -607,8 +607,8 @@ impl TextCase {
     pub fn label(self) -> &'static str {
         match self {
             TextCase::None | TextCase::Invalid => "As typed",
-            TextCase::Upper => "UPPER CASE",
-            TextCase::Lower => "lower case",
+            TextCase::Upper => "Upper case",
+            TextCase::Lower => "Lower case",
         }
     }
 
