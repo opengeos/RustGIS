@@ -2225,10 +2225,11 @@ fn inputs_in(
         let name = spec.map_or("The tool", |t| t.name);
         let n: usize = unplaced.iter().map(|(_, n)| n).sum();
         let layers = unplaced.iter().map(|(layer, n)| format!("'{layer}' ({n})")).collect::<Vec<_>>().join(", ");
-        said.push(rustgis_data::loss::Note::loss(
-            rustgis_data::loss::LossCode::DroppedGeometry,
-            format!("{name}: {n} feature(s) of {layers} have a place that can't be given in longitude/latitude, so the tool reads them without their geometry"),
-        ));
+        // Counted over each whole layer, before the run's rows are narrowed to a selection: some may
+        // be rows the tool doesn't read, so it isn't a coded loss.
+        said.push(rustgis_data::loss::Note::plain(format!(
+            "{name}: {n} feature(s) of {layers} have a place that can't be given in longitude/latitude, so the tool reads them without their geometry"
+        )));
     }
     if !bent.is_empty() {
         let name = spec.map_or("The tool", |t| t.name);

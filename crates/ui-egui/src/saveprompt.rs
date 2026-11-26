@@ -61,6 +61,8 @@ struct PendingSave {
     document: Option<String>,
     /// Whether that document is the one the project was opened from.
     opened_from: bool,
+    /// What the save loses of the project's constructions, said once it is written.
+    notes: Vec<rustgis_engine::data::loss::Note>,
 }
 
 /// The document the open project is written back to on Save, and whether it is the one the project
@@ -119,11 +121,9 @@ pub(crate) fn start_project_save(app: &mut RustGisApp, in_place: bool) -> Result
         project: app.session.file_identity(),
         document: target,
         opened_from,
+        notes,
     });
     report.notify(&mut app.session);
-    for note in notes {
-        app.session.say(note);
-    }
     Ok(())
 }
 
@@ -158,6 +158,10 @@ impl RustGisApp {
             }
         }
         let Some(saved) = pending else { return };
+        // Written: what it lost of the constructions is said now, and only now.
+        for note in saved.notes {
+            self.session.say(note);
+        }
         // Saved through the picker: Save writes back to the document it wrote from now on, or
         // asks again where the phone can't write it back; never to the one before.
         // A write-back that reports its document again (iOS made its bookmark again, the file having

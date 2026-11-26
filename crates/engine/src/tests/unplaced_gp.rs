@@ -68,8 +68,15 @@ fn run(s: &mut Session, cmd: &str, p: serde_json::Value) -> (serde_json::Value, 
     let mark = s.notice_mark();
     let out = s.run(cmd, &p).unwrap_or_else(|e| panic!("{cmd}: {e}"));
     let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).filter(|t| t.contains("can't be given in")).collect();
-    // Each such notice says a loss, with its code.
-    assert!(s.notices_since(mark).iter().filter(|n| n.text.contains("can't be given in")).all(|n| n.loss().is_some()), "{cmd}: {said:?}");
+    // Each such notice says a loss, with its code; a tool's, counted over its whole inputs before
+    // they are narrowed to its rows, is plain.
+    assert!(
+        s.notices_since(mark)
+            .iter()
+            .filter(|n| n.text.contains("can't be given in") && !n.text.contains("so the tool reads them"))
+            .all(|n| n.loss().is_some()),
+        "{cmd}: {said:?}"
+    );
     (out, said)
 }
 
