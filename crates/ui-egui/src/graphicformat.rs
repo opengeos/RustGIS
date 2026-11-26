@@ -388,6 +388,28 @@ mod tests {
         assert!(h.state().session.notices_since(mark).iter().all(|n| !n.text.contains("no longer there")));
     }
 
+    /// A text too long for a graphic (`graphics.edit` takes at most 2000 characters) is refused when the
+    /// pane closes over it, and that is said, not dropped in silence.
+    #[test]
+    fn a_text_too_long_to_save_says_why_when_the_pane_closes() {
+        let mut app = RustGisApp::with_sample();
+        let added = app.run("graphics.add", json!({"shape": "text", "points": [[10, 50]], "text": "Old"})).unwrap();
+        let (layer, row) = (added["layer"].as_u64().unwrap() as u32, added["row"].as_u64().unwrap() as usize);
+        let mut h = harness(app);
+        h.run_steps(2);
+        h.state_mut().run("select.rows", json!({"layer": layer, "rows": [row]})).unwrap();
+        h.run_steps(3);
+        h.query_all_by_role(Role::MultilineTextInput).find(|n| n.value().as_deref() == Some("Old")).unwrap().focus();
+        h.run_steps(2);
+        h.query_all_by_role(Role::MultilineTextInput).find(|n| n.is_focused()).unwrap().type_text(&"x".repeat(2001));
+        h.run_steps(2);
+        let mark = h.state().session.notice_mark();
+        h.state_mut().run("ui.pane.format", json!({})).unwrap();
+        h.run_steps(2);
+        let said: Vec<String> = h.state().session.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+        assert!(said.iter().any(|t| t.contains("2000")), "{said:?}");
+    }
+
     /// A text field focused but not edited has nothing pending: switching map says nothing of it (#2987).
     #[test]
     fn a_focused_text_nobody_edited_leaves_no_notice_when_the_map_changes() {
