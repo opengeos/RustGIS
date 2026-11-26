@@ -49,6 +49,6 @@ flatpak run --env=PYTHONPATH=/app/share/qgis/python --env=QT_QPA_PLATFORM=offscr
 
 It writes `data/`, `qml/`, `qgs/`, `types.txt` and `log.txt` (what was written, and what this
 QGIS couldn't write) into the output folder, then runs `scrub.py` on the projects. QGIS may crash
-on exit, after writing everything. When replacing the whole corpus, copy the files here without `log.txt`, `sample.sqlite`,
-`dem.tif.aux.xml`, `all-styles.qgs` (the `.qgz` holds it) and the `_attachments.zip` files QGIS
-writes beside each project.
+on exit, after writing everything. When replacing the whole corpus, copy the files here without
+`log.txt`, `sample.sqlite`, `dem.tif.aux.xml`, `all-styles.qgs` (the `.qgz` holds it) and the
+`_attachments.zip` files QGIS writes beside each project.

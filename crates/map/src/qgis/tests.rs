@@ -1136,6 +1136,7 @@ fn every_corpus_file_reads() {
                 report.notes
             );
         }
+        // Until the importer reads SVG markers (#2266 part E2a), which changes this on purpose.
         if name.starts_with("symbol-svg-marker-") {
             assert!(
                 report.notes.iter().any(|n| n.text.starts_with("SVG markers, drawn as circles")),
