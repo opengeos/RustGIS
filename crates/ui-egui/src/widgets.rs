@@ -84,8 +84,8 @@ pub(crate) fn yield_touch_drag(ctx: &egui::Context, area: egui::Id) {
 
 /// Whether the drag of the row `resp` starts this frame (#2958): with the mouse, when it starts a
 /// drag; with a finger, when it moves after a long press (egui reads the long press as a click of
-/// the context menu and lets go of the row's drag, so the pressed row is kept until the finger
-/// is up, and the menu closes as the item is taken). Without `reorder` it never does.
+/// the context menu and lets go of the row's drag, so the long press arms the row for that press
+/// only, and the menu closes as the item is taken). Without `reorder` it never does.
 pub(crate) fn reorder_drag(ui: &Ui, resp: &Response, reorder: bool) -> bool {
     if !reorder {
         return false;
