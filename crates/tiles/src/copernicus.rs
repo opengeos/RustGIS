@@ -322,7 +322,8 @@ fn remember_after(known: &mut Known, username: &str, password: &str, totp: bool,
         _ => Known::Nothing,
     };
     match deleted {
-        Err(SecretError::Uncertain(_)) if remember && !was => Some(UNCONFIRMED),
+        // A two-factor sign-in was never saved: only the delete of the one before is unconfirmed.
+        Err(SecretError::Uncertain(_)) if remember && !totp && !was => Some(UNCONFIRMED),
         // Said first: a password remembered before may still be there.
         Err(_) if left => Some(NOT_FORGOTTEN),
         _ if remember && totp => Some(TWO_FACTOR),
