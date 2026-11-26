@@ -452,6 +452,20 @@ impl Embed {
     }
 }
 
+impl WebShell {
+    /// Keeps the key listener's shortcuts current: the shortcuts can be changed in the app, and
+    /// the Script box takes its find chords only while it has the focus. Rebuilt only when one of
+    /// them changed.
+    fn follow_keys(&mut self, ctx: &egui::Context) {
+        let find = RustGisApp::script_find_keys(ctx);
+        let print = (self.app.shortcuts_fingerprint(), find.len());
+        if self.taken_print != Some(print) {
+            self.taken_print = Some(print);
+            *self.taken.borrow_mut() = (self.app.command_keys(), find);
+        }
+    }
+}
+
 impl eframe::App for WebShell {
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         // The GPU map backend draws inside egui's wgpu pass; hand over the render state.
@@ -483,18 +497,14 @@ impl eframe::App for WebShell {
         }
         self.app.logic(ctx);
         self.dirty.set(self.app.session.dirty());
-        // The shortcuts can be changed in the app, and the Script box takes its find chords only
-        // while it has the focus: the key listener follows, rebuilt only when one of them changed.
-        let find = RustGisApp::script_find_keys(ctx);
-        let print = (self.app.shortcuts_fingerprint(), find.len());
-        if self.taken_print != Some(print) {
-            self.taken_print = Some(print);
-            *self.taken.borrow_mut() = (self.app.command_keys(), find);
-        }
+        self.follow_keys(ctx);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.app.ui(ui);
+        // The pass may have moved the focus into the Script box, or out of it: a key pressed
+        // before the next frame's `logic` is judged by where the focus is now.
+        self.follow_keys(ui.ctx());
     }
 }
 
