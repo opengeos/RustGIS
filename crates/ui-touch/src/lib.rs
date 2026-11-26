@@ -2355,6 +2355,28 @@ mod tests {
         }
     }
 
+    /// An older toast too tall for the room left above the newer ones waits, rather than being
+    /// pushed down over them.
+    #[test]
+    fn a_toast_too_tall_for_the_room_left_waits() {
+        let mut held = Held::new();
+        held.raise(Sheet::Layers, "Layers");
+        let tall: Vec<String> = (0..30).map(|i| format!("line {i}")).collect();
+        held.app.session.notify(format!("Toast tall\n{}", tall.join("\n")), false);
+        held.app.session.notify("Toast short 1", false);
+        held.app.session.notify("Toast short 2", false);
+        for _ in 0..3 {
+            held.frame(Vec::new());
+        }
+        let words = held.frame(Vec::new());
+        let toasts: Vec<(String, Rect)> = words.into_iter().filter(|(text, _)| text.starts_with("Toast ")).collect();
+        assert!(toasts.iter().any(|(text, _)| text.starts_with("Toast short 2")), "the newest is shown: {toasts:?}");
+        for (i, (_, at)) in toasts.iter().enumerate() {
+            assert!(at.min.y >= 0.0, "{at:?} runs off the top");
+            assert!(toasts[i + 1..].iter().all(|(_, other)| !other.intersects(*at)), "{at:?} overlaps another");
+        }
+    }
+
     /// ModelBuilder, left open in the desktop interface, has no tab here: its own button leaves it.
     #[test]
     fn model_builder_is_left_for_the_map_by_a_button_in_sight() {

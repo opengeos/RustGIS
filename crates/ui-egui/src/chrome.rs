@@ -1814,12 +1814,15 @@ pub fn notices(app: &mut RustGisApp, ctx: &egui::Context) {
     let over_map = app.chrome.and(app.map.view_rect).map(|(map, _)| map.max.y);
     let mut y = over_map.unwrap_or(screen.max.y).max(screen.min.y + 84.0) - 40.0;
     for (i, toast) in app.map.toasts.iter_mut().rev().take(3).enumerate() {
-        // A one-line toast's height: one that wouldn't fit below the top waits for room.
-        if i > 0 && y - 44.0 < screen.min.y {
+        // Keyed by the notice, not the slot, so a selection stays with its text as toasts come and go.
+        let id = egui::Id::unique(("toast", toast.id));
+        // Its height when last drawn (a one-line toast's before it is measured): an older one that
+        // wouldn't fit below the top waits for room, as the window would push it down over the rest.
+        let height = egui::AreaState::load(ctx, id).and_then(|a| a.size).map_or(44.0, |s| s.y);
+        if i > 0 && y - height < screen.min.y {
             break;
         }
-        // Keyed by the notice, not the slot, so a selection stays with its text as toasts come and go.
-        let shown = egui::Area::new(egui::Id::unique(("toast", toast.id)))
+        let shown = egui::Area::new(id)
             .pivot(egui::Align2::LEFT_BOTTOM)
             .fixed_pos(pos2(screen.max.x - 380.0, y))
             .order(egui::Order::Tooltip)
