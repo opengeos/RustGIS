@@ -898,11 +898,12 @@ fn select_all(query: &str) -> Option<(String, Option<String>)> {
 fn csv(datasource: &str, dir: &str) -> Source {
     let (path, q) = datasource.split_once('?').unwrap_or((datasource, ""));
     // file:///absolute/path, or a relative one as file:./path.
-    let path = file_url_path(path).unwrap_or(path);
+    // A `file:` address is its path decoded, a drive's colon encoded or not; anything else is decoded as it is.
+    let path = file_address_path(path).unwrap_or_else(|| rustgis_data::address::percent_decode(path));
     let q = query(q);
     let get = |k: &str| q.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone()).filter(|v| !v.is_empty());
     Source::Csv {
-        path: absolute(&rustgis_data::address::percent_decode(path), dir),
+        path: absolute(&path, dir),
         x: get("xField"),
         y: get("yField"),
         wkt: get("wktField"),
@@ -1396,6 +1397,9 @@ mod tests {
             Source::Archive { path: "C:/maps/t.mbtiles".into(), kind: "mbtiles", vector: true, zoom: (None, None) }
         );
         let Source::Csv { path, .. } = read("delimitedtext", "file:///C:/maps/p.csv?xField=x", dir) else { panic!() };
+        assert_eq!(path, "C:/maps/p.csv");
+        // A drive's colon may be encoded, as an image's and an archive's is.
+        let Source::Csv { path, .. } = read("delimitedtext", "file:///C%3A/maps/p.csv?xField=x", dir) else { panic!() };
         assert_eq!(path, "C:/maps/p.csv");
         // An encoded file address is decoded once (QGIS encodes the address again as a parameter).
         assert_eq!(

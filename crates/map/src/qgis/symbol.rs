@@ -891,7 +891,8 @@ fn marker(layers: &[(Node, Props)], reference: Option<f64>, still: bool, layer: 
     Converted { symbol, strokes, rotation: None, by: SymbolBy::default(), fills: Vec::new() }
 }
 
-/// Whether `path` starts from a root (`/…`, `\\…`, `C:\…`), not from the project's folder.
+/// Whether `path` starts from a root (`/…`, `\\…`) or names a drive (`C:\…`, or `C:x`, as `is_relative` counts
+/// it), not from the project's folder.
 fn rooted(path: &str) -> bool {
     let b = path.as_bytes();
     path.starts_with(['/', '\\']) || (b.first().is_some_and(u8::is_ascii_alphabetic) && b.get(1) == Some(&b':'))
