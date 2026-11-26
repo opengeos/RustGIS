@@ -383,10 +383,12 @@ mod tests {
         app.assistant.loaded = true;
         app.services.http = Some(Box::new(|_, _| {}));
         received(&mut app, "map.png", png());
-        for _ in 0..1_000_000 {
-            if app.assistant.pictures.reading.iter().all(|(_, slot)| slot.lock().is_ok_and(|s| s.is_some())) {
-                break;
-            }
+        // The worker has read it, and nothing has taken it in yet.
+        let read = |app: &RustGisApp| app.assistant.pictures.reading.iter().all(|(_, slot)| slot.lock().is_ok_and(|s| s.is_some()));
+        let mut spins = 0;
+        while !read(&app) {
+            assert!(spins < 10_000_000, "the picture was never read");
+            spins += 1;
             std::thread::yield_now();
         }
         app.assistant.queued = Some("like this".into());

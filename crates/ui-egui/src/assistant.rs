@@ -867,13 +867,25 @@ pub fn stop(app: &mut RustGisApp) {
     drop_request(&mut app.assistant);
 }
 
+/// Puts a message still waiting to be sent back into the input box, so it is never lost: as the
+/// draft when the box is empty or already holds it, above newer typing otherwise.
+fn unqueue(state: &mut AssistantState) {
+    let Some(text) = state.queued.take() else { return };
+    let draft = state.input.trim();
+    if draft.is_empty() {
+        state.input = text;
+    } else if draft != text.trim() {
+        state.input = format!("{text}\n{}", state.input);
+    }
+}
+
 /// Forgets the conversation, and ends the agent threads it started. A message still waiting to
-/// be sent ([`AssistantState::queued`]) is dropped with it; its draft stays in the box.
+/// be sent ([`AssistantState::queued`]) isn't sent into the new one: it goes back to the box.
 pub fn new_conversation(app: &mut RustGisApp) {
     if let Some(a) = app.assistant.agent.as_mut() {
         a.clear();
     }
-    app.assistant.queued = None;
+    unqueue(&mut app.assistant);
     drop_request(&mut app.assistant);
     end_threads(app);
 }
@@ -1059,18 +1071,13 @@ fn revoke_later(app: &mut RustGisApp, revocation: Option<chatgpt::Revocation>, c
 }
 
 /// After signing out or removing the account: no tokens, no catalog, and nothing waiting to be
-/// sent with them (a queued message goes back to an empty input box, not to the provider; text
-/// typed since stays).
+/// sent with them (a queued message goes back to the input box, not to the provider).
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn forget_sign_in(app: &mut RustGisApp, cfg: &mut Config) {
     app.assistant.sign_in_read = None;
     app.assistant.models_slot = None;
     app.assistant.catalog_pending = false;
-    if let Some(text) = app.assistant.queued.take()
-        && app.assistant.input.trim().is_empty()
-    {
-        app.assistant.input = text;
-    }
+    unqueue(&mut app.assistant);
     cfg.key.clear();
     app.assistant.account = None;
     app.assistant.models.clear();

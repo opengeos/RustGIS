@@ -1460,15 +1460,13 @@ pub(crate) mod tests {
         }
     }
 
-    /// A new conversation drops a message still waiting to be sent, so it can't open the next
-    /// one; its draft stays in the box.
-    /// Signing out puts a waiting message back only into an empty box: newer typing stays.
+    /// Signing out puts a waiting message back into the box: as the draft, or above newer typing.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    fn signing_out_keeps_newer_typing() {
+    fn signing_out_returns_a_waiting_message_to_the_box() {
         let mut app = RustGisApp::with_sample();
         let mut cfg = Config::from_env("custom");
-        for (draft, kept) in [("typed since", "typed since"), ("", "waited")] {
+        for (draft, kept) in [("typed since", "waited\ntyped since"), ("", "waited"), ("waited", "waited")] {
             app.assistant.queued = Some("waited".into());
             app.assistant.input = draft.into();
             assistant::forget_sign_in(&mut app, &mut cfg);
@@ -1477,15 +1475,19 @@ pub(crate) mod tests {
         }
     }
 
+    /// A new conversation doesn't send a message still waiting into the next one: it goes back to
+    /// the box (a suggestion's too, which never was the draft).
     #[test]
-    fn new_conversation_drops_a_waiting_message() {
+    fn new_conversation_returns_a_waiting_message_to_the_box() {
         let mut app = RustGisApp::with_sample();
         app.assistant.agent = Some(Agent::new(Config::from_env("custom"), &app.session));
-        app.assistant.queued = Some("from before".into());
-        app.assistant.input = "from before".into();
-        assistant::new_conversation(&mut app);
-        assert!(app.assistant.queued.is_none());
-        assert_eq!(app.assistant.input, "from before");
+        for draft in ["from before", ""] {
+            app.assistant.queued = Some("from before".into());
+            app.assistant.input = draft.into();
+            assistant::new_conversation(&mut app);
+            assert!(app.assistant.queued.is_none());
+            assert_eq!(app.assistant.input, "from before");
+        }
     }
 
     /// Real pending reviews keep their reach visible while exact requests wait under Details.
