@@ -97,11 +97,12 @@ const NODE: u64 = 100;
 /// 695 ns a pixel, 100 stops 93 ns, 2 stops 21 ns), so each stop costs 1/16 of a unit a pixel.
 const STOPS_PER_UNIT: u64 = 16;
 
-/// SVG text `text` read into a tree: within [`XML_NODES`], [`ELEMENTS`], [`POINTS`] and
-/// [`CSS_STEPS`], its root an `<svg>`, with no images resolved and no files read. Matching its
-/// style sheets ([`css_steps`]) stops at `cap` too, what the run has left, refused there for the
-/// run ([`Refusal::PastRun`]) when below [`CSS_STEPS`]; `matched` is set to the steps it took,
-/// refused or not, which its length doesn't bound, for the run to be charged them.
+/// SVG text `text` read into a tree: within [`XML_NODES`], [`ELEMENTS`], [`POINTS`], [`CSS_STEPS`],
+/// [`STYLE_UNITS`] and [`ATTRIBUTE_PAIRS`], its root an `<svg>`, with no images resolved and no
+/// files read. Matching its style sheets ([`css_steps`]) stops at `cap` too, what the run has
+/// left, refused there for the run ([`Refusal::PastRun`]) when below [`CSS_STEPS`]; `matched` is
+/// set to the steps it took, refused or not, which its length doesn't bound, for the run to be
+/// charged them.
 pub(super) fn read(text: &str, cap: u64, matched: &mut u64) -> Result<usvg::Tree, Refusal> {
     // Before roxmltree checks each attribute of a tag against those before it.
     if attribute_pairs(text) > ATTRIBUTE_PAIRS {
@@ -356,7 +357,7 @@ fn style_units(doc: &roxmltree::Document) -> u64 {
     for n in doc.descendants() {
         if n.has_tag_name("style") {
             let sheet = sheet_of(n);
-            units = units.saturating_add(declarations(&sheet).saturating_mul(sheet.len() as u64));
+            units = units.saturating_add((declarations(&sheet) + 1).saturating_mul(sheet.len() as u64));
         }
         if let Some(style) = n.attribute("style") {
             units = units.saturating_add((declarations(style) + 1).saturating_mul(style.len() as u64));
@@ -1461,6 +1462,22 @@ mod tests {
         assert_eq!(read(&svg(&format!("<desc>{}</desc>", "a=b ".repeat(5000)))).err(), Some(Refusal::TooMuchToRead));
         // The bound is on the tags: a `<` in a value isn't XML that reads.
         assert_eq!(read(&svg(&format!(r#"<rect width="1" height="1" a="<"{}/>"#, attributes(100)))).err(), Some(Refusal::NotSvg));
+    }
+
+    /// An entity can't expand to a tag (roxmltree refuses it), so the tags counted before reading are
+    /// the tags read (#2800): the way round the attribute bound the text count would leave (guards an
+    /// update of roxmltree).
+    #[test]
+    fn an_entity_of_a_tag_with_many_attributes_is_not_a_way_round_the_bound() {
+        let attributes = (0..2000).map(|i| format!(r#" a{i}="1""#)).collect::<String>();
+        let uses = "&t;".repeat(3000);
+        let text = format!(
+            r#"<?xml version="1.0"?><!DOCTYPE svg [<!ENTITY t "<rect width='1' height='1'{attributes}/>">]><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">{uses}</svg>"#
+        );
+        let started = std::time::Instant::now();
+        let refused = read(&text).err();
+        assert_eq!(refused, Some(Refusal::NotSvg), "read whole in {:?}", started.elapsed());
+        assert!(started.elapsed() < std::time::Duration::from_secs(2), "{refused:?} in {:?}", started.elapsed());
     }
 
     /// usvg takes from a `style` attribute only the presentation properties, which a radius isn't:
