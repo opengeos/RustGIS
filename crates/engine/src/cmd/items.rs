@@ -1678,10 +1678,16 @@ fn stl_bytes(s: &mut Session, p: &Value) -> Result<(Vec<u8>, StlReport, Vec<Stri
     let (bytes, report) = mesh_stl(&mesh, MAX_STL_TRIANGLES)?;
     mesh_notices(s, &mesh);
     if mesh.flat > 0 {
-        s.notify(format!("Left out {} polygon(s) and point(s) of zero height: STL holds solids, not flat sheets", mesh.flat), false);
+        s.say(rustgis_data::loss::Note::loss(
+            rustgis_data::loss::LossCode::DroppedFeature,
+            format!("Left out {} polygon(s) and point(s) of zero height: STL holds solids, not flat sheets", mesh.flat),
+        ));
     }
     if report.lines > 0 {
-        s.notify(format!("STL holds triangles only: left out {} polyline(s)", report.lines), false);
+        s.say(rustgis_data::loss::Note::loss(
+            rustgis_data::loss::LossCode::DroppedFeature,
+            format!("STL holds triangles only: left out {} polyline(s)", report.lines),
+        ));
     }
     if report.degenerate > 0 {
         s.notify(

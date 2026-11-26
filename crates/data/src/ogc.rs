@@ -393,6 +393,10 @@ pub struct ServiceLayer {
     /// service's GetLegendGraphic, then its default style's picture; a WMTS layer's default
     /// style's, each for its scales. None when the service gives none.
     pub legends: Vec<Legend>,
+    /// The legend pictures its default style offers that RustGIS can't show: in a format other
+    /// than PNG or JPEG, or at an address other than the web's (an `ftp:` one). A WMS layer's
+    /// count is 1 when none of its style's pictures could be shown and the service draws none.
+    pub legends_left_out: usize,
     /// The Web Mercator zooms its tiles are drawn at, least and greatest, when the service says:
     /// a WMS layer's scale hints, a WMTS layer's tile matrices. `None`: the usual range.
     pub zooms: Option<(u8, u8)>,
@@ -1124,6 +1128,8 @@ fn wms(url: &str, root: &Node) -> Service {
         if let Some(l) = wms_legend(url, &styles).filter(|l| !legends.contains(l)) {
             legends.push(l);
         }
+        // Its style offers a picture, and none can be shown: its legend is lost.
+        let legends_left_out = usize::from(legends.is_empty() && wms_offers_legend(&styles));
         service.layers.push(ServiceLayer {
             zooms: Some(scales.zooms()),
             name,
@@ -1144,6 +1150,7 @@ fn wms(url: &str, root: &Node) -> Service {
             }),
             feature_info,
             legends,
+            legends_left_out,
         });
     }
     if cut_times > 0 {
@@ -1355,6 +1362,12 @@ fn wms_legend(url: &str, styles: &[Node]) -> Option<Legend> {
     })
 }
 
+/// Whether a WMS layer's default style ([`wms_legend`]'s) offers any legend picture.
+fn wms_offers_legend(styles: &[Node]) -> bool {
+    let style = styles.iter().find(|s| child_text(s, "Name").is_some_and(|n| n.eq_ignore_ascii_case("default"))).or_else(|| styles.first());
+    style.is_some_and(|s| children(s, "LegendURL").next().is_some())
+}
+
 /// A service's GetLegendGraphic request for a layer, when its capabilities offer one (the SLD
 /// profile's `GetLegendGraphic` among its requests) in PNG or JPEG.
 fn wms_legend_graphic(root: &Node, url: &str, get_map: &str, version: &str) -> Option<impl Fn(&str) -> Legend + use<>> {
@@ -1546,9 +1559,12 @@ fn wmts(url: &str, root: &Node) -> Service {
         let default_style = children(&layer, "Style").find(|s| s.attribute("isDefault") == Some("true")).or_else(|| child(&layer, "Style"));
         let style = default_style.and_then(|s| child_text(&s, "Identifier")).unwrap_or_else(|| "default".into());
         // Its default style's legends (WMTS 1.0.0 §7.1.1.1.1), each for the scales it gives.
+        // Those it can't show are lost; of the rest, the first [`MAX_LEGENDS`] are kept.
+        let mut offered = 0usize;
         let legends: Vec<Legend> = default_style
             .iter()
             .flat_map(|s| children(s, "LegendURL"))
+            .inspect(|_| offered += 1)
             .filter(|l| legend_format(l.attribute("format")))
             .filter_map(|l| {
                 let url = href(&l).and_then(|h| resolve(url, &h)).filter(|h| is_web(h))?;
@@ -1556,6 +1572,7 @@ fn wmts(url: &str, root: &Node) -> Service {
             })
             .take(MAX_LEGENDS)
             .collect();
+        let legends_left_out = offered.saturating_sub(legends.len());
         let linked: Vec<String> = children(&layer, "TileMatrixSetLink").filter_map(|l| child_text(&l, "TileMatrixSet")).collect();
         let bbox = child(&layer, "WGS84BoundingBox").and_then(|b| {
             let lo: Vec<f64> = child_text(&b, "LowerCorner")?.split_whitespace().filter_map(|t| t.parse().ok()).collect();
@@ -1696,6 +1713,7 @@ fn wmts(url: &str, root: &Node) -> Service {
             time,
             feature_info: None,
             legends,
+            legends_left_out,
         });
     }
     cut_listing(&mut service);
@@ -1844,6 +1862,7 @@ fn wfs(url: &str, root: &Node) -> Service {
             time: None,
             feature_info: None,
             legends: Vec::new(),
+            legends_left_out: 0,
         });
     }
     if let (n, Some(first)) = unread {
@@ -2014,6 +2033,7 @@ fn wcs(url: &str, root: &Node) -> Service {
             time: None,
             feature_info: None,
             legends: Vec::new(),
+            legends_left_out: 0,
         });
     };
     let (mut n, mut left, mut long_ids) = (0, 0, 0);
@@ -2728,6 +2748,7 @@ fn arcgis(url: &str, v: &serde_json::Value) -> Result<Service, String> {
                 time: None,
                 feature_info: None,
                 legends: Vec::new(),
+                legends_left_out: 0,
             });
             listed = true;
         }
@@ -2758,6 +2779,7 @@ fn arcgis(url: &str, v: &serde_json::Value) -> Result<Service, String> {
             time: None,
             feature_info: None,
             legends: Vec::new(),
+            legends_left_out: 0,
         });
         features(&mut service);
         // A dynamic map's layers, each drawn alone (`layers=show:<id>`): a national layer is
@@ -2780,6 +2802,7 @@ fn arcgis(url: &str, v: &serde_json::Value) -> Result<Service, String> {
                     time: None,
                     feature_info: None,
                     legends: Vec::new(),
+                    legends_left_out: 0,
                 });
             }
         }
@@ -2796,6 +2819,7 @@ fn arcgis(url: &str, v: &serde_json::Value) -> Result<Service, String> {
             time: None,
             feature_info: None,
             legends: Vec::new(),
+            legends_left_out: 0,
         });
     } else if lower.ends_with("/vectortileserver") {
         service.kind = "ArcGIS VectorTileServer".into();
@@ -2814,6 +2838,7 @@ fn arcgis(url: &str, v: &serde_json::Value) -> Result<Service, String> {
             time: None,
             feature_info: None,
             legends: Vec::new(),
+            legends_left_out: 0,
         });
     } else {
         if let Some((root, id)) = b.rsplit_once('/')
@@ -2923,6 +2948,7 @@ fn arcgis_directory(b: &str, v: &serde_json::Value) -> Service {
             time: None,
             feature_info: None,
             legends: Vec::new(),
+            legends_left_out: 0,
         });
     }
     for s in v.get("services").and_then(|s| s.as_array()).into_iter().flatten().take(MAX_LISTED_LAYERS) {
@@ -2949,6 +2975,7 @@ fn arcgis_directory(b: &str, v: &serde_json::Value) -> Service {
             time: None,
             feature_info: None,
             legends: Vec::new(),
+            legends_left_out: 0,
         });
     }
     if skipped > 0 {
@@ -3013,6 +3040,7 @@ fn ogc_api(url: &str, v: &serde_json::Value) -> Result<Service, String> {
                 time: None,
                 feature_info: None,
                 legends: Vec::new(),
+                legends_left_out: 0,
             });
         }
         if !service.layers.is_empty() || service.collections_url.is_some() || service.dataset.is_some() {
@@ -3083,6 +3111,7 @@ fn ogc_api(url: &str, v: &serde_json::Value) -> Result<Service, String> {
                 time: None,
                 feature_info: None,
                 legends: Vec::new(),
+                legends_left_out: 0,
             });
         }
         if let Some((t, list, withheld)) = &vector {
@@ -3097,6 +3126,7 @@ fn ogc_api(url: &str, v: &serde_json::Value) -> Result<Service, String> {
                 time: None,
                 feature_info: None,
                 legends: Vec::new(),
+                legends_left_out: 0,
             });
         }
         if map.is_some() || vector.is_some() {
@@ -3152,6 +3182,7 @@ fn ogc_api(url: &str, v: &serde_json::Value) -> Result<Service, String> {
             time: None,
             feature_info: None,
             legends: Vec::new(),
+            legends_left_out: 0,
         });
     }
     if unreadable > 0 {
@@ -7879,6 +7910,9 @@ mod tests {
         // A picture RustGIS doesn't show, or not on the web: the parent's, or none.
         assert_eq!(urls(&s, "only svg"), Vec::<String>::new());
         assert_eq!(urls(&s, "not on the web"), Vec::<String>::new());
+        // Those two lose their legend; a GIF passed over for a PNG loses none.
+        let lost = |s: &Service, name: &str| s.layers.iter().find(|l| l.name == name).unwrap().legends_left_out;
+        assert_eq!(["inherits", "own", "named default", "only svg", "not on the web"].map(|n| lost(&s, n)), [0, 0, 0, 1, 1]);
         assert!(s.layers.iter().flat_map(|l| &l.legends).all(|l| l.min_scale.is_none() && l.max_scale.is_none()));
         // With it (swisstopo's, in its SLD namespace): the service's legend first, the style's after.
         let glg = r#"<sld:GetLegendGraphic><Format>image/gif</Format><Format>image/png</Format><DCPType><HTTP><Get><OnlineResource xlink:href="https://maps.example.org/de/?"/></Get></HTTP></DCPType></sld:GetLegendGraphic>"#;
@@ -7896,6 +7930,8 @@ mod tests {
                 "https://maps.example.org/de/?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetLegendGraphic&LAYER=only%20svg&FORMAT=image%2Fpng&SLD_VERSION=1.1.0"
             ]
         );
+        // The service draws its legend: none is lost.
+        assert!(s.layers.iter().all(|l| l.legends_left_out == 0));
         // WMS 1.1.1 (SLD 1.0): no SLD version; its own address, else GetMap's.
         let glg = r#"<GetLegendGraphic><Format>image/jpeg</Format></GetLegendGraphic>"#;
         let s = parse("https://maps.example.org/wms", caps("1.1.1", glg).as_bytes()).unwrap();
@@ -7934,6 +7970,8 @@ mod tests {
                 Legend { url: "https://t.example.org/1.0.0/far.jpg".into(), min_scale: Some(50_000.0), max_scale: None },
             ]
         );
+        // The SVG one can't be shown: lost.
+        assert_eq!(s.layers[0].legends_left_out, 1);
         // The one for the map's scale: up to below the maximum, from the minimum.
         let at = |scale: f64| legends_at(legends, scale).map(|l| l.url.as_str()).collect::<Vec<_>>();
         assert_eq!(at(10_000.0), ["https://t.example.org/near.png"]);
