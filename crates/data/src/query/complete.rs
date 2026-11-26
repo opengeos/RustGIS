@@ -161,18 +161,40 @@ pub fn brackets(text: &str) -> Option<(usize, usize)> {
     Some((open, unopened))
 }
 
-/// Whether `text`, what follows a cursor where a value goes, starts with a value that a value
-/// written there would stand beside (`= ▮'Africa'`, `▮!name!`): a text, a quoted name, a number,
-/// a sign (a value before `-5` would subtract it), a bracket, a variable, or a name that isn't a
-/// word coming after a value (`AND`, `THEN`, `LIKE`…). Its first word is read as the lexer reads
-/// it, so `!=` is an operator; what can't be read is no value.
-pub fn starts_with_value(text: &str) -> bool {
-    let first = lex_spans(text, true).ok().and_then(|l| l.toks.into_iter().next());
-    let after_a_value = [Kw::And, Kw::Or, Kw::Not, Kw::Is, Kw::Like, Kw::Ilike, Kw::In, Kw::Between, Kw::When, Kw::Then, Kw::Else, Kw::End];
-    match first {
-        Some(Tok::Str(_) | Tok::QuotedIdent(_) | Tok::Num(_) | Tok::Var(_) | Tok::LParen | Tok::Arith(Arith::Add | Arith::Sub)) => true,
-        Some(Tok::Ident(word)) => !after_a_value.iter().any(|k| k.word().eq_ignore_ascii_case(&word)),
-        _ => false,
+/// What `text`, what follows a cursor where a value goes, starts with, as [`follows`] reads it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Follows {
+    /// A value, which a value written there would stand beside (`= ▮'Africa'`, `▮!name!`): a
+    /// text or quoted name (finished or not), a number, a sign (a value before `-5` would
+    /// subtract it), a bracket, a variable, or a name that isn't a word coming after a value.
+    Value,
+    /// What takes the value before it as its left side: an operator (`▮= 'Old'`, `▮* 2`, `▮||`)
+    /// or `IS`, `NOT`, `LIKE`, `ILIKE`, `IN`, `BETWEEN`.
+    Operator,
+    /// Anything else: nothing, a closing bracket, a comma, `AND`, `OR`, a `CASE` word, or what
+    /// can't be read into words.
+    Other,
+}
+
+/// What `text`, what follows a cursor where a value goes, starts with: its first word read as
+/// the lexer reads it, so `!=` is an operator and `!a!` a name.
+pub fn follows(text: &str) -> Follows {
+    let Some(Lexed { toks, open, .. }) = lex_spans(text, true).ok() else { return Follows::Other };
+    let left_side = [Kw::Is, Kw::Not, Kw::Like, Kw::Ilike, Kw::In, Kw::Between];
+    let joins = [Kw::And, Kw::Or, Kw::When, Kw::Then, Kw::Else, Kw::End];
+    let is = |word: &str, kws: &[Kw]| kws.iter().any(|k| k.word().eq_ignore_ascii_case(word));
+    match toks.into_iter().next() {
+        Some(Tok::Str(_) | Tok::QuotedIdent(_) | Tok::Num(_) | Tok::Var(_) | Tok::LParen | Tok::Arith(Arith::Add | Arith::Sub)) => {
+            Follows::Value
+        }
+        Some(Tok::Op(_) | Tok::Concat | Tok::Arith(_)) => Follows::Operator,
+        Some(Tok::Ident(word)) if is(&word, &left_side) => Follows::Operator,
+        Some(Tok::Ident(word)) if is(&word, &joins) => Follows::Other,
+        Some(Tok::Ident(_)) => Follows::Value,
+        Some(Tok::RParen | Tok::Comma) => Follows::Other,
+        // A text or name begun and never closed holds the rest.
+        None if open.is_some() => Follows::Value,
+        None => Follows::Other,
     }
 }
 
@@ -347,15 +369,37 @@ mod tests {
         }
     }
 
-    /// What follows a cursor is read as the lexer reads it: `!=` is an operator, `!a!` a name, and
-    /// a bracket in a text or quoted name is no bracket.
+    /// What follows a cursor is read as the lexer reads it: `!=` is an operator, `!a!` a name, a
+    /// text never closed a value, and a bracket in a text or quoted name is no bracket.
     #[test]
     fn what_follows_is_read_as_the_lexer_reads_it() {
-        for text in ["'a'", " !a b!", "\"a\"", "-5", "+5", "(1)", "@row_number", "name", "upper(name)"] {
-            assert!(starts_with_value(text), "{text}");
-        }
-        for text in ["", " != 1", "<> 1", ") AND", ", 'b')", "AND pop > 1", "then 1", "|| 'x'", "* 2", "#"] {
-            assert!(!starts_with_value(text), "{text}");
+        for (text, then) in [
+            ("'a'", Follows::Value),
+            (" !a b!", Follows::Value),
+            ("\"a\"", Follows::Value),
+            ("'Afr", Follows::Value),
+            ("!Af", Follows::Value),
+            ("-5", Follows::Value),
+            ("+5", Follows::Value),
+            ("(1)", Follows::Value),
+            ("@row_number", Follows::Value),
+            ("name", Follows::Value),
+            ("upper(name)", Follows::Value),
+            (" != 1", Follows::Operator),
+            ("<> 1", Follows::Operator),
+            ("= 'Old'", Follows::Operator),
+            ("|| 'x'", Follows::Operator),
+            ("* 2", Follows::Operator),
+            ("IN ('a')", Follows::Operator),
+            ("not like 'a%'", Follows::Operator),
+            ("", Follows::Other),
+            (") AND", Follows::Other),
+            (", 'b')", Follows::Other),
+            ("AND pop > 1", Follows::Other),
+            ("then 1", Follows::Other),
+            ("#", Follows::Other),
+        ] {
+            assert_eq!(follows(text), then, "{text}");
         }
         assert_eq!(brackets("((a = ')' AND \"b)\" = !c)! "), Some((2, 0)));
         assert_eq!(brackets(" AND b = 1)) "), Some((0, 2)));

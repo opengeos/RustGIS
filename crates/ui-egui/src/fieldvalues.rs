@@ -189,6 +189,8 @@ pub(crate) fn said(ui: &mut Ui, form: &Form) {
 /// - after a bare `IN` (a list is next), the value as a list of one (`IN ('Asia')`);
 /// - after the field itself, as its button writes it (`continent `), what goes after it
 ///   (`= 'Asia'`);
+/// - after the first end of a `BETWEEN` (`pop_est BETWEEN 1 `), `AND` and the value;
+/// - after a whole clause (`pop_est > 1 `), the comparison joined to it with `AND`;
 /// - anywhere else, the comparison with the field (`"Pop Est" = 10`).
 ///
 /// A text or a quoted name begun and left open (`name = 'As`) is replaced by what is added, to its
@@ -196,7 +198,9 @@ pub(crate) fn said(ui: &mut Ui, form: &Form) {
 /// and the box says why it doesn't read.
 ///
 /// Nothing is added, and the reason is returned, when the value has a `%` or `_` where a `LIKE`
-/// pattern goes (it would match more than itself) or the clause would pass `query::MAX_LEN`.
+/// pattern goes (it would match more than itself), a value follows the cursor already, an operator
+/// follows it where more than the value would be added, a quote at the cursor is never closed and
+/// holds the rest of the clause, or the clause would pass `query::MAX_LEN`.
 pub(crate) fn insert(text: &mut String, field: &str, value: &str, ds: &Dataset, at: Option<usize>) -> Result<(), String> {
     let split = at.and_then(|at| text.char_indices().nth(at)).map_or(text.len(), |(i, _)| i);
     let (before, mut after) = text.split_at(split);
@@ -205,13 +209,24 @@ pub(crate) fn insert(text: &mut String, field: &str, value: &str, ds: &Dataset, 
     if let Some(open) = here.as_ref().filter(|c| c.place != Place::Code) {
         let keep = head.char_indices().nth(open.word.start).map_or(head.len(), |(i, _)| i);
         // What is left of the text, up to its closing quote, goes with what was typed of it.
-        if let Some(quote) = head.get(keep..).unwrap_or_default().chars().next().filter(|q| matches!(q, '\'' | '"')) {
-            after = after_quote(after, quote);
+        if let Some(quote) = head.get(keep..).unwrap_or_default().chars().next().filter(|q| matches!(q, '\'' | '"' | '!')) {
+            after = match after_quote(after, quote) {
+                Some(rest) => rest,
+                None if after.trim().is_empty() => "",
+                // Never closed, it holds the rest of the clause, which would go with it.
+                None => {
+                    return Err(tl!(
+                        "Not added: the quote at the cursor is never closed, so the rest of the clause is in it. Close it first"
+                    )
+                    .to_string());
+                }
+            };
         }
         head.truncate(keep);
         here = at_end(&head, ds);
     }
-    if query::starts_with_value(after) {
+    let next = query::follows(after);
+    if next == query::Follows::Value {
         return Err(tl!("Not added: a value follows the cursor already. Put the cursor where none is, or delete that one").to_string());
     }
     if !here.as_ref().is_some_and(|c| c.operand || c.symbols.contains(&"=")) && ends_with_field(&head, field) {
@@ -224,10 +239,21 @@ pub(crate) fn insert(text: &mut String, field: &str, value: &str, ds: &Dataset, 
     if here.as_ref().is_some_and(|c| c.pattern) && value.contains(['%', '_']) {
         return Err(crate::i18n::fmt("{value} has a % or _, which matches more than itself after LIKE: use = for it", &[("value", value)]));
     }
+    let alone = here.as_ref().is_some_and(|c| c.operand && c.compared);
+    if !alone && next == query::Follows::Operator {
+        // `continent▮ = 'Old'`: what follows would compare what is added.
+        return Err(tl!("Not added: an operator follows the cursor. Put the cursor after it, where its value goes").to_string());
+    }
     let put = match &here {
-        Some(c) if c.operand && c.compared => value.to_string(),
+        _ if alone => value.to_string(),
         Some(c) if !c.operand && c.symbols == ["("] => format!("({value})"),
         Some(c) if !c.operand && c.symbols.contains(&"=") && ends_with_field(&head, field) => format!("= {value}"),
+        // `pop_est BETWEEN 1 ▮`: the second end.
+        Some(c) if !c.operand && c.keywords == [Kw::And] => format!("AND {value}"),
+        // After a whole clause (`pop_est > 1 ▮`), the comparison joined to it.
+        Some(c) if !c.operand && c.keywords.contains(&Kw::Or) && !c.symbols.contains(&"=") => {
+            format!("AND {} = {value}", field_ref(field))
+        }
         _ => format!("{} = {value}", field_ref(field)),
     };
     crate::dialogs::add_word(&mut head, &put);
@@ -274,18 +300,19 @@ pub(crate) fn insert(text: &mut String, field: &str, value: &str, ds: &Dataset, 
 }
 
 /// What is left of `text` after the quoted text or name that began before it, up to its closing
-/// quote (a doubled quote is a quote in it): none of it when the quote is never closed.
-fn after_quote(text: &str, quote: char) -> &str {
+/// quote (a doubled `'` or `"` is that quote in it; `!` has no such escape, as the lexer reads
+/// it): `None` when the quote is never closed.
+fn after_quote(text: &str, quote: char) -> Option<&str> {
     let mut chars = text.char_indices().peekable();
     while let Some((i, c)) = chars.next() {
         if c == quote {
-            if chars.next_if(|&(_, next)| next == quote).is_some() {
+            if quote != '!' && chars.next_if(|&(_, next)| next == quote).is_some() {
                 continue;
             }
-            return text.get(i + c.len_utf8()..).unwrap_or_default();
+            return Some(text.get(i + c.len_utf8()..).unwrap_or_default());
         }
     }
-    ""
+    None
 }
 
 /// Whether `text` starts with the word `word`, letter case aside (not a longer name that starts
@@ -358,6 +385,10 @@ mod tests {
             ("pop_est BETWEEN 1 AND", "pop_est", "10", "pop_est BETWEEN 1 AND 10 "),
             ("(pop_est BETWEEN ", "pop_est", "10", "(pop_est BETWEEN 10 AND 10) "),
             ("pop_est BETWEEN (", "pop_est", "10", "pop_est BETWEEN (10) AND 10 "),
+            ("pop_est BETWEEN 1 ", "pop_est", "10", "pop_est BETWEEN 1 AND 10 "),
+            // After a whole clause, the comparison joined to it.
+            ("pop_est > 1 ", "continent", "'Asia'", "pop_est > 1 AND continent = 'Asia' "),
+            ("pop_est > 1", "continent", "'Asia'", "pop_est > 1 AND continent = 'Asia' "),
             // A text begun is replaced by the value.
             ("continent = 'As", "continent", "'Asia'", "continent = 'Asia' "),
             // The field's button was clicked, then Values: the field is there, so only what
@@ -453,8 +484,22 @@ mod tests {
         }
     }
 
-    /// What would stand beside a value or a field already there is not written: the draft stays,
-    /// and the box says why.
+    /// A name begun in `!` at the cursor is replaced to its closing `!`, which has no doubling.
+    #[test]
+    fn a_name_begun_in_bangs_is_replaced_to_its_close() {
+        let ds = countries();
+        for (clause, at, expected) in [
+            ("continent = !Af!", 15, "continent = 'Asia' "),
+            ("continent = !Af! AND pop_est > 1", 15, "continent = 'Asia' AND pop_est > 1"),
+        ] {
+            let mut text = clause.to_string();
+            insert(&mut text, "continent", "'Asia'", &ds, Some(at)).unwrap();
+            assert_eq!(text, expected, "{clause}");
+        }
+    }
+
+    /// What would stand beside a value or a field already there, after an operator, or in a quote
+    /// that holds the rest is not written: the draft stays, and the box says why.
     #[test]
     fn a_value_is_not_written_beside_another() {
         let ds = countries();
@@ -467,6 +512,12 @@ mod tests {
             ("pop_est > -5", Some(10), "pop_est"),
             ("pop_est > +5", Some(10), "pop_est"),
             ("continent = !name!", Some(12), "continent"),
+            ("continent =  'Afr", Some(12), "continent"),
+            // An operator after the cursor, where more than the value would go.
+            ("continent = 'Old'", Some(9), "continent"),
+            ("continent IN ('Old')", Some(9), "continent"),
+            // A quote never closed holds the rest of the clause.
+            ("continent = 'As AND pop_est > 1", Some(15), "continent"),
             // The field's button clicked after an operator: the field is the value already.
             ("pop_est > continent ", None, "continent"),
             ("name = continent", None, "continent"),

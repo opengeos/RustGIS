@@ -36,8 +36,8 @@ mod complete;
 mod legacy;
 
 pub use complete::{
-    Call, Completion, FieldValue, FieldValues, Place, VALUE_CHARS, VALUES_READ, brackets, complete_at, field_values, literal,
-    starts_with_value,
+    Call, Completion, FieldValue, FieldValues, Follows, Place, VALUE_CHARS, VALUES_READ, brackets, complete_at, field_values, follows,
+    literal,
 };
 
 #[derive(Clone, Debug, PartialEq)]
