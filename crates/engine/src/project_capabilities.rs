@@ -388,9 +388,8 @@ fn text_blocks(e: &rustgis_map::layout::Element) -> bool {
 /// A value the command refuses on a text needs nothing either: the command changes nothing. The
 /// keys are read here alone, so a block key given to another kind counts too, though its command
 /// refuses it: an over-count that asks for the capability sooner, never a missing one. A
-/// `layout.import` requires it for
-/// such a text once its layout is read into range, so a name it doesn't know or a spacing that
-/// isn't a number, read as the default, needs nothing.
+/// `layout.import` requires it for such a text once its layout is read into range, so a name it
+/// doesn't know or a spacing that isn't a number, read as the default, needs nothing.
 fn command_uses_text_block(id: &str, params: &Value) -> bool {
     use rustgis_map::layout::{LINE_SPACING, TextCase, TextVAlign};
     match id {
