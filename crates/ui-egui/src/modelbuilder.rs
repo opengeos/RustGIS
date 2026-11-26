@@ -2031,6 +2031,40 @@ mod tests {
         assert_eq!(tools(&h), tools(&mouse));
     }
 
+    /// #3034: `+ Input` and `+ Output`, above the list, are dragged onto the canvas at once by
+    /// the mouse and by a finger, their name following the pointer meanwhile.
+    #[test]
+    fn the_input_and_output_buttons_drag_onto_the_canvas() {
+        use egui_kittest::kittest::Queryable;
+        let to = pos2(700.0, 400.0);
+        // How many times `label` is drawn: the button, and the ghost while it is carried.
+        let drawn = |h: &egui_kittest::Harness<'_, RustGisApp>, label: &str| {
+            h.output().shapes.iter().filter(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.text() == label)).count()
+        };
+        for (label, kind) in [("+ Input", ModelNodeKind::Input), ("+ Output", ModelNodeKind::Output)] {
+            let kinds = |h: &egui_kittest::Harness<'_, RustGisApp>| h.state().mb.graph.nodes.iter().map(|n| n.kind).collect::<Vec<_>>();
+            let mut h = palette_harness();
+            let from = h.get_by_label(label).rect().center();
+            assert_eq!(drawn(&h, label), 1);
+            let button =
+                |pos, pressed| Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+            for event in [Event::PointerMoved(from), button(from, true), Event::PointerMoved(to)] {
+                h.event(event);
+                h.step();
+            }
+            assert_eq!(drawn(&h, label), 2, "no ghost of {label} mid-drag");
+            h.event(button(to, false));
+            h.run_steps(3);
+            assert_eq!(kinds(&h), [kind]);
+            assert_eq!(drawn(&h, label), 1, "the ghost of {label} stayed");
+
+            let mut finger = palette_harness();
+            crate::panes::tests::touch_drag(&mut finger, from, to, 0);
+            finger.run_steps(3);
+            assert_eq!(kinds(&finger), [kind], "a finger on {label}");
+        }
+    }
+
     /// Delete removes the selected node with its wires, Ctrl+Z brings both back, Ctrl+D copies
     /// it; a map tab clicked (or a map activated) hides ModelBuilder, its tab shows it again.
     #[test]
