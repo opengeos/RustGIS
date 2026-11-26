@@ -149,6 +149,13 @@ impl RustGisApp {
             Ok(name) => self.session.notify(crate::i18n::fmt("Saved {name}.", &[("name", &name)]), false),
             Err(error) => {
                 self.session.notify(error, true);
+                // A failed write-back that may have reached the document: what that loses of the
+                // constructions is said too, as the file may hold it.
+                if let Some(p) = pending.as_ref().filter(|p| p.document.is_some() && reached) {
+                    for note in p.notes.clone() {
+                        self.session.say(note);
+                    }
+                }
                 // A document that couldn't be written back is asked for again: the next Save
                 // shows the picker. A picker closed with no choice changes nothing.
                 if let Some(failed) = pending.filter(|p| p.document.is_some() && reached) {
