@@ -53,16 +53,15 @@ impl Phone {
 
     /// Tells the engine what Android allows (`rustgis_data::memory::set_phone`): the memory it
     /// has, and, asked again each time a job plans, what is free of it. Where Android doesn't say
-    /// at start, [`shell::MEMORY_UNSAID`] stands in.
-    pub fn plan_memory(&self) {
+    /// at start, [`shell::MEMORY_UNSAID`] stands in. Returns whether Android said.
+    pub fn plan_memory(&self) -> bool {
         let activity = self.activity.clone();
-        let total = memory(&activity).map(|(total, _)| total).filter(|total| *total > 0).unwrap_or_else(|| {
-            log::warn!("Android didn't say how much memory it has");
-            shell::MEMORY_UNSAID
-        });
-        if !rustgis_engine::data::memory::set_phone(total, move || memory(&activity).map(|(_, free)| free)) {
+        let total = memory(&activity).map(|(total, _)| total).filter(|total| *total > 0);
+        let free = move || memory(&activity).map(|(_, free)| free);
+        if !rustgis_engine::data::memory::set_phone(total.unwrap_or(shell::MEMORY_UNSAID), free) {
             log::warn!("the memory limits were read before Android's were set");
         }
+        total.is_some()
     }
 
     /// Runs `call` with the Java environment and the activity, on this thread.

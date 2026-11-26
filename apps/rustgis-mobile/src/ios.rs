@@ -792,19 +792,19 @@ unsafe extern "C" {
 /// Tells the engine what iOS allows (`rustgis_data::memory::set_phone`): what the system says is
 /// left at start, while the app holds little, stands for its limit, and is asked again each time a
 /// job plans. Where it says nothing at start, [`shell::MEMORY_UNSAID`] stands in, with nothing
-/// known to be free.
-fn plan_memory() {
+/// known to be free. Returns whether iOS said.
+fn plan_memory() -> bool {
     let left = || os_proc_available_memory() as u64;
     let start = left();
     let taken = if start > 0 {
         rustgis_engine::data::memory::set_phone(start, move || Some(left()))
     } else {
-        log::warn!("iOS didn't say how much memory the app may use");
         rustgis_engine::data::memory::set_phone(shell::MEMORY_UNSAID, || None)
     };
     if !taken {
         log::warn!("the memory limits were read before iOS's were set");
     }
+    start > 0
 }
 
 thread_local! {
@@ -1414,8 +1414,11 @@ pub fn main() {
     let folders = folders();
     let made = std::fs::create_dir_all(&folders.support).is_ok() && rustgis_engine::data::dirs::set_root(folders.support.clone());
     // Before anything plans a job.
-    plan_memory();
+    let said = plan_memory();
     let mut app = shell::front_end(made.then_some(folders.support.as_path()));
+    if !said {
+        shell::say_memory_unsaid(&mut app);
+    }
     // The app's Documents folder: files put there from a computer (Finder, `xcrun simctl`) are
     // opened once the window is up, as on Android.
     let documents = PathBuf::from(NSHomeDirectory().to_string()).join("Documents");

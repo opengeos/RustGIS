@@ -26,7 +26,7 @@ pub const SHARE: u64 = 4;
 /// a container's limit included, for tests and to reproduce a smaller computer; any other value is
 /// ignored. [`source`] says which one was used.
 ///
-/// On a phone it is what the app said the system allows ([`set_phone`]), unless [`OVERRIDE`] is set.
+/// On a phone it is the figure its app gave ([`set_phone`]), unless [`OVERRIDE`] is set.
 pub fn physical() -> Option<u64> {
     reading().0
 }
@@ -72,8 +72,9 @@ struct Phone {
 static PHONE: std::sync::OnceLock<Option<Phone>> = std::sync::OnceLock::new();
 
 /// Says RustGIS runs on a phone, for the phone app to call once, before anything asks for a limit.
-/// The limits then plan with `allowed` bytes, what the system lets apps use, in place of the
-/// device's memory ([`physical`]), and for no more than `free` says is free each time it is asked
+/// The limits then plan with `allowed` bytes in place of the memory read here ([`physical`]):
+/// what the system lets the app use where it says (iOS), else the device's memory (Android). They
+/// plan for no more than `free` says is free each time it is asked
 /// ([`available`]; any thread asks). Where the browser's floor is lower than the desktop's, they
 /// take it ([`on_phone`]). Returns whether it took: not for no bytes, a second call, or once the
 /// memory has been read.
@@ -142,16 +143,26 @@ pub const SCRATCH_CEILING: usize = 4 << 30;
 /// The scratch memory work's threads (a tool's, a GeoTIFF read's) may take together beyond one
 /// thread's: on the desktop a sixteenth of the computer's memory, on top of the quarter the input
 /// and output limits plan for, from [`SCRATCH_FLOOR`] up to [`SCRATCH_CEILING`] (#1291 step 2). It
-/// bounds the threads a high thread setting starts ([`crate::threads`]).
+/// bounds the threads a high thread setting starts ([`crate::threads`]). A phone ([`on_phone`])
+/// takes [`SCRATCH_FLOOR`], as the browser does: this is asked while drawing, too often to ask the
+/// system what is free, and a phone's whole figure isn't free to take.
 pub fn thread_scratch() -> usize {
+    if on_phone() {
+        return SCRATCH_FLOOR;
+    }
     scaled(physical().map(|m| m / 4), SCRATCH_FLOOR, SCRATCH_CEILING, 1)
 }
 
 /// Feature storage kept only by undo and redo snapshots. On the desktop the history can use
 /// a quarter of physical memory, from 256 MiB up to 4 GiB. The browser and unknown hosts use
-/// the floor.
+/// the floor. A phone ([`on_phone`]) plans it from what is free too ([`planned`]), when a
+/// session starts.
 pub fn undo_history() -> usize {
-    scaled(physical(), 256 << 20, usize::try_from(4_u64 << 30).unwrap_or(usize::MAX), 1)
+    let (floor, ceiling) = (256 << 20, usize::try_from(4_u64 << 30).unwrap_or(usize::MAX));
+    if on_phone() {
+        return planned(floor, ceiling, 1);
+    }
+    scaled(physical(), floor, ceiling, 1)
 }
 
 /// The memory RustGIS plans to hold on a computer with `memory` bytes (`None`: not known), what the

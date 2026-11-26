@@ -1737,7 +1737,8 @@ memory raises every limit past what it has, and a large job can then run out of 
 On a phone the limits plan the same way from what its system allows: on Android, the memory the
 device has, and no more than is free before Android starts ending processes; on iOS, what iOS says
 the app may still use. Where the web app's floor is lower (`rasterSamples`, `bufferBytes`), a
-phone takes it (see [Memory](field-work.md#memory)).
+phone takes it. There `undoBytes` plans for what is free too, once as RustGIS starts, and
+`threadScratchBytes` is the web app's 256 MiB (see [Memory](field-work.md#memory)).
 
 The limits below other than `threadScratchBytes`, `undoBytes` and `projectBytes` plan for less
 when memory is short, never below their floors. They plan for the smallest of three figures:

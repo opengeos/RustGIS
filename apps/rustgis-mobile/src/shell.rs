@@ -19,6 +19,11 @@ const KEYBOARD_SETTLES: std::time::Duration = std::time::Duration::from_millis(1
 /// what a small phone can give an app.
 pub const MEMORY_UNSAID: u64 = 1536 << 20;
 
+/// Says, in the window, that the limits plan with [`MEMORY_UNSAID`].
+pub fn say_memory_unsaid(app: &mut RustGisApp) {
+    app.session.warn(tl!("This device didn't say how much memory RustGIS may use, so its limits plan for 1.5 GiB."));
+}
+
 /// What the shell asks of a phone beyond [`Platform`].
 pub trait Phone: Platform {
     /// The room the system's bars, a camera cutout and the soft keyboard take at the window's

@@ -52,10 +52,11 @@ fn android_main(android: AndroidApp) {
     let phone = Phone::new(&android);
     // Before anything plans a job: the limits follow what Android allows, with the browser's
     // floors.
-    if let Ok(phone) = &phone {
-        phone.plan_memory();
-    }
+    let unsaid = phone.as_ref().is_ok_and(|phone| !phone.plan_memory());
     let mut app = shell::front_end(folders.as_deref());
+    if unsaid {
+        shell::say_memory_unsaid(&mut app);
+    }
     // The app's external files folder (`/sdcard/Android/data/org.rustgis.mobile/files`), where
     // `adb push` can put files.
     let pushed = shell::pushed(android.external_data_path(), &mut app);

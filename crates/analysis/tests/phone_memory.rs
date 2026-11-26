@@ -21,6 +21,7 @@ fn a_phones_limits_follow_what_its_system_allows_and_has_free() {
     assert!(raster::SAMPLES_FLOOR as u64 * 8 > allowed / 4);
     assert_eq!(raster::max_samples() as u64 * 8, allowed / 4);
     assert_eq!(max_buffer_bytes() as u64, allowed / 4);
+    assert_eq!(memory::undo_history() as u64, allowed / 4);
 
     // 300 MiB free, asked again: little is left past what is kept for drawing, so the limits are
     // the browser's floors.
@@ -28,6 +29,8 @@ fn a_phones_limits_follow_what_its_system_allows_and_has_free() {
     assert_eq!(memory::available(), Some(300 << 20));
     assert_eq!(raster::max_samples(), raster::BROWSER_SAMPLES);
     assert_eq!(max_buffer_bytes(), 128 << 20);
+    assert_eq!(memory::undo_history(), 256 << 20, "Undo follows what is free too");
+    assert_eq!(memory::thread_scratch(), memory::SCRATCH_FLOOR);
 
     // A grid of 64 million cells, within the desktop's floor, is refused with the way out.
     let crs = Crs::from_epsg(3857).unwrap();
