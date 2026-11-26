@@ -525,12 +525,12 @@ fn symbol(s: &Value, g: GeometryType, picture: Option<Rgba>, pictures: &mut Pict
                 (h, w) => h.or(w),
             };
             let larger = if num("height") > num("width") { s.get("height") } else { s.get("width") };
-            // With a size given and none above 0 (a size of 0 isn't shown), RustGIS's, said.
-            let none = top.is_some_and(|t| t <= 0.0);
+            // With no size above 0 (a size of 0 isn't shown), or none given, RustGIS's, said as the drawn one is.
+            let none = top.is_none_or(|t| t <= 0.0);
             if none {
                 notes.add("picture markers with no size, drawn at RustGIS's");
             }
-            let size = size(if none || top.is_none() { None } else { larger }, base.size, notes);
+            let size = size(if none { None } else { larger }, base.size, notes);
             Some((Symbol { fill, size, ..base }, None))
         }
         ("esriPFS", GeometryType::Polygon) => {
@@ -894,7 +894,7 @@ mod tests {
         assert_eq!(s.size, base.size);
         assert_eq!(
             notes.text(),
-            "picture markers whose image isn't a PNG, JPEG or SVG RustGIS reads, drawn as circles; marker sizes RustGIS can't read, left out"
+            "picture markers whose image isn't a PNG, JPEG or SVG RustGIS reads, drawn as circles; marker sizes RustGIS can't read, left out; picture markers with no size, drawn at RustGIS's"
         );
         // Each side that isn't a number is said, whichever one the circle takes its size from.
         for (width, height, size, text) in [
@@ -906,6 +906,19 @@ mod tests {
             ),
             (
                 json!(0),
+                json!("abc"),
+                0.0,
+                "picture markers whose image isn't a PNG, JPEG or SVG RustGIS reads, drawn as circles; marker sizes RustGIS can't read, left out; picture markers with no size, drawn at RustGIS's",
+            ),
+            // With neither side given at all, it has no size, as the drawn picture has none.
+            (
+                json!(null),
+                json!(null),
+                0.0,
+                "picture markers whose image isn't a PNG, JPEG or SVG RustGIS reads, drawn as circles; picture markers with no size, drawn at RustGIS's",
+            ),
+            (
+                json!("abc"),
                 json!("abc"),
                 0.0,
                 "picture markers whose image isn't a PNG, JPEG or SVG RustGIS reads, drawn as circles; marker sizes RustGIS can't read, left out; picture markers with no size, drawn at RustGIS's",
