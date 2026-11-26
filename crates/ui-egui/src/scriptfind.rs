@@ -519,8 +519,12 @@ pub fn browser_keys(ctx: &egui::Context) -> &'static [(bool, bool, egui::Key)] {
     let box_id = egui::Id::unique("script_text");
     let ours = [box_id, box_id.with("find_query"), box_id.with("find_replace")];
     if ctx.memory(|m| m.focused()).is_some_and(|f| ours.contains(&f)) {
-        // On a Mac, ⌥⌘F (the Replace there) is a ⌘F with Alt more, and ⌘H isn't ours.
-        if ctx.os().is_mac() { &[(false, false, egui::Key::F)] } else { &[(false, false, egui::Key::F), (false, false, egui::Key::H)] }
+        // On a Mac, ⌥⌘F is the Replace, and ⌘H isn't ours.
+        if ctx.os().is_mac() {
+            &[(false, false, egui::Key::F), (true, false, egui::Key::F)]
+        } else {
+            &[(false, false, egui::Key::F), (false, false, egui::Key::H)]
+        }
     } else {
         &[]
     }

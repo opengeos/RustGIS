@@ -1669,6 +1669,14 @@ impl RustGisApp {
         scriptfind::browser_keys(ctx)
     }
 
+    /// Whether a browser key press (its `key` and `code`, Ctrl or ⌘ held, Alt) is one of the find
+    /// chords [`Self::script_find_keys`] gives. Alt must be as the chord says, unlike
+    /// [`Self::takes_browser_key`]: the box takes no Ctrl+Alt+F or Ctrl+Alt+H, so the browser keeps
+    /// them. Shift is free, as egui matches these.
+    pub fn takes_find_key(keys: &[(bool, bool, egui::Key)], key: &str, code: &str, command: bool, alt: bool) -> bool {
+        command && keymap::browser_key(key, code).is_some_and(|k| keys.iter().any(|&(a, _, bound)| bound == k && a == alt))
+    }
+
     /// The keyboard shortcuts of a command run without parameters, in the keymap's order, for a
     /// native menu to show (the macOS menu bar).
     pub fn shortcuts_of(&self, command: &str) -> Vec<egui::KeyboardShortcut> {

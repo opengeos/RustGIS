@@ -349,9 +349,9 @@ struct WebShell {
     taken_print: Option<(u64, usize)>,
 }
 
-/// The app's Ctrl (⌘) shortcuts as (Alt, Shift, key): [`RustGisApp::command_keys`], shared with
-/// the page's key listener.
-type TakenKeys = Rc<RefCell<Vec<(bool, bool, egui::Key)>>>;
+/// The app's Ctrl (⌘) shortcuts as (Alt, Shift, key), [`RustGisApp::command_keys`], and the Script
+/// box's find chords, [`RustGisApp::script_find_keys`], shared with the page's key listener.
+type TakenKeys = Rc<RefCell<(Vec<(bool, bool, egui::Key)>, &'static [(bool, bool, egui::Key)])>>;
 
 /// The link to the page that embeds the app (`?embed`; see `embed.rs`).
 struct Embed {
@@ -489,9 +489,7 @@ impl eframe::App for WebShell {
         let print = (self.app.shortcuts_fingerprint(), find.len());
         if self.taken_print != Some(print) {
             self.taken_print = Some(print);
-            let mut keys = self.app.command_keys();
-            keys.extend_from_slice(find);
-            *self.taken.borrow_mut() = keys;
+            *self.taken.borrow_mut() = (self.app.command_keys(), find);
         }
     }
 
@@ -1506,7 +1504,10 @@ fn keep_app_shortcuts(taken: TakenKeys) -> Result<(), String> {
         // As eframe reads it, Ctrl or ⌘ is egui's command on every platform, so the app's
         // shortcut runs on either and the browser's is kept from both.
         let command = e.ctrl_key() || e.meta_key();
-        if RustGisApp::takes_browser_key(&taken.borrow(), &e.key(), &e.code(), command, e.alt_key(), e.shift_key()) {
+        let (keys, find) = &*taken.borrow();
+        if RustGisApp::takes_browser_key(keys, &e.key(), &e.code(), command, e.alt_key(), e.shift_key())
+            || RustGisApp::takes_find_key(find, &e.key(), &e.code(), command, e.alt_key())
+        {
             e.prevent_default();
         }
     });

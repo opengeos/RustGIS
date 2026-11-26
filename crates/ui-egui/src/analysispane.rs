@@ -3360,18 +3360,22 @@ mod tests {
         );
         h.run();
         let box_id = egui::Id::unique("script_text");
-        let taken = |h: &egui_kittest::Harness<'_, RustGisApp>, key: &str, code: &str| {
-            RustGisApp::takes_browser_key(crate::scriptfind::browser_keys(&h.ctx), key, code, true, false, false)
+        let pressed = |h: &egui_kittest::Harness<'_, RustGisApp>, key: &str, code: &str, alt: bool| {
+            RustGisApp::takes_find_key(crate::scriptfind::browser_keys(&h.ctx), key, code, true, alt)
         };
+        let taken = |h: &egui_kittest::Harness<'_, RustGisApp>, key: &str, code: &str| pressed(h, key, code, false);
         assert!(!taken(&h, "f", "KeyF"), "the browser keeps them with the focus elsewhere");
         h.ctx.memory_mut(|m| m.request_focus(box_id));
         h.run();
         assert!(taken(&h, "f", "KeyF") && taken(&h, "h", "KeyH"), "taken in the box");
         assert!(!taken(&h, "d", "KeyD"), "and only these");
+        // With Alt they are the browser's: the box takes neither.
+        assert!(!pressed(&h, "f", "KeyF", true) && !pressed(&h, "h", "KeyH", true), "Ctrl+Alt is not ours");
         // On a Mac ⌘H hides the app and the box doesn't take it: only ⌘F (⌥⌘F with it).
         let os = h.ctx.os();
         h.ctx.set_os(egui::os::OperatingSystem::Mac);
         assert!(taken(&h, "f", "KeyF") && !taken(&h, "h", "KeyH"), "⌘H is not ours");
+        assert!(pressed(&h, "f", "KeyF", true), "⌥⌘F opens the Replace row");
         h.ctx.set_os(os);
         h.key_press_modifiers(Modifiers::COMMAND, Key::F);
         h.run();
