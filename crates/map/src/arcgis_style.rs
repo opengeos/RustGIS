@@ -498,9 +498,9 @@ fn symbol(s: &Value, g: GeometryType, picture: Option<Rgba>, pictures: &mut Pict
                     say_unreadable_sizes(s, notes);
                     let wide = s.get("width").and_then(Value::as_f64).is_some_and(|w| w.is_finite() && w > 0.0);
                     let height = s.get("height").filter(|h| !h.is_null());
-                    let flat = height.and_then(Value::as_f64).is_some_and(|h| h <= 0.0);
+                    let no_height = height.and_then(Value::as_f64).is_some_and(|h| h <= 0.0);
                     let sized_by = if wide {
-                        if flat {
+                        if no_height {
                             notes.add("picture markers of no height, drawn as tall as their image is");
                         }
                         s.get("width")
@@ -909,6 +909,13 @@ mod tests {
                 json!("abc"),
                 0.0,
                 "picture markers whose image isn't a PNG, JPEG or SVG RustGIS reads, drawn as circles; marker sizes RustGIS can't read, left out; picture markers with no size, drawn at RustGIS's",
+            ),
+            // A size below 0 is no size (not drawn at 0, not shown), as it is for the drawn picture.
+            (
+                json!(-5),
+                json!(null),
+                0.0,
+                "picture markers whose image isn't a PNG, JPEG or SVG RustGIS reads, drawn as circles; picture markers with no size, drawn at RustGIS's",
             ),
             // With neither side given at all, it has no size, as the drawn picture has none.
             (
