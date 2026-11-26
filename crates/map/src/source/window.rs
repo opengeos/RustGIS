@@ -36,12 +36,16 @@ type Drawn = Option<Vec<Option<Geometry>>>;
 
 /// The extents, the vertices thinning can drop, and the bytes of a window's rows as drawn.
 fn drawn_stats(features: &[rustgis_data::Feature], projected: &Drawn) -> (Arc<Vec<Extent>>, usize, usize) {
-    let geoms: Vec<Option<&Geometry>> = match projected {
-        Some(p) => p.iter().map(Option::as_ref).collect(),
-        None => features.iter().map(geometry).collect(),
+    // One walk over the rows as drawn, with no list of them beside the window.
+    let mut vertices = 0;
+    let mut extent = |g: Option<&Geometry>| {
+        vertices += g.map_or(0, crate::lod::thinnable);
+        g.map_or(Extent::EMPTY, Geometry::extent)
     };
-    let extents = Arc::new(geoms.iter().map(|g| g.map_or(Extent::EMPTY, Geometry::extent)).collect());
-    let vertices = geoms.iter().flatten().map(|g| crate::lod::thinnable(g)).sum();
+    let extents = Arc::new(match projected {
+        Some(p) => p.iter().map(|g| extent(g.as_ref())).collect(),
+        None => features.iter().map(|f| extent(geometry(f))).collect(),
+    });
     (extents, vertices, projected.as_ref().map_or(0, crate::lod::cache_bytes))
 }
 

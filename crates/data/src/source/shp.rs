@@ -270,7 +270,27 @@ impl ShpSource {
     }
 }
 
+/// How a request narrows a read of the file ([`ShpSource::narrowing`]), the same for a sampled
+/// read and a visit in chunks.
+struct Narrowing {
+    /// The request's box in the file's own system, when it is one (a box in another system is
+    /// read as if absent).
+    own: Option<Extent>,
+    /// A box over the whole plane in its own system with no extent beside it, which narrows
+    /// nothing: every record, those without a box too, as a whole read.
+    everywhere: bool,
+    /// A read of an area, in longitude/latitude or in the file's own system, which holds no
+    /// shape without geometry.
+    by_area: bool,
+}
+
 impl ShpSource {
+    fn narrowing(&self, req: &Request) -> Narrowing {
+        let own = self.reproject.own_box(req);
+        let everywhere = req.extent.is_none() && own == Some(super::whole_plane());
+        Narrowing { own, everywhere, by_area: req.extent.is_some() || own.is_some() && !everywhere }
+    }
+
     /// A complete visit of a request's records, or of those numbered `numbered` (from 0, in
     /// order), parsed and given a chunk at a time ([`FeatureSource::visit_request_chunks`],
     /// [`FeatureSource::visit_ids_chunks`]). Only a whole read looks at the stored boxes.
@@ -284,12 +304,7 @@ impl ShpSource {
         let encoding = self.encoding.decoder();
         let mut chunks = super::chunk_memory::Chunker::new(bytes, visit)?;
         let req = Request { limit: usize::MAX, ..*req };
-        // The request's box in the file's own system, when it is one (a box in another system
-        // is read as if absent), and whether it is one over the whole plane with no extent
-        // beside it, which narrows nothing: every record, those without a box too, as a whole
-        // read (and as `read` decides).
-        let own = self.reproject.own_box(&req);
-        let everywhere = req.extent.is_none() && own == Some(super::whole_plane());
+        let Narrowing { own, everywhere, by_area } = self.narrowing(&req);
         let extent = self.reproject.request_box(&req).filter(|_| !everywhere);
         if extent.is_some_and(|e| e.is_empty()) {
             return Ok(Batch { complete: true, ..Batch::default() });
@@ -369,7 +384,7 @@ impl ShpSource {
             // As in `read`, the shape itself is checked.
             // As a read by area, its box in the file's own system included, gives no rows
             // without a shape.
-            if geometry.as_ref().map_or(if own.is_some() { !everywhere } else { req.extent.is_some() }, |g| !g.inside) {
+            if geometry.as_ref().map_or(by_area, |g| !g.inside) {
                 boxed_off += u64::from(no_number == Some(true));
                 return Ok(());
             }
@@ -468,12 +483,7 @@ impl FeatureSource for ShpSource {
         // by: every record is visited, tested, and the matches sampled as they come.
         let late = req.extent.is_some() && bounds.is_none();
         let mut sample = super::Sampler::new(limit);
-        // A read of an area, in longitude/latitude or in the file's own system, which holds no
-        // shape without geometry; a box over the whole plane in its own system is no area, as in
-        // `visit_with`.
-        let own = self.reproject.own_box(req);
-        let everywhere = req.extent.is_none() && own == Some(super::whole_plane());
-        let by_area = req.extent.is_some() || own.is_some() && !everywhere;
+        let Narrowing { everywhere, by_area, .. } = self.narrowing(req);
         if late {
             crate::progress::begin(self.info.count.and_then(|n| usize::try_from(n).ok()).unwrap_or(0));
         }
