@@ -977,7 +977,7 @@ fn geometry_part_fits(g: &flatgeobuf::Geometry<'_>, kind: GeometryKind, depth: u
     if !from_parts {
         let values = g.xy().map_or(0, |xy| xy.len());
         // A point is read from its own first coordinate.
-        if !values.is_multiple_of(2) || (kind == K::Point && g.xy().is_some() && values < 2) {
+        if !values.is_multiple_of(2) || (kind == K::Point && values < 2) {
             return false;
         }
         if let Some(ends) = g.ends() {
@@ -1283,7 +1283,7 @@ mod geometry_fits_tests {
     }
 
     /// A multi-polygon whose own `xy` is there but empty reads from its parts, so it fits; a point
-    /// with an empty `xy` doesn't, nor a collection's point part (#3006).
+    /// with an empty or absent `xy` doesn't, nor a collection's point part (#3006).
     #[test]
     fn a_point_is_held_to_its_coordinate_and_a_multi_part_geometry_is_not() {
         let multi = |kind| {
@@ -1306,6 +1306,10 @@ mod geometry_fits_tests {
             Geometry::create(fbb, &GeometryArgs { xy: Some(xy), type_: GeometryKind::Point, ..Default::default() })
         };
         assert!(!fits(empty_point, GeometryKind::Point));
+        let no_xy = |fbb: &mut FlatBufferBuilder<'static>| {
+            Geometry::create(fbb, &GeometryArgs { type_: GeometryKind::Point, ..Default::default() })
+        };
+        assert!(!fits(no_xy, GeometryKind::Point), "a point with no xy at all is refused too");
         let collection = fits(
             |fbb| {
                 let point = empty_point(fbb);
