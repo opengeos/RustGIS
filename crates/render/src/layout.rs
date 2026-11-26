@@ -9,8 +9,8 @@ use rustgis_data::query::{Env, SeriesPage};
 use rustgis_geom::{Coord, Extent};
 use rustgis_map::layout::{
     ArrowStyle, ChartLook, ColorScale, ElementKind, FrameShape, GRID_LABEL_PT, Grid, GridKind, INK, Layout, LineHead, MAX_LEGEND_COLUMNS,
-    Orientation, PT_PER_MM, SCALE_BAR_TEXT_PT, ScaleBarFit, ScaleBarStyle, ScaleLabelPosition, ScaleUnits, TextAlign, TickSide,
-    UnitLabelPosition, frame_camera, layout_text_scale,
+    Orientation, PT_PER_MM, SCALE_BAR_TEXT_PT, ScaleBarFit, ScaleBarStyle, ScaleLabelPosition, ScaleUnits, TextAlign, TextCase, TextVAlign,
+    TickSide, UnitLabelPosition, frame_camera, layout_text_scale,
 };
 use rustgis_map::symbology::LegendEntry;
 use rustgis_map::{Map, Rgba};
@@ -338,7 +338,11 @@ fn bar_labels_cut(
     Some((off_page, bar.cramped, bar.unit_cut))
 }
 
-/// The texts cut off, of the whole page or of the element `only`.
+/// The texts cut off, of the whole page or of the element `only`. A text's lines are the ones the
+/// page draws ([`drawn_text`]), placed as [`text_block`] places them: its block shifted down its
+/// box by its alignment and stepped by its spaced pitch. A block taller than its box starts at its
+/// top whatever its alignment, so the same trailing lines are left out and counted as for a text
+/// at the top.
 fn losses(layout: &Layout, maps: &[Map], dpi: f64, info: &PageInfo, only: Option<u32>) -> Vec<TextLoss> {
     let (w, h, k) = page_geometry(layout, dpi);
     let ppp = (k / PT_PER_MM) as f32;
@@ -375,22 +379,58 @@ fn losses(layout: &Layout, maps: &[Map], dpi: f64, info: &PageInfo, only: Option
             // A colorbar's labels left out for want of height, said with its title (#2638).
             let mut labels_cut = false;
             // `fits`: how many of its lines the element draws, when it decides that itself.
-            let (s, size, face, align, spacing, rotation, title, broken, fits) = match &e.kind {
+            let (s, size, face, align, spacing, rotation, title, broken, fits, block) = match &e.kind {
                 ElementKind::Text {
-                    text: t, size, color, bold, italic, align, letter_spacing, font, font_name, rotation, wrap, ..
+                    text: t,
+                    size,
+                    color,
+                    bold,
+                    italic,
+                    align,
+                    letter_spacing,
+                    font,
+                    font_name,
+                    rotation,
+                    wrap,
+                    valign,
+                    line_spacing,
+                    case,
+                    ..
                 } if color.a() > 0 => {
-                    let style = text_style(*bold, *italic, *font, font_name.as_deref(), *align, *letter_spacing);
-                    let s = expand(t, layout, info, first);
-                    // Its lines as they are drawn: a wrapped text's, broken to its box.
-                    let s = if *wrap { wrapped(&s, e.w, *size, style) } else { s };
-                    (s, *size as f32, style.face, *align, *letter_spacing as f32, *rotation as f32, false, *wrap, None)
+                    let style =
+                        text_style(*bold, *italic, *font, font_name.as_deref(), *align, *letter_spacing).with_block(*valign, *line_spacing);
+                    // Its lines as they are drawn: in its case, a wrapped text's broken to its box.
+                    let s = drawn_text(expand(t, layout, info, first), *case, *wrap, e.w, *size, style);
+                    (
+                        s,
+                        *size as f32,
+                        style.face,
+                        *align,
+                        *letter_spacing as f32,
+                        *rotation as f32,
+                        false,
+                        *wrap,
+                        None,
+                        (style.valign, style.line_spacing_kept()),
+                    )
                 }
                 // Its title at the size it is drawn at, its legend's text size (#2581).
                 ElementKind::Legend { title, frame, text_size, .. } => {
                     let ElementKind::MapFrame { map, .. } = &layout.element(*frame)?.kind else { return None };
                     map_index(maps, map)?;
                     let size = LEGEND_TITLE_PT * legend_size(*text_size);
-                    (title.clone(), size, text::Face { bold: true, ..Default::default() }, TextAlign::Left, 0.0, 0.0, true, false, None)
+                    (
+                        title.clone(),
+                        size,
+                        text::Face { bold: true, ..Default::default() },
+                        TextAlign::Left,
+                        0.0,
+                        0.0,
+                        true,
+                        false,
+                        None,
+                        (TextVAlign::Top, 1.0),
+                    )
                 }
                 // A colorbar's title in the lines it is drawn in (#2493), when it draws one: its
                 // frame's map has a raster with a colour scale (else it draws a placeholder).
@@ -419,13 +459,31 @@ fn losses(layout: &Layout, maps: &[Map], dpi: f64, info: &PageInfo, only: Option
                         return None;
                     }
                     let s = lines.join("\n");
-                    (s, COLORBAR_TITLE_PT as f32, colorbar_title_style().face, TextAlign::Left, 0.0, 0.0, false, true, Some(fits))
+                    (
+                        s,
+                        COLORBAR_TITLE_PT as f32,
+                        colorbar_title_style().face,
+                        TextAlign::Left,
+                        0.0,
+                        0.0,
+                        false,
+                        true,
+                        Some(fits),
+                        (TextVAlign::Top, 1.0),
+                    )
                 }
                 _ => return None,
             };
             let px = size.clamp(2.0, 400.0) * 1.33 * ppp;
             // A legend's title sits in the middle of its first row, which grows with its size.
-            let mut cy = r.y() + if title { LEGEND_ROW * (size / LEGEND_TITLE_PT) * ppp / 2.0 } else { px * 0.6 };
+            // A text's first line, where its block alignment puts it ([`block_shift`]).
+            let mut cy = if title {
+                r.y() + LEGEND_ROW * (size / LEGEND_TITLE_PT) * ppp / 2.0
+            } else {
+                let n = s.lines().take(200).count();
+                let shift = block_shift(block.0, f64::from(r.height()), f64::from(px), n, f64::from(block.1)) as f32;
+                r.y() + shift + px * 0.6
+            };
             let turn = Transform::from_rotate_at(rotation, r.x() + r.width() / 2.0, r.y() + r.height() / 2.0);
             // Legend titles are drawn on one line, unlike text elements' explicit line breaks.
             let lines = std::iter::once(s.as_str()).filter(|_| title).chain(s.lines().filter(|_| !title));
@@ -464,7 +522,7 @@ fn losses(layout: &Layout, maps: &[Map], dpi: f64, info: &PageInfo, only: Option
                     turn.map_points(&mut corners);
                     corners.iter().any(|p| p.x < 0.0 || p.y < 0.0 || p.x > w as f32 || p.y > h as f32)
                 });
-                cy += px * 1.25;
+                cy += px * 1.25 * block.1;
             }
             // A wrapped text ends at the line past the 200 drawn ([`wrapped`]): it may go on.
             let at_least = broken && s.lines().nth(200).is_some();
@@ -899,11 +957,29 @@ fn draw_page(
                     None => placeholder(&mut pm, r, "Colorbar", ppp),
                 }
             }
-            ElementKind::Text { text: t, size, color, bold, italic, align, letter_spacing, font, font_name, rotation, wrap, .. } => {
+            ElementKind::Text {
+                text: t,
+                size,
+                color,
+                bold,
+                italic,
+                align,
+                letter_spacing,
+                font,
+                font_name,
+                rotation,
+                wrap,
+                valign,
+                line_spacing,
+                case,
+                ..
+            } => {
                 let first = layout.first_frame().and_then(frame);
+                let style =
+                    text_style(*bold, *italic, *font, font_name.as_deref(), *align, *letter_spacing).with_block(*valign, *line_spacing);
+                // Its tokens filled in, then its case, then its wrap ([`drawn_text`]).
                 let s = expand(t, layout, info, first.and_then(|f| maps.get(f.1).map(|m| (m, f.2))));
-                let style = text_style(*bold, *italic, *font, font_name.as_deref(), *align, *letter_spacing);
-                let s = if *wrap { wrapped(&s, e.w, *size, style) } else { s };
+                let s = drawn_text(s, *case, *wrap, e.w, *size, style);
                 if *rotation == 0.0 {
                     text_block(&mut pm, r, &s, *size as f32, *color, style, ppp);
                 } else if let Some(area) = text_area(r, &s, *size as f32, style, ppp) {
@@ -4391,6 +4467,32 @@ pub(crate) struct TextStyle {
     pub(crate) align: TextAlign,
     /// Letter spacing in points.
     pub(crate) spacing: f32,
+    /// Where its block of lines sits down its box ([`block_shift`]).
+    pub(crate) valign: TextVAlign,
+    /// The distance between its lines, a multiple of the usual (0.5 to 3).
+    pub(crate) line_spacing: f32,
+}
+
+impl TextStyle {
+    /// This style with a text's block alignment and line spacing, clamped where they are used: an
+    /// unknown alignment is the top, a line spacing not a number the usual one, and one outside
+    /// 0.5..=3 the nearer limit.
+    pub(crate) fn with_block(self, valign: TextVAlign, line_spacing: f64) -> TextStyle {
+        // An infinity clamps to the nearer limit; only NaN has none.
+        let ls = if line_spacing.is_nan() {
+            rustgis_map::layout::LINE_SPACING
+        } else {
+            line_spacing.clamp(rustgis_map::layout::MIN_LINE_SPACING, rustgis_map::layout::MAX_LINE_SPACING)
+        };
+        TextStyle { valign: valign.kept(), line_spacing: ls as f32, ..self }
+    }
+
+    /// Its line spacing, clamped again where it is used: in 0.5..=3, the usual one when it is not
+    /// a number. Exactly 1 for the usual spacing, so a plain text is placed as it always was.
+    fn line_spacing_kept(self) -> f32 {
+        let (lo, hi) = (rustgis_map::layout::MIN_LINE_SPACING as f32, rustgis_map::layout::MAX_LINE_SPACING as f32);
+        if self.line_spacing.is_nan() { 1.0 } else { self.line_spacing.clamp(lo, hi) }
+    }
 }
 
 /// A text element's style: its face in an installed family by name (#762), else its generic one.
@@ -4407,7 +4509,7 @@ pub(crate) fn text_style(
 ) -> TextStyle {
     let family = font_name.and_then(crate::families::find_ready);
     let face = text::Face { bold, italic, serif: font == rustgis_map::layout::FontFamily::Serif, family };
-    TextStyle { face, align, spacing: letter_spacing as f32 }
+    TextStyle { face, align, spacing: letter_spacing as f32, valign: TextVAlign::Top, line_spacing: 1.0 }
 }
 
 /// Pixels per millimetre a wrapped text's lines are measured at (300 dpi), whatever the
@@ -4431,12 +4533,50 @@ pub(crate) fn wrapped(s: &str, width: f64, size: f64, style: TextStyle) -> Strin
     crate::report::wrap_lines(s, width * WRAP_PX_PER_MM, measure, 200).join("\n")
 }
 
+/// A text element's lines as they are drawn, from its text with its tokens filled in ([`expand`]):
+/// in its case, then, when it wraps, broken to its box `width_mm` wide ([`wrapped`]), so an upper
+/// case text breaks at its own, wider, width. One for the page, its cut-off check and the SVG, so
+/// they draw and count the same lines. Those that don't fit its box are left out from the bottom
+/// whatever its block alignment: a block taller than its box starts at its top ([`block_shift`]).
+pub(crate) fn drawn_text(expanded: String, case: TextCase, wrap: bool, width_mm: f64, size: f64, style: TextStyle) -> String {
+    let s = case.kept().apply(expanded);
+    if wrap { wrapped(&s, width_mm, size, style) } else { s }
+}
+
+/// How far down its box of `box_h` pixels a text's block of `lines` lines at `px` pixels, spaced
+/// `line_spacing` times the usual, starts: 0 at the top; half the room it leaves in the middle;
+/// all of it at the bottom, its last line's pitch ending on the box's bottom edge. A block taller
+/// than its box (or with no line) starts at its top whatever its alignment, so its first lines are
+/// the ones kept and none is drawn above the box.
+pub(crate) fn block_shift(valign: TextVAlign, box_h: f64, px: f64, lines: usize, line_spacing: f64) -> f64 {
+    if lines == 0 || valign.kept() == TextVAlign::Top {
+        return 0.0;
+    }
+    let block = px * 1.25 * (1.0 + (lines - 1) as f64 * line_spacing);
+    let free = box_h - block;
+    // A measure not a number, or past any page, is no room.
+    if !free.is_finite() || free <= 0.0 {
+        return 0.0;
+    }
+    match valign.kept() {
+        TextVAlign::Middle => free / 2.0,
+        TextVAlign::Bottom => free,
+        _ => 0.0,
+    }
+}
+
 /// A colorbar's title's size in points; it is drawn bold.
 pub const COLORBAR_TITLE_PT: f64 = 9.0;
 
 /// A colorbar's title's style, as [`colorbar_title_lines`] measures it: bold, from the left edge.
 fn colorbar_title_style() -> TextStyle {
-    TextStyle { face: text::Face { bold: true, ..Default::default() }, align: TextAlign::Left, spacing: 0.0 }
+    TextStyle {
+        face: text::Face { bold: true, ..Default::default() },
+        align: TextAlign::Left,
+        spacing: 0.0,
+        valign: TextVAlign::Top,
+        line_spacing: 1.0,
+    }
 }
 
 /// A colorbar's title's width in mm, its widest line, measured as [`colorbar_title_lines`] breaks
@@ -4509,7 +4649,11 @@ fn text_area(r: Rect, s: &str, size: f32, style: TextStyle, ppp: f64) -> Option<
         };
         (x0, x1, lines) = (x0.min(a), x1.max(b), lines + 1);
     }
-    let down = (r.height() + px).min(f32::from(lines) * px * 1.25);
+    // Down to its last line, where its block alignment and line spacing put it.
+    let shift =
+        block_shift(style.valign, f64::from(r.height()), f64::from(px), usize::from(lines), f64::from(style.line_spacing_kept())) as f32;
+    let block = (1.0 + (f32::from(lines) - 1.0) * style.line_spacing_kept()) * px * 1.25;
+    let down = (r.height() + px).min(shift + block);
     (lines > 0).then(|| Rect::from_ltrb(x0 - px, -px, x1 + px, down + px)).flatten()
 }
 
@@ -4555,14 +4699,19 @@ fn draw_turned_box(pm: &mut Canvas, r: Rect, degrees: f32, area: Rect, draw: imp
     pm.draw_pixmap(0, 0, pic.pixmap().as_ref(), &paint, place, None);
 }
 
-/// Text in an element: lines split at `\n` from the top, each placed by the style's alignment. A
-/// centred or right-aligned line wider than the element runs out past its left edge, as a
-/// left-aligned one runs past its right.
+/// Text in an element: lines split at `\n`, the block of them at the top, middle or bottom of the
+/// box ([`block_shift`]) and spaced by the style's line spacing, each placed by the style's
+/// alignment. A block taller than its box starts at its top whatever its alignment, so its first
+/// lines are drawn and the ones past the box left out ([`text_losses`] counts them). A centred or
+/// right-aligned line wider than the element runs out past its left edge, as a left-aligned one
+/// runs past its right.
 fn text_block(pm: &mut Canvas, r: Rect, s: &str, size: f32, color: Rgba, style: TextStyle, ppp: f64) {
     let px = size.clamp(2.0, 400.0) * 1.33 * ppp as f32;
     // Letter spacing is in points, as the size is.
     let spacing = style.spacing * 1.33 * ppp as f32;
-    let mut y = r.y() + px * 0.6;
+    let n = s.lines().take(200).count();
+    let shift = block_shift(style.valign, f64::from(r.height()), f64::from(px), n, f64::from(style.line_spacing_kept())) as f32;
+    let mut y = r.y() + shift + px * 0.6;
     for line in s.lines().take(200) {
         if y > r.y() + r.height() + px {
             break;
@@ -4579,7 +4728,7 @@ fn text_block(pm: &mut Canvas, r: Rect, s: &str, size: f32, color: Rgba, style: 
             }
         };
         text::styled_at(pm, line, left, y, px, color, style.face, spacing);
-        y += px * 1.25;
+        y += px * 1.25 * style.line_spacing_kept();
     }
 }
 
@@ -7869,7 +8018,8 @@ mod tests {
     /// an image export and a print break a text alike.
     #[test]
     fn a_wrapped_text_breaks_alike_at_every_resolution() {
-        let style = TextStyle { face: text::Face::default(), align: TextAlign::Left, spacing: 0.0 };
+        let style =
+            TextStyle { face: text::Face::default(), align: TextAlign::Left, spacing: 0.0, valign: TextVAlign::Top, line_spacing: 1.0 };
         let lines = wrapped(NOTE, 40.0, 12.0, style);
         assert!(lines.lines().count() > 3, "{lines}");
         assert!(lines.lines().all(|l| !l.starts_with(' ') && !l.ends_with(' ')), "{lines:?}");
@@ -7929,7 +8079,8 @@ mod tests {
     #[test]
     fn a_turned_texts_picture_covers_its_lines() {
         let r = Rect::from_xywh(0.0, 0.0, 2000.0, 1000.0).unwrap();
-        let plain = TextStyle { face: text::Face::default(), align: TextAlign::Left, spacing: 0.0 };
+        let plain =
+            TextStyle { face: text::Face::default(), align: TextAlign::Left, spacing: 0.0, valign: TextVAlign::Top, line_spacing: 1.0 };
         let px = 14.0 * 1.33;
         let area = |align| text_area(r, "Fonte: IBGE", 14.0, TextStyle { align, ..plain }, 1.0).unwrap();
         let left = area(TextAlign::Left);
@@ -8004,7 +8155,8 @@ Elaboração: RustGIS",
     /// as before.
     #[test]
     fn text_takes_italic_alignment_and_letter_spacing() {
-        let plain = TextStyle { face: text::Face::default(), align: TextAlign::Left, spacing: 0.0 };
+        let plain =
+            TextStyle { face: text::Face::default(), align: TextAlign::Left, spacing: 0.0, valign: TextVAlign::Top, line_spacing: 1.0 };
         let base = styled_line(plain);
         let (l, r, ..) = text_ink(&base);
         assert!(l < 4, "left-aligned starts at the left: {l}");
@@ -8062,6 +8214,178 @@ Elaboração: RustGIS",
         });
         let (l, r, ..) = text_ink(&pm);
         assert!(r <= 300 && l < r, "inked {l}..{r}");
+    }
+
+    /// A 100 × 100 mm page with `text` at 12 pt in black in (10, 10, 40, `h`) mm, its kind changed
+    /// by `f`.
+    fn block_page(text: &str, h: f64, f: &dyn Fn(&mut ElementKind)) -> Layout {
+        let mut l = Layout::new("L", 100.0, 100.0);
+        let mut kind = ElementKind::text(text, 12.0, Rgba::rgb(0, 0, 0), false);
+        f(&mut kind);
+        l.add("Block", (10.0, 10.0, 40.0, h), kind);
+        l
+    }
+
+    /// Sets a text's block alignment, line spacing and case.
+    fn set_block(k: &mut ElementKind, v: TextVAlign, ls: f64, c: TextCase) {
+        if let ElementKind::Text { valign, line_spacing, case, .. } = k {
+            (*valign, *line_spacing, *case) = (v, ls, c);
+        }
+    }
+
+    /// The rows with a dark pixel, from the top.
+    fn ink_rows(pm: &Pixmap) -> Vec<u32> {
+        (0..pm.height()).filter(|&y| (0..pm.width()).any(|x| rgb(pm, x, y).0 < 128)).collect()
+    }
+
+    /// How many pixels are dark.
+    fn dark_count(pm: &Pixmap) -> usize {
+        (0..pm.height()).flat_map(|y| (0..pm.width()).map(move |x| (x, y))).filter(|&(x, y)| rgb(pm, x, y).0 < 128).count()
+    }
+
+    /// A text's block sits at the top of its box, as texts always have, in its middle, or with its
+    /// last line on its bottom edge; the block itself is the same, moved.
+    #[test]
+    fn a_text_block_sits_at_the_top_middle_or_bottom_of_its_box() {
+        let draw = |v: TextVAlign| {
+            render(&block_page("one\ntwo\nthree", 60.0, &|k| set_block(k, v, 1.0, TextCase::None)), &mut [], 96.0, &PageInfo::default())
+                .unwrap()
+        };
+        let (top, mid, bottom) =
+            (ink_rows(&draw(TextVAlign::Top)), ink_rows(&draw(TextVAlign::Middle)), ink_rows(&draw(TextVAlign::Bottom)));
+        let plain = ink_rows(&render(&block_page("one\ntwo\nthree", 60.0, &|_| {}), &mut [], 96.0, &PageInfo::default()).unwrap());
+        assert_eq!(top, plain, "top is today's drawing");
+        let span = |r: &[u32]| r[r.len() - 1] - r[0];
+        assert_eq!((span(&mid), span(&bottom)), (span(&top), span(&top)), "the same block, moved");
+        let (box_top, box_bottom) = ((10.0 * 96.0 / 25.4) as u32, (70.0 * 96.0 / 25.4) as u32);
+        assert!(box_bottom - bottom[bottom.len() - 1] <= 12, "bottom: last ink row {} of the box's {box_bottom}", bottom[bottom.len() - 1]);
+        let (above, below) = (mid[0] - box_top, box_bottom - mid[mid.len() - 1]);
+        assert!(above.abs_diff(below) <= 8, "middle: {above} above, {below} below");
+    }
+
+    /// Line spacing multiplies the distance between lines: twice as far apart at 2, half at 0.5.
+    #[test]
+    fn line_spacing_spreads_the_lines_by_its_multiple() {
+        let span = |ls: f64| {
+            let pm = render(
+                &block_page("one\ntwo\nthree", 60.0, &|k| set_block(k, TextVAlign::Top, ls, TextCase::None)),
+                &mut [],
+                96.0,
+                &PageInfo::default(),
+            )
+            .unwrap();
+            let r = ink_rows(&pm);
+            (r[r.len() - 1] - r[0]) as f64
+        };
+        // The usual pitch in pixels at 96 dpi, a layout point a pixel there.
+        let pitch = 12.0 * 1.33 * 1.25;
+        assert!(((span(2.0) - span(1.0)) - 2.0 * pitch).abs() <= 2.0, "{} {}", span(2.0), span(1.0));
+        assert!(((span(1.0) - span(0.5)) - pitch).abs() <= 2.0, "{} {}", span(1.0), span(0.5));
+    }
+
+    /// A block taller than its box is drawn from the top whatever its alignment: its first lines
+    /// are kept, the same lines left out and said, and none is drawn above the box.
+    #[test]
+    fn a_block_taller_than_its_box_keeps_its_first_lines_whatever_its_valign() {
+        let info = PageInfo::default();
+        let page = |v| block_page("one\ntwo\nthree\nfour\nfive", 7.0, &|k| set_block(k, v, 1.0, TextCase::None));
+        let top = page(TextVAlign::Top);
+        let loss = text_losses(&top, &[], 96.0, &info);
+        assert_eq!(loss.iter().map(|l| l.left_out).collect::<Vec<_>>(), [3]);
+        for v in [TextVAlign::Middle, TextVAlign::Bottom] {
+            let l = page(v);
+            assert_eq!(render(&l, &mut [], 96.0, &info).unwrap().data(), render(&top, &mut [], 96.0, &info).unwrap().data(), "{v:?}");
+            assert_eq!(text_losses(&l, &[], 96.0, &info), loss, "{v:?}");
+            assert_eq!(lines_left_out_notice(&text_losses(&l, &[], 96.0, &info)[0]), lines_left_out_notice(&loss[0]));
+        }
+    }
+
+    /// The cut-off check steps by the spaced pitch, as the page draws: a wider spacing leaves lines
+    /// out of a box that held them, a tighter one draws lines a box cut.
+    #[test]
+    fn line_spacing_changes_the_lines_left_out() {
+        let info = PageInfo::default();
+        let left_out = |h: f64, ls: f64| {
+            let l = block_page("one\ntwo\nthree\nfour\nfive", h, &|k| set_block(k, TextVAlign::Top, ls, TextCase::None));
+            text_losses(&l, &[], 96.0, &info).first().map_or(0, |l| l.left_out)
+        };
+        assert_eq!((left_out(25.0, 1.0), left_out(25.0, 2.0)), (0, 2));
+        assert_eq!((left_out(12.0, 1.0), left_out(12.0, 0.5)), (2, 0));
+    }
+
+    /// Case applies once the tokens are filled in, and before the wrap, which breaks the wider
+    /// words.
+    #[test]
+    fn case_applies_after_the_tokens_and_before_the_wrap() {
+        let info = PageInfo { page: 2, pages: 3, page_name: String::new() };
+        let draw = |t: &str, c| render(&block_page(t, 20.0, &|k| set_block(k, TextVAlign::Top, 1.0, c)), &mut [], 96.0, &info).unwrap();
+        assert_eq!(draw("Page {page} of {pages}", TextCase::Upper).data(), draw("PAGE 2 OF 3", TextCase::None).data());
+        assert_eq!(draw("PAGE {page} OF {pages}", TextCase::Lower).data(), draw("page 2 of 3", TextCase::None).data());
+        let style = text_style(false, false, rustgis_map::layout::FontFamily::Sans, None, TextAlign::Left, 0.0);
+        let s = "boundaries simplified for print from the census".to_string();
+        let lines = |c| drawn_text(s.clone(), c, true, 40.0, 12.0, style).lines().count();
+        assert!(lines(TextCase::Upper) > lines(TextCase::Lower), "{} {}", lines(TextCase::Upper), lines(TextCase::Lower));
+        assert_eq!(drawn_text(s.clone(), TextCase::None, false, 40.0, 12.0, style), s, "unwrapped and as typed: unchanged");
+    }
+
+    /// A turned text's picture covers its lines where its block alignment and spacing put them.
+    #[test]
+    fn a_turned_bottom_aligned_text_is_drawn_whole() {
+        let info = PageInfo::default();
+        let ink = |v, ls| {
+            let pm = render(
+                &block_page("one\ntwo\nthree", 60.0, &|k| {
+                    set_block(k, v, ls, TextCase::None);
+                    if let ElementKind::Text { rotation, .. } = k {
+                        *rotation = 90.0;
+                    }
+                }),
+                &mut [],
+                96.0,
+                &info,
+            )
+            .unwrap();
+            (dark_count(&pm), ink_bounds(&pm))
+        };
+        let (top, moved) = (ink(TextVAlign::Top, 1.0), ink(TextVAlign::Bottom, 1.5));
+        // Within a tenth: a 12 pt text of some 290 dark pixels shifted by part of a pixel shades
+        // its edges differently (3 % here); a line of it left out is far more.
+        assert!(top.0.abs_diff(moved.0) * 10 <= top.0, "every letter drawn: {} and {}", top.0, moved.0);
+        assert_ne!(top.1, moved.1, "the block moved");
+    }
+
+    /// A block alignment or line spacing that reaches the page unrepaired is clamped where it is
+    /// used: an unknown alignment draws at the top, a spacing not a number at the usual one, one
+    /// out of range at the nearer limit; none moves a line to a place not a number.
+    #[test]
+    fn hostile_text_block_settings_draw_clamped() {
+        let style = text_style(false, false, rustgis_map::layout::FontFamily::Sans, None, TextAlign::Left, 0.0);
+        let kept = |v, ls: f64| {
+            let s = style.with_block(v, ls);
+            (s.valign, s.line_spacing)
+        };
+        assert_eq!(kept(TextVAlign::Invalid, f64::NAN), (TextVAlign::Top, 1.0));
+        assert_eq!(kept(TextVAlign::Bottom, 9.0), (TextVAlign::Bottom, 3.0));
+        assert_eq!(kept(TextVAlign::Middle, f64::INFINITY), (TextVAlign::Middle, 3.0));
+        assert_eq!(kept(TextVAlign::Middle, f64::NEG_INFINITY), (TextVAlign::Middle, 0.5));
+        assert_eq!(kept(TextVAlign::Top, 0.1), (TextVAlign::Top, 0.5));
+        for (v, box_h, px, ls) in [
+            (TextVAlign::Bottom, f64::NAN, 10.0, 1.0),
+            (TextVAlign::Middle, 100.0, f64::NAN, 1.0),
+            (TextVAlign::Bottom, 100.0, 10.0, f64::NAN),
+            (TextVAlign::Bottom, f64::INFINITY, 10.0, 1.0),
+            (TextVAlign::Invalid, 100.0, 10.0, 1.0),
+        ] {
+            assert_eq!(block_shift(v, box_h, px, 3, ls), 0.0, "{v:?} {box_h} {px} {ls}");
+        }
+        assert_eq!(block_shift(TextVAlign::Bottom, 100.0, 10.0, 0, 1.0), 0.0, "no line");
+        let info = PageInfo::default();
+        let draw =
+            |v, ls| render(&block_page("one\ntwo", 60.0, &|k| set_block(k, v, ls, TextCase::Invalid)), &mut [], 96.0, &info).unwrap();
+        assert_eq!(draw(TextVAlign::Invalid, f64::NAN).data(), draw(TextVAlign::Top, 1.0).data());
+        assert_eq!(draw(TextVAlign::Bottom, 1e300).data(), draw(TextVAlign::Bottom, 3.0).data());
+        let l = block_page("one\ntwo", 60.0, &|k| set_block(k, TextVAlign::Bottom, f64::NAN, TextCase::Invalid));
+        assert!(text_losses(&l, &[], 96.0, &info).is_empty());
     }
 
     /// The extent indicator is drawn in its own colour and width (#213): red and 2 pt until set.

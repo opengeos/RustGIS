@@ -660,7 +660,13 @@ mod tests {
         };
         let plain = svg(false);
         assert!(!plain.contains("<tspan") && plain.contains(note), "one line: {plain}");
-        let style = crate::layout::TextStyle { face: crate::text::Face::default(), align: TextAlign::Left, spacing: 0.0 };
+        let style = crate::layout::TextStyle {
+            face: crate::text::Face::default(),
+            align: TextAlign::Left,
+            spacing: 0.0,
+            valign: rustgis_map::layout::TextVAlign::Top,
+            line_spacing: 1.0,
+        };
         let lines = crate::layout::wrapped(note, 40.0, 12.0, style);
         let wrapped = svg(true);
         assert!(lines.lines().count() > 3, "{lines}");
