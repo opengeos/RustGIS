@@ -21,6 +21,18 @@ pub use crate::io::{GpkgMode, GpkgTable, GpkgWritten};
 /// Rows fetched by id per query.
 const CHUNK: usize = 500;
 
+/// What a view read through the R-tree fetches a table's rows by, so they come in the order a
+/// scan of the table gives them.
+#[derive(Clone, Copy)]
+enum RowOrder {
+    /// The key, which is the rowid (a GeoPackage's `INTEGER PRIMARY KEY`).
+    Key,
+    /// The rowid, by this name, where the key is apart from it (declared `INT`, say).
+    Rowid(&'static str),
+    /// Neither: no rowid, or columns have taken all its names. A view is read by a scan.
+    Scan,
+}
+
 /// A feature table in a GeoPackage.
 pub struct GpkgSource {
     info: SourceInfo,
@@ -29,9 +41,7 @@ pub struct GpkgSource {
     table: String,
     geom: String,
     pk: Option<String>,
-    /// Whether the key isn't the table's rowid (declared `INT PRIMARY KEY`, say, not `INTEGER`),
-    /// so the table's order isn't the key's.
-    rowid_apart: bool,
+    row_order: RowOrder,
     rtree: Option<String>,
     reproject: Reproject,
     /// A copy written for a file opened from memory, removed when the source is dropped.
@@ -289,10 +299,7 @@ impl GpkgSource {
                 }
             }
         }
-        // SQLite indexes a primary key that isn't the rowid itself. A table without rowids has
-        // such an index too, and its order is the key's.
-        let rowid_apart = conn.query_row("SELECT 1 FROM pragma_index_list(?1) WHERE origin = 'pk'", [&table], |_| Ok(())).is_ok()
-            && conn.prepare(&format!("SELECT _rowid_ FROM {}", quote(&table))).is_ok();
+        let row_order = row_order(&conn, &table);
         // Looked up without regard to case, as SQLite names are; the real name is kept.
         let rtree_name = format!("rtree_{table}_{geom}");
         let rtree: Option<String> = conn
@@ -357,7 +364,7 @@ impl GpkgSource {
             // A system the definition gives, by its PROJ definition, so the layer keeps it
             // (`SourceInfo::coordinate_system`), as a Shapefile's .prj does (#1476).
             crs: reproject.info_crs(),
-            indexed: rtree.is_some(),
+            indexed: rtree.is_some() && !matches!(row_order, RowOrder::Scan),
             notes,
             zm_dropped: false,
         };
@@ -368,7 +375,7 @@ impl GpkgSource {
             table,
             geom,
             pk,
-            rowid_apart,
+            row_order,
             rtree,
             reproject,
             temp: None,
@@ -528,7 +535,7 @@ impl FeatureSource for GpkgSource {
             Row::Bad => out.skipped += 1,
         };
         match (native, &self.rtree, &self.pk) {
-            (Some(e), Some(rt), Some(pk)) => {
+            (Some(e), Some(rt), Some(pk)) if !matches!(self.row_order, RowOrder::Scan) => {
                 // The index gives the matching ids; an evenly spread sample of them is fetched.
                 // Counted first, then streamed keeping every `step`-th, so a huge match never sits
                 // in memory as a list of ids.
@@ -537,15 +544,7 @@ impl FeatureSource for GpkgSource {
                 let n: i64 = conn.query_row(&format!("SELECT COUNT(*) {filter}"), args, |r| r.get(0)).map_err(err)?;
                 out.matched = u64::try_from(n).unwrap_or(0);
                 let step = usize::try_from(stride(out.matched, limit)).unwrap_or(usize::MAX);
-                let (table, key) = (quote(&self.table), quote(pk));
-                // A key apart from the rowid doesn't follow the table's order: the table lists the
-                // ids in it.
-                let ids = if self.rowid_apart {
-                    format!("SELECT {key} FROM {table} WHERE {key} IN (SELECT id {filter}) ORDER BY _rowid_")
-                } else {
-                    format!("SELECT id {filter}")
-                };
-                let mut st = conn.prepare(&ids).map_err(err)?;
+                let mut st = conn.prepare(&format!("SELECT id {filter}")).map_err(err)?;
                 // A row error (a corrupt page) fails the read rather than truncating it quietly.
                 let mut picked: Vec<i64> = st
                     .query_map(args, |r| r.get(0))
@@ -554,16 +553,21 @@ impl FeatureSource for GpkgSource {
                     .take(limit)
                     .collect::<rusqlite::Result<_>>()
                     .map_err(err)?;
+                out.complete = step == 1;
+                let table = quote(&self.table);
                 // The index lists them in its own order. They are fetched in the table's, as a
                 // whole read gives them: the order the map draws them in.
-                if !self.rowid_apart {
-                    picked.sort_unstable();
-                }
-                let order = if self.rowid_apart { "_rowid_" } else { &key };
-                out.complete = step == 1;
+                let by = match self.row_order {
+                    RowOrder::Rowid(rowid) => {
+                        picked = rowids(conn, &table, rowid, &quote(pk), &picked).map_err(err)?;
+                        rowid.to_string()
+                    }
+                    _ => quote(pk),
+                };
+                picked.sort_unstable();
                 for chunk in picked.chunks(CHUNK) {
                     let marks = vec!["?"; chunk.len()].join(",");
-                    let sql = format!("SELECT {} FROM {table} WHERE {key} IN ({marks}) ORDER BY {order}", self.select_list());
+                    let sql = format!("SELECT {} FROM {table} WHERE {by} IN ({marks}) ORDER BY {by}", self.select_list());
                     let mut st = conn.prepare(&sql).map_err(err)?;
                     let mut rows = st.query(params_from_iter(chunk.iter())).map_err(err)?;
                     while let Some(r) = rows.next().map_err(err)? {
@@ -671,6 +675,33 @@ impl FeatureSource for GpkgSource {
         chunks.flush()?;
         Ok(out)
     }
+}
+
+/// How to fetch rows of `table` in a scan's order ([`RowOrder`]).
+fn row_order(conn: &Connection, table: &str) -> RowOrder {
+    // SQLite indexes a primary key that isn't the rowid itself.
+    if conn.query_row("SELECT 1 FROM pragma_index_list(?1) WHERE origin = 'pk'", [table], |_| Ok(())).is_err() {
+        return RowOrder::Key;
+    }
+    // A column takes a rowid's name from it; a table without rowids has none of them.
+    let free = |name: &&str| {
+        let taken = "SELECT 1 FROM pragma_table_xinfo(?1) WHERE lower(name) = ?2";
+        conn.query_row(taken, [table, name], |_| Ok(())).is_err() && conn.prepare(&format!("SELECT {name} FROM {}", quote(table))).is_ok()
+    };
+    ["rowid", "_rowid_", "oid"].into_iter().find(free).map_or(RowOrder::Scan, RowOrder::Rowid)
+}
+
+/// The rowids (named `rowid`) of the rows of `table` whose `key` is among `keys`.
+fn rowids(conn: &Connection, table: &str, rowid: &str, key: &str, keys: &[i64]) -> rusqlite::Result<Vec<i64>> {
+    let mut found = Vec::with_capacity(keys.len());
+    for chunk in keys.chunks(CHUNK) {
+        let marks = vec!["?"; chunk.len()].join(",");
+        let mut st = conn.prepare(&format!("SELECT {rowid} FROM {table} WHERE {key} IN ({marks})"))?;
+        for id in st.query_map(params_from_iter(chunk.iter()), |r| r.get(0))? {
+            found.push(id?);
+        }
+    }
+    Ok(found)
 }
 
 /// A file's device and inode, which tell it from another file put at its path since; `None`
