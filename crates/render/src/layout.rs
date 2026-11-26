@@ -411,7 +411,7 @@ fn losses(layout: &Layout, maps: &[Map], dpi: f64, info: &PageInfo, only: Option
                         false,
                         *wrap,
                         None,
-                        (style.valign, style.line_spacing_kept()),
+                        (style.valign, style.line_spacing),
                     )
                 }
                 // Its title at the size it is drawn at, its legend's text size (#2581).
@@ -4474,28 +4474,13 @@ pub(crate) struct TextStyle {
 }
 
 impl TextStyle {
-    /// This style with a text's block alignment and line spacing, clamped where they are used: an
-    /// unknown alignment is the top, a line spacing not a number the usual one, and one outside
-    /// 0.5..=3 the nearer limit.
+    /// This style with a text's block alignment and line spacing, brought into range here, so every
+    /// reader of `line_spacing` may trust it: an unknown alignment is the top, and the spacing is
+    /// as [`rustgis_map::layout::line_spacing_in_range`] reads it (not finite is the usual one, one
+    /// outside 0.5..=3 the nearer limit). The usual spacing is exactly 1, so a plain text is placed
+    /// as it always was.
     pub(crate) fn with_block(self, valign: TextVAlign, line_spacing: f64) -> TextStyle {
-        TextStyle { valign: valign.kept(), line_spacing: kept_line_spacing(line_spacing) as f32, ..self }
-    }
-
-    /// Its line spacing, clamped again where it is used ([`kept_line_spacing`]). Exactly 1 for the
-    /// usual spacing (an `f32` goes to `f64` and back unchanged), so a plain text is placed as it
-    /// always was.
-    pub(crate) fn line_spacing_kept(self) -> f32 {
-        kept_line_spacing(f64::from(self.line_spacing)) as f32
-    }
-}
-
-/// A line spacing as it is drawn: the usual one when it is not a number, else clamped to 0.5..=3
-/// (an infinity to the nearer limit).
-fn kept_line_spacing(ls: f64) -> f64 {
-    if ls.is_nan() {
-        rustgis_map::layout::LINE_SPACING
-    } else {
-        ls.clamp(rustgis_map::layout::MIN_LINE_SPACING, rustgis_map::layout::MAX_LINE_SPACING)
+        TextStyle { valign: valign.kept(), line_spacing: rustgis_map::layout::line_spacing_in_range(line_spacing) as f32, ..self }
     }
 }
 
@@ -4655,9 +4640,8 @@ fn text_area(r: Rect, s: &str, size: f32, style: TextStyle, ppp: f64) -> Option<
         (x0, x1, lines) = (x0.min(a), x1.max(b), lines + 1);
     }
     // Down to its last line, where its block alignment and line spacing put it.
-    let shift =
-        block_shift(style.valign, f64::from(r.height()), f64::from(px), usize::from(lines), f64::from(style.line_spacing_kept())) as f32;
-    let block = (1.0 + (f32::from(lines) - 1.0) * style.line_spacing_kept()) * px * 1.25;
+    let shift = block_shift(style.valign, f64::from(r.height()), f64::from(px), usize::from(lines), f64::from(style.line_spacing)) as f32;
+    let block = (1.0 + (f32::from(lines) - 1.0) * style.line_spacing) * px * 1.25;
     let down = (r.height() + px).min(shift + block);
     (lines > 0).then(|| Rect::from_ltrb(x0 - px, -px, x1 + px, down + px)).flatten()
 }
@@ -4715,7 +4699,7 @@ fn text_block(pm: &mut Canvas, r: Rect, s: &str, size: f32, color: Rgba, style: 
     // Letter spacing is in points, as the size is.
     let spacing = style.spacing * 1.33 * ppp as f32;
     let n = s.lines().take(200).count();
-    let shift = block_shift(style.valign, f64::from(r.height()), f64::from(px), n, f64::from(style.line_spacing_kept())) as f32;
+    let shift = block_shift(style.valign, f64::from(r.height()), f64::from(px), n, f64::from(style.line_spacing)) as f32;
     let mut y = r.y() + shift + px * 0.6;
     for line in s.lines().take(200) {
         if y > r.y() + r.height() + px {
@@ -4733,7 +4717,7 @@ fn text_block(pm: &mut Canvas, r: Rect, s: &str, size: f32, color: Rgba, style: 
             }
         };
         text::styled_at(pm, line, left, y, px, color, style.face, spacing);
-        y += px * 1.25 * style.line_spacing_kept();
+        y += px * 1.25 * style.line_spacing;
     }
 }
 
@@ -8413,8 +8397,9 @@ Elaboração: RustGIS",
     }
 
     /// A block alignment or line spacing that reaches the page unrepaired is clamped where it is
-    /// used: an unknown alignment draws at the top, a spacing not a number at the usual one, one
-    /// out of range at the nearer limit; none moves a line to a place not a number.
+    /// used: an unknown alignment draws at the top, a spacing not a finite number (an infinity too)
+    /// at the usual one, one out of range at the nearer limit; none moves a line to a place not a
+    /// number.
     #[test]
     fn hostile_text_block_settings_draw_clamped() {
         let style = text_style(false, false, rustgis_map::layout::FontFamily::Sans, None, TextAlign::Left, 0.0);
@@ -8424,8 +8409,8 @@ Elaboração: RustGIS",
         };
         assert_eq!(kept(TextVAlign::Invalid, f64::NAN), (TextVAlign::Top, 1.0));
         assert_eq!(kept(TextVAlign::Bottom, 9.0), (TextVAlign::Bottom, 3.0));
-        assert_eq!(kept(TextVAlign::Middle, f64::INFINITY), (TextVAlign::Middle, 3.0));
-        assert_eq!(kept(TextVAlign::Middle, f64::NEG_INFINITY), (TextVAlign::Middle, 0.5));
+        assert_eq!(kept(TextVAlign::Middle, f64::INFINITY), (TextVAlign::Middle, 1.0));
+        assert_eq!(kept(TextVAlign::Middle, f64::NEG_INFINITY), (TextVAlign::Middle, 1.0));
         assert_eq!(kept(TextVAlign::Top, 0.1), (TextVAlign::Top, 0.5));
         for (v, box_h, px, ls) in [
             (TextVAlign::Bottom, f64::NAN, 10.0, 1.0),

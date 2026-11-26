@@ -570,8 +570,10 @@ impl<'de> Deserialize<'de> for TextVAlign {
     }
 }
 
+/// Whether a save leaves a text's block alignment out: the top, or a value that is not a name
+/// ([`TextVAlign::kept`]), which reads back as the top.
 fn is_top(v: &TextVAlign) -> bool {
-    *v == TextVAlign::Top
+    v.kept() == TextVAlign::Top
 }
 
 /// The case a text element is drawn in.
@@ -652,8 +654,10 @@ impl<'de> Deserialize<'de> for TextCase {
     }
 }
 
+/// Whether a save leaves a text's case out: as typed, or a value that is not a name
+/// ([`TextCase::kept`]), which reads back as typed.
 fn is_no_case(v: &TextCase) -> bool {
-    *v == TextCase::None
+    v.kept() == TextCase::None
 }
 
 /// The usual spacing between a text's lines, as a multiple of it.
@@ -666,8 +670,17 @@ fn line_spacing() -> f64 {
     LINE_SPACING
 }
 
+/// Whether a save leaves a text's line spacing out: the usual, or one not finite, which
+/// [`line_spacing_in_range`] reads as the usual.
 fn is_line_spacing(v: &f64) -> bool {
-    *v == LINE_SPACING
+    !v.is_finite() || *v == LINE_SPACING
+}
+
+/// A text's line spacing as it is drawn and kept: the usual one ([`LINE_SPACING`]) when it is not
+/// a finite number, else clamped to [`MIN_LINE_SPACING`]..=[`MAX_LINE_SPACING`]. The one reader
+/// for the range, so a layout's repair, its capability check and the page agree.
+pub fn line_spacing_in_range(v: f64) -> f64 {
+    finite_or(v, LINE_SPACING).clamp(MIN_LINE_SPACING, MAX_LINE_SPACING)
 }
 
 /// A text's line spacing as a file holds it: a number as it is (out of range is for
@@ -1892,9 +1905,7 @@ impl ElementKind {
         let ElementKind::Text { valign, line_spacing, case, .. } = self else {
             return false;
         };
-        valign.kept() != TextVAlign::Top
-            || case.kept() != TextCase::None
-            || finite_or(*line_spacing, LINE_SPACING).clamp(MIN_LINE_SPACING, MAX_LINE_SPACING) != LINE_SPACING
+        valign.kept() != TextVAlign::Top || case.kept() != TextCase::None || line_spacing_in_range(*line_spacing) != LINE_SPACING
     }
 
     /// Whether this is a scale bar with any of the details set: subdivisions, divisions before
@@ -3172,7 +3183,7 @@ impl Layout {
                     // A file's unknown name or wrong kind of value is read as a marker: back to the default.
                     *valign = valign.kept();
                     *case = case.kept();
-                    *line_spacing = finite_or(*line_spacing, LINE_SPACING).clamp(MIN_LINE_SPACING, MAX_LINE_SPACING);
+                    *line_spacing = line_spacing_in_range(*line_spacing);
                     *size = finite_or(*size, 12.0).clamp(*crate::graphics::FONT_SIZE.start(), *crate::graphics::FONT_SIZE.end());
                     *letter_spacing = finite_or(*letter_spacing, 0.0).clamp(MIN_LETTER_SPACING, MAX_LETTER_SPACING);
                     let end = text.char_indices().nth(5000).map_or(text.len(), |(i, _)| i);
@@ -4970,6 +4981,29 @@ mod tests {
         assert!(s.ends_with(r#""bold":false,"valign":"bottom","line_spacing":1.5,"case":"upper"}}"#), "{s}");
         assert_eq!(serde_json::from_str::<ElementKind>(&s).unwrap(), set);
         assert!(set.text_uses_block());
+        // Unclamped, a value that is not a name or not a finite number saves as the default does:
+        // nothing, never "top" or a null spacing.
+        let plain = ElementKind::text("a", 10.0, Rgba::rgb(0, 0, 0), false);
+        let plain_json = serde_json::to_string(&plain).unwrap();
+        for (v, ls, c) in [
+            (TextVAlign::Invalid, f64::NAN, TextCase::Invalid),
+            (TextVAlign::Invalid, LINE_SPACING, TextCase::None),
+            (TextVAlign::Top, f64::NAN, TextCase::None),
+            (TextVAlign::Top, f64::INFINITY, TextCase::None),
+            (TextVAlign::Top, f64::NEG_INFINITY, TextCase::Invalid),
+        ] {
+            let mut odd = plain.clone();
+            if let ElementKind::Text { valign, line_spacing, case, .. } = &mut odd {
+                (*valign, *line_spacing, *case) = (v, ls, c);
+            }
+            assert_eq!(serde_json::to_string(&odd).unwrap(), plain_json, "{v:?} {ls} {c:?}");
+            assert!(!odd.text_uses_block(), "{v:?} {ls} {c:?}");
+        }
+        // One reader for the range: not finite is the usual spacing, else the nearer limit.
+        for (ls, want) in [(f64::NAN, 1.0), (f64::INFINITY, 1.0), (f64::NEG_INFINITY, 1.0), (9.0, 3.0), (0.1, 0.5), (1.5, 1.5), (3.0, 3.0)]
+        {
+            assert_eq!(line_spacing_in_range(ls), want, "{ls}");
+        }
         for (name, v) in [
             (" MIDDLE ", TextVAlign::Middle),
             ("centre", TextVAlign::Middle),
