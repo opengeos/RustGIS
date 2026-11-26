@@ -10095,8 +10095,9 @@ Elaboração: RustGIS",
     const PINNED_TEXT_LOSSES: u64 = 0x26af_01ce_67e5_7cfd;
 
     /// A text with none of the block settings draws, and is measured for lines that don't fit and ink
-    /// off the page, exactly as main did, at 96 and 300 dpi: in a process of its own, told to use the
-    /// built-in face before any text.
+    /// off the page, exactly as main did: every page at 96 dpi, and the first eight (left-aligned,
+    /// unwrapped, upright and turned a quarter) at 300 dpi too, which is enough to hold the scaling
+    /// of the line pitch. In a process of its own, told to use the built-in face before any text.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn plain_texts_draw_as_before() {
