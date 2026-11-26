@@ -41,6 +41,15 @@ pub struct VertexDrag {
     pub snapped_lonlat: Option<Coord>,
 }
 
+impl VertexDrag {
+    /// Where letting go would put the vertex, in longitude/latitude: where it snapped, as snapping
+    /// gave it, else the pointer's place ([`VertexDrag::at`], in view coordinates) there. `None`
+    /// where the map's coordinates have none.
+    pub fn lonlat(&self, app: &RustGisApp) -> Option<Coord> {
+        self.snapped_lonlat.or_else(|| view_to_lonlat(app, self.at))
+    }
+}
+
 /// The source chosen by a vertex click, without retaining rows or invalidating ordinary edits.
 #[derive(Clone, Copy)]
 pub(crate) struct VertexOwner {
