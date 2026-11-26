@@ -478,7 +478,8 @@ fn edt_1d(f: &[f32], out: &mut [f32], v: &mut [usize], z: &mut [f32]) {
     // The parabola rooted at p, where it crosses the one rooted at q.
     let cross = |q: usize, p: usize| {
         let (fq, fp) = (at(f, q), at(f, p));
-        ((fq + (q * q) as f32) - (fp + (p * p) as f32)) / (2.0 * (q as f32 - p as f32))
+        let (qf, pf) = (q as f64, p as f64);
+        (((f64::from(fq) + qf * qf) - (f64::from(fp) + pf * pf)) / (2.0 * (qf - pf))) as f32
     };
     let mut k = 0usize;
     if let (Some(v0), [z0, z1, ..]) = (v.first_mut(), &mut *z) {
@@ -750,5 +751,21 @@ mod tests {
         let mut s: Vec<f32> = (0..w * h).map(|i| if i % w < 4 { 0.0 } else { 1.0 }).collect();
         blur(&mut s, w, h, 3);
         assert!(s[3] > 0.0 && s[4] < 1.0, "{s:?}");
+    }
+
+    #[test]
+    fn edt_1d_handles_large_indices_without_overflow_or_rounding_loss() {
+        // Past 65,536, `q * q` overflows 32-bit `usize` on wasm32, and `(q * q) as f32` rounds
+        // away small `f` differences (ULP >= 256 in f32).
+        let n = 65_538;
+        let mut f = vec![1e20f32; n];
+        f[65_536] = 0.0;
+        f[65_537] = 10.0;
+        let (mut out, mut v, mut z) = (vec![0.0f32; n], vec![0usize; n], vec![0.0f32; n + 1]);
+        edt_1d(&f, &mut out, &mut v, &mut z);
+        assert_eq!(out[65_536], 0.0);
+        assert_eq!(out[65_537], 1.0);
+        assert_eq!(out[65_535], 1.0);
+        assert_eq!(out[65_534], 4.0);
     }
 }

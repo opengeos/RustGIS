@@ -527,6 +527,7 @@ fn dist_m(a: Coord, b: Coord) -> f64 {
 pub fn elevation_at(r: &Raster, b: usize, ll: Coord) -> Option<f64> {
     let w = r.transformer().from_lonlat(ll)?;
     let (x, y) = r.transform.to_pixel(w);
+    let x = r.wrap_col(x);
     let (x, y) = (x - 0.5, y - 0.5);
     let (c0, r0) = (x.floor() as i64, y.floor() as i64);
     let (fx, fy) = (x - c0 as f64, y - r0 as f64);
@@ -543,6 +544,9 @@ pub fn elevation_at(r: &Raster, b: usize, ll: Coord) -> Option<f64> {
 /// An elevation profile along a path: (distance from the start in metres, point, elevation).
 pub fn profile(r: &Raster, b: usize, path: &[Coord], samples: usize) -> Vec<(f64, Coord, Option<f64>)> {
     let samples = samples.clamp(2, 10_000);
+    if path.iter().any(|p| !p.is_finite()) {
+        return Vec::new();
+    }
     let legs: Vec<f64> = path
         .windows(2)
         .map(|w| match w {
@@ -551,7 +555,7 @@ pub fn profile(r: &Raster, b: usize, path: &[Coord], samples: usize) -> Vec<(f64
         })
         .collect();
     let total: f64 = legs.iter().sum();
-    if total <= 0.0 {
+    if !(total.is_finite() && total > 0.0) {
         return path.first().map(|p| vec![(0.0, *p, elevation_at(r, b, *p))]).unwrap_or_default();
     }
     // Samples are in order along the path, so the legs are walked once.
@@ -566,7 +570,21 @@ pub fn profile(r: &Raster, b: usize, path: &[Coord], samples: usize) -> Vec<(f64
         let len = legs.get(li).copied().unwrap_or(0.0);
         let t = if len > 0.0 { ((d - acc) / len).clamp(0.0, 1.0) } else { 0.0 };
         let at = match (path.get(li), path.get(li + 1)) {
-            (Some(a), Some(c)) => Coord::new(a.x + (c.x - a.x) * t, a.y + (c.y - a.y) * t),
+            (Some(a), Some(c)) => {
+                let mut dx = c.x - a.x;
+                if dx > 180.0 {
+                    dx -= 360.0;
+                } else if dx < -180.0 {
+                    dx += 360.0;
+                }
+                let mut x = a.x + dx * t;
+                if x > 180.0 {
+                    x -= 360.0;
+                } else if x < -180.0 {
+                    x += 360.0;
+                }
+                Coord::new(x, a.y + (c.y - a.y) * t)
+            }
             _ => path.last().copied().unwrap_or_default(),
         };
         out.push((d, at, elevation_at(r, b, at)));
@@ -3843,6 +3861,55 @@ mod tests {
             assert!(inside > 1000, "{inside} cells are in the zone");
             let got = zonal_means_in(&r, polar, &[0], &[vec![ring]]).unwrap_or_else(|e| panic!("{e}"));
             assert_eq!(got, Some((vec![1.0], inside)), "{x0} {x1} {y0} {y1}");
+        }
+    }
+
+    #[test]
+    fn profile_guards_nan_and_interpolates_across_antimeridian() {
+        // Global 1-degree LonLat raster: elevation 100 near +/-180 deg, 0 elsewhere.
+        let (w, h) = (360u32, 10u32);
+        let mut data = vec![0.0f32; (w * h) as usize];
+        for row in 0..h {
+            for col in 0..w {
+                let lon = -180.0 + col as f64 + 0.5;
+                if lon.abs() >= 178.0 {
+                    data[(row * w + col) as usize] = 100.0;
+                }
+            }
+        }
+        let gt = GeoTransform { origin_x: -180.0, origin_y: 5.0, pixel_width: 1.0, pixel_height: -1.0 };
+        let r = Raster::new("dem", w, h, vec![data], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
+
+        // A path with a NaN coordinate must not emit NaN samples.
+        let nan_prof = profile(&r, 0, &[Coord::new(0.0, 0.0), Coord::new(f64::NAN, 0.0)], 500);
+        assert!(nan_prof.is_empty(), "expected empty profile for NaN path, got {} samples", nan_prof.len());
+
+        // Crossing the antimeridian from 179 to -179 must interpolate along the 2-degree arc
+        // across +/-180 rather than sweeping across longitude 0.
+        let prof = profile(&r, 0, &[Coord::new(179.0, 0.0), Coord::new(-179.0, 0.0)], 20);
+        assert_eq!(prof.len(), 20);
+        for &(d, c, z) in &prof {
+            assert!(d.is_finite() && c.is_finite());
+            assert!(c.x.abs() >= 178.999 && c.x.abs() <= 180.0, "sample swept away from antimeridian: {c:?}");
+            assert_eq!(z, Some(100.0), "expected antimeridian elevation at {c:?}");
+        }
+        // Westbound across the antimeridian (-179 to 179) also stays on the short arc.
+        let prof_west = profile(&r, 0, &[Coord::new(-179.0, 0.0), Coord::new(179.0, 0.0)], 21);
+        assert_eq!(prof_west.len(), 21);
+        for &(d, c, _) in &prof_west {
+            assert!(d.is_finite() && c.is_finite());
+            assert!(c.x.abs() >= 178.999 && c.x.abs() <= 180.0, "westbound sample swept away: {c:?}");
+        }
+
+        // Regional raster spanning 179..183 deg: wrapped samples past 180 (e.g. -179.5) must still
+        // resolve onto the raster's columns via its longitude wrap.
+        let reg_gt = GeoTransform { origin_x: 179.0, origin_y: 2.0, pixel_width: 1.0, pixel_height: -1.0 };
+        let reg = Raster::new("regional", 4, 4, vec![vec![250.0; 16]], reg_gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
+        let prof_reg = profile(&reg, 0, &[Coord::new(179.5, 0.0), Coord::new(-177.5, 0.0)], 13);
+        assert_eq!(prof_reg.len(), 13);
+        for &(d, c, z) in &prof_reg {
+            assert!(d.is_finite() && c.is_finite());
+            assert_eq!(z, Some(250.0), "regional antimeridian raster missed elevation at {c:?}");
         }
     }
 }

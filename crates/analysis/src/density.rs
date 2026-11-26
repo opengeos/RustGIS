@@ -70,37 +70,29 @@ const DEFAULT_GRID_STEPS: f64 = 250.0;
 /// small samples or identical coordinates (span / 30.0 when extent > 0, or 1000.0 coordinate-space
 /// units for single or coincident points).
 pub fn silverman_bandwidth(points: &[(Coord, f64)], extent: &Extent) -> f64 {
-    let n = points.len();
-    if n < 2 {
+    let fallback = || {
         let span = extent.width().max(extent.height());
-        return if span > 1e-4 { span / 30.0 } else { 1000.0 };
+        if span.is_finite() && span > 1e-4 { (span / 30.0).max(1e-4) } else { 1000.0 }
+    };
+
+    let valid: Vec<(Coord, f64)> = points.iter().copied().filter(|(p, w)| p.is_finite() && w.is_finite() && *w > 0.0).collect();
+    let n = valid.len();
+    if n < 2 {
+        return fallback();
     }
 
-    let (sum_x, sum_y, sum_w) = points.iter().fold((0.0, 0.0, 0.0), |(sx, sy, sw), (p, w)| {
-        let weight = if w.is_finite() && *w > 0.0 { *w } else { 1.0 };
-        (sx + p.x * weight, sy + p.y * weight, sw + weight)
-    });
-    if sum_w <= 0.0 || !sum_w.is_finite() {
-        let span = extent.width().max(extent.height());
-        return if span.is_finite() && span > 1e-4 { (span / 30.0).max(1e-4) } else { 1000.0 };
+    let (sum_x, sum_y, sum_w) = valid.iter().fold((0.0, 0.0, 0.0), |(sx, sy, sw), (p, w)| (sx + p.x * w, sy + p.y * w, sw + w));
+    if sum_w <= 0.0 || !sum_w.is_finite() || !sum_x.is_finite() || !sum_y.is_finite() {
+        return fallback();
     }
     let mean_x = sum_x / sum_w;
     let mean_y = sum_y / sum_w;
 
-    let sum_sq_dist = points.iter().fold(0.0, |acc, (p, w)| {
-        let weight = if w.is_finite() && *w > 0.0 { *w } else { 1.0 };
-        acc + weight * ((p.x - mean_x).powi(2) + (p.y - mean_y).powi(2))
-    });
+    let sum_sq_dist = valid.iter().fold(0.0, |acc, (p, w)| acc + w * ((p.x - mean_x).powi(2) + (p.y - mean_y).powi(2)));
     let std_dist = (sum_sq_dist / sum_w).sqrt();
 
-    let mut dists: Vec<(f64, f64)> = points
-        .iter()
-        .map(|(p, w)| {
-            let weight = if w.is_finite() && *w > 0.0 { *w } else { 1.0 };
-            (((p.x - mean_x).powi(2) + (p.y - mean_y).powi(2)).sqrt(), weight)
-        })
-        .collect();
-    dists.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    let mut dists: Vec<(f64, f64)> = valid.iter().map(|(p, w)| (((p.x - mean_x).powi(2) + (p.y - mean_y).powi(2)).sqrt(), *w)).collect();
+    dists.sort_by(|a, b| a.0.total_cmp(&b.0));
 
     let half_w = sum_w * 0.5;
     let mut cum_w = 0.0;
@@ -117,7 +109,7 @@ pub fn silverman_bandwidth(points: &[(Coord, f64)], extent: &Extent) -> f64 {
     let a = (1.0 / 2.0f64.ln()).sqrt();
     let term = std_dist.min(a * median_dist);
 
-    if term > 1e-6 {
+    if term.is_finite() && term > 1e-6 {
         let n_factor = (n as f64).powf(-0.2);
         let h = 0.9 * term * n_factor;
         if h.is_finite() && h > 1e-4 {
@@ -125,9 +117,7 @@ pub fn silverman_bandwidth(points: &[(Coord, f64)], extent: &Extent) -> f64 {
         }
     }
 
-    // Fallback: fraction of extent or fixed distance
-    let span = extent.width().max(extent.height());
-    if span.is_finite() && span > 1e-4 { (span / 30.0).max(1e-4) } else { 1000.0 }
+    fallback()
 }
 
 /// Automatically calculates cell size so the grid spans approximately 250 cells across its maximum dimension.
@@ -704,5 +694,41 @@ mod tests {
             let e = kernel_density_on(Some(threads), &points, None, 5.0, 50.0, KernelType::Quartic, "c", Crs::WebMercator).unwrap_err();
             assert_eq!(e, crate::control::CANCELLED, "{threads}");
         }
+    }
+
+    #[test]
+    fn silverman_bandwidth_matches_valid_points_and_handles_non_finite() {
+        let base = vec![
+            (Coord::new(0.0, 0.0), 1.0),
+            (Coord::new(100.0, 0.0), 2.0),
+            (Coord::new(0.0, 100.0), 1.5),
+            (Coord::new(100.0, 100.0), 1.0),
+            (Coord::new(50.0, 50.0), 3.0),
+        ];
+        let ext = Extent::new(0.0, 0.0, 100.0, 100.0);
+        let h_base = silverman_bandwidth(&base, &ext);
+
+        let mut noisy = base.clone();
+        for i in 0..30 {
+            match i % 5 {
+                0 => noisy.push((Coord::new(f64::NAN, 10.0), 1.0)),
+                1 => noisy.push((Coord::new(f64::INFINITY, 10.0), 1.0)),
+                2 => noisy.push((Coord::new(25.0, 25.0), 0.0)),
+                3 => noisy.push((Coord::new(75.0, 75.0), -2.0)),
+                _ => noisy.push((Coord::new(50.0, 50.0), f64::NAN)),
+            }
+        }
+        let h_noisy = silverman_bandwidth(&noisy, &ext);
+        assert_eq!(h_noisy, h_base, "invalid and non-positive points must not change bandwidth");
+
+        // Fewer than 2 valid points falls back to extent scaling.
+        let one_valid = vec![
+            (Coord::new(50.0, 50.0), 1.0),
+            (Coord::new(0.0, 0.0), 0.0),
+            (Coord::new(100.0, 100.0), -1.0),
+            (Coord::new(f64::NAN, 0.0), 1.0),
+        ];
+        let h_one = silverman_bandwidth(&one_valid, &ext);
+        assert!((h_one - 100.0 / 30.0).abs() < 1e-12, "got {h_one}");
     }
 }

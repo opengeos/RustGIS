@@ -2457,6 +2457,16 @@ fn simulate(s: &mut Session, p: &Value) -> CmdResult {
                 && polygons.features.row(r).is_some_and(|f| f.geometry().is_none())
         })
         .count();
+    let unusable = rows
+        .iter()
+        .filter(|&&r| {
+            polygons
+                .features
+                .row(r)
+                .and_then(|f| f.geometry())
+                .is_some_and(|g| matches!(g, Geometry::Polygon(_)) && !network::usable_polygon_extent(g.extent()))
+        })
+        .count();
     let source = l.name.clone();
     let seed = f(p, "seed").map_or(42, |v| v.max(0.0) as u64);
     let pts: Vec<(usize, Coord)> = match ps(p, "field") {
@@ -2504,6 +2514,12 @@ fn simulate(s: &mut Session, p: &Value) -> CmdResult {
                 "{}: {unplaced} polygon(s) of {source} have a place that can't be given in longitude/latitude, so no points are simulated in them",
                 ds.name
             ),
+        ));
+    }
+    if unusable > 0 {
+        s.warn(format!(
+            "{}: {unusable} polygon(s) of {source} have an empty, zero-area or non-finite extent, so no points are simulated in them",
+            ds.name
         ));
     }
     let nid = super::layer::add_dataset(s, ds);

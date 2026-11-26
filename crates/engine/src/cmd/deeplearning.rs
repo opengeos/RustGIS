@@ -354,7 +354,8 @@ pub(crate) fn classify_work(s: &Session, p: &Value) -> Result<super::workflows::
                 (m, Some((auto, unread)))
             }
         };
-        let (class, prob) = neural::classify(&r, &m.model, rasterops::NODATA)?;
+        let classified = neural::classify_reporting(&r, &m.model, rasterops::NODATA)?;
+        let (class, prob, overflowed) = (classified.class, classified.prob, classified.overflowed);
         let mut counts = vec![0usize; m.model.classes.len()];
         for v in class.iter().filter(|v| **v >= 1.0) {
             if let Some(c) = counts.get_mut(*v as usize - 1) {
@@ -365,18 +366,26 @@ pub(crate) fn classify_work(s: &Session, p: &Value) -> Result<super::workflows::
         let legend: Vec<Value> =
             m.model.classes.iter().zip(&counts).enumerate().map(|(i, (c, n))| json!({"value": i + 1, "class": c, "pixels": n})).collect();
         let extra = json!({"model": m.name, "accuracy": m.accuracy, "classes": legend});
+        let out_name = out.clone();
         // Kept once its classes are added. One that was given no name is named then, so it never
         // replaces a model kept while it trained.
-        let then: Option<super::workflows::Then> = trained.map(|(auto, unread)| {
+        let then: Option<super::workflows::Then> = (trained.is_some() || overflowed > 0).then(|| {
             Box::new(move |s: &mut Session, v: &mut Value| {
-                unread.say(s);
-                let mut m = m;
-                if let Some(base) = auto {
-                    m.name = free_name(s, &base);
-                    v["model"] = json!(m.name);
+                if let Some((auto, unread)) = trained {
+                    unread.say(s);
+                    let mut m = m;
+                    if let Some(base) = auto {
+                        m.name = free_name(s, &base);
+                        v["model"] = json!(m.name);
+                    }
+                    m.say_limited(s, v);
+                    v["replaced"] = json!(store(s, m));
                 }
-                m.say_limited(s, v);
-                v["replaced"] = json!(store(s, m));
+                if overflowed > 0 {
+                    s.warn(format!(
+                        "{out_name}: {overflowed} pixel(s) overflowed the network during classification and were left as no data"
+                    ));
+                }
             }) as super::workflows::Then
         });
         Ok(super::workflows::made_layer(out, layer, Some(extra), then))

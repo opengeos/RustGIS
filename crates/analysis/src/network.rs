@@ -772,6 +772,19 @@ impl Search {
 pub const MAX_POINTS: usize = 1_000_000;
 const MAX_TRIES: usize = 50_000_000;
 
+/// Whether `e` is a finite, positive-area bounding box that [`random_points`] can sample inside.
+pub fn usable_polygon_extent(e: rustgis_geom::Extent) -> bool {
+    !e.is_empty()
+        && e.min_x.is_finite()
+        && e.max_x.is_finite()
+        && e.min_y.is_finite()
+        && e.max_y.is_finite()
+        && e.width().is_finite()
+        && e.height().is_finite()
+        && e.width() > 0.0
+        && e.height() > 0.0
+}
+
 /// Points spread at random (but reproducibly, from `seed`) inside polygons: `per` in each, up to
 /// [`MAX_POINTS`] in all; thin polygons may get fewer (tries are bounded too).
 pub fn random_points(ds: &Dataset, rows: &[usize], per: usize, seed: u64) -> Vec<(usize, Coord)> {
@@ -785,17 +798,23 @@ pub fn random_points(ds: &Dataset, rows: &[usize], per: usize, seed: u64) -> Vec
     };
     let mut out = Vec::new();
     crate::control::begin(rows.len());
-    for (i, r) in rows.iter().enumerate() {
+    'rows: for (i, r) in rows.iter().enumerate() {
         if crate::control::cancelled() {
             break;
         }
         crate::control::reached(i);
         let Some(Geometry::Polygon(polys)) = ds.features.get(*r).and_then(|f| f.geometry.as_ref()) else { continue };
         let e = ds.features.get(*r).and_then(|f| f.geometry.as_ref()).map(|g| g.extent()).unwrap_or_default();
+        if !usable_polygon_extent(e) {
+            continue;
+        }
         let mut placed = 0;
         let mut tries = 0usize;
         while placed < per && tries < per.saturating_mul(200) && budget > 0 && out.len() < MAX_POINTS {
             tries += 1;
+            if tries & 1023 == 0 && crate::control::cancelled() {
+                break 'rows;
+            }
             budget -= 1;
             let c = Coord::new(e.min_x + rnd() * e.width(), e.min_y + rnd() * e.height());
             if polys.iter().any(|rings| rustgis_data::geometry::polygon_contains(rings, c)) {
@@ -1899,5 +1918,47 @@ mod tests {
         let mut ds = Dataset::new("legacy prefilter", GeometryType::Point, vec![]);
         ds.push(Some(Geometry::Point(point)), vec![]);
         assert!(within(&ds, &[0], center, 100_000.0).is_empty());
+    }
+
+    #[test]
+    fn random_points_skips_empty_extents_and_checks_cancel_inside_loop() {
+        // 1,000 empty polygons (each would burn 250 * 200 = 50,000 tries = 50,000,000 total)
+        // followed by one valid unit square: the empty polygons must not exhaust the try budget.
+        let mut ds = Dataset::new("p", GeometryType::Polygon, vec![]);
+        for _ in 0..1000 {
+            ds.push(Some(Geometry::Polygon(vec![])), vec![]);
+        }
+        ds.push(
+            Some(Geometry::Polygon(vec![vec![vec![
+                Coord::new(0.0, 0.0),
+                Coord::new(1.0, 0.0),
+                Coord::new(1.0, 1.0),
+                Coord::new(0.0, 1.0),
+                Coord::new(0.0, 0.0),
+            ]]])),
+            vec![],
+        );
+        let rows: Vec<usize> = (0..ds.features.len()).collect();
+        let pts = random_points(&ds, &rows, 250, 7);
+        assert_eq!(pts.len(), 250);
+        assert!(pts.iter().all(|(r, _)| *r == 1000));
+
+        // A very thin diagonal sliver polygon forces many rejection tries; cancellation must be
+        // observed inside the rejection loop rather than only between features.
+        let mut sliver = Dataset::new("sliver", GeometryType::Polygon, vec![]);
+        sliver.push(
+            Some(Geometry::Polygon(vec![vec![vec![
+                Coord::new(0.0, 0.0),
+                Coord::new(1.0, 1.0),
+                Coord::new(1.0, 1.0 - 1e-6),
+                Coord::new(0.0, 0.0),
+            ]]])),
+            vec![],
+        );
+        let ctrl = crate::control::Control::cancelled_at_look(2);
+        let _installed = crate::control::install(Some(ctrl.clone()));
+        let got = random_points(&sliver, &[0], 10_000, 7);
+        assert!(ctrl.looked() >= 2, "expected cancel check inside rejection loop, looked {}", ctrl.looked());
+        assert!(got.len() < 10_000);
     }
 }

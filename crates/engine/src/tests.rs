@@ -62701,3 +62701,112 @@ fn a_transparency_reads_back_without_float_noise() {
     assert_eq!(crate::cmd::project::percent(33.3), json!(33.3));
     assert_eq!(crate::cmd::project::percent(0.0), json!(0.0));
 }
+
+/// Deep learning classification warns with a count when valid pixels overflow the network, and
+/// emits no notice for clean input (AGENTS.md > Never silent).
+#[test]
+fn dl_classify_notifies_when_pixels_overflow_and_not_when_clean() {
+    use crate::cmd::deeplearning::DlModel;
+    use rustgis_analysis::neural::{Dense, Mlp};
+    use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster};
+    use rustgis_map::RasterLayer;
+
+    let mut s = world();
+    let gt = GeoTransform { origin_x: 0.0, origin_y: 1.0, pixel_width: 1.0, pixel_height: -1.0 };
+    let r_overflow = Raster::new("overflow_img", 2, 1, vec![vec![1.0, 1.0e38]], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
+    let r_clean = Raster::new("clean_img", 2, 1, vec![vec![1.0, -1.0]], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
+    crate::cmd::raster::add_raster(&mut s, "overflow_img", RasterLayer::from_path(r_overflow, "overflow_img.tif")).unwrap();
+    crate::cmd::raster::add_raster(&mut s, "clean_img", RasterLayer::from_path(r_clean, "clean_img.tif")).unwrap();
+    s.project.dl_models.push(DlModel {
+        name: "m".into(),
+        model: Mlp {
+            bands: vec![0],
+            mean: vec![0.0],
+            std: vec![1.0],
+            layers: vec![Dense { inp: 1, out: 2, w: vec![10.0, -10.0], b: vec![0.0, 0.0] }],
+            classes: vec!["a".into(), "b".into()],
+        },
+        accuracy: 1.0,
+        epochs: 1,
+        limited: None,
+    });
+
+    let mark = s.notice_mark();
+    s.run("dl.classify", &json!({"layer": "overflow_img", "model": "m", "name": "out_ov"})).unwrap();
+    let notices = s.notices_since(mark);
+    assert!(notices.iter().any(|n| n.text.contains("1 pixel(s) overflowed")), "expected overflow notice, got {notices:?}");
+
+    let mark = s.notice_mark();
+    s.run("dl.classify", &json!({"layer": "clean_img", "model": "m", "name": "out_ok"})).unwrap();
+    let clean_notices = s.notices_since(mark);
+    assert!(
+        !clean_notices.iter().any(|n| n.text.contains("overflowed")),
+        "clean classification must not emit overflow notice: {clean_notices:?}"
+    );
+}
+
+/// `analysis.simulate` warns once with a count when polygons have empty, zero-area or non-finite
+/// extents, and emits no notice when all polygons are usable (AGENTS.md > Never silent).
+#[test]
+fn simulate_notifies_when_polygons_have_unusable_extents_and_not_when_clean() {
+    use rustgis_data::{Dataset, Geometry, GeometryType};
+    use rustgis_geom::Coord;
+
+    let sq = || {
+        Geometry::Polygon(vec![vec![vec![
+            Coord::new(0.0, 0.0),
+            Coord::new(1.0, 0.0),
+            Coord::new(1.0, 1.0),
+            Coord::new(0.0, 1.0),
+            Coord::new(0.0, 0.0),
+        ]]])
+    };
+
+    let mut s = world();
+    let mut mixed = Dataset::new("mixed_polys", GeometryType::Polygon, vec![]);
+    mixed.push(Some(sq()), vec![]);
+    mixed.push(Some(Geometry::Polygon(vec![])), vec![]);
+    mixed.push(Some(Geometry::Polygon(vec![vec![vec![Coord::new(0.0, 0.0), Coord::new(1.0, 0.0), Coord::new(0.0, 0.0)]]])), vec![]);
+    let mixed_id = crate::cmd::layer::add_dataset(&mut s, mixed);
+
+    let mut clean = Dataset::new("clean_polys", GeometryType::Polygon, vec![]);
+    clean.push(Some(sq()), vec![]);
+    let clean_id = crate::cmd::layer::add_dataset(&mut s, clean);
+
+    let mark = s.notice_mark();
+    let res = s.run("analysis.simulate", &json!({"layer": mixed_id, "count": 5, "name": "sim_mixed"})).unwrap();
+    assert_eq!(res["points"], 5);
+    let notices = s.notices_since(mark);
+    assert!(
+        notices.iter().any(|n| n.text.contains("2 polygon(s)") && n.text.contains("empty, zero-area or non-finite")),
+        "expected notice for 2 unusable polygons, got {notices:?}"
+    );
+
+    let mark = s.notice_mark();
+    let res_clean = s.run("analysis.simulate", &json!({"layer": clean_id, "count": 5, "name": "sim_clean"})).unwrap();
+    assert_eq!(res_clean["points"], 5);
+    let clean_notices = s.notices_since(mark);
+    assert!(clean_notices.is_empty(), "clean simulate must emit no notice: {clean_notices:?}");
+}
+
+/// `profile.alongLine` reports a non-finite coordinate directly instead of "the line doesn't cross
+/// the raster".
+#[test]
+fn profile_along_line_reports_non_finite_coordinate() {
+    use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster};
+    use rustgis_data::{Dataset, Geometry, GeometryType};
+    use rustgis_geom::Coord;
+    use rustgis_map::RasterLayer;
+
+    let mut s = world();
+    let gt = GeoTransform { origin_x: -10.0, origin_y: 10.0, pixel_width: 1.0, pixel_height: -1.0 };
+    let r = Raster::new("dem", 20, 20, vec![vec![50.0; 400]], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
+    crate::cmd::raster::add_raster(&mut s, "dem", RasterLayer::from_path(r, "dem.tif")).unwrap();
+
+    let mut lines = Dataset::new("bad_lines", GeometryType::Polyline, vec![]);
+    lines.push(Some(Geometry::Line(vec![vec![Coord::new(0.0, 0.0), Coord::new(f64::NAN, 1.0)]])), vec![]);
+    crate::cmd::layer::add_dataset(&mut s, lines);
+
+    let err = s.run("profile.alongLine", &json!({"layer": "dem", "lines": "bad_lines", "row": 0})).unwrap_err();
+    assert_eq!(err, "a coordinate is not a number");
+}

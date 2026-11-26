@@ -546,6 +546,9 @@ fn dem(s: &Session, p: &Value) -> Result<std::sync::Arc<rustgis_data::raster::Ra
 
 /// An elevation profile with its summary.
 fn profile(s: &Session, p: &Value, path: &[Coord]) -> CmdResult {
+    if path.iter().any(|c| !c.is_finite()) {
+        return Err("a coordinate is not a number".into());
+    }
     let r = dem(s, p)?;
     let samples = p.get("samples").and_then(Value::as_u64).unwrap_or(200) as usize;
     let prof = rustgis_analysis::rasterops::profile(&r, 0, path, samples);

@@ -278,10 +278,19 @@ pub fn join_field(target: &Dataset, source: &Dataset, opts: &JoinFieldOptions<'_
     }
 
     // 5. Index source records: Map JoinKey -> source feature index
-    let mut source_index: HashMap<JoinKey, usize> = HashMap::with_capacity(source.features.len());
+    let source_len = source.features.len();
+    let extra_len = if comparison == KeyComparison::NumberAsText { source_len } else { 0 };
+    let target_len = target.features.len();
+    crate::control::begin(source_len.saturating_add(extra_len).saturating_add(target_len));
+
+    let mut source_index: HashMap<JoinKey, usize> = HashMap::with_capacity(source_len);
     let mut duplicate_count = 0usize;
 
     for (s_idx, s_feat) in source.features.iter().enumerate() {
+        if s_idx & 1023 == 0 {
+            crate::control::check()?;
+            crate::control::reached(s_idx);
+        }
         let val = s_feat.attrs.get(source_key_idx).unwrap_or(&Value::Null);
         let Some(key) = JoinKey::from_value_compared(val, comparison) else {
             // Null or non-finite keys in source cannot match
@@ -312,6 +321,10 @@ pub fn join_field(target: &Dataset, source: &Dataset, opts: &JoinFieldOptions<'_
     let mut zero_padded_sources: HashMap<String, usize> = HashMap::new();
     if comparison == KeyComparison::NumberAsText {
         for (s_idx, s_feat) in source.features.iter().enumerate() {
+            if s_idx & 1023 == 0 {
+                crate::control::check()?;
+                crate::control::reached(source_len.saturating_add(s_idx));
+            }
             if let Some(Value::Text(text)) = s_feat.attrs.get(source_key_idx)
                 && let Some(digits) = without_leading_zeros(text)
             {
@@ -324,11 +337,14 @@ pub fn join_field(target: &Dataset, source: &Dataset, opts: &JoinFieldOptions<'_
     let mut leading_zero_example = None;
 
     // 6. Join records into target
-    let target_len = target.features.len();
     let mut matched_records = 0usize;
     let mut out_features = Vec::with_capacity(target_len);
 
-    for t_feat in &target.features {
+    for (t_idx, t_feat) in (0..target_len).zip(&target.features) {
+        if t_idx & 1023 == 0 {
+            crate::control::check()?;
+            crate::control::reached(source_len.saturating_add(extra_len).saturating_add(t_idx));
+        }
         if t_feat.attrs.len() > target.fields.len() {
             return Err(format!(
                 "target feature {} has {} attributes, exceeding schema field count {}",
@@ -377,6 +393,9 @@ pub fn join_field(target: &Dataset, source: &Dataset, opts: &JoinFieldOptions<'_
 
         out_features.push(rustgis_data::Feature { id: t_feat.id, geometry: t_feat.geometry.clone(), attrs: new_attrs });
     }
+
+    crate::control::check()?;
+    crate::control::finish();
 
     out.features = out_features.into();
 
@@ -1310,5 +1329,33 @@ mod tests {
         assert_eq!(out_col.fields[2].name, "cost_2");
         assert_eq!(out_col.fields[2].alias, None);
         assert_eq!(out_col.fields[2].display(), "cost_2");
+    }
+
+    #[test]
+    fn join_field_respects_cancel_and_reports_progress() {
+        let target_rows: Vec<Vec<Value>> = (0..2500).map(|i| vec![Value::Int(i), Value::Text(format!("t{i}"))]).collect();
+        let source_rows: Vec<Vec<Value>> = (0..2500).map(|i| vec![Value::Int(i), Value::Float(i as f64)]).collect();
+        let target = make_table("target", vec![("id", FieldType::Integer), ("name", FieldType::Text)], target_rows);
+        let source = make_table("source", vec![("id", FieldType::Integer), ("val", FieldType::Double)], source_rows);
+        let opts = JoinFieldOptions {
+            target_field: "id",
+            join_field: "id",
+            fields_to_transfer: None,
+            prefix: "",
+            duplicate_strategy: DuplicateStrategy::First,
+            output_name: "joined".into(),
+        };
+
+        let cancel_ctrl = crate::control::Control::cancelled_once_started();
+        let err = crate::run_under("Join Field", &cancel_ctrl, || join_field(&target, &source, &opts)).unwrap_err();
+        assert!(err.contains("cancelled"), "expected cancellation error, got {err}");
+        assert!(cancel_ctrl.looked() >= 1);
+
+        let prog_ctrl = crate::control::Control::new();
+        let _installed = crate::control::install(Some(prog_ctrl.clone()));
+        let (_, rep) = join_field(&target, &source, &opts).unwrap();
+        assert_eq!(rep.matched_records, 2500);
+        let (done, total) = prog_ctrl.progress().expect("join_field should report progress");
+        assert!(total > 0 && done == total, "done={done} total={total}");
     }
 }

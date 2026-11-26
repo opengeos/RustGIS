@@ -209,20 +209,22 @@ fn segments_cross(a: (Coord, Coord), b: (Coord, Coord)) -> Option<Coord> {
     (t > e && t < 1.0 - e && u > e && u < 1.0 - e).then(|| Coord::new(a.0.x + t * (a.1.x - a.0.x), a.0.y + t * (a.1.y - a.0.y)))
 }
 
-/// Where a path crosses itself (rings and lines; ring closures are allowed). Segments are swept
-/// west to east, so only those overlapping in x are compared. A path too complex to finish
-/// within the work budget is reported at its start, to be looked at, rather than passed, and
-/// says so (`Err`), so the check is said to be incomplete. A run cancelled past the limit stops
-/// with `Err` too, which the caller tells apart by looking at Cancel.
-fn self_crossing(path: &[Coord], closed: bool) -> Result<Option<Coord>, Coord> {
+/// Where a path crosses itself (rings and lines; ring closures are allowed), together with
+/// whether any non-finite segment had to be omitted. Segments are swept west to east, so only
+/// those overlapping in x are compared. A path too complex to finish within the work budget is
+/// reported at its start, to be looked at, rather than passed, and says so (`Err`), so the check
+/// is said to be incomplete. A run cancelled past the limit stops with `Err` too, which the caller
+/// tells apart by looking at Cancel.
+fn self_crossing(path: &[Coord], closed: bool) -> Result<(Option<Coord>, bool), Coord> {
     let segs: Vec<(Coord, Coord)> = path.windows(2).filter_map(|w| Some((*w.first()?, *w.get(1)?))).collect();
     let n = segs.len();
     let minx = |s: &(Coord, Coord)| s.0.x.min(s.1.x);
     let maxx = |s: &(Coord, Coord)| s.0.x.max(s.1.x);
-    let mut order: Vec<usize> = (0..n).collect();
+    let mut order: Vec<usize> = (0..n).filter(|&i| segs.get(i).is_some_and(|s| s.0.is_finite() && s.1.is_finite())).collect();
+    let omitted = order.len() < n;
     order.sort_by(|a, b| {
         let (sa, sb) = (segs.get(*a).map_or(0.0, minx), segs.get(*b).map_or(0.0, minx));
-        sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
+        sa.total_cmp(&sb)
     });
     let mut work = 0usize;
     for (k, &i) in order.iter().enumerate() {
@@ -234,7 +236,7 @@ fn self_crossing(path: &[Coord], closed: bool) -> Result<Option<Coord>, Coord> {
             }
             work += 1;
             if past_limit(work) {
-                return Err(path.first().copied().unwrap_or(a.0));
+                return Err(path.iter().copied().find(|c| c.is_finite()).unwrap_or(a.0));
             }
             let (lo, hi) = (i.min(j), i.max(j));
             // Neighbouring segments share a vertex, as do a ring's first and last.
@@ -242,11 +244,11 @@ fn self_crossing(path: &[Coord], closed: bool) -> Result<Option<Coord>, Coord> {
                 continue;
             }
             if let Some(c) = segments_cross(*a, *b) {
-                return Ok(Some(c));
+                return Ok((Some(c), omitted));
             }
         }
     }
-    Ok(None)
+    Ok((None, omitted))
 }
 
 /// Lines and polygon rings that cross themselves.
@@ -254,10 +256,11 @@ pub fn self_intersections(ds: &Dataset, rows: &[usize]) -> Checked {
     let mut out = Vec::new();
     // A path too complex to finish: reported at its start, and the check said incomplete.
     let mut limited = false;
+    let mut skipped = 0usize;
     crate::control::begin(rows.len());
     for (i, r) in rows.iter().enumerate() {
         if crate::control::cancelled() {
-            return Checked::partial(out);
+            return Checked { errors: out, complete: false, skipped };
         }
         crate::control::reached(i);
         let Some(g) = ds.features.get(*r).and_then(|f| f.geometry.as_ref()) else { continue };
@@ -266,12 +269,18 @@ pub fn self_intersections(ds: &Dataset, rows: &[usize]) -> Checked {
             Geometry::Polygon(polys) => polys.iter().flatten().map(|r| (r.clone(), true)).collect(),
             _ => Vec::new(),
         };
+        let mut row_omitted = false;
         for (p, closed) in paths {
-            let m: Vec<Coord> = p.iter().map(|c| to_plane(*c)).collect();
+            // Keep non-finite input vertices non-finite before projection: `lonlat_to_plane`
+            // clamps latitudes to +/-90 and would otherwise turn +/-inf into a finite point.
+            let m: Vec<Coord> = p.iter().map(|c| if c.is_finite() { to_plane(*c) } else { Coord::new(f64::NAN, f64::NAN) }).collect();
             let found = match self_crossing(&m, closed) {
-                Ok(c) => c,
+                Ok((c, omitted)) => {
+                    row_omitted |= omitted;
+                    c
+                }
                 // Stopped by Cancel, not by the limit: nothing to list (the run is dropped).
-                Err(_) if crate::control::cancelled() => return Checked::partial(out),
+                Err(_) if crate::control::cancelled() => return Checked { errors: out, complete: false, skipped },
                 Err(start) => {
                     limited = true;
                     Some(start)
@@ -282,11 +291,14 @@ pub fn self_intersections(ds: &Dataset, rows: &[usize]) -> Checked {
                 break;
             }
         }
+        if row_omitted {
+            skipped += 1;
+        }
         if out.len() >= MAX_ERRORS {
-            return Checked::partial(out);
+            return Checked { errors: out, complete: false, skipped };
         }
     }
-    if limited { Checked::partial(out) } else { Checked::done(out) }
+    Checked { errors: out, complete: !limited && skipped == 0, skipped }
 }
 
 /// Line ends that touch no other line (within `tol_m` metres). Line parts are indexed on a grid,
@@ -1682,5 +1694,58 @@ mod tests {
         // (on a boundary, which the guide says is still reported), in the gap, east of everything
         // and west of everything: reported.
         assert_eq!(reported, [1, 2, 3, 4, 5, 6]);
+    }
+
+    #[test]
+    fn self_intersections_handles_non_finite_coords_without_panicking() {
+        // Non-monotonic x coordinates mixed with consecutive NaN vertices (so segment minx is NaN)
+        // trigger driftsort total-order panics under `partial_cmp().unwrap_or(Equal)`.
+        let mut path = Vec::new();
+        for i in 0..80 {
+            let x = ((i * 37) % 80) as f64 * 0.01;
+            if i % 5 == 0 {
+                path.push(Coord::new(f64::NAN, 0.0));
+                path.push(Coord::new(f64::NAN, 0.0));
+            } else {
+                path.push(Coord::new(x, i as f64 * 0.01));
+            }
+        }
+        let mut clean = Dataset::new("l", GeometryType::Polyline, vec![]);
+        clean.push(Some(Geometry::Line(vec![path.clone()])), vec![]);
+        let clean_res = self_intersections(&clean, &[0]);
+        assert!(clean_res.errors.is_empty());
+        assert!(!clean_res.complete, "omitted non-finite segments mark check incomplete");
+        assert_eq!(clean_res.skipped, 1);
+
+        // An infinite latitude must be filtered before projection, not clamped to +90 deg into a
+        // spurious crossing.
+        let mut inf_ds = Dataset::new("inf", GeometryType::Polyline, vec![]);
+        inf_ds.push(
+            Some(Geometry::Line(vec![vec![
+                Coord::new(0.0, 0.0),
+                Coord::new(1.0, f64::INFINITY),
+                Coord::new(1.0, 0.0),
+                Coord::new(0.0, 1.0),
+            ]])),
+            vec![],
+        );
+        let inf_res = self_intersections(&inf_ds, &[0]);
+        assert!(inf_res.errors.is_empty(), "infinite vertex must not create a spurious crossing");
+        assert!(!inf_res.complete);
+        assert_eq!(inf_res.skipped, 1);
+
+        // Add a genuine self-crossing among the finite segments.
+        path.push(Coord::new(f64::NAN, f64::NAN));
+        path.push(Coord::new(5.0, 0.0));
+        path.push(Coord::new(5.1, 0.1));
+        path.push(Coord::new(5.1, 0.0));
+        path.push(Coord::new(5.0, 0.1));
+        let mut crossing = Dataset::new("l", GeometryType::Polyline, vec![]);
+        crossing.push(Some(Geometry::Line(vec![path])), vec![]);
+        let res = self_intersections(&crossing, &[0]);
+        assert_eq!(res.errors.len(), 1);
+        assert!((res.errors[0].at.x - 5.05).abs() < 1e-4);
+        assert!(!res.complete);
+        assert_eq!(res.skipped, 1);
     }
 }

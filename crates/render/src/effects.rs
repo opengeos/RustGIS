@@ -548,7 +548,13 @@ pub(crate) fn extrude_tilted(
             let mut kept: Vec<(f64, f64)> = Vec::new();
             let mut last: Option<(f64, f64)> = None;
             for c in r {
+                if !c.is_finite() {
+                    continue;
+                }
                 let g = cam.ground_px(*c);
+                if !g.0.is_finite() || !g.1.is_finite() {
+                    continue;
+                }
                 let s = cam.project_raised(g.0, g.1, 0.0, w, h);
                 let near = match (s, last) {
                     (Some(s), Some(l)) => (s.0 - l.0).hypot(s.1 - l.1) < 0.75,
@@ -572,6 +578,10 @@ pub(crate) fn extrude_tilted(
             continue;
         }
         let centroid = rustgis_geom::Coord::new(sum.x / n, sum.y / n);
+        let depth_y = cam.ground_px(centroid).1;
+        if !centroid.is_finite() || !depth_y.is_finite() {
+            continue;
+        }
         // At the feature's own scale (Web Mercator stretches the ground toward the poles).
         let (unit, res) = (m_per_unit(centroid).max(1e-9), cam.res.max(1e-9));
         let base = base_within(x.base_metres_at(ds, row, columns) / unit / res, 1e7);
@@ -579,10 +589,10 @@ pub(crate) fn extrude_tilted(
         // Fog on the way to the view's reach, by the middle of the feature.
         let depth = cam.depth_scale(centroid, h).map_or(1.0, |k| 1.0 / k.max(1e-9));
         let t = ((depth - far * 0.5) / (far * 0.5)).clamp(0.0, 1.0);
-        shapes.push((cam.ground_px(centroid).1, rings, holes, base, up, t * t * (3.0 - 2.0 * t), row));
+        shapes.push((depth_y, rings, holes, base, up, t * t * (3.0 - 2.0 * t), row));
     }
     // Far (up the screen) first.
-    shapes.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    shapes.sort_by(|a, b| a.0.total_cmp(&b.0));
     let at = |u: f64, v: f64, up: f64| cam.project_raised(u, v, up, w, h).map(|(x, y)| (x as f32 * ppp, y as f32 * ppp));
     let path = |pts: &[(f32, f32)]| {
         let mut pb = PathBuilder::new();
@@ -757,5 +767,59 @@ mod spool_tests {
         let flat =
             shapes(&ctx, &ds, &[Some(&geom)], &[true], &Extrusion { height: 10.0, ..Extrusion::default() }, f64::INFINITY, |_| symbol);
         assert_eq!(flat.first().map(|s| s.3), Some(0.0));
+    }
+
+    #[test]
+    fn extrude_tilted_skips_non_finite_vertices_and_depths() {
+        let symbol = Symbol::default_for(rustgis_data::GeometryType::Polygon, 1);
+        let mut camera = rustgis_map::Camera::new(rustgis_geom::Coord::new(0.0, 0.0), 1.0);
+        camera.pitch = 45.0;
+        let view = View { width: 100.0, height: 100.0, pixels_per_point: 1.0, camera, sky: false };
+        let c = rustgis_geom::Coord::new;
+        let mut geoms = Vec::new();
+        // Ascending runs bridged by NaN depths fool driftsort's run detector into treating
+        // non-monotonic slices as sorted, triggering a merge panic under
+        // `partial_cmp().unwrap_or(Equal)`.
+        let mut keys: Vec<Option<f64>> = Vec::new();
+        for block in 0..8 {
+            for k in 0..12 {
+                keys.push(Some(20.0 - (block * 2 + k) as f64 * 0.5));
+            }
+            keys.push(None);
+            for k in 0..12 {
+                keys.push(Some(-20.0 + k as f64 * 0.5));
+            }
+        }
+        for (i, ky) in keys.into_iter().enumerate() {
+            let y = ky.unwrap_or(0.0);
+            let x0 = ((i % 7) as f64 - 3.0) * 6.0;
+            let mut ring = vec![c(x0 - 3.0, y), c(x0 + 3.0, y), c(x0, y + 3.0)];
+            if ky.is_none() {
+                ring.push(c(f64::NAN, f64::NAN));
+            }
+            ring.push(c(x0 - 3.0, y));
+            geoms.push(Geometry::Polygon(vec![vec![ring]]));
+        }
+        // Also include an all-NaN polygon and a polygon whose vertex sum overflows to infinity.
+        geoms.push(Geometry::Polygon(vec![vec![vec![c(f64::NAN, f64::NAN), c(f64::NAN, f64::NAN), c(f64::NAN, f64::NAN)]]]));
+        geoms.push(Geometry::Polygon(vec![vec![vec![c(1e308, 0.0), c(1e308, 1.0), c(1e308, 2.0), c(1e308, 0.0)]]]));
+        let refs: Vec<Option<&Geometry>> = geoms.iter().map(Some).collect();
+        let rows = vec![true; geoms.len()];
+        let ds = Dataset::new("tilt", rustgis_data::GeometryType::Polygon, vec![]);
+        let x = Extrusion { height: 10.0, shadows: true, ..Extrusion::default() };
+        let mut pm = Pixmap::new(100, 100).unwrap();
+        extrude_tilted(&mut pm, &view, &ds, &refs, &rows, &x, |_| 1.0, Rgba::rgb(255, 255, 255), |_| symbol);
+        assert!(pm.pixels().iter().any(|px| px.alpha() > 0), "valid tilted polygons still draw");
+
+        // A polygon with 3 valid vertices plus 1 NaN vertex must render identically to the clean
+        // 3-vertex polygon once the non-finite vertex is skipped.
+        let clean = Geometry::Polygon(vec![vec![vec![c(-10.0, -10.0), c(10.0, -10.0), c(0.0, 10.0), c(-10.0, -10.0)]]]);
+        let dirty =
+            Geometry::Polygon(vec![vec![vec![c(-10.0, -10.0), c(10.0, -10.0), c(0.0, 10.0), c(f64::NAN, f64::NAN), c(-10.0, -10.0)]]]);
+        let mut pm_clean = Pixmap::new(100, 100).unwrap();
+        let mut pm_dirty = Pixmap::new(100, 100).unwrap();
+        extrude_tilted(&mut pm_clean, &view, &ds, &[Some(&clean)], &[true], &x, |_| 1.0, Rgba::rgb(255, 255, 255), |_| symbol);
+        extrude_tilted(&mut pm_dirty, &view, &ds, &[Some(&dirty)], &[true], &x, |_| 1.0, Rgba::rgb(255, 255, 255), |_| symbol);
+        assert!(pm_dirty.data() == pm_clean.data(), "skipping NaN vertex matches clean polygon");
     }
 }
