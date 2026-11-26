@@ -325,7 +325,8 @@ impl FgbSource {
             };
             // Reads skip a feature with unreadable properties or geometry and report it in
             // Batch::skipped. Such a feature must not influence the inferred date type either: its
-            // geometry is converted as a read converts it.
+            // geometry is converted as a read converts it, which costs this pass one conversion of
+            // each geometry. A cheaper check would have to copy what the conversion refuses.
             if geometry_of(feature, kind).is_none()
                 || !properties_fit(feature, &self.kinds)
                 || feature.process_properties(&mut props).is_err()
@@ -957,29 +958,43 @@ fn geometry_fits(feature: &flatgeobuf::FgbFeature, kind: GeometryKind) -> bool {
 
 /// [`geometry_fits`] for `g`, read as `kind`.
 fn geometry_part_fits(g: &flatgeobuf::Geometry<'_>, kind: GeometryKind, depth: u32) -> bool {
+    use GeometryKind as K;
     // Parts within parts are a collection's; a file nesting them deeper is refused, not followed.
     if depth > 32 {
         return false;
     }
-    let values = g.xy().map_or(0, |xy| xy.len());
-    // A point is read from its own first coordinate; a multi-part geometry's own xy isn't read.
-    if !values.is_multiple_of(2) || (kind == GeometryKind::Point && g.xy().is_some() && values < 2) {
-        return false;
-    }
-    if let Some(ends) = g.ends() {
-        let mut last = 0usize;
-        for end in ends.iter() {
-            let end = usize::try_from(end).unwrap_or(usize::MAX);
-            if end < last || end.saturating_mul(2) > values {
-                return false;
+    // These are read from their parts alone: their own xy and ends are never looked at.
+    let from_parts = matches!(
+        kind,
+        K::MultiPolygon
+            | K::PolyhedralSurface
+            | K::GeometryCollection
+            | K::MultiCurve
+            | K::MultiSurface
+            | K::CompoundCurve
+            | K::CurvePolygon
+    );
+    if !from_parts {
+        let values = g.xy().map_or(0, |xy| xy.len());
+        // A point is read from its own first coordinate.
+        if !values.is_multiple_of(2) || (kind == K::Point && g.xy().is_some() && values < 2) {
+            return false;
+        }
+        if let Some(ends) = g.ends() {
+            let mut last = 0usize;
+            for end in ends.iter() {
+                let end = usize::try_from(end).unwrap_or(usize::MAX);
+                if end < last || end.saturating_mul(2) > values {
+                    return false;
+                }
+                last = end;
             }
-            last = end;
         }
     }
-    // A collection's parts are read by their own type; other parts (rings, curves) never as points.
+    // A multi-polygon's parts are read as polygons whatever they say; the rest by their own type.
     g.parts().is_none_or(|parts| {
         parts.iter().all(|part| {
-            let read_as = if kind == GeometryKind::GeometryCollection { part.type_() } else { GeometryKind::Unknown };
+            let read_as = if matches!(kind, K::MultiPolygon | K::PolyhedralSurface) { K::Polygon } else { part.type_() };
             geometry_part_fits(&part, read_as, depth + 1)
         })
     })
@@ -1301,6 +1316,20 @@ mod geometry_fits_tests {
         );
         assert!(!collection, "a collection reads its point part as a point");
         assert!(fits(square, GeometryKind::Polygon));
+        // A multi-polygon's own xy, odd or not, is never read; a polygon's is, parts or not.
+        let odd_own = |kind| {
+            fits(
+                |fbb| {
+                    let part = square(fbb);
+                    let parts = fbb.create_vector(&[part]);
+                    let xy = fbb.create_vector(&[1.0, 2.0, 3.0]);
+                    Geometry::create(fbb, &GeometryArgs { xy: Some(xy), parts: Some(parts), type_: kind, ..Default::default() })
+                },
+                kind,
+            )
+        };
+        assert!(odd_own(GeometryKind::MultiPolygon));
+        assert!(!odd_own(GeometryKind::Polygon));
     }
 }
 
