@@ -4484,7 +4484,7 @@ impl TextStyle {
     /// Its line spacing, clamped again where it is used ([`kept_line_spacing`]). Exactly 1 for the
     /// usual spacing (an `f32` goes to `f64` and back unchanged), so a plain text is placed as it
     /// always was.
-    fn line_spacing_kept(self) -> f32 {
+    pub(crate) fn line_spacing_kept(self) -> f32 {
         kept_line_spacing(f64::from(self.line_spacing)) as f32
     }
 }

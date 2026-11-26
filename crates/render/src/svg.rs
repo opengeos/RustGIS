@@ -95,7 +95,22 @@ fn elements(
         background(&mut s, e);
         let (x, y, w, h) = (e.x, e.y, e.w, e.h);
         match &e.kind {
-            ElementKind::Text { text: t, size, color, bold, italic, align, letter_spacing, font, font_name, rotation, wrap, .. } => {
+            ElementKind::Text {
+                text: t,
+                size,
+                color,
+                bold,
+                italic,
+                align,
+                letter_spacing,
+                font,
+                font_name,
+                rotation,
+                wrap,
+                valign,
+                line_spacing,
+                case,
+            } => {
                 let first = layout.first_frame().and_then(|id| layout.element(id)).and_then(|f| match &f.kind {
                     ElementKind::MapFrame { map, center, scale, bearing, pitch, .. } => {
                         let m = maps.iter().find(|m| m.name.eq_ignore_ascii_case(map))?;
@@ -103,17 +118,19 @@ fn elements(
                     }
                     _ => None,
                 });
-                let text = expand(t, layout, info, first);
-                // A wrapped text in the lines the page breaks it into (#2346), each its own line.
-                let text = if *wrap {
-                    let style = crate::layout::text_style(*bold, *italic, *font, font_name.as_deref(), *align, *letter_spacing);
-                    crate::layout::wrapped(&text, w, *size, style)
-                } else {
-                    text
-                };
-                // As the page draws it: the size in points, lines 1.25 apart, the first baseline
-                // 0.6 of the size below the top, lines past the frame left out.
+                let style = crate::layout::text_style(*bold, *italic, *font, font_name.as_deref(), *align, *letter_spacing)
+                    .with_block(*valign, *line_spacing);
+                // Its tokens filled in, then its case, then, wrapped, the lines the page breaks it
+                // into (#2346), each its own line ([`crate::layout::drawn_text`]).
+                let text = crate::layout::drawn_text(expand(t, layout, info, first), *case, *wrap, w, *size, style);
+                // As the page draws it: the size in points, the block at the top, middle or bottom
+                // of the box (from the top when taller than it), lines 1.25 em times the line
+                // spacing apart, the first baseline 0.6 of the size below the block's top, lines
+                // past the frame left out.
                 let em = size.clamp(2.0, 400.0) * 1.33 / PT_PER_MM;
+                let ls = f64::from(style.line_spacing_kept());
+                let n = text.lines().take(200).count();
+                let top = y + crate::layout::block_shift(style.valign, h, em, n, ls);
                 let (anchor, tx) = match align {
                     TextAlign::Left => ("start", x),
                     TextAlign::Center => ("middle", x + w / 2.0),
@@ -123,7 +140,7 @@ fn elements(
                     .lines()
                     .take(200)
                     .enumerate()
-                    .map(|(i, l)| (y + em * (0.6 + 1.25 * i as f64), l))
+                    .map(|(i, l)| (top + em * (0.6 + 1.25 * ls * i as f64), l))
                     .take_while(|(ly, _)| *ly <= y + h + em)
                     .collect();
                 // A named family first (#762), quoted as CSS has it (its own backslashes and
@@ -137,7 +154,7 @@ fn elements(
                     s,
                     r#"<text x="{}" y="{}" font-family="{}" font-size="{}" font-weight="{}" font-style="{}" text-anchor="{anchor}" letter-spacing="{}"{} xml:space="preserve""#,
                     num(tx),
-                    num(lines.first().map_or(y + em * 0.6, |l| l.0)),
+                    num(lines.first().map_or(top + em * 0.6, |l| l.0)),
                     esc(&family),
                     num(em),
                     if *bold { "bold" } else { "normal" },
@@ -673,6 +690,67 @@ mod tests {
         assert_eq!(wrapped.matches("<tspan").count(), lines.lines().count(), "{wrapped}");
         for line in lines.lines() {
             assert!(wrapped.contains(&format!(">{}</tspan>", esc(line))), "{line}: {wrapped}");
+        }
+    }
+
+    /// A text's block in SVG sits, is spaced and is cased as the page draws it, and a block taller than
+    /// its box keeps its first lines, as on the page.
+    #[test]
+    fn a_text_block_is_written_where_the_page_draws_it() {
+        use rustgis_map::layout::{TextCase, TextVAlign};
+        let page = |text: &str, h: f64, v: TextVAlign, ls: f64, c: TextCase| {
+            let mut l = Layout::new("SVG", 100.0, 80.0);
+            let mut kind = ElementKind::text(text, 10.0, rustgis_map::Rgba::rgb(0, 0, 0), false);
+            if let ElementKind::Text { valign, line_spacing, case, .. } = &mut kind {
+                (*valign, *line_spacing, *case) = (v, ls, c);
+            }
+            l.add("Text", (30.0, 10.0, 30.0, h), kind);
+            layout_svg(&l, &mut [], 72.0, &PageInfo::default()).unwrap().0
+        };
+        let spans = |svg: &str| -> Vec<(f64, String)> {
+            svg.split("<tspan ")
+                .skip(1)
+                .filter_map(|t| {
+                    let y = t.split("y=\"").nth(1)?.split('"').next()?.parse().ok()?;
+                    Some((y, t.split('>').nth(1)?.split('<').next()?.to_string()))
+                })
+                .collect()
+        };
+        let got = spans(&page("one\ntwo\nthree", 60.0, TextVAlign::Bottom, 1.5, TextCase::Upper));
+        assert_eq!(got.iter().map(|s| s.1.as_str()).collect::<Vec<_>>(), ["ONE", "TWO", "THREE"]);
+        let em = 10.0 * 1.33 / PT_PER_MM;
+        assert!(((got[1].0 - got[0].0) - em * 1.25 * 1.5).abs() < 0.01, "{got:?}");
+        assert!((got[2].0 - (70.0 - em * 1.25 + em * 0.6)).abs() < 0.01, "the last on the bottom: {got:?}");
+        let tall = "one\ntwo\nthree\nfour\nfive";
+        let from_top = spans(&page(tall, 9.0, TextVAlign::Top, 1.0, TextCase::None));
+        assert!(!from_top.is_empty(), "two lines fit");
+        assert_eq!(spans(&page(tall, 9.0, TextVAlign::Bottom, 1.0, TextCase::None)), from_top, "taller than its box: from the top");
+    }
+
+    /// The vector PDF records the block as the page draws it: a block's PDF differs from the plain
+    /// text's, and the plain one is still main's (`plain_texts_export_as_before`).
+    #[test]
+    fn a_text_block_reaches_the_pdf() {
+        use rustgis_map::layout::{TextCase, TextVAlign};
+        let pdf = |v: TextVAlign, ls: f64, c: TextCase| {
+            let mut l = Layout::new("PDF", 100.0, 80.0);
+            let mut kind = ElementKind::text("one\ntwo\nthree", 10.0, rustgis_map::Rgba::rgb(0, 0, 0), false);
+            if let ElementKind::Text { valign, line_spacing, case, .. } = &mut kind {
+                (*valign, *line_spacing, *case) = (v, ls, c);
+            }
+            l.add("Text", (30.0, 10.0, 30.0, 60.0), kind);
+            let (drawing, _) = crate::layout::render_drawing(&l, &mut [], 150.0, &PageInfo::default()).unwrap();
+            crate::pdf::write(&[crate::pdf::Page::drawing(drawing, l.width, l.height)], "Block")
+        };
+        let plain = pdf(TextVAlign::Top, 1.0, TextCase::None);
+        let block = pdf(TextVAlign::Bottom, 1.5, TextCase::Upper);
+        assert!(plain.starts_with(b"%PDF") && block.starts_with(b"%PDF"), "both write");
+        assert_ne!(plain, block, "the block's case, shift and spacing reach the PDF");
+        // Each setting alone changes what is recorded.
+        for (v, ls, c) in
+            [(TextVAlign::Bottom, 1.0, TextCase::None), (TextVAlign::Top, 1.5, TextCase::None), (TextVAlign::Top, 1.0, TextCase::Upper)]
+        {
+            assert_ne!(pdf(v, ls, c), plain, "{v:?} {ls} {c:?}");
         }
     }
 
