@@ -385,8 +385,10 @@ fn text_blocks(e: &rustgis_map::layout::Element) -> bool {
 /// the usual spacing and as typed. Each is read on its own by the command's own reader
 /// ([`crate::cmd::layout::text_block_settings`]), so the defaults (`"top"`, `1` or `"1"`, `"none"`,
 /// in any case) and `null`, which leaves a text as it is, keep a text as an older reader draws it.
-/// A value the command refuses needs nothing either: the command changes nothing. Only a text
-/// takes the keys, so a `layout.update` is read by them alone. A `layout.import` requires it for
+/// A value the command refuses on a text needs nothing either: the command changes nothing. The
+/// keys are read here alone, so a block key given to another kind counts too, though its command
+/// refuses it: an over-count that asks for the capability sooner, never a missing one. A
+/// `layout.import` requires it for
 /// such a text once its layout is read into range, so a name it doesn't know or a spacing that
 /// isn't a number, read as the default, needs nothing.
 fn command_uses_text_block(id: &str, params: &Value) -> bool {
