@@ -698,6 +698,11 @@ fn a_nan_shape_outside_an_area_its_system_cant_bound_is_counted_as_of_the_layer(
             "2 shape(s) in the layer (a count of the whole layer, as the area couldn't be placed in its coordinates) {SAID}: they have no geometry, so the read leaves them out, but the layer's extent and its index still take in their stored boxes"
         )];
         assert_eq!(reads(src.as_ref()), ((0, 0, layer.clone()), (0, 0, layer)));
+        // A box in the file's own system is an area too, which holds no shape without geometry:
+        // only the line with a place.
+        let own = Some((crs, Extent::new(-1e7, -1e7, 1e7, 1e7)));
+        let boxed = src.read(&Request { own, ..Request::all() }).unwrap();
+        assert_eq!(boxed.features.iter().map(|f| f.geometry.is_some()).collect::<Vec<_>>(), [true]);
         // A whole read gives them without geometry, and says that once, with its plain count.
         let whole = src.read(&Request::all()).unwrap();
         assert!(said(&whole.notes).is_empty(), "{:?}", whole.notes);

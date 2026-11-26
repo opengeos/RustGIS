@@ -1507,8 +1507,9 @@ impl Layer {
 
     /// The geometry as the last [`Layer::projected_in`] call drew it, without refreshing it: call
     /// that first (it needs `&mut self`) whenever the geometry or the map may have changed. On a
-    /// map in the layer's own system it is the layer's rows, read in place, so a later edit shows
-    /// in it at once, while [`Layer::projected_extents`] stays as made until it is refreshed.
+    /// map in the layer's own system it is the layer's rows, read in place, row for row with
+    /// [`Layer::projected_extents`]; an edit marked ([`Layer::touch_geometry`]) leaves none until
+    /// it is drawn again, so the rows aren't paired with extents made before it.
     pub fn projected_cache(&self) -> Shapes<'_> {
         shapes_of(self.projected_own, &self.dataset.features, &self.projected)
     }
@@ -1629,6 +1630,10 @@ impl Layer {
     /// Marks geometry as changed.
     pub fn touch_geometry(&mut self) {
         self.geometry_rev = self.geometry_rev.wrapping_add(1);
+        // Its own rows, read in place as the projected geometry, are no longer what its extents
+        // and thinned copies were made from: until drawn again, there is none, as for a copy
+        // made from geometry since changed ([`Layer::projected_cache`]).
+        self.projected_own = false;
     }
 
     /// Puts the selection in range, in order and with each row once: the state selecting leaves
@@ -4504,6 +4509,7 @@ mod tests {
         l.dataset.features[0].geometry = Some(Geometry::Line(vec![run[..2].to_vec()]));
         l.touch_geometry();
         assert!(!l.is_cached("utm"));
+        assert!(l.projected_cache().is_empty(), "the rows aren't paired with extents made before the edit");
         assert_eq!(l.projected_in(&own, "utm").get(0), Some(&Geometry::Line(vec![run[..2].to_vec()])));
         // A copy of the layer (an undo snapshot, a drawing off the UI thread) shares it.
         let copy = l.clone();

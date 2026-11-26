@@ -467,6 +467,10 @@ impl FeatureSource for ShpSource {
         // by: every record is visited, tested, and the matches sampled as they come.
         let late = req.extent.is_some() && bounds.is_none();
         let mut sample = super::Sampler::new(limit);
+        // A read of an area, in longitude/latitude or in the file's own system, which holds no
+        // shape without geometry; a box over the whole plane in its own system is no area, as in
+        // `visit_with`.
+        let by_area = req.extent.is_some() || self.reproject.own_box(req).is_some_and(|b| b != super::whole_plane());
         if late {
             crate::progress::begin(self.info.count.and_then(|n| usize::try_from(n).ok()).unwrap_or(0));
         }
@@ -510,7 +514,7 @@ impl FeatureSource for ShpSource {
             };
             // The index's boxes are rounded outward to f32, so it can match a shape just outside. A
             // shape without geometry doesn't match an extent, bounded natively or not.
-            if geometry.as_ref().map_or(req.extent.is_some(), |g| !g.inside) {
+            if geometry.as_ref().map_or(by_area, |g| !g.inside) {
                 boxed_off += u64::from(no_number == Some(true));
                 return Ok(());
             }
