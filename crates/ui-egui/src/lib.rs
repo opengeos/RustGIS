@@ -114,6 +114,7 @@ mod saveprompt;
 mod scriptcolor;
 mod scriptcomplete;
 mod scriptfind;
+pub use scriptfind::FindChords;
 mod searchbox;
 mod serviceui;
 mod sessionlog;
@@ -1662,19 +1663,10 @@ impl RustGisApp {
         keys
     }
 
-    /// The Ctrl (⌘) chords the Script box and its find bar take while one of them has the focus, as
-    /// (Alt, Shift, key), none otherwise: with [`Self::command_keys`], what the web app keeps from
-    /// the browser's own shortcuts.
-    pub fn script_find_keys(ctx: &egui::Context) -> Vec<(bool, bool, egui::Key)> {
-        scriptfind::browser_keys(ctx)
-    }
-
-    /// Whether a browser key press (its `key` and `code`, Ctrl or ⌘ held, Alt) is one of the find
-    /// chords [`Self::script_find_keys`] gives. Alt must be as the chord says, unlike
-    /// [`Self::takes_browser_key`]: the box takes no Ctrl+Alt+F or Ctrl+Alt+H, so the browser keeps
-    /// them. Shift is free, as egui matches these.
-    pub fn takes_find_key(keys: &[(bool, bool, egui::Key)], key: &str, code: &str, command: bool, alt: bool) -> bool {
-        command && keymap::browser_key(key, code).is_some_and(|k| keys.iter().any(|&(a, _, bound)| bound == k && a == alt))
+    /// The chords the Script box and its find bar take now, none while neither has the focus: with
+    /// [`Self::command_keys`], what the web app keeps from the browser's own shortcuts.
+    pub fn script_find_keys(&self, ctx: &egui::Context) -> FindChords {
+        scriptfind::browser_keys(ctx, self.workflow.script_find.is_open())
     }
 
     /// The keyboard shortcuts of a command run without parameters, in the keymap's order, for a

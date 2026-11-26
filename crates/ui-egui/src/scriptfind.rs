@@ -150,7 +150,7 @@ impl Field {
         let before = self.left_out;
         self.left_out = 0;
         if let Some((end, _)) = self.text.char_indices().nth(FIELD_MAX) {
-            self.left_out = self.text[end..].chars().count();
+            self.left_out = self.text.get(end..).map_or(0, |rest| rest.chars().count());
             self.text.truncate(end);
         }
         (before == 0 && self.left_out > 0).then_some(self.left_out)
@@ -205,6 +205,11 @@ pub struct Bar {
 }
 
 impl Bar {
+    /// Whether the bar shows, so F3 and Shift+F3 are its keys.
+    pub(crate) fn is_open(&self) -> bool {
+        self.open
+    }
+
     /// The matches of `script`, worked out again if it, the query or a toggle changed since, and the
     /// current one picked: called wherever the matches are used, so they are never of an older
     /// text. `cursor`: the box's cursor, where a current match lost to an edit of the text is
@@ -257,6 +262,7 @@ enum Does {
 
 /// A shortcut of the box and its bar: Ctrl or ⌘ held (`command`), Alt as given, and the key.
 /// A letter takes Shift or not; F3 takes it as given.
+#[derive(Clone, Copy, PartialEq)]
 struct Chord {
     command: bool,
     alt: bool,
@@ -310,17 +316,22 @@ fn here(ctx: &egui::Context, box_id: egui::Id) -> bool {
     ctx.memory(|m| m.focused()).is_some_and(|f| ours.contains(&f))
 }
 
+/// The chords the box and its bar take now: the next and previous match only with the bar `open`.
+fn taken_now(mac: bool, open: bool) -> impl Iterator<Item = Chord> {
+    chords(mac).into_iter().filter(move |c| open || !matches!(c.does, Does::Next | Does::Previous))
+}
+
 /// Before the box: the shortcuts pressed in the box or the bar ([`chords`]). Finding opens the bar,
 /// with the selection in its field; the next and previous match move an open one.
 pub fn keys(ui: &egui::Ui, box_id: egui::Id, script: &str, bar: &mut Bar) {
     if !here(ui.ctx(), box_id) {
         return;
     }
-    for chord in chords(ui.ctx().os().is_mac()) {
-        let stepping = matches!(chord.does, Does::Next | Does::Previous);
-        if (stepping && !bar.open) || !chord.take(ui) {
+    for chord in taken_now(ui.ctx().os().is_mac(), bar.open) {
+        if !chord.take(ui) {
             continue;
         }
+        let stepping = matches!(chord.does, Does::Next | Does::Previous);
         let range = crate::widgets::cursor_range(ui.ctx(), box_id);
         if stepping {
             bar.refresh(script, range.map_or(bar.anchor, |r| r.primary.index.0));
@@ -345,13 +356,26 @@ pub fn keys(ui: &egui::Ui, box_id: egui::Id, script: &str, bar: &mut Bar) {
     }
 }
 
-/// The chords with Ctrl or ⌘ the box and its bar take while one of them has the focus, as (Alt,
-/// Shift, key), for the web app to keep from the browser's own Find and History.
-pub fn browser_keys(ctx: &egui::Context) -> Vec<(bool, bool, egui::Key)> {
-    if !here(ctx, egui::Id::unique("script_text")) {
-        return Vec::new();
+/// The chords the Script box and its bar take at one moment, none while neither has the focus:
+/// what the web app keeps from the browser's own Find and History.
+#[derive(Clone, Default, PartialEq)]
+pub struct FindChords(Vec<Chord>);
+
+impl FindChords {
+    /// Whether a browser key press (its `key` and `code`, Ctrl or ⌘ held, Alt, Shift) is one of
+    /// them, read as the box reads it ([`Chord::is_pressed_with`]).
+    pub fn takes(&self, key: &str, code: &str, command: bool, alt: bool, shift: bool) -> bool {
+        let held = egui::Modifiers { command, alt, shift, ..egui::Modifiers::default() };
+        crate::keymap::browser_key(key, code).is_some_and(|k| self.0.iter().any(|c| c.key == k && c.is_pressed_with(held)))
     }
-    chords(ctx.os().is_mac()).iter().filter(|c| c.command).map(|c| (c.alt, c.shift, c.key)).collect()
+}
+
+/// [`FindChords`] as they are now, the bar `open` or not.
+pub fn browser_keys(ctx: &egui::Context, open: bool) -> FindChords {
+    if !here(ctx, egui::Id::unique("script_text")) {
+        return FindChords::default();
+    }
+    FindChords(taken_now(ctx.os().is_mac(), open).collect())
 }
 
 /// The room the bar leaves at the box's edges, and the widths it takes: what the count takes, the
@@ -363,6 +387,8 @@ const TOGGLE_WIDTH: f32 = 16.0;
 const MIN_BAR: f32 = 230.0;
 const MAX_BAR: f32 = 380.0;
 const GAP: f32 = 4.0;
+/// The least a field is wide: its margins and the toggles inside it, and some forty points of text.
+const MIN_FIELD: f32 = 100.0;
 
 /// The toggles inside the right end of the query field `input`, as in a code editor: Match Case
 /// (`Aa`) and Match Whole Word (`ab` under a bracket). Each is `on` or off; the one clicked is
@@ -437,7 +463,10 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
     let pos = egui::pos2((area.right() - EDGE - width).max(area.left()), area.top().max(seen.top()) + EDGE);
     // The popup's own margin (`Frame::popup`) and its stroke.
     let margin = 6.0;
-    let field = width - 2.0 * margin - 2.0 - TOGGLE_WIDTH - COUNT_WIDTH - 3.0 * crate::widgets::FLAT_BUTTON - 5.0 * GAP;
+    // The fields take what the count and buttons leave, but never less than can be read: what then
+    // doesn't fit wraps below them.
+    let left = width - 2.0 * margin - 2.0 - TOGGLE_WIDTH - COUNT_WIDTH - 3.0 * crate::widgets::FLAT_BUTTON - 5.0 * GAP;
+    let field = left.max(MIN_FIELD);
     let mut todo = None;
     // A widget of the bar was used, or a field changed.
     let (mut used, mut edited) = (false, false);
@@ -462,7 +491,7 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
                 used = true;
             }
             ui.vertical(|ui| {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     let query = ui.add(
                         egui::TextEdit::singleline(&mut bar.query.text)
                             .id(query_id)
@@ -521,7 +550,7 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
                     }
                 });
                 if bar.replace_open {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         let replace = ui.add(
                             egui::TextEdit::singleline(&mut bar.replace.text)
                                 .id(replace_id)

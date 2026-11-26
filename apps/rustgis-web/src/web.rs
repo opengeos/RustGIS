@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use rustgis_ui_egui::rustgis_engine::{data::diagnostics::Capture, sources::message_with_address};
-use rustgis_ui_egui::{Inbox, RustGisApp, Services, Slot};
+use rustgis_ui_egui::{FindChords, Inbox, RustGisApp, Services, Slot};
 
 use crate::parts::Notes;
 use wasm_bindgen::JsCast as _;
@@ -346,12 +346,12 @@ struct WebShell {
     taken: TakenKeys,
     /// [`RustGisApp::shortcuts_fingerprint`] and [`RustGisApp::script_find_keys`] when `taken`
     /// was last filled.
-    taken_print: Option<(u64, Vec<(bool, bool, egui::Key)>)>,
+    taken_print: Option<(u64, FindChords)>,
 }
 
 /// The app's Ctrl (⌘) shortcuts as (Alt, Shift, key), [`RustGisApp::command_keys`], and the Script
 /// box's find chords, [`RustGisApp::script_find_keys`], shared with the page's key listener.
-type TakenKeys = Rc<RefCell<(Vec<(bool, bool, egui::Key)>, Vec<(bool, bool, egui::Key)>)>>;
+type TakenKeys = Rc<RefCell<(Vec<(bool, bool, egui::Key)>, FindChords)>>;
 
 /// The link to the page that embeds the app (`?embed`; see `embed.rs`).
 struct Embed {
@@ -457,7 +457,7 @@ impl WebShell {
     /// the Script box takes its find chords only while it has the focus. Rebuilt only when one of
     /// them changed.
     fn follow_keys(&mut self, ctx: &egui::Context) {
-        let find = RustGisApp::script_find_keys(ctx);
+        let find = self.app.script_find_keys(ctx);
         let print = (self.app.shortcuts_fingerprint(), find);
         if self.taken_print.as_ref() != Some(&print) {
             *self.taken.borrow_mut() = (self.app.command_keys(), print.1.clone());
@@ -1516,7 +1516,7 @@ fn keep_app_shortcuts(taken: TakenKeys) -> Result<(), String> {
         let command = e.ctrl_key() || e.meta_key();
         let (keys, find) = &*taken.borrow();
         if RustGisApp::takes_browser_key(keys, &e.key(), &e.code(), command, e.alt_key(), e.shift_key())
-            || RustGisApp::takes_find_key(find, &e.key(), &e.code(), command, e.alt_key())
+            || find.takes(&e.key(), &e.code(), command, e.alt_key(), e.shift_key())
         {
             e.prevent_default();
         }

@@ -3399,7 +3399,7 @@ mod tests {
         h.run();
         let box_id = egui::Id::unique("script_text");
         let pressed = |h: &egui_kittest::Harness<'_, RustGisApp>, key: &str, code: &str, alt: bool| {
-            RustGisApp::takes_find_key(&crate::scriptfind::browser_keys(&h.ctx), key, code, true, alt)
+            h.state().script_find_keys(&h.ctx).takes(key, code, true, alt, false)
         };
         let taken = |h: &egui_kittest::Harness<'_, RustGisApp>, key: &str, code: &str| pressed(h, key, code, false);
         assert!(!taken(&h, "f", "KeyF"), "the browser keeps them with the focus elsewhere");
@@ -3415,8 +3415,16 @@ mod tests {
         assert!(taken(&h, "f", "KeyF") && !taken(&h, "h", "KeyH"), "⌘H is not ours");
         assert!(pressed(&h, "f", "KeyF", true), "⌥⌘F opens the Replace row");
         h.ctx.set_os(os);
+        let f3 = |h: &egui_kittest::Harness<'_, RustGisApp>| {
+            let taken = h.state().script_find_keys(&h.ctx);
+            // Shift+F3 too, and with Ctrl neither: that one stays the browser's.
+            assert!(!taken.takes("F3", "F3", true, false, false));
+            taken.takes("F3", "F3", false, false, false) && taken.takes("F3", "F3", false, false, true)
+        };
+        assert!(!f3(&h), "F3 is the browser's while the bar is closed");
         h.key_press_modifiers(Modifiers::COMMAND, Key::F);
         h.run();
+        assert!(f3(&h), "and the bar's once open");
         assert!(h.ctx.memory(|m| m.has_focus(box_id.with("find_query"))));
         assert!(taken(&h, "f", "KeyF") && taken(&h, "h", "KeyH"), "and in the bar");
         h.ctx.memory_mut(|m| m.surrender_focus(box_id.with("find_query")));
@@ -3524,6 +3532,27 @@ mod tests {
         assert!(h.state().workflow.script == script, "6000 × 200 characters is over 1 MB");
         let said = "Replace All would make the script larger than 1 MB: nothing was replaced";
         assert!(h.state().session.notices.iter().any(|n| n.text == said), "{:?}", h.state().session.notices);
+    }
+
+    /// In a narrow pane the query field keeps room to read what is typed: the buttons wrap below
+    /// it rather than squeeze it (#2996).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_narrow_pane_keeps_the_find_query_readable() {
+        use egui::{Key, Modifiers};
+        use egui_kittest::kittest::Queryable;
+        let mut h = find_harness("map.zoomFull");
+        h.set_size(vec2(240.0, 600.0));
+        h.run();
+        h.key_press_modifiers(Modifiers::COMMAND, Key::H);
+        h.run();
+        h.run();
+        let box_id = egui::Id::unique("script_text");
+        for field in ["find_query", "find_replace"] {
+            let width = h.ctx.read_response(box_id.with(field)).map(|r| r.rect.width());
+            assert!(width.is_some_and(|w| w >= 100.0), "{field}: {width:?}");
+        }
+        h.get_by_label("Close (Esc)");
     }
 
     /// The Replace field's note is shown with its row, not while the row is hidden (#2996).
