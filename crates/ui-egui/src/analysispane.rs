@@ -3301,9 +3301,19 @@ mod tests {
         use egui_kittest::kittest::Queryable;
         let mut app = RustGisApp::with_sample();
         app.workflow.script = "a".repeat(400);
-        let mut h = egui_kittest::Harness::builder()
-            .with_size(vec2(900.0, 800.0))
-            .build_ui_state(|ui, app: &mut RustGisApp| script_pane(app, ui, &Tokens::light()), app);
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(900.0, 800.0)).build_ui_state(
+            move |ui, app: &mut RustGisApp| {
+                // The icons draw letters: the fonts first, as the other pane tests do.
+                if !fonts {
+                    crate::theme::install_fonts(ui.ctx(), &[], None);
+                    fonts = true;
+                    return;
+                }
+                script_pane(app, ui, &Tokens::light());
+            },
+            app,
+        );
         h.run();
         let box_id = egui::Id::unique("script_text");
         h.ctx.memory_mut(|m| m.request_focus(box_id));
@@ -3314,6 +3324,62 @@ mod tests {
         h.run();
         // 200 characters in a script of 400: two matches. All 400 would be one.
         h.get_by_label("1 of 2");
+        // The Replace field takes no more either: Replace All writes it once per match, so a long
+        // paste would make the script the matches times its length.
+        h.get_by_label("Toggle Replace").click();
+        h.run();
+        h.ctx.memory_mut(|m| m.request_focus(box_id.with("find_replace")));
+        h.run();
+        h.event(Event::Text("b".repeat(400)));
+        h.run();
+        h.get_by_label("Replace All").click();
+        h.run();
+        assert_eq!(h.state().workflow.script, "b".repeat(400), "200 characters for each of the two matches");
+    }
+
+    /// In a browser the find shortcuts are kept from the browser's own (#2996): while the box or a
+    /// field of the bar has the focus, and no longer.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn the_find_chords_are_taken_from_the_browser_while_the_box_or_bar_has_the_focus() {
+        use egui::{Key, Modifiers};
+        let mut app = RustGisApp::with_sample();
+        app.workflow.script = "map.zoomFull".to_string();
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(900.0, 800.0)).build_ui_state(
+            move |ui, app: &mut RustGisApp| {
+                // The icons draw letters: the fonts first, as the other pane tests do.
+                if !fonts {
+                    crate::theme::install_fonts(ui.ctx(), &[], None);
+                    fonts = true;
+                    return;
+                }
+                script_pane(app, ui, &Tokens::light());
+            },
+            app,
+        );
+        h.run();
+        let box_id = egui::Id::unique("script_text");
+        let taken = |h: &egui_kittest::Harness<'_, RustGisApp>, key: &str, code: &str| {
+            RustGisApp::takes_browser_key(crate::scriptfind::browser_keys(&h.ctx), key, code, true, false, false)
+        };
+        assert!(!taken(&h, "f", "KeyF"), "the browser keeps them with the focus elsewhere");
+        h.ctx.memory_mut(|m| m.request_focus(box_id));
+        h.run();
+        assert!(taken(&h, "f", "KeyF") && taken(&h, "h", "KeyH"), "taken in the box");
+        assert!(!taken(&h, "d", "KeyD"), "and only these");
+        // On a Mac ⌘H hides the app and the box doesn't take it: only ⌘F (⌥⌘F with it).
+        let os = h.ctx.os();
+        h.ctx.set_os(egui::os::OperatingSystem::Mac);
+        assert!(taken(&h, "f", "KeyF") && !taken(&h, "h", "KeyH"), "⌘H is not ours");
+        h.ctx.set_os(os);
+        h.key_press_modifiers(Modifiers::COMMAND, Key::F);
+        h.run();
+        assert!(h.ctx.memory(|m| m.has_focus(box_id.with("find_query"))));
+        assert!(taken(&h, "f", "KeyF") && taken(&h, "h", "KeyH"), "and in the bar");
+        h.ctx.memory_mut(|m| m.surrender_focus(box_id.with("find_query")));
+        h.run();
+        assert!(!taken(&h, "f", "KeyF"), "given back when the focus leaves");
     }
 
     /// The editor shortcuts around the find bar (#2996): Ctrl+H opens it with the Replace row, F3 and

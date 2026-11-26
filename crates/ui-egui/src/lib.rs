@@ -1662,6 +1662,13 @@ impl RustGisApp {
         keys
     }
 
+    /// The Ctrl (⌘) chords the Script box and its find bar take while one of them has the focus, as
+    /// (Alt, Shift, key), none otherwise: with [`Self::command_keys`], what the web app keeps from
+    /// the browser's own shortcuts.
+    pub fn script_find_keys(ctx: &egui::Context) -> &'static [(bool, bool, egui::Key)] {
+        scriptfind::browser_keys(ctx)
+    }
+
     /// The keyboard shortcuts of a command run without parameters, in the keymap's order, for a
     /// native menu to show (the macOS menu bar).
     pub fn shortcuts_of(&self, command: &str) -> Vec<egui::KeyboardShortcut> {

@@ -344,8 +344,9 @@ struct WebShell {
     embed: Option<Embed>,
     /// The app's Ctrl (⌘) shortcuts, kept current for [`keep_app_shortcuts`].
     taken: TakenKeys,
-    /// [`RustGisApp::shortcuts_fingerprint`] when `taken` was last filled.
-    taken_print: Option<u64>,
+    /// [`RustGisApp::shortcuts_fingerprint`] and the length of [`RustGisApp::script_find_keys`]
+    /// when `taken` was last filled.
+    taken_print: Option<(u64, usize)>,
 }
 
 /// The app's Ctrl (⌘) shortcuts as (Alt, Shift, key): [`RustGisApp::command_keys`], shared with
@@ -482,12 +483,15 @@ impl eframe::App for WebShell {
         }
         self.app.logic(ctx);
         self.dirty.set(self.app.session.dirty());
-        // The shortcuts can be changed in the app: the key listener follows, rebuilt only when
-        // the keymap changed.
-        let print = self.app.shortcuts_fingerprint();
+        // The shortcuts can be changed in the app, and the Script box takes its find chords only
+        // while it has the focus: the key listener follows, rebuilt only when one of them changed.
+        let find = RustGisApp::script_find_keys(ctx);
+        let print = (self.app.shortcuts_fingerprint(), find.len());
         if self.taken_print != Some(print) {
             self.taken_print = Some(print);
-            *self.taken.borrow_mut() = self.app.command_keys();
+            let mut keys = self.app.command_keys();
+            keys.extend_from_slice(find);
+            *self.taken.borrow_mut() = keys;
         }
     }
 

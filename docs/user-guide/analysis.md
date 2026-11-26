@@ -1896,7 +1896,7 @@ Backspace in an empty `{}`, `[]` or `""` deletes both. The lists open in a quote
 itself, and accepting keeps that quote. Pasting adds nothing.
 
 Ctrl+F (⌘+F on macOS) in the Script box opens a find bar over the box's top right, as a code editor
-does, with the selected text, if it is one line of up to 200 characters (the most the field takes),
+does, with the selected text, if it is one line of up to 200 characters (the most each field takes),
 in its field. Every match is highlighted in the box, the current one stronger and outlined, and the
 bar says which it is (`3 of 12`, or `No results`). Enter and Shift+Enter (or F3 and Shift+F3), or
 the up and down arrows, go to the next and the previous match, round the ends, and scroll it into

@@ -157,6 +157,14 @@ impl Bar {
         }
     }
 
+    /// Whether `found` is what `script`, the query and the toggles say now.
+    fn is_current(&self, script: &str) -> bool {
+        let hash = egui::util::hash(script);
+        self.key
+            .as_ref()
+            .is_some_and(|(h, query, case, whole)| *h == hash && *query == self.query && *case == self.case && *whole == self.whole)
+    }
+
     /// The bar moved to the match `at` of the found ones.
     fn go(&mut self, at: Option<usize>) {
         self.current = at;
@@ -192,10 +200,11 @@ const MIN_BAR: f32 = 230.0;
 const MAX_BAR: f32 = 380.0;
 const GAP: f32 = 4.0;
 
-/// The most characters of a query: what the field takes, and so of a selection that fills it when
-/// the bar opens (a longer one is a passage, not a word to look for). Each change of the script or
-/// the query costs the script's length times the query's, on the UI thread.
-const QUERY_MAX: usize = 200;
+/// The most characters of a query, and of a replacement: what each field takes, and so of a
+/// selection that fills the query when the bar opens (a longer one is a passage, not a word to look
+/// for). Each change of the script or the query costs the script's length times the query's, on the
+/// UI thread, and Replace All writes the replacement once per match, up to [`MAX_MATCHES`].
+const FIELD_MAX: usize = 200;
 
 /// Before the box: Ctrl+F (⌘F) in the box or in the bar opens it, with the selection in its field;
 /// the matches are worked out, and what the box has to draw of them is returned, None while the bar
@@ -222,7 +231,7 @@ pub fn prepare(ui: &egui::Ui, box_id: egui::Id, script: &str) -> Option<Shown> {
         if in_box && let Some(r) = crate::widgets::cursor_range(ui.ctx(), box_id) {
             let (a, b) = (r.primary.index.0.min(r.secondary.index.0), r.primary.index.0.max(r.secondary.index.0));
             let picked: String = script.chars().skip(a).take(b - a).collect();
-            if !picked.is_empty() && picked.chars().count() <= QUERY_MAX && !picked.contains(['\n', '\r']) {
+            if !picked.is_empty() && picked.chars().count() <= FIELD_MAX && !picked.contains(['\n', '\r']) {
                 bar.query = picked;
             }
             bar.anchor = a;
@@ -344,7 +353,7 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
                         egui::TextEdit::singleline(&mut bar.query)
                             .id(query_id)
                             .desired_width(field)
-                            .char_limit(QUERY_MAX)
+                            .char_limit(FIELD_MAX)
                             .margin(egui::Margin { left: 6, right: 54, top: 3, bottom: 3 })
                             .hint_text(tl!("Find")),
                     );
@@ -408,6 +417,7 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
                             egui::TextEdit::singleline(&mut bar.replace)
                                 .id(replace_id)
                                 .desired_width(field)
+                                .char_limit(FIELD_MAX)
                                 .margin(egui::Margin { left: 6, right: 6, top: 3, bottom: 3 })
                                 .hint_text(tl!("Replace")),
                         );
@@ -429,6 +439,8 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
                             wait.clone()
                         } else if capped {
                             crate::i18n::fmt("Too many matches to replace at once (more than {n})", &[("n", &MAX_MATCHES.to_string())])
+                        } else if total == 0 {
+                            nothing.clone()
                         } else {
                             tl!("Replace every match (one step of Undo)").to_string()
                         };
@@ -458,7 +470,7 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
     let found = bar.found.clone();
     // What was found is of the script as it was when the matches were worked out: a key typed in the
     // box since, in this frame, leaves them for the next.
-    let current_text = bar.key.as_ref().is_some_and(|k| k.0 == egui::util::hash(&*script));
+    let current_text = bar.is_current(script);
     match todo {
         Some(Action::Next) => bar.go(step(total, bar.current, false)),
         Some(Action::Previous) => bar.go(step(total, bar.current, true)),
@@ -499,6 +511,19 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
         ui.ctx().request_repaint();
     }
     ui.data_mut(|d| d.insert_temp(id, bar));
+}
+
+/// The chords the Script box and its find bar take while one of them has the focus, as (Alt, Shift,
+/// key) with Ctrl or ⌘ held, for the web app to keep from the browser's own Find and History.
+pub fn browser_keys(ctx: &egui::Context) -> &'static [(bool, bool, egui::Key)] {
+    let box_id = egui::Id::unique("script_text");
+    let ours = [box_id, box_id.with("find_query"), box_id.with("find_replace")];
+    if ctx.memory(|m| m.focused()).is_some_and(|f| ours.contains(&f)) {
+        // On a Mac, ⌥⌘F (the Replace there) is a ⌘F with Alt more, and ⌘H isn't ours.
+        if ctx.os().is_mac() { &[(false, false, egui::Key::F)] } else { &[(false, false, egui::Key::F), (false, false, egui::Key::H)] }
+    } else {
+        &[]
+    }
 }
 
 /// The fill of a match, and of the current one: amber over the text, translucent, as the stop's
@@ -550,6 +575,23 @@ mod tests {
 
     fn at(text: &str, query: &str, case: bool) -> Vec<(usize, usize)> {
         matches(text, query, case, false).ranges.into_iter().map(|r| (r.start, r.end)).collect()
+    }
+
+    #[test]
+    fn matches_of_another_script_query_or_toggle_are_not_current() {
+        let mut bar = Bar { query: "cat".into(), ..Bar::default() };
+        bar.refresh("cat dog", 0);
+        assert!(bar.is_current("cat dog"));
+        assert!(!bar.is_current("cat dogs"), "the script changed");
+        // Typed or toggled after the matches were worked out, in the same frame.
+        bar.query.push('s');
+        assert!(!bar.is_current("cat dog"), "the query changed");
+        bar.query.pop();
+        bar.case = true;
+        assert!(!bar.is_current("cat dog"), "Match Case changed");
+        bar.case = false;
+        bar.whole = true;
+        assert!(!bar.is_current("cat dog"), "Match Whole Word changed");
     }
 
     #[test]
