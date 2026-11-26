@@ -902,13 +902,7 @@ fn csv(datasource: &str, dir: &str) -> Source {
     let path = file_address_path(path).unwrap_or_else(|| rustgis_data::address::percent_decode(path));
     let q = query(q);
     let get = |k: &str| q.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone()).filter(|v| !v.is_empty());
-    Source::Csv {
-        path: absolute(&path, dir),
-        x: get("xField"),
-        y: get("yField"),
-        wkt: get("wktField"),
-        crs: get("crs"),
-    }
+    Source::Csv { path: absolute(&path, dir), x: get("xField"), y: get("yField"), wkt: get("wktField"), crs: get("crs") }
 }
 
 /// The most `&`-joined parts of a web source, or of an address's query, read; the rest are
