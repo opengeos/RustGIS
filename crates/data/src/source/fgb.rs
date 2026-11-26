@@ -323,8 +323,12 @@ impl FgbSource {
                 rounded_dates: Vec::new(),
             };
             // Reads skip a feature with unreadable properties or geometry and report it in
-            // Batch::skipped. Such a feature must not influence the inferred date type either.
-            if !geometry_fits(feature) || !properties_fit(feature, &self.kinds) || feature.process_properties(&mut props).is_err() {
+            // Batch::skipped. Such a feature must not influence the inferred date type either: its
+            // geometry is converted as a read converts it.
+            if wkb_of(feature).as_deref().and_then(wkb::decode).is_none()
+                || !properties_fit(feature, &self.kinds)
+                || feature.process_properties(&mut props).is_err()
+            {
                 continue;
             }
             for &k in columns {
