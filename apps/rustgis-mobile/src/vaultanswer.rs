@@ -4,14 +4,12 @@
 use rustgis_engine::data::secrets::{Secret, SecretError};
 
 /// Reads the Java half's answer: `ok` (with the secret after a tab, for a load that found one),
-/// `none`, or `unavailable`, `failed` or `uncertain` (a change that may or may not have been kept)
-/// with the reason after a tab.
+/// `none`, or `unavailable` or `failed` with the reason after a tab.
 pub(crate) fn answer(line: &str) -> Result<Option<Secret>, SecretError> {
     match line.split_once('\t') {
         Some(("ok", secret)) => Ok(Some(Secret::new(secret))),
         Some(("unavailable", why)) => Err(SecretError::Unavailable(why.to_string())),
         Some(("failed", why)) => Err(SecretError::Failed(why.to_string())),
-        Some(("uncertain", why)) => Err(SecretError::Uncertain(why.to_string())),
         None if line == "ok" || line == "none" => Ok(None),
         _ => Err(SecretError::Failed("the Android keystore gave an answer RustGIS doesn't know".into())),
     }
@@ -28,7 +26,6 @@ mod tests {
         assert!(answer("none").unwrap().is_none());
         assert_eq!(answer("unavailable\tno keystore"), Err(SecretError::Unavailable("no keystore".into())));
         assert_eq!(answer("failed\tdamaged"), Err(SecretError::Failed("damaged".into())));
-        assert_eq!(answer("uncertain\tmay be kept"), Err(SecretError::Uncertain("may be kept".into())));
         assert!(matches!(answer("saved"), Err(SecretError::Failed(why)) if why.contains("doesn't know")));
         assert!(matches!(answer("later\tx"), Err(SecretError::Failed(why)) if why.contains("doesn't know")));
     }

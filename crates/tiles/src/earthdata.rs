@@ -170,9 +170,6 @@ pub const ACCOUNT: &str = "earthdata/token";
 pub const NO_STORE: &str = "The token is kept for this session only: there is no credential store here to remember it in.";
 /// [`login`] with `remember`, when the credential store didn't keep the token.
 pub const NOT_REMEMBERED: &str = "The token is kept for this session, but the system's credential store didn't remember it.";
-/// `login` with `remember`, when the credential store couldn't confirm what it kept.
-pub const UNCONFIRMED: &str =
-    "The token is kept for this session; the system's credential store couldn't confirm whether it remembered it.";
 /// The credential store didn't delete the token remembered earlier.
 pub const NOT_FORGOTTEN: &str = "The token remembered on this computer couldn't be deleted from the system's credential store.";
 
@@ -307,7 +304,6 @@ pub fn login(token: &str, remember: bool) -> Result<Option<&'static str>, String
     let deleted = store.delete(ACCOUNT);
     REMEMBERED.kept.store(kept && deleted.is_err(), Ordering::SeqCst);
     match deleted {
-        Err(rustgis_data::secrets::SecretError::Uncertain(_)) if remember => Ok(Some(UNCONFIRMED)),
         _ if remember => Ok(Some(NOT_REMEMBERED)),
         Ok(()) => Ok(None),
         // A system without a credential store had nowhere to keep one.
@@ -1075,11 +1071,6 @@ mod tests {
         assert_eq!(login(LASTING, true), Ok(Some(NOT_REMEMBERED)));
         assert!(has_token() && !is_remembered());
         assert_eq!(logout(), Err(NOT_FORGOTTEN));
-        // A store that can't confirm what it kept: not said to have forgotten it.
-        set_secret_store(Some(Arc::new(MemorySecrets::failing(SecretError::Uncertain("unconfirmed".into())))));
-        assert_eq!(login(LASTING, true), Ok(Some(UNCONFIRMED)));
-        assert!(has_token() && !is_remembered());
-        let _ = logout();
         assert!(!has_token());
         assert!(login("", true).is_err() && login("two words", true).is_err());
     }

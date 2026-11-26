@@ -426,12 +426,6 @@ fn a_sign_in_not_to_be_remembered_deletes_the_one_before_and_two_factor_is_never
     set_secret_store(Some(Arc::new(MemorySecrets::failing(SecretError::Unavailable("none".into())))));
     assert_eq!(login_remembering_at(&base, USER, PASSWORD, None, true).unwrap().1, Some(NOT_REMEMBERED));
     assert!(signed_in().is_some());
-    // A store that can't confirm what it kept: not said to be forgotten, nor claimed remembered.
-    set_secret_store(Some(Arc::new(MemorySecrets::failing(SecretError::Uncertain("unconfirmed".into())))));
-    assert_eq!(login_remembering_at(&base, USER, PASSWORD, None, true).unwrap().1, Some(UNCONFIRMED));
-    assert!(!is_remembered());
-    // With a one-time code nothing was saved: it's the one before that may still be there.
-    assert_eq!(login_remembering_at(&base, USER, PASSWORD, Some("123456"), true).unwrap().1, Some(NOT_FORGOTTEN));
 }
 
 #[test]

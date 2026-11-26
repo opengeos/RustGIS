@@ -36,9 +36,6 @@ pub enum SecretError {
     Denied,
     InvalidAccount(String),
     Failed(String),
-    /// The store couldn't confirm whether the change was kept: a secret said to be saved, or one
-    /// said to be forgotten, may or may not be there next time.
-    Uncertain(String),
 }
 
 impl fmt::Display for SecretError {
@@ -48,7 +45,6 @@ impl fmt::Display for SecretError {
             Self::Denied => f.write_str("the system keychain is locked or access to it was refused"),
             Self::InvalidAccount(account) => write!(f, "invalid secret name \"{account}\""),
             Self::Failed(why) => write!(f, "the system keychain failed: {why}"),
-            Self::Uncertain(why) => write!(f, "the system keychain couldn't confirm the change: {why}"),
         }
     }
 }

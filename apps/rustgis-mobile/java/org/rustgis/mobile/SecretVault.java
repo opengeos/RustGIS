@@ -3,35 +3,35 @@ package org.rustgis.mobile;
 /**
  * Secrets kept for the Rust side's secret store (src/secrets.rs): each one encrypted with
  * AES-GCM under a key in the Android Keystore, made once and never leaving it, and kept in the
- * app's private preferences as "1.<nonce>.<ciphertext>" (Base64), the account name bound to it.
- * Nothing is kept unencrypted: when the keystore can't be used, the Rust side says so and the
- * secret lasts for the session. An entry a newer RustGIS wrote (a version above 1) is neither
- * read, written over nor removed.
+ * file of its own as "1.<nonce>.<ciphertext>" (Base64), the account name bound to it. The files
+ * are in the app's no-backup folder, which Android's backups leave out (the key couldn't open
+ * them elsewhere), named by a SHA-256 of the account. A new entry is written whole beside the old
+ * and renamed over it, so a failed save or removal leaves the entry as it was, and is said as a
+ * failure. Nothing is kept unencrypted: when the keystore can't be used, the Rust side says so
+ * and the secret lasts for the session. An entry a newer RustGIS wrote (a version above 1) is
+ * neither read, written over nor removed.
  *
  * Each call answers with a line: "ok" (with the secret after a tab, for a load that found one),
  * "none" (a load that found none), "unavailable" or "failed", each with the reason after a tab.
- * Called on any thread: one call at a time, so a write and the putting back of a write that
- * failed see no other call's entry in between.
+ * Called on any thread, one call at a time.
  */
 final class SecretVault {
     /** The keystore's name for the one key. */
     private static final String KEY = "rustgis-secrets";
-    /** The app's private preferences the encrypted secrets are kept in. */
-    private static final String FILE = "rustgis-secrets";
+    /** The folder, in the app's no-backup folder, the encrypted secrets are kept in. */
+    private static final String FOLDER = "rustgis-secrets";
     /** The version of the entries this one writes. */
     private static final int VERSION = 1;
     private static final String CIPHER = "AES/GCM/NoPadding";
     private static final int TAG_BITS = 128;
     private static final String NEWER = "failed\tit was kept by a newer RustGIS: update RustGIS to use it";
     private static final String UNWRITTEN = "failed\tthe app's storage can't be written to";
-    private static final String UNCERTAIN =
-            "uncertain\tthe app's storage can't be written to, and the secret as it was couldn't be put back: it may still be kept";
 
     private SecretVault() {}
 
     static synchronized String load(android.content.Context context, String account) {
         try {
-            String kept = preferences(context).getString(account, null);
+            String kept = kept(file(context, account));
             if (kept == null) {
                 return "none";
             }
@@ -58,7 +58,7 @@ final class SecretVault {
         } catch (java.security.KeyStoreException | java.security.NoSuchProviderException | java.io.IOException
                 | java.security.ProviderException e) {
             return "unavailable\t" + reason(e);
-        } catch (java.security.GeneralSecurityException | IllegalArgumentException | ClassCastException e) {
+        } catch (java.security.GeneralSecurityException | IllegalArgumentException e) {
             // A damaged entry, or one sealed with a key the keystore no longer has.
             return "failed\tthe kept secret can't be decrypted: " + reason(e);
         } catch (RuntimeException e) {
@@ -68,9 +68,8 @@ final class SecretVault {
 
     static synchronized String save(android.content.Context context, String account, String value) {
         try {
-            android.content.SharedPreferences preferences = preferences(context);
-            String before = kept(preferences, account);
-            if (version(before) > VERSION) {
+            java.io.File file = file(context, account);
+            if (version(kept(file)) > VERSION) {
                 return NEWER;
             }
             javax.crypto.Cipher cipher = javax.crypto.Cipher.getInstance(CIPHER);
@@ -81,12 +80,10 @@ final class SecretVault {
             byte[] sealed = cipher.doFinal(value.getBytes(java.nio.charset.StandardCharsets.UTF_8));
             String kept = VERSION + "." + android.util.Base64.encodeToString(cipher.getIV(), android.util.Base64.NO_WRAP) + "."
                     + android.util.Base64.encodeToString(sealed, android.util.Base64.NO_WRAP);
-            return write(preferences, account, kept, before);
+            return write(file, kept);
         } catch (java.security.KeyStoreException | java.security.NoSuchProviderException | java.io.IOException
                 | java.security.ProviderException e) {
             return "unavailable\t" + reason(e);
-        } catch (ClassCastException e) {
-            return "failed\tthe kept secret is damaged";
         } catch (java.security.GeneralSecurityException | RuntimeException e) {
             return "failed\t" + reason(e);
         }
@@ -94,39 +91,64 @@ final class SecretVault {
 
     static synchronized String delete(android.content.Context context, String account) {
         try {
-            android.content.SharedPreferences preferences = preferences(context);
-            String before = kept(preferences, account);
+            java.io.File file = file(context, account);
+            String before = kept(file);
             if (version(before) > VERSION) {
                 return NEWER;
             }
-            return before == null ? "ok" : write(preferences, account, null, before);
-        } catch (ClassCastException e) {
-            return "failed\tthe kept secret is damaged";
-        } catch (RuntimeException e) {
+            return before == null || file.delete() || !file.exists() ? "ok" : UNWRITTEN;
+        } catch (java.io.IOException | RuntimeException e) {
             return "failed\t" + reason(e);
         }
     }
 
     /**
-     * Writes the account's entry (null removes it) and answers how it went. A write that isn't
-     * confirmed puts the entry as it was back (Android keeps what it was given in memory, and
-     * would write it with a later save of another account), so a secret said not to be kept isn't;
-     * when that fails too, the answer says it may be.
+     * Writes the account's entry whole to a file beside its own and renames it over it, so the
+     * entry is either the new one or, after a failure, still the one before.
      */
-    private static String write(android.content.SharedPreferences preferences, String account, String kept, String before) {
-        if (put(preferences.edit(), account, kept).commit()) {
+    private static String write(java.io.File file, String kept) {
+        java.io.File folder = file.getParentFile();
+        java.io.File part = new java.io.File(folder, file.getName() + ".part");
+        try {
+            if (folder == null || !(folder.isDirectory() || folder.mkdirs())) {
+                return UNWRITTEN;
+            }
+            try (java.io.FileOutputStream out = new java.io.FileOutputStream(part)) {
+                out.write(kept.getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+                // On the disk before the rename makes it the entry.
+                out.getFD().sync();
+            }
+            java.nio.file.Files.move(part.toPath(), file.toPath(), java.nio.file.StandardCopyOption.ATOMIC_MOVE);
             return "ok";
+        } catch (java.io.IOException | RuntimeException e) {
+            part.delete();
+            return UNWRITTEN + ": " + reason(e);
         }
-        return put(preferences.edit(), account, before).commit() ? UNWRITTEN : UNCERTAIN;
     }
 
-    private static android.content.SharedPreferences.Editor put(android.content.SharedPreferences.Editor editor, String account, String kept) {
-        return kept == null ? editor.remove(account) : editor.putString(account, kept);
+    /** The account's entry, or null when there is none. */
+    private static String kept(java.io.File file) throws java.io.IOException {
+        if (!file.exists()) {
+            return null;
+        }
+        byte[] bytes = java.nio.file.Files.readAllBytes(file.toPath());
+        return new String(bytes, java.nio.charset.StandardCharsets.US_ASCII);
     }
 
-    /** The account's entry, or null; one that isn't text (not this vault's) throws ClassCastException. */
-    private static String kept(android.content.SharedPreferences preferences, String account) {
-        return preferences.getString(account, null);
+    /** The account's file: its name a SHA-256 of the account, as an account may hold any character. */
+    private static java.io.File file(android.content.Context context, String account) {
+        byte[] digest;
+        try {
+            digest = java.security.MessageDigest.getInstance("SHA-256").digest(account.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        } catch (java.security.NoSuchAlgorithmException e) {
+            // Every Android has SHA-256.
+            throw new IllegalStateException(e);
+        }
+        StringBuilder name = new StringBuilder();
+        for (byte b : digest) {
+            name.append(String.format(java.util.Locale.ROOT, "%02x", b));
+        }
+        return new java.io.File(new java.io.File(context.getApplicationContext().getNoBackupFilesDir(), FOLDER), name.toString());
     }
 
     /** The version an entry was written in: the number before its first point, 0 if none. */
@@ -140,10 +162,6 @@ final class SecretVault {
         } catch (NumberFormatException e) {
             return 0;
         }
-    }
-
-    private static android.content.SharedPreferences preferences(android.content.Context context) {
-        return context.getApplicationContext().getSharedPreferences(FILE, android.content.Context.MODE_PRIVATE);
     }
 
     /** The keystore's key, made the first time it is asked for when {@code make}; else null when there is none. */

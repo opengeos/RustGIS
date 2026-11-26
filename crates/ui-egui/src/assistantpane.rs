@@ -303,17 +303,12 @@ fn key_storage_note(app: &RustGisApp, provider: &str) -> String {
                 notes.push(match error {
                     SecretError::Denied => tl!("The system keychain is locked or access was refused."),
                     SecretError::Unavailable(_) => tl!("The system keychain is unavailable."),
-                    SecretError::Uncertain(_) => tl!("The system keychain couldn't confirm the change."),
                     _ => tl!("The system keychain could not complete the request."),
                 });
                 if *reading {
                     notes.push(tl!("A saved key could not be read. A key entered now will be kept for this session only."));
                 } else if *deleting {
                     notes.push(tl!("RustGIS could not confirm that any previously saved key was deleted from the system keychain."));
-                } else if matches!(error, SecretError::Uncertain(_)) {
-                    notes.push(tl!(
-                        "RustGIS could not confirm whether the key was remembered: it may be there the next time RustGIS starts."
-                    ));
                 } else if !legacy || !plaintext {
                     notes.push(tl!("The key is kept for this session only; it has not been remembered."));
                 }
@@ -1072,25 +1067,6 @@ pub(crate) mod tests {
             let note = key_storage_note(&app, "custom");
             assert!(note.contains("session only") && !note.contains("synthetic-new"));
         }
-    }
-
-    /// A save the store couldn't confirm isn't said to be lost: the key may be there next time.
-    #[cfg(not(target_arch = "wasm32"))]
-    #[test]
-    fn an_unconfirmed_save_is_not_said_to_be_forgotten() {
-        use rustgis_engine::data::secrets::{MemorySecrets, SecretError};
-        let store = std::sync::Arc::new(MemorySecrets::failing(SecretError::Uncertain("synthetic-why".into())));
-        let (mut app, _) = keys_app(None, Some(store));
-        settle_keys(&mut app);
-        let mut cfg = app.assistant.agent.as_ref().unwrap().config.clone();
-        cfg.key = "synthetic-new".into();
-        app.assistant.keys.edit("custom", &cfg.key);
-        apply_config(&mut app, cfg.clone());
-        save_config(&mut app, &cfg, &egui::Context::default());
-        settle_keys(&mut app);
-        let note = key_storage_note(&app, "custom");
-        assert!(note.contains("could not confirm whether the key was remembered"), "{note}");
-        assert!(!note.contains("has not been remembered") && !note.contains("synthetic-new"));
     }
 
     /// A failed replacement is session-only even when a different legacy key still needs migration.
