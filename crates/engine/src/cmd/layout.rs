@@ -134,7 +134,7 @@ pub fn commands() -> Vec<C> {
         ),
         C::new("layout.removeElement", "Delete Element", "Publish › Element", |s, p| {
             let id = element_id(p)?;
-            let named = layouts_naming_a_map(&s.project);
+            let named = maps_layouts_name(&s.project);
             let l = active(s, p)?;
             // A frame's surrounds go with it: a locked one keeps the frame too.
             if let Some(locked) = l.locked_in_removal(id).map(|e| e.id) {
@@ -143,7 +143,7 @@ pub fn commands() -> Vec<C> {
             if !l.remove(id) {
                 return Err(format!("no element {id}"));
             }
-            say_unnamed_maps(s, &named);
+            say_map_texts(s, &named);
             Ok(Value::Null)
         }).inputs(object_inputs).roles(&[]).effects(crate::policy::Effects::NONE)
         .params(r#"{"layout"?, "element": id}"#),
@@ -227,6 +227,7 @@ fn element_id(p: &Value) -> Result<u32, String> {
 fn arrange(s: &mut Session, p: &Value) -> CmdResult {
     let id = element_id(p)?;
     let to = ps(p, "to").and_then(Arrange::from_name).ok_or("to is front, forward, backward or back")?;
+    let named = maps_layouts_name(&s.project);
     let l = active(s, p)?;
     if l.element(id).is_none() {
         return Err(format!("no element {id}"));
@@ -239,6 +240,8 @@ fn arrange(s: &mut Session, p: &Value) -> CmdResult {
     if before == Some(index) {
         s.request_only = true;
     }
+    // The first map frame is the lowest: sending a frame back, or another forward, can change it.
+    say_map_texts(s, &named);
     Ok(json!({"element": id, "index": index, "of": of}))
 }
 
@@ -3117,40 +3120,65 @@ fn page(s: &mut Session, p: &Value) -> CmdResult {
     Ok(json!({"width": w, "height": h, "decimal": if l.decimal_comma { "," } else { "." }}))
 }
 
-/// For each layout, whether its `{map}` texts have a map to name: its first map frame shows one.
-pub(crate) fn layouts_naming_a_map(project: &crate::project::Project) -> Vec<bool> {
-    let names = |l: &Layout| {
-        l.first_frame().and_then(|id| l.element(id)).is_some_and(
-            |e| matches!(&e.kind, ElementKind::MapFrame { map, .. } if crate::render::layout::map_index(&project.maps, map).is_some()),
-        )
+/// For each layout, the map its `{map}` texts name: the one its first map frame shows, as the
+/// project names it; None when that frame or its map is gone.
+pub(crate) fn maps_layouts_name(project: &crate::project::Project) -> Vec<Option<String>> {
+    let named = |l: &Layout| {
+        let frame = l.first_frame().and_then(|id| l.element(id))?;
+        let ElementKind::MapFrame { map, .. } = &frame.kind else { return None };
+        crate::render::layout::map_index(&project.maps, map).and_then(|i| project.maps.get(i)).map(|m| m.name.clone())
     };
-    project.layouts.iter().map(names).collect()
+    project.layouts.iter().map(named).collect()
 }
 
-/// Says which `{map}` texts a change left with no map to name, so that `{map}` in them draws empty:
-/// those of the layouts that had one `before` it ([`layouts_naming_a_map`], in the same order).
-pub(crate) fn say_unnamed_maps(s: &mut Session, before: &[bool]) {
-    let after = layouts_naming_a_map(&s.project);
-    let left: Vec<(&str, usize)> = s
-        .project
-        .layouts
-        .iter()
-        .zip(before.iter().zip(after))
-        .filter(|(_, (had, has))| **had && !*has)
-        .map(|(l, _)| {
-            let texts = l.elements.iter().filter(|e| matches!(&e.kind, ElementKind::Text { text, .. } if text.contains("{map}")));
-            (l.name.as_str(), texts.count())
-        })
-        .filter(|(_, n)| *n > 0)
-        .collect();
-    let n: usize = left.iter().map(|(_, n)| n).sum();
-    let whose = match left.as_slice() {
-        [] => return,
-        [(name, _)] => format!("Layout '{name}': {n}"),
-        more => format!("{} layouts: {n}", more.len()),
+/// Says which `{map}` texts a change (`before` it, [`maps_layouts_name`], layouts in the same
+/// order) left naming another map or none: `{map}` follows the layout's first map frame, which
+/// is the lowest in the drawing order, so removing or reordering frames can change it. One
+/// notice for each, with the count.
+pub(crate) fn say_map_texts(s: &mut Session, before: &[Option<String>]) {
+    let after = maps_layouts_name(&s.project);
+    let (mut empty, mut moved) = (Vec::new(), Vec::new());
+    for (l, (was, now)) in s.project.layouts.iter().zip(before.iter().zip(&after)) {
+        let Some(was) = was else { continue };
+        let n = l.elements.iter().filter(|e| matches!(&e.kind, ElementKind::Text { text, .. } if text.contains("{map}"))).count();
+        match now {
+            _ if n == 0 => {}
+            None => empty.push((l.name.as_str(), n)),
+            Some(now) if !now.eq_ignore_ascii_case(was) => moved.push((l.name.as_str(), n, now.as_str())),
+            Some(_) => {}
+        }
+    }
+    let texts = |n: usize| if n == 1 { format!("{n} text with {{map}}") } else { format!("{n} texts with {{map}}") };
+    let n: usize = empty.iter().map(|(_, n)| n).sum();
+    let notice = match empty.as_slice() {
+        [] => None,
+        [(name, _)] => Some(format!("Layout '{name}': {}", texts(n))),
+        more => Some(format!("{} layouts: {}", more.len(), texts(n))),
     };
-    let (texts, have) = if n == 1 { ("text", "has") } else { ("texts", "have") };
-    s.notify(format!("{whose} {texts} with {{map}} {have} no map frame showing a map to name, so {{map}} draws empty"), false);
+    let mut said = Vec::new();
+    if let Some(whose) = notice {
+        let have = if n == 1 { "has" } else { "have" };
+        said.push(format!("{whose} {have} no map frame showing a map to name, so {{map}} draws empty"));
+    }
+    let n: usize = moved.iter().map(|(_, n, _)| n).sum();
+    let notice = match moved.as_slice() {
+        [] => None,
+        [(name, _, map)] => Some(format!(
+            "Layout '{name}': its first map frame, the lowest in the drawing order, now shows '{map}', so {} {} it",
+            texts(n),
+            if n == 1 { "names" } else { "name" }
+        )),
+        more => Some(format!(
+            "{} layouts: their first map frame, the lowest in the drawing order, now shows another map, so {} {} that one",
+            more.len(),
+            texts(n),
+            if n == 1 { "names" } else { "name" }
+        )),
+    };
+    said.extend(notice);
+    for text in said {
+        s.notify(text, false);
+    }
 }
 
 /// A sheet's footer of two columns, its right one moved to start where a legend at the right of the

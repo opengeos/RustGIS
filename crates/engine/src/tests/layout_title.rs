@@ -268,3 +268,32 @@ fn removing_an_offline_area_and_its_map_says_the_map_texts_draw_empty() {
         ["Layout 'Sheet': 1 text with {map} has no map frame showing a map to name, so {map} draws empty"]
     );
 }
+
+/// `{map}` names the first map frame's map, and the first is the lowest in the drawing order:
+/// sending another frame to the back, or deleting the first, changes the map it names, and says
+/// so. Moves that leave the first frame's map as it was say nothing.
+#[test]
+fn reordering_or_removing_frames_says_when_map_texts_name_another_map() {
+    let mut s = world();
+    let first = s.map().name.clone();
+    s.run("map.new", &json!({"name": "Detail"})).unwrap();
+    s.run("map.activate", &json!({"name": &first})).unwrap();
+    s.run("layout.new", &json!({"page": "a4", "template": "map", "name": "Sheet"})).unwrap();
+    let detail =
+        s.run("layout.addFrame", &json!({"map": "Detail", "x": 10, "y": 10, "w": 40, "h": 30})).unwrap()["element"].as_u64().unwrap();
+    let title = id(&s, 0, "Title");
+    // Neither changes the first frame.
+    assert_eq!(map_notices(&mut s, "layout.arrange", json!({"element": title, "to": "front"})), Vec::<String>::new());
+    assert_eq!(map_notices(&mut s, "layout.arrange", json!({"element": detail, "to": "front"})), Vec::<String>::new());
+    assert_eq!(
+        map_notices(&mut s, "layout.arrange", json!({"element": detail, "to": "back"})),
+        ["Layout 'Sheet': its first map frame, the lowest in the drawing order, now shows 'Detail', so 1 text with {map} names it"]
+    );
+    // Undone, the title names the first map again; the next change is said again.
+    s.run("edit.undo", &json!({})).unwrap();
+    let world_frame = s.project.layouts[0].first_frame().unwrap();
+    assert_eq!(
+        map_notices(&mut s, "layout.removeElement", json!({"element": world_frame})),
+        ["Layout 'Sheet': its first map frame, the lowest in the drawing order, now shows 'Detail', so 1 text with {map} names it"]
+    );
+}
