@@ -81,7 +81,16 @@ impl Form {
     /// chosen, as `query::complete_at` reads it.
     pub(crate) fn follow_box(&mut self, ui: &Ui, id: egui::Id, text: &str, ds: &Dataset) {
         let cursor = TextEditState::load(ui.ctx(), id).and_then(|s| s.cursor.char_range()).map(|r| r.primary.index.0);
-        let at = cursor.and_then(|at| Some((at, query::complete_at(text, at, ds)?.field?)));
+        let here = cursor.and_then(|at| Some((at, query::complete_at(text, at, ds)?)));
+        if here.as_ref().is_some_and(|(_, c)| c.compared && c.field.is_none()) {
+            // Compared with something computed (`upper(name) = ▮`): no field's values to list,
+            // not the one chosen before.
+            self.field = None;
+            self.read = None;
+            self.cursor = None;
+            return;
+        }
+        let at = here.and_then(|(at, c)| Some((at, c.field?)));
         let Some((at, field)) = at.and_then(|(at, i)| Some((at, ds.fields.get(i)?))) else {
             // The cursor is not where a value goes: a value picked goes at the end.
             self.cursor = None;
@@ -138,6 +147,8 @@ impl Form {
     /// says why.
     pub(crate) fn accept(&mut self, text: &mut String, field: &str, value: &str, ds: &Dataset) {
         let at = self.cursor.as_ref().filter(|(_, held)| held == text).map(|(at, _)| *at);
+        // The list closed with the pick: opened again, even in the next frame, it is a new one.
+        self.drawn = None;
         self.said = insert(text, field, value, ds, at).err();
         if self.said.is_none() {
             self.cursor = None;
@@ -200,6 +211,16 @@ pub(crate) fn insert(text: &mut String, field: &str, value: &str, ds: &Dataset, 
         head.truncate(keep);
         here = at_end(&head, ds);
     }
+    if starts_an_operand(after) {
+        return Err(tl!("Not added: a value follows the cursor already. Put the cursor where none is, or delete that one").to_string());
+    }
+    if !here.as_ref().is_some_and(|c| c.operand || c.symbols.contains(&"=")) && ends_with_field(&head, field) {
+        // `pop_est > continent ▮`: the field is the value of a comparison already.
+        return Err(crate::i18n::fmt(
+            "Not added: {field} is already a value here. Type an operator after it, or put the cursor after one",
+            &[("field", &field_ref(field))],
+        ));
+    }
     if here.as_ref().is_some_and(|c| c.pattern) && value.contains(['%', '_']) {
         return Err(crate::i18n::fmt("{value} has a % or _, which matches more than itself after LIKE: use = for it", &[("value", value)]));
     }
@@ -222,13 +243,18 @@ pub(crate) fn insert(text: &mut String, field: &str, value: &str, ds: &Dataset, 
         true => format!("{}{after}", head.trim_end()),
         false => format!("{head}{after}"),
     };
-    let mut done = join(&head);
-    // A bracket left open is closed, unless what follows it does.
-    if at_end(&head, ds).is_some_and(|c| c.symbols.contains(&")")) && (after.is_empty() || query::parse(&done, ds).is_err()) {
+    // Each bracket left open is closed, unless what follows the value closes it or goes on in it
+    // (`IN (▮, 'Africa')`); what follows doesn't otherwise count (an unfinished clause after it
+    // isn't a bracket left open). At most as many as were opened.
+    let opened = head.matches('(').count();
+    for _ in 0..opened {
+        if after.starts_with([')', ',']) || !at_end(&head, ds).is_some_and(|c| c.symbols.contains(&")")) {
+            break;
+        }
         head.pop();
         head.push_str(") ");
-        done = join(&head);
     }
+    let done = join(&head);
     if done.chars().count() > query::MAX_LEN {
         return Err(crate::i18n::fmt(
             "Not added: the clause would be longer than {max} characters",
@@ -237,6 +263,22 @@ pub(crate) fn insert(text: &mut String, field: &str, value: &str, ds: &Dataset, 
     }
     *text = done;
     Ok(())
+}
+
+/// Whether `text` (what follows the cursor a value goes at) starts with a value, which the value
+/// added would stand beside (`= ▮'Africa'`): a text or quoted name, a number, a bracket, or a name
+/// that isn't a word coming after a value (`AND`, `THEN`, `LIKE`…).
+fn starts_an_operand(text: &str) -> bool {
+    let text = text.trim_start();
+    let Some(first) = text.chars().next() else { return false };
+    if matches!(first, '\'' | '"' | '(' | '@' | '$' | '.') || first.is_ascii_digit() {
+        return true;
+    }
+    if !(first.is_alphabetic() || first == '_') {
+        return false;
+    }
+    let after_a_value = [Kw::And, Kw::Or, Kw::Not, Kw::Is, Kw::Like, Kw::Ilike, Kw::In, Kw::Between, Kw::When, Kw::Then, Kw::Else, Kw::End];
+    !after_a_value.iter().any(|k| starts_with_word(text, k.word()))
 }
 
 /// What is left of `text` after the quoted text or name that began before it, up to its closing
@@ -383,6 +425,70 @@ mod tests {
             }
         }
         assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
+    /// Brackets: each left open is closed, however many, but not one that what follows the value
+    /// closes, and not for an unfinished clause after it.
+    #[test]
+    fn every_bracket_left_open_is_closed_and_no_other() {
+        let ds = countries();
+        let mut text = "((continent = ".to_string();
+        insert(&mut text, "continent", "'Asia'", &ds, None).unwrap();
+        assert_eq!(text, "((continent = 'Asia')) ");
+        assert!(query::select(&text, &ds).is_ok());
+        // The list is closed; the comparison after it is unfinished, and stays so.
+        let mut text = "continent IN () AND pop_est > ".to_string();
+        insert(&mut text, "continent", "'Asia'", &ds, Some(14)).unwrap();
+        assert_eq!(text, "continent IN ('Asia') AND pop_est > ");
+    }
+
+    /// What would stand beside a value or a field already there is not written: the draft stays,
+    /// and the box says why.
+    #[test]
+    fn a_value_is_not_written_beside_another() {
+        let ds = countries();
+        // (the text, the cursor in chars, the field)
+        for (clause, at, field) in [
+            ("continent = 'Africa' AND pop_est > 1", Some(12), "continent"),
+            ("continent =  'Africa'", Some(12), "continent"),
+            ("pop_est > 5", Some(10), "pop_est"),
+            ("continent = name", Some(12), "continent"),
+            // The field's button clicked after an operator: the field is the value already.
+            ("pop_est > continent ", None, "continent"),
+            ("name = continent", None, "continent"),
+        ] {
+            let mut text = clause.to_string();
+            let said = insert(&mut text, field, "'Asia'", &ds, at).expect_err(clause);
+            assert_eq!(text, clause, "left as it was");
+            assert!(said.starts_with("Not added"), "{said}");
+        }
+        // Words that come after a value leave the gap open to fill.
+        for (clause, at) in [("continent =  AND pop_est > 1", 12), ("continent =  OR pop_est > 1", 12)] {
+            let mut text = clause.to_string();
+            insert(&mut text, "continent", "'Asia'", &ds, Some(at)).unwrap();
+            assert!(query::select(&text, &ds).is_ok(), "{text}");
+        }
+    }
+
+    /// The list is held while it stays open, but a pick closes it: opened again, even in the next
+    /// frame, it reads the rows as they are then.
+    #[test]
+    fn a_pick_ends_the_list_held() {
+        let ds = countries();
+        let field = ds.fields.iter().position(|f| f.name == "continent").unwrap();
+        // Rows of their own: one more feature.
+        let mut other = ds.clone();
+        other.push(None, vec![rustgis_engine::data::Value::Null; ds.fields.len()]);
+        assert!(!other.features.allocation_key().ptr_eq(&ds.features.allocation_key()));
+        let mut form = Form::default();
+        form.choose("continent");
+        let _ = form.list(&ds, field, 1);
+        let _ = form.list(&other, field, 2);
+        assert_eq!(form.reads, 1, "held while open, whatever the rows");
+        let mut text = String::new();
+        form.accept(&mut text, "continent", "'Asia'", &ds);
+        let _ = form.list(&other, field, 3);
+        assert_eq!(form.reads, 2, "opened again in the next frame: read again");
     }
 
     /// The cursor remembered is the one the field came from, while the text is as it was: typed in

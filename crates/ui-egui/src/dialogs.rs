@@ -4527,6 +4527,34 @@ mod tests {
         assert_eq!(h.state().dialogs.text, "continent = 'Asia' AND pop_est > 1", "the gap filled, the rest kept");
     }
 
+    /// Compared with something computed (`upper(name) = ▮`), there is no field to list: not the one
+    /// clicked before.
+    #[test]
+    fn select_by_attributes_values_list_lists_nothing_beside_a_computed_left_side() {
+        use egui::accesskit::Role;
+        use egui::text::{CCursor, CCursorRange};
+        use egui_kittest::kittest::Queryable;
+        let mut app = RustGisApp::with_sample();
+        app.run("ui.dialog", json!({"name": "selectByAttributes"})).unwrap();
+        app.dialogs.layer = "Countries".into();
+        let mut h = app_harness(app);
+        h.run_steps(3);
+        h.get_by_role_and_label(Role::Button, "continent").click();
+        h.run();
+        let id = egui::Id::unique("sba_where");
+        h.state_mut().dialogs.text = "upper(name) = ".into();
+        h.ctx.memory_mut(|m| m.request_focus(id));
+        h.run();
+        let mut state = egui::widgets::text_edit::TextEditState::load(&h.ctx, id).unwrap_or_default();
+        state.cursor.set_char_range(Some(CCursorRange::one(CCursor::new(14))));
+        state.store(&h.ctx, id);
+        h.run();
+        h.get_by_role_and_label(Role::Button, "Values ▾").click();
+        h.run();
+        assert!(h.query_by_label("Click a field, or put the cursor in one, to list its values").is_some(), "no field chosen");
+        assert!(h.query_by_role_and_label(Role::Button, "'Asia'").is_none(), "continent isn't listed");
+    }
+
     /// The list stays as it was read while it is open: rows that change under it (a streamed
     /// layer's next view) don't change what Enter takes. Opened again, it reads the rows then.
     #[test]

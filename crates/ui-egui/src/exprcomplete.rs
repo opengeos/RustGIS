@@ -63,7 +63,7 @@ impl ValuesRead {
     /// What the help says of where the values come from, and of values not listed; None when
     /// they are all the layer's.
     fn note(self) -> Option<String> {
-        let from = self.from();
+        let from = self.source();
         let left = (self.left_out > 0).then(|| self.left_out_note());
         match (from, left) {
             (Some(from), Some(left)) => Some(format!("{from}\n{left}")),
@@ -73,12 +73,21 @@ impl ValuesRead {
 
     /// That the values of `left_out` features aren't listed, and why.
     pub(crate) fn left_out_note(self) -> String {
-        let n = self.left_out.to_string();
-        crate::i18n::fmt("The values of {n} features aren't listed: longer than 100 characters, or of several lines", &[("n", &n)])
+        let (n, max) = (self.left_out.to_string(), query::VALUE_CHARS.to_string());
+        let args = [("n", n.as_str()), ("max", max.as_str())];
+        match self.left_out {
+            1 => {
+                crate::i18n::fmt("The value of 1 feature isn't listed: longer than {max} characters, of several lines or too large", &args)
+            }
+            _ => crate::i18n::fmt(
+                "The values of {n} features aren't listed: longer than {max} characters, of several lines or too large",
+                &args,
+            ),
+        }
     }
 
     /// Where the values come from; None when they are all the layer's.
-    fn from(self) -> Option<String> {
+    fn source(self) -> Option<String> {
         let (read, of) = (self.read.to_string(), self.of.to_string());
         let args = [("read", read.as_str()), ("of", of.as_str())];
         match (self.view, self.read < self.of) {
@@ -978,7 +987,11 @@ mod tests {
         assert_eq!(note(40, 40, true).as_deref(), Some("Values of the 40 features read for the view"));
         assert_eq!(note(10_000, 30_000, true).as_deref(), Some("Values of 10000 of the 30000 features read for the view, evenly spread"));
         // Values left out are said, with or without a sample.
-        let left = "The values of 3 features aren't listed: longer than 100 characters, or of several lines";
+        let left = "The values of 3 features aren't listed: longer than 100 characters, of several lines or too large";
+        assert_eq!(
+            ValuesRead { read: 4, of: 4, view: false, left_out: 1 }.note().as_deref(),
+            Some("The value of 1 feature isn't listed: longer than 100 characters, of several lines or too large")
+        );
         assert_eq!(ValuesRead { read: 4, of: 4, view: false, left_out: 3 }.note().as_deref(), Some(left));
         assert_eq!(
             ValuesRead { read: 10, of: 20, view: false, left_out: 3 }.note(),

@@ -152,7 +152,7 @@ pub const VALUES_READ: usize = 10_000;
 /// The longest text [`field_values`] gives, in chars. A longer one is a description, not a
 /// value anyone compares with by typing it, and a list as wide as its widest item would run off
 /// the screen with it.
-pub(crate) const VALUE_CHARS: usize = 100;
+pub const VALUE_CHARS: usize = 100;
 
 /// A value of a field, from [`field_values`]: as an expression writes it ([`literal`]: `'O''Br'`,
 /// `3.25`), and as it reads (`O'Br`), what is typed inside its quotes.
@@ -174,9 +174,10 @@ pub struct FieldValues {
     pub read: usize,
     /// How many features the dataset holds: more than `read` when a sample was read.
     pub of: usize,
-    /// How many of the features read have a value left out of `values` for its length (a text or
-    /// float written longer than [`VALUE_CHARS`]) or for breaking a line, for a list of `values`
-    /// to say it isn't all of them.
+    /// How many of the features read have a value left out of `values`: a text or float written
+    /// longer than [`VALUE_CHARS`], a text that breaks a line, an infinite float or a whole number
+    /// too large to write exactly ([`literal`]), for a list of `values` to say it isn't all of
+    /// them. Null and NaN are no value, and aren't counted.
     pub left_out: usize,
 }
 
@@ -198,8 +199,14 @@ pub fn field_values(ds: &Dataset, field: usize, most: usize) -> FieldValues {
             continue;
         }
         let written = literal(v);
-        // A float is written in full (`1e300` as 301 digits): too long to list, as a text is.
-        if matches!(v, Value::Float(_)) && written.as_ref().is_some_and(|w| w.len() > VALUE_CHARS) {
+        let unlisted = match v {
+            // A float is written in full (`1e300` as 301 digits): too long to list, as a text is.
+            Value::Float(x) => x.is_infinite() || written.as_ref().is_some_and(|w| w.len() > VALUE_CHARS),
+            // 9e15 or more, which the lexer would read as a float.
+            Value::Int(_) => written.is_none(),
+            _ => false,
+        };
+        if unlisted {
             left_out += 1;
             continue;
         }
@@ -330,6 +337,13 @@ mod tests {
         // value to list, not one left out.
         assert_eq!(v.left_out, 2);
         assert_eq!(field_values(&d, 1, VALUES_READ).left_out, 2, "1e300 and -1e-300 in full");
+        // A number too large to write exactly, and an infinite one, are left out and counted.
+        let mut big = Dataset::new("t", GeometryType::Point, vec![Field::new("n", FieldType::Double)]);
+        for n in [Value::Int(9_000_000_000_000_000), Value::Float(f64::INFINITY), Value::Float(f64::NEG_INFINITY), Value::Int(7)] {
+            big.push(None, vec![n]);
+        }
+        let got = field_values(&big, 0, VALUES_READ);
+        assert_eq!((got.left_out, got.values.len()), (3, 1));
         let longest = "x".repeat(VALUE_CHARS);
         assert_eq!(written(0), ["'A'".to_string(), "'b'".to_string(), format!("'{longest}'")], "up to the longest text listed");
         assert_eq!(v.values.first(), Some(&FieldValue { written: "'A'".into(), text: "A".into() }));
