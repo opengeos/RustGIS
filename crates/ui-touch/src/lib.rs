@@ -89,7 +89,12 @@ pub fn removing_copies(ctx: &egui::Context) -> bool {
 /// in view, with no dialog over it. A shell whose system keeps Back unless asked for it (Android
 /// 16 on) asks only then, so the rest of the time Back does what the system does with it.
 pub fn takes_back(app: &RustGisApp, ctx: &egui::Context) -> bool {
-    app.chrome.is_some() && !app.ui.backstage && sheet(ctx) != Sheet::None && ctx.memory(|m| m.top_modal_layer().is_none())
+    // A dialog window isn't a modal layer: it is asked for by name.
+    app.chrome.is_some()
+        && !app.ui.backstage
+        && sheet(ctx) != Sheet::None
+        && app.dialogs.open.is_none()
+        && ctx.memory(|m| m.top_modal_layer().is_none())
 }
 
 /// The touch interface (a `rustgis_ui_egui::Chrome`): the bar, the sheet asked for, and the map
@@ -2313,6 +2318,16 @@ mod tests {
         held.frame(vec![back()]);
         assert_eq!(sheet(&held.ctx), Sheet::None);
         assert!(!takes_back(&held.app, &held.ctx));
+        // Nor with a dialog over the sheet.
+        held.raise(Sheet::More, "More");
+        run(&mut held.app, "ui.dialog", json!({"name": "addService"}));
+        held.frame(Vec::new());
+        assert!(!takes_back(&held.app, &held.ctx));
+        held.frame(vec![back()]);
+        assert_eq!(sheet(&held.ctx), Sheet::More);
+        held.app.dialogs.open = None;
+        held.frame(vec![back()]);
+        assert_eq!(sheet(&held.ctx), Sheet::None);
         // With a question up, Back is not the sheet's.
         held.raise(Sheet::More, "More");
         let first = held.app.session.map().layers.first().map(|l| l.id);
