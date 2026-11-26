@@ -3863,7 +3863,7 @@ fn overlays(app: &mut RustGisApp, ui: &mut Ui, p: &egui::Painter, rect: Rect, t:
             match (&app.map.vertex_drag, &app.map.snap) {
                 // A dragged vertex has snapped already (leaving its own feature out), in view
                 // coordinates.
-                (Some(d), _) => d.snapped.then(|| crate::vertexedit::view_to_lonlat(app, d.at)).flatten(),
+                (Some(d), _) => d.snapped_lonlat,
                 (None, Some((k, at))) if *k == key => *at,
                 _ => {
                     // Asked directly, not as a command: commands mark the map changed.

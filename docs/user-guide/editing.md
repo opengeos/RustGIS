@@ -482,7 +482,8 @@ The command uses row positions and the same vertex addresses as `edit.vertex`:
 {"layer":"Parcels","row":0,"part":0,"ring":0,"index":3,"lon":12.5,"lat":41.9}
 ```
 
-Run these parameters with `edit.moveSharedVertex`. It returns the source `part`, `ring` and
+Run these parameters with `edit.moveSharedVertex`. In place of `lon` and `lat`, `x` and `y` give
+the place in the layer's own coordinates, written as given. It returns the source `part`, `ring` and
 `index`, plus `modified`: the number of features whose geometry or attributes actually changed.
 Every matched feature runs through attribute rules and archiving in one transaction; a rejection
 rolls back the whole edit. A successful command is one undo step. As with `edit.vertex`, a direct

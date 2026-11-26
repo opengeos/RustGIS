@@ -1464,10 +1464,11 @@ fn edit_vertex(s: &mut Session, p: &Json) -> CmdResult {
 /// on a map in the layer's system, #2032 C2f-7), or `None` when it is given in longitude/latitude
 /// ([`lonlat_place`]) or not at all. Both kinds at once, or half of one, are refused.
 pub(super) fn own_place(p: &Json) -> Result<Option<Coord>, String> {
-    if p.get("x").is_none() && p.get("y").is_none() {
+    let given = |k: &str| p.get(k).is_some_and(|v| !v.is_null());
+    if !given("x") && !given("y") {
         return Ok(None);
     }
-    if p.get("lon").is_some() || p.get("lat").is_some() {
+    if given("lon") || given("lat") {
         return Err("give lon and lat or x and y, not both".into());
     }
     let (x, y) = (f(p, "x").ok_or("x and y are both required")?, f(p, "y").ok_or("x and y are both required")?);

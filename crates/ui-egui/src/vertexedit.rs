@@ -36,6 +36,9 @@ pub struct VertexDrag {
     pub at: Coord,
     /// Whether `at` snapped to a feature (the overlay marks it).
     pub snapped: bool,
+    /// The longitude/latitude it snapped to, as snapping gave it: committed as it is, so the
+    /// place snapped to is kept exactly, not after a round trip through the map's coordinates.
+    pub snapped_lonlat: Option<Coord>,
 }
 
 /// The source chosen by a vertex click, without retaining rows or invalidating ordinary edits.
@@ -346,7 +349,7 @@ fn unplaced_signature(app: &RustGisApp) -> u64 {
     let m = app.session.map();
     let mut h = std::collections::hash_map::DefaultHasher::new();
     app.session.project.active_map.hash(&mut h);
-    format!("{:?}", m.projection).hash(&mut h);
+    m.projection.hash(&mut h);
     for l in m.layers.iter().filter(|l| m.shows(l) && !l.selection.is_empty() && !l.is_raster() && !l.graphics && !l.is_streamed()) {
         let rows = l.dataset.features.allocation_key().as_ptr() as usize;
         let revisions = (l.instance_id(), l.replacement_revision(), l.geometry_rev, rows);
@@ -498,8 +501,12 @@ fn handle_at(app: &RustGisApp, rect: Rect, p: Pos2) -> Option<Handle> {
 /// and map context before previewing. A later source change cancels rather than retargets it.
 pub fn drag_start(app: &mut RustGisApp, rect: Rect, origin: Pos2) -> bool {
     let drag = match handle_at(app, rect, origin) {
-        Some(Handle::Vertex(layer, row, vertex, at)) => VertexDrag { layer, row, vertex, insert: false, at, snapped: false },
-        Some(Handle::Edge(layer, row, vertex, at)) => VertexDrag { layer, row, vertex, insert: true, at, snapped: false },
+        Some(Handle::Vertex(layer, row, vertex, at)) => {
+            VertexDrag { layer, row, vertex, insert: false, at, snapped: false, snapped_lonlat: None }
+        }
+        Some(Handle::Edge(layer, row, vertex, at)) => {
+            VertexDrag { layer, row, vertex, insert: true, at, snapped: false, snapped_lonlat: None }
+        }
         None => return false,
     };
     let Some(owner) = DragOwner::capture(app, drag) else { return false };
@@ -524,12 +531,14 @@ pub fn drag_to(app: &mut RustGisApp, rect: Rect, p: Pos2) {
             rustgis_engine::cmd::design::snap_except(&mut app.session, lonlat, Some((d.layer, d.row)))
         } else {
             rustgis_engine::cmd::design::snap_vertex_except(&mut app.session, lonlat, Some((d.layer, d.row, d.vertex)))
-        };
-        lonlat_to_view(app, at?.0)
+        }?
+        .0;
+        Some((lonlat_to_view(app, at)?, at))
     });
     if let Some(d) = &mut app.map.vertex_drag {
-        d.at = snap.unwrap_or(c);
+        d.at = snap.map_or(c, |(view, _)| view);
         d.snapped = snap.is_some();
+        d.snapped_lonlat = snap.map(|(_, lonlat)| lonlat);
     }
 }
 
@@ -569,9 +578,17 @@ fn commit(app: &mut RustGisApp, d: VertexDrag) {
     // On a map in the layer's own system, a vertex placed by the pointer is written where it is,
     // in the layer's coordinates. A snapped one goes by longitude/latitude, so the place snapped
     // to is kept as stored (`held_places`).
-    let own = !d.snapped && own_placing(app, d.layer);
-    let place = if own { Some(("x", "y", d.at)) } else { view_to_lonlat(app, d.at).map(|c| ("lon", "lat", c)) };
-    let Some((kx, ky, at)) = place else { return };
+    let own = d.snapped_lonlat.is_none() && own_placing(app, d.layer);
+    let place = match d.snapped_lonlat {
+        _ if own => Some(("x", "y", d.at)),
+        Some(lonlat) => Some(("lon", "lat", lonlat)),
+        None => view_to_lonlat(app, d.at).map(|c| ("lon", "lat", c)),
+    };
+    let Some((kx, ky, at)) = place else {
+        // Let go where the map's coordinates have no longitude/latitude: said, not dropped.
+        app.session.notify(crate::tl!("The vertex can't be placed there: that place has no longitude/latitude"), true);
+        return;
+    };
     if let Some(o) = p.as_object_mut() {
         o.insert(kx.into(), json!(at.x));
         o.insert(ky.into(), json!(at.y));
@@ -597,7 +614,9 @@ fn commit(app: &mut RustGisApp, d: VertexDrag) {
 pub fn click(app: &mut RustGisApp, rect: Rect, p: Pos2, c: Coord, shift: bool) {
     match handle_at(app, rect, p) {
         Some(Handle::Vertex(layer, row, v, _)) => choose(app, Some((layer, row, v))),
-        Some(Handle::Edge(layer, row, vertex, at)) => commit(app, VertexDrag { layer, row, vertex, insert: true, at, snapped: false }),
+        Some(Handle::Edge(layer, row, vertex, at)) => {
+            commit(app, VertexDrag { layer, row, vertex, insert: true, at, snapped: false, snapped_lonlat: None })
+        }
         None => {
             choose(app, None);
             let mode = if shift { "add" } else { "new" };
@@ -896,6 +915,33 @@ mod tests {
         assert!(delete_chosen(&mut app));
         let g = app.session.map().layer(id).unwrap().dataset.features.geometry(0).unwrap().clone();
         assert_eq!(g, far.delete_vertex(VertexId::new(0, 0, 1)).unwrap());
+    }
+
+    /// A vertex snapped on a Web Mercator map is committed at the longitude/latitude it snapped
+    /// to, exactly, not after a round trip through the map's coordinates.
+    #[test]
+    fn a_snapped_vertex_is_placed_exactly_where_it_snapped() {
+        // The second feature's corner, at a place whose Mercator round trip isn't exact.
+        let target = Coord::new(0.123_456_789_012_3, 0.987_654_321_098_7);
+        let back = |app: &RustGisApp| view_to_lonlat(app, lonlat_to_view(app, target).unwrap()).unwrap();
+        let other = Geometry::Polygon(vec![vec![vec![target, Coord::new(5., 5.), Coord::new(5., 6.), target]]]);
+        let mut app = app([square(0.), other].into_iter());
+        let id = app.session.active_layer.unwrap();
+        app.session.map_mut().editing.settings.enabled = true;
+        app.session.map_mut().editing.snapping.enabled = true;
+        app.map.move_shared_vertices = false;
+        let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(1000., 800.));
+        if back(&app) == target {
+            eprintln!("this place round-trips exactly; the test proves nothing here");
+        }
+        let from = lonlat_to_screen(&app, rect, Coord::new(1., 1.)).unwrap();
+        assert!(drag_start(&mut app, rect, from));
+        let near = lonlat_to_screen(&app, rect, target).unwrap() + egui::vec2(1.0, 1.0);
+        drag_to(&mut app, rect, near);
+        assert_eq!(app.map.vertex_drag.unwrap().snapped_lonlat, Some(target));
+        drag_stop(&mut app);
+        let g = app.session.map().layer(id).unwrap().dataset.features.geometry(0).unwrap().clone();
+        assert_eq!(g.vertex(VertexId::new(0, 0, 2)), Some(target), "{g:?}");
     }
 
     /// The count stops where the handles do: at their cap of placed features. With 49 placed
