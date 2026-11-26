@@ -61,9 +61,9 @@ impl<T: Copy + Default + PartialEq + Send + Sync + 'static> Dragged<T> {
 }
 
 /// What a row that can be dragged to another place (`reorder`) senses (#2958): clicks, and drags
-/// unless a finger is on the screen. A drag is what the list's own drag-to-scroll gives way to,
-/// so under a finger the row senses clicks only and a swipe scrolls the list; `reorder_drag` arms
-/// the drag by a long press. The mouse of a touch-screen laptop keeps dragging rows.
+/// unless a finger is on the screen. While a finger is down the list's drag-to-scroll must win a
+/// swipe, so the row senses clicks only and `reorder_drag` arms its drag by a long press. The
+/// mouse of a touch-screen laptop keeps dragging rows.
 pub(crate) fn reorder_sense(ui: &Ui, reorder: bool) -> Sense {
     if reorder && !ui.input(|i| i.any_touches()) { Sense::click_and_drag() } else { Sense::click() }
 }
@@ -73,11 +73,13 @@ fn touched_row() -> egui::Id {
 }
 
 /// After the scroll area `area` of a list of reorderable rows: gives it the drag of a finger that
-/// came down on one of them, so a swipe scrolls the list (#2958).
+/// came down on one of them, so a swipe scrolls the list (#2958). Every such row must sit inside
+/// a list that calls this, or the next list that does takes its drag.
 pub(crate) fn yield_touch_drag(ctx: &egui::Context, area: egui::Id) {
     if ctx.data(|d| d.get_temp::<bool>(touched_row())) == Some(true) {
         ctx.data_mut(|d| d.remove::<bool>(touched_row()));
-        // The id egui gives the drag of a scroll area's content.
+        // The id egui 0.37 gives the drag of a scroll area's content (`scroll_area.rs`); the
+        // swipe tests in `panes.rs` fail if it changes.
         ctx.set_dragged_id(area.with("area"));
     }
 }

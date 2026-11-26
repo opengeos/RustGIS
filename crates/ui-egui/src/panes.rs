@@ -8631,6 +8631,35 @@ mod tests {
         assert_eq!(h.state().session.active_layer, Some(picked));
     }
 
+    /// #2958: a finger held on a row of a long list and then moved drags the row; the list under
+    /// it stays where it was.
+    #[test]
+    fn a_long_press_then_a_move_does_not_scroll_the_list() {
+        use egui_kittest::kittest::Queryable;
+        let _turn = crate::fetching::turn();
+        let mut app = RustGisApp::with_sample();
+        for i in 0..30 {
+            app.run("map.addTiles", json!({"url": format!("https://wms.example.org/{i}/{{z}}/{{x}}/{{y}}.png"), "name": format!("Depths {i}"), "overlay": true}))
+                .unwrap();
+        }
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 700.0)).with_max_steps(64).build_ui_state(
+            |ui, app: &mut RustGisApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run_steps(6);
+        let from = h.get_by_label("Depths 25").rect().center();
+        // A row the drag does not pass, so only a scroll would move it.
+        let still = h.get_by_label("Depths 15").rect().center();
+        touch_drag(&mut h, from, from - vec2(0.0, 80.0), 6);
+        h.run_steps(10);
+        let now = h.get_by_label("Depths 15").rect().center();
+        assert!((now.y - still.y).abs() < 0.5, "the list scrolled: {still:?} to {now:?}");
+    }
+
     /// #2958: a swipe over the view tabs scrolls the strip and leaves the maps in their order.
     #[test]
     fn a_swipe_over_the_view_tabs_scrolls_and_does_not_reorder_them() {
