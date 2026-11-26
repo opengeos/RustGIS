@@ -856,4 +856,39 @@ mod tests {
         let (s, p) = (fnv(&svg), fnv(&pdf));
         assert_eq!((s, p), (PINNED_TEXT_SVG, PINNED_TEXT_PDF), "{s:#x} {p:#x}");
     }
+
+    /// How [`legends_export_as_before`]'s pages were written as SVG and as a vector PDF before
+    /// legends had a fit, layer names to leave off or more than three columns; in the built-in face.
+    #[cfg(not(target_arch = "wasm32"))]
+    const PINNED_LEGEND_SVG: u64 = 0xadfa_b6b6_4b1b_50f1;
+    #[cfg(not(target_arch = "wasm32"))]
+    const PINNED_LEGEND_PDF: u64 = 0xdd47_f219_ace4_cbd7;
+
+    /// The SVG and the vector PDF of a legend with none of the fitting settings are byte for byte
+    /// main's, every page of [`crate::layout::legend_pin_pages`]: in a process of its own, told to
+    /// use the built-in face before any text.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn legends_export_as_before() {
+        if std::env::var_os("RUSTGIS_LEGEND_EXPORT_PIN_CHILD").is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "svg::tests::legends_export_as_before", "--nocapture"])
+                .env("RUSTGIS_LEGEND_EXPORT_PIN_CHILD", "1")
+                .env("RUSTGIS_BUILTIN_FONTS", "1")
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+            assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"), "the test didn't run in the child process");
+            return;
+        }
+        let info = PageInfo::default();
+        let (mut svg, mut pdf) = (Vec::new(), Vec::new());
+        for (l, mut maps) in crate::layout::legend_pin_pages() {
+            svg.extend(layout_svg(&l, &mut maps, 72.0, &info).unwrap().0.into_bytes());
+            let (drawing, _) = crate::layout::render_drawing(&l, &mut maps, 150.0, &info).unwrap();
+            pdf.extend(crate::pdf::write(&[crate::pdf::Page::drawing(drawing, l.width, l.height)], "Legends"));
+        }
+        let (s, p) = (fnv(&svg), fnv(&pdf));
+        assert_eq!((s, p), (PINNED_LEGEND_SVG, PINNED_LEGEND_PDF), "{s:#x} {p:#x}");
+    }
 }

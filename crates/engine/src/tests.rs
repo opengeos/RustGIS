@@ -12899,6 +12899,71 @@ fn layout_scale_bars_take_their_details() {
     assert_eq!(back, s.project.layouts[0]);
 }
 
+/// 64-bit FNV-1a over one byte slice.
+#[cfg(not(target_arch = "wasm32"))]
+fn fnv_bytes(b: &[u8]) -> u64 {
+    b.iter().fold(0xcbf2_9ce4_8422_2325, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3))
+}
+
+/// What [`legend_notices_and_publications_are_as_before`] heard and laid out before legends had a
+/// fit or more than three columns; in the built-in face.
+#[cfg(not(target_arch = "wasm32"))]
+const PINNED_LEGEND_NOTICES: u64 = 0xd5f4_a138_dbbc_c84f;
+#[cfg(not(target_arch = "wasm32"))]
+const PINNED_PUBLICATIONS: u64 = 0x5588_2d64_179a_9eea;
+
+/// What main says about a legend's fit in its box, word for word, as added and when made 12 mm
+/// tall, and how `layout.publication` lays out the sample, its answer and its layout (the legend,
+/// its column count and box included) for a legend in one, two and three columns, before legends
+/// had a fit or more than three columns; in the built-in face, in a process of its own.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn legend_notices_and_publications_are_as_before() {
+    if std::env::var_os("RUSTGIS_LEGEND_NOTICE_PIN_CHILD").is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "tests::legend_notices_and_publications_are_as_before", "--nocapture"])
+            .env("RUSTGIS_LEGEND_NOTICE_PIN_CHILD", "1")
+            .env("RUSTGIS_BUILTIN_FONTS", "1")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"), "the test didn't run in the child process");
+        return;
+    }
+    let mut s = world();
+    s.run("layout.new", &json!({"name": "Notices", "page": "a4", "orientation": "landscape"})).unwrap();
+    let mut said = String::new();
+    for p in [
+        // Too narrow and too short in two columns.
+        json!({"kind": "legend", "columns": 2, "allClasses": true, "w": 30, "h": 20}),
+        // One column, too narrow.
+        json!({"kind": "legend", "columns": 1, "allClasses": true, "w": 15, "h": 80}),
+        json!({"kind": "legend", "textSize": 20, "allClasses": true, "w": 60, "h": 30}),
+        // Fits as added: said only once it is made 12 mm tall.
+        json!({"kind": "legend", "columns": 3, "allClasses": true, "w": 200, "h": 150}),
+        json!({"kind": "legend", "showNoData": true, "w": 40, "h": 10}),
+    ] {
+        let mark = s.notice_mark();
+        let id = s.run("layout.addElement", &p).unwrap()["element"].clone();
+        let added: Vec<_> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+        let mark = s.notice_mark();
+        s.run("layout.update", &json!({"element": id, "h": 12})).unwrap();
+        let updated: Vec<_> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+        said.push_str(&format!("{p}: {added:?} {updated:?}\n"));
+    }
+    assert!(said.contains("its last rows are left out") && said.contains("close up"), "{said}");
+    let mut laid = String::new();
+    // The sample's publications lay their legend in two columns (the default), one (a panel) and
+    // three (a thesis's half page).
+    for p in [json!({}), json!({"style": "panel"}), json!({"profile": "thesis-half"})] {
+        let mut s = world();
+        let r = s.run("layout.publication", &p).unwrap();
+        laid.push_str(&format!("{r}\n{}\n", serde_json::to_string(s.project.layouts.last().unwrap()).unwrap()));
+    }
+    let (n, p) = (fnv_bytes(said.as_bytes()), fnv_bytes(laid.as_bytes()));
+    assert_eq!((n, p), (PINNED_LEGEND_NOTICES, PINNED_PUBLICATIONS), "{n:#x} {p:#x}\n{said}\n{laid}");
+}
+
 /// A publication's scale bar box is measured from every setting its bar has (#1379), as the
 /// renderer draws it: a detail given measures it again for the detailed bar, its frame drawn at
 /// another scale measures it again, and made plain again it is the plain bar's box once more. A
