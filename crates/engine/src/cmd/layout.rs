@@ -3415,7 +3415,13 @@ fn add_frame(s: &mut Session, p: &Value) -> CmdResult {
     let rect = place(p, l, (15.0 + n * 5.0, 25.0 + n * 5.0, l.width * 0.5, l.height * 0.5))?;
     let kind = frame_kind(s, &map, rect.2, shape);
     let l = s.project.layouts.get_mut(i).ok_or("no layout")?;
+    let first = l.first_frame();
     let id = l.add("Map Frame", rect, kind);
+    // The first frame decides the figures of the texts (#2853): a layout that had none reads them
+    // from this one now, and what its map lacks is said.
+    if first.is_none() {
+        say_layout_text_statistics(s, i);
+    }
     Ok(json!({"element": id}))
 }
 

@@ -7261,6 +7261,9 @@ fn references_follow_layer(s: &mut Session, old: &str, new: &str) {
         replace(layer);
     }
     let mut texts_too_long = 0usize;
+    let mut texts_with_braces = 0usize;
+    // A name with a brace can't be written into a token: the texts keep the old one.
+    let braces = new.contains(['{', '}']);
     for layout in &mut s.project.layouts {
         let frames: Vec<u32> = layout
             .elements
@@ -7287,6 +7290,8 @@ fn references_follow_layer(s: &mut Session, old: &str, new: &str) {
                     // A longer name must not take the text past what a text holds: the file would
                     // cut its tail, so that text keeps the old name.
                     match renamed {
+                        // A brace in the new name would end the token early (`{count:Cities}}`).
+                        Some(_) if braces => texts_with_braces += 1,
                         Some(renamed) if renamed.chars().count() <= rustgis_map::layout::MAX_TEXT_CHARS => *text = renamed,
                         Some(_) => texts_too_long += 1,
                         None => {}
@@ -7304,6 +7309,7 @@ fn references_follow_layer(s: &mut Session, old: &str, new: &str) {
     // A presentation's map page draws its title over its own map, where a layer statistic is filled
     // in (#2853).
     let mut titles_too_long = 0usize;
+    let mut titles_with_braces = 0usize;
     for page in s.project.presentations.iter_mut().flat_map(|p| &mut p.pages) {
         if matches!(&page.kind, rustgis_map::presentation::PageKind::Map { map, .. } if map.eq_ignore_ascii_case(&map_name)) {
             let renamed = rustgis_map::layout::rename_stat_layers(&page.title, |layer| {
@@ -7312,6 +7318,7 @@ fn references_follow_layer(s: &mut Session, old: &str, new: &str) {
                 (name != layer).then_some(name)
             });
             match renamed {
+                Some(_) if braces => titles_with_braces += 1,
                 Some(renamed) if renamed.chars().count() <= rustgis_map::presentation::MAX_TITLE => page.title = renamed,
                 Some(_) => titles_too_long += 1,
                 None => {}
@@ -7356,6 +7363,14 @@ fn references_follow_layer(s: &mut Session, old: &str, new: &str) {
     for workspace in &mut s.project.workspaces {
         for image in &mut workspace.images {
             project_reference(image);
+        }
+    }
+    for (count, what) in [(texts_with_braces, "layout text(s)"), (titles_with_braces, "presentation title(s)")] {
+        if count > 0 {
+            s.notify_text(crate::notice_text::NoticeText::format(
+                "{count} {what} keep the old layer name '{old}' in their statistics: the new name has a brace, which a token can't hold",
+                [("count", count.to_string().into()), ("what", what.to_string().into()), ("old", old.to_string().into())],
+            ), false);
         }
     }
     if titles_too_long > 0 {

@@ -40204,6 +40204,56 @@ fn renaming_a_layer_leaves_a_statistic_text_that_would_outgrow_its_limit() {
     assert!(said.iter().any(|n| n.contains("1 layout text(s) keep the old layer name") && n.contains("5000")), "{said:?}");
 }
 
+/// A layout with no map frame has its texts' figures drawn as written; the first frame added is the
+/// map they read from, so what it lacks is said (#2853).
+#[test]
+fn layout_text_statistics_are_said_when_a_first_frame_is_added() {
+    let mut s = world();
+    s.run("layout.new", &json!({"name": "L"})).unwrap();
+    s.run("layout.addElement", &json!({"kind": "text", "text": "{count:Nowhere} places", "x": 10, "y": 10})).unwrap();
+    let li = s.active_layout.unwrap();
+    let frame = s.project.layouts[li].first_frame().unwrap();
+    s.run("layout.removeElement", &json!({"element": frame})).unwrap();
+    let said = |s: &mut Session, id: &str, p: Value| {
+        let mark = s.notice_mark();
+        s.run(id, &p).unwrap();
+        s.notices_since(mark).iter().map(|n| n.text.as_str().to_string()).filter(|t| t.contains("shows as written")).collect::<Vec<_>>()
+    };
+    assert_eq!(
+        said(&mut s, "layout.addFrame", json!({})),
+        ["{count:Nowhere} shows as written: the map of the layout's first frame has no layer named 'Nowhere'"]
+    );
+    // A second frame is not the first: nothing changes for the texts.
+    assert_eq!(said(&mut s, "layout.addFrame", json!({})), Vec::<String>::new());
+}
+
+/// A layer renamed to a name a token can't hold (a brace ends it) must not be written into the
+/// statistics that name it: they would read another layer, or none (#2853).
+#[test]
+fn renaming_a_layer_to_a_name_with_braces_leaves_its_statistics() {
+    let mut s = world();
+    s.run("layout.new", &json!({"name": "L"})).unwrap();
+    let id = s
+        .run("layout.addElement", &json!({"kind": "text", "text": "{count:Countries} {sum:Countries:pop_est}", "x": 10, "y": 10}))
+        .unwrap()["element"]
+        .as_u64()
+        .unwrap() as u32;
+    s.run("presentation.new", &json!({"name": "P"})).unwrap();
+    s.run("presentation.mapPage", &json!({"title": "{count:Countries} places"})).unwrap();
+    let mark = s.notice_mark();
+    s.run("layer.rename", &json!({"layer": "Countries", "name": "Cities}"})).unwrap();
+    let li = s.active_layout.unwrap();
+    let text = match &s.project.layouts[li].element(id).unwrap().kind {
+        rustgis_map::layout::ElementKind::Text { text, .. } => text.clone(),
+        _ => panic!("a text"),
+    };
+    assert_eq!(text, "{count:Countries} {sum:Countries:pop_est}");
+    assert_eq!(s.project.presentations[0].pages[1].title, "{count:Countries} places");
+    let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.as_str().to_string()).collect();
+    assert!(said.iter().any(|n| n.contains("1 layout text(s) keep the old layer name") && n.contains("brace")), "{said:?}");
+    assert!(said.iter().any(|n| n.contains("1 presentation title(s) keep the old layer name") && n.contains("brace")), "{said:?}");
+}
+
 #[test]
 fn locked_layout_elements_take_no_change_until_unlocked() {
     use rustgis_map::layout::ElementKind;
