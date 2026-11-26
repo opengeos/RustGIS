@@ -7,7 +7,7 @@
 use egui::{Align2, Color32, CornerRadius, CursorIcon, Pos2, Rect, Sense, Stroke, Ui, pos2, vec2};
 use rustgis_engine::map::layout::{
     Arrange, ArrowStyle, Background, ChartOrder, CoordFormat, Element, ElementKind, Grid, GridKind, GridStyle, INK, LAYOUT_TEXT_SIZE,
-    Layout, LineHead, MAX_BACKGROUND_PADDING, MAX_BACKGROUND_RADIUS, MAX_BACKGROUND_WIDTH, MAX_CHART_BARS, MAX_CHART_DECIMALS,
+    Layout, LegendFit, LineHead, MAX_BACKGROUND_PADDING, MAX_BACKGROUND_RADIUS, MAX_BACKGROUND_WIDTH, MAX_CHART_BARS, MAX_CHART_DECIMALS,
     MAX_COLORBAR_TICKS, MAX_FRAME_SCALE, MAX_GRID_WIDTH, MAX_LEGEND_COLUMNS, MAX_SCALE_BEFORE_ZERO, MAX_SCALE_DECIMALS,
     MAX_SCALE_DIVISIONS, MAX_SCALE_SUBDIVISIONS, MAX_TICK_MM, MIN_FRAME_SCALE, Orientation, PT_PER_MM, ScaleBarFit, ScaleBarStyle,
     ScaleLabelPosition, ScaleUnits, TextAlign, TickSide, UnitLabelPosition, chart_stack_refusal, frame_camera, line_angle, line_length,
@@ -1882,7 +1882,7 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                         });
                         ui.end_row();
                     }
-                    ElementKind::Legend { title, all_classes, hide_other, show_no_data, columns, text_size, .. } => {
+                    ElementKind::Legend { title, all_classes, hide_other, show_no_data, columns, text_size, fit, show_layer_names, .. } => {
                         let input_label = ui.label(tl!("Title"));
                         if let Some(tt) = text_field(app, ui, (li, id, "title"), title, false, input_label.id) {
                             update(app, json!({"title": tt}));
@@ -1912,9 +1912,38 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                         let drag = Dragged::lend(ui, drag_key("columns"), &mut n);
                         let r = ui
                             .add(egui::DragValue::new(&mut n).update_while_editing(false).range(1..=MAX_LEGEND_COLUMNS as u64))
-                            .labelled_by(input_label.id);
+                            .labelled_by(input_label.id)
+                            .on_hover_text(tl!("The columns its rows are laid in; a fit that adds columns starts from these"));
                         if drag.settled(ui, &r, &mut n) && n as usize != *columns {
                             update(app, json!({"columns": n}));
+                        }
+                        ui.end_row();
+                        let input_label = ui.label(tl!("Fit"));
+                        let current = fit.kept();
+                        egui::ComboBox::from_id_salt(("legend_fit", id))
+                            .selected_text(fit_label(current))
+                            .show_ui(ui, |ui| {
+                                for v in LegendFit::ALL {
+                                    if ui.selectable_label(current == v, fit_label(v)).clicked() && current != v {
+                                        update(app, json!({"fit": v.code()}));
+                                    }
+                                }
+                            })
+                            .response
+                            .labelled_by(input_label.id)
+                            .on_hover_text(tl!(
+                                "What gives way when the rows don't fit the box: the text's size, the columns, or nothing, leaving the last rows out"
+                            ));
+                        ui.end_row();
+                        let input_label = ui.label(tl!("Layer names"));
+                        let mut names = show_layer_names.shown();
+                        if ui
+                            .checkbox(&mut names, "")
+                            .labelled_by(input_label.id)
+                            .on_hover_text(tl!("The name over each layer's classes; a layer drawn in one symbol keeps its name"))
+                            .changed()
+                        {
+                            update(app, json!({"showLayerNames": names}));
                         }
                         ui.end_row();
                         // Its names' and labels' points; the title, rows and swatches follow (#2581).
@@ -3100,6 +3129,17 @@ fn first_ink(background: Option<&Background>, page: rustgis_engine::map::Rgba) -
     let shown = Color32::from_rgb(over(fill.r(), page.r()), over(fill.g(), page.g()), over(fill.b(), page.b()));
     let white = rustgis_engine::map::Rgba::rgb(0xFF, 0xFF, 0xFF);
     if crate::theme::contrast(shown, Color32::WHITE) > crate::theme::contrast(shown, crate::theme::c32(INK)) { white } else { INK }
+}
+
+/// A legend's fit as the Format pane writes it, in the words of [`LegendFit::label`] (which the
+/// command line and the docs use), each one here so it is translated.
+fn fit_label(fit: LegendFit) -> &'static str {
+    match fit.kept() {
+        LegendFit::Manual | LegendFit::Invalid => tl!("Manual"),
+        LegendFit::AdjustSize => tl!("Shrink the text"),
+        LegendFit::AdjustColumns => tl!("Add columns"),
+        LegendFit::AdjustColumnsAndSize => tl!("Add columns, then shrink the text"),
+    }
 }
 
 /// A row of a layout element's text size in points, within [`LAYOUT_TEXT_SIZE`], labelled `label`
@@ -4880,6 +4920,81 @@ mod tests {
         h.get_by_role_and_label(Role::CheckBox, "Rivers").click();
         h.run_steps(2);
         assert_eq!(left_out(&h), ["Cities"]);
+    }
+
+    /// A legend's Fit and Layer names in the Format pane: shown at their defaults on opening and
+    /// sending nothing then, each change one undo step, picking the current fit none, and a column
+    /// count past six set at six.
+    #[test]
+    fn a_legends_fit_and_layer_names_are_one_undo_step_each() {
+        use egui::accesskit::{Action, ActionData, ActionRequest, Role, Toggled};
+        use egui_kittest::kittest::{NodeT, Queryable};
+        use rustgis_engine::map::layout::{ElementKind, LayerNames, LegendFit};
+        let mut app = RustGisApp::with_sample();
+        app.run("layout.new", json!({"name": "Key", "template": "map"})).unwrap();
+        let li = app.session.active_layout.unwrap();
+        let legend = app.session.project.layouts[li].elements.iter().find(|e| matches!(e.kind, ElementKind::Legend { .. })).unwrap().id;
+        app.layout.selected = Some(legend);
+        let set = |app: &RustGisApp| match &app.session.project.layouts[li].element(legend).unwrap().kind {
+            ElementKind::Legend { fit, show_layer_names, columns, .. } => (*fit, *show_layer_names, *columns),
+            other => panic!("{other:?}"),
+        };
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 900.0)).build_ui_state(
+            move |ui, app: &mut RustGisApp| {
+                if !fonts {
+                    crate::theme::install_fonts(ui.ctx(), &[], None);
+                    fonts = true;
+                    return;
+                }
+                with_format(app, ui);
+            },
+            app,
+        );
+        let depth = h.state().session.undo_depth();
+        h.run_steps(3);
+        // Opening the pane sends nothing, and shows a plain legend's defaults.
+        assert_eq!(h.state().session.undo_depth(), depth, "opening the pane changed nothing");
+        assert_eq!(set(h.state()), (LegendFit::Manual, LayerNames::Shown, 1));
+        let shown_fit = |h: &egui_kittest::Harness<'_, RustGisApp>| h.get_by_role_and_label(Role::ComboBox, "Fit").value();
+        let names_ticked =
+            |h: &egui_kittest::Harness<'_, RustGisApp>| h.get_by_role_and_label(Role::CheckBox, "Layer names").accesskit_node().toggled();
+        assert_eq!(shown_fit(&h).as_deref(), Some("Manual"));
+        assert_eq!(names_ticked(&h), Some(Toggled::True));
+        let pick = |h: &mut egui_kittest::Harness<'_, RustGisApp>, item: &str| {
+            h.get_by_role_and_label(Role::ComboBox, "Fit").click();
+            h.run_steps(2);
+            h.get_by_label(item).click();
+            h.run_steps(3);
+        };
+        pick(&mut h, "Manual");
+        assert_eq!(h.state().session.undo_depth(), depth, "the fit already set is no step");
+        pick(&mut h, "Shrink the text");
+        assert_eq!(set(h.state()).0, LegendFit::AdjustSize);
+        assert_eq!(h.state().session.undo_depth(), depth + 1, "one step");
+        assert_eq!(shown_fit(&h).as_deref(), Some("Shrink the text"));
+        pick(&mut h, "Add columns, then shrink the text");
+        assert_eq!(set(h.state()).0, LegendFit::AdjustColumnsAndSize);
+        assert_eq!(h.state().session.undo_depth(), depth + 2);
+        assert_eq!(shown_fit(&h).as_deref(), Some("Add columns, then shrink the text"));
+        h.get_by_role_and_label(Role::CheckBox, "Layer names").click();
+        h.run_steps(3);
+        assert_eq!(set(h.state()).1, LayerNames::Hidden);
+        assert_eq!(h.state().session.undo_depth(), depth + 3);
+        assert_eq!(names_ticked(&h), Some(Toggled::False));
+        // Past the most columns, set as assistive technology does: kept at six, in one step.
+        let (node, tree) = h.get_by_role_and_label(Role::SpinButton, "Columns").accesskit_node().locate();
+        h.event(egui::Event::AccessKitActionRequest(ActionRequest {
+            action: Action::SetValue,
+            target_tree: tree,
+            target_node: node,
+            data: Some(ActionData::NumericValue(9.0)),
+        }));
+        h.run_steps(3);
+        assert_eq!(set(h.state()), (LegendFit::AdjustColumnsAndSize, LayerNames::Hidden, 6));
+        assert_eq!(h.state().session.undo_depth(), depth + 4);
+        h.state_mut().run("edit.undo", json!({})).unwrap();
+        assert_eq!(set(h.state()), (LegendFit::AdjustColumnsAndSize, LayerNames::Hidden, 1), "one step undoes the columns alone");
     }
 
     /// The layout view with the Format pane beside it, as the app draws them: after following
