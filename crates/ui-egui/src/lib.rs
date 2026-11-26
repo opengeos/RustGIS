@@ -113,6 +113,7 @@ mod s3ui;
 mod saveprompt;
 mod scriptcolor;
 mod scriptcomplete;
+mod scriptfind;
 mod searchbox;
 mod serviceui;
 mod sessionlog;

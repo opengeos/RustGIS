@@ -1895,6 +1895,19 @@ before the same one steps over it, as does a `"` typed before the quote that end
 Backspace in an empty `{}`, `[]` or `""` deletes both. The lists open in a quote that closed
 itself, and accepting keeps that quote. Pasting adds nothing.
 
+Ctrl+F (⌘+F on macOS) in the Script box opens a find bar over the box's top right, as a code editor
+does, with the selected text, if it is one line of up to 200 characters, in its field. Every match
+is highlighted in the box, the current one stronger and outlined, and the bar says which it is (`3
+of 12`, or `No results`). Enter and Shift+Enter (or F3 and Shift+F3), or the up and down arrows, go
+to the next and the previous match, round the ends, and scroll it into view. Two toggles inside the
+field make capitals count (**Aa**) and match only whole words (**ab** under a bracket: no letter,
+digit or `_` against the match); the search is plain text, without patterns. The arrow at the bar's
+left (or Ctrl+H, ⌥⌘F on macOS) shows a second field, for what to replace with, and two buttons:
+Replace changes the current match and Replace All every one, each as one step of the box's Undo
+(Ctrl+Z); both are off while a run is under way, and Replace All is off too when there are more
+matches than the bar keeps (10,000). Escape in its fields, or the close button, closes the bar and
+leaves the current match selected in the box.
+
 ## ModelBuilder
 
 <figure markdown="span">
