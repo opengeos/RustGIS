@@ -976,8 +976,8 @@ fn geometry_part_fits(g: &flatgeobuf::Geometry<'_>, kind: GeometryKind, depth: u
     );
     if !from_parts {
         let values = g.xy().map_or(0, |xy| xy.len());
-        // A point is read from its own first coordinate.
-        if !values.is_multiple_of(2) || (kind == K::Point && values < 2) {
+        // A point is read from its own first two values, whatever follows; the rest by pairs.
+        if (kind != K::Point && !values.is_multiple_of(2)) || (kind == K::Point && values < 2) {
             return false;
         }
         // Ends are read only for these kinds, and only when there are two or more of them.
@@ -1370,6 +1370,32 @@ mod geometry_fits_tests {
         assert!(!with_ends(GeometryKind::Polygon, &[2, 9]));
         assert!(!with_ends(GeometryKind::MultiLineString, &[3, 2]));
         assert!(with_ends(GeometryKind::Polygon, &[2, 4]));
+        // A point reads its first two values alone, so a third doesn't refuse it.
+        let three = |fbb: &mut FlatBufferBuilder<'static>| {
+            let xy = fbb.create_vector(&[1.0, 2.0, 3.0]);
+            Geometry::create(fbb, &GeometryArgs { xy: Some(xy), type_: GeometryKind::Point, ..Default::default() })
+        };
+        assert!(fits(three, GeometryKind::Point));
+        assert!(!fits(three, GeometryKind::LineString), "a line reads by pairs");
+        // A multi-polygon's part is read as a polygon, so bad ring ends in it are refused.
+        let multi_with_ends = |ends: &'static [u32]| {
+            fits(
+                |fbb| {
+                    let first = square(fbb);
+                    let xy = fbb.create_vector(&[0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 0.0]);
+                    let ends = fbb.create_vector(ends);
+                    let second = Geometry::create(
+                        fbb,
+                        &GeometryArgs { xy: Some(xy), ends: Some(ends), type_: GeometryKind::Polygon, ..Default::default() },
+                    );
+                    let parts = fbb.create_vector(&[first, second]);
+                    Geometry::create(fbb, &GeometryArgs { parts: Some(parts), type_: GeometryKind::MultiPolygon, ..Default::default() })
+                },
+                GeometryKind::MultiPolygon,
+            )
+        };
+        assert!(!multi_with_ends(&[2, 9]));
+        assert!(multi_with_ends(&[2, 4]));
     }
 
     /// Collections nested past 32 levels are refused before the reader recurses into them; 32 are
