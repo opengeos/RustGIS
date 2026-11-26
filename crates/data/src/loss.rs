@@ -60,7 +60,7 @@ macro_rules! loss_codes {
 
 loss_codes! {
     DroppedLegend => ("dropped.legend", Dropped, "Use a service with short HTTP or HTTPS addresses for its legend pictures."),
-    DroppedRing => ("dropped.ring", Dropped, "Correct the unreadable polygon ring in the source."),
+    DroppedRing => ("dropped.ring", Dropped, "Correct the unreadable polygon ring in the source, or write to a format that holds holes, such as GeoPackage."),
     DroppedExtraAttributes => (
         "dropped.extra-attributes",
         Dropped,
@@ -81,7 +81,7 @@ loss_codes! {
     DroppedCrsName => (
         "dropped.crs-name",
         Dropped,
-        "Keep the source file's coordinate system definition with the export."
+        "Keep the source file's coordinate system definition with the export, or export in WGS 84, which every format can name."
     ),
     DroppedFeature => (
         "dropped.feature",

@@ -157,13 +157,13 @@ An `--allow` that names no kind or code is refused with status 2, as is `--allow
 | Code | What to do |
 |---|---|
 | `dropped.legend` | Use a service with short HTTP or HTTPS addresses for its legend pictures. |
-| `dropped.ring` | Correct the unreadable polygon ring in the source. |
+| `dropped.ring` | Correct the unreadable polygon ring in the source, or write to a format that holds holes, such as GeoPackage. |
 | `dropped.extra-attributes` | Add fields for the extra attribute values or remove those values from the input. |
 | `dropped.time` | Write to a date-time field to keep the time of day. |
 | `dropped.value` | Correct the value or use a destination field that can hold it. |
 | `dropped.calculation-result` | Correct the expression or check the input rows named in the notice. |
 | `dropped.zm` | Keep the source file where heights or measures matter: RustGIS keeps x and y only. |
-| `dropped.crs-name` | Keep the source file's coordinate system definition with the export. |
+| `dropped.crs-name` | Keep the source file's coordinate system definition with the export, or export in WGS 84, which every format can name. |
 | `dropped.feature` | Correct those features in the source, or read the source in the way the notice suggests. |
 | `dropped.geometry` | Correct the geometry in the source, or give the coordinate system its coordinates are in. |
 | `dropped.over-limit` | Read less at once, such as by filtering or clipping the source first. |

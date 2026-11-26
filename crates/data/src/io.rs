@@ -5605,7 +5605,8 @@ fn kml_blank_names_note(ds: &Dataset, target: &str) -> Result<Option<crate::loss
     // One pass over the placemarks written, looking at Cancel as [`kml_empty_fields_note`] does.
     let mut with_value = vec![false; blank.len()];
     let mut values = 0usize;
-    for f in ds.features.iter().filter(|f| f.geometry.is_some()) {
+    let written = written_with_geometry(ds);
+    for f in ds.features.iter().filter(|f| written(f)) {
         crate::progress::check()?;
         for (has, k) in with_value.iter_mut().zip(&blank) {
             if f.attrs.get(*k).is_some_and(|v| !v.is_null()) {
@@ -5626,13 +5627,22 @@ fn kml_blank_names_note(ds: &Dataset, target: &str) -> Result<Option<crate::loss
     .map(|t| crate::loss::Note::loss(crate::loss::LossCode::DroppedValue, t)))
 }
 
+/// Whether a KML or GPX file of `ds` writes feature `f` with its geometry: it has one, with a
+/// place in longitude/latitude. The writer leaves out the geometry of a feature held in another
+/// system whose place can't be given there.
+fn written_with_geometry(ds: &Dataset) -> impl Fn(&crate::Feature) -> bool + '_ {
+    let to = ds.lonlat_conversion().ok().filter(|to| !to.is_identity());
+    move |f| f.geometry.as_ref().is_some_and(|g| to.as_ref().is_none_or(|to| Dataset::converted_to_lonlat(to, g).is_some()))
+}
+
 /// KML writes ExtendedData only for non-null values of placemarks it writes. Report every
 /// field absent from that output, even when an unwritten feature has a value for it.
 fn kml_empty_fields_note(ds: &Dataset, target: &str) -> Result<Option<crate::loss::Note>> {
     let mut written = vec![false; ds.fields.len()];
+    let placemark = written_with_geometry(ds);
     for f in &ds.features {
         crate::progress::check()?;
-        if f.geometry.is_some() {
+        if placemark(f) {
             for (written, value) in written.iter_mut().zip(&f.attrs) {
                 *written |= !value.is_null();
             }
@@ -5672,7 +5682,10 @@ pub fn gpx_left_out(ds: &Dataset) -> usize {
 /// fields' values, polygons (written as tracks along their outer rings, holes left out) and
 /// multipoints (a waypoint per point). One notice per kind; none for a layer GPX holds whole.
 pub fn gpx_notes(ds: &Dataset, name_field: Option<usize>, target: &str) -> Vec<crate::loss::Note> {
-    let drawn = || ds.features.iter().filter(|f| f.geometry.is_some());
+    // Each feature looked at once: the fields below go over them again.
+    let written = written_with_geometry(ds);
+    let placed: Vec<bool> = ds.features.iter().map(&written).collect();
+    let drawn = || ds.features.iter().zip(&placed).filter(|(_, p)| **p).map(|(f, _)| f);
     // Every other field, null everywhere or not: it isn't in the file, so it doesn't come back.
     // Fields with values come first, so the names shown before "and N more" are the ones that lost data.
     let mut fields: Vec<(bool, &str)> = (ds.fields.iter().enumerate())
@@ -8407,6 +8420,12 @@ mod tests {
             let notes = export_losses_notes(&held, ext, None, &format!("parcels.{ext}")).unwrap();
             assert!(notes.iter().all(|n| n.loss != Some(crate::loss::LossCode::DroppedFeature)), "{ext}: {notes:?}");
         }
+        // A feature with no place in longitude/latitude is written without its geometry, so no
+        // placemark holds its value: 'empty' still has none in the placemarks written.
+        held.push(Some(Geometry::Point(Coord::new(1e12, 0.0))), vec![Value::Int(4), Value::Text("lost".into())]);
+        held.features[2].attrs[1] = Value::Null;
+        let notes = export_losses_notes(&held, "kml", None, "parcels.kml").unwrap();
+        assert!(notes.iter().any(|n| n.contains("KML omitted 1 field with no values in the placemarks written ('empty')")), "{notes:?}");
     }
 
     /// A point layer's fields named like coordinates keep their values when its CSV is read back:
