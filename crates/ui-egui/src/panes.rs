@@ -8541,11 +8541,17 @@ mod tests {
     /// #2958: a swipe of a finger over the layer rows scrolls the list; it does not take the row
     /// under the finger to another place, as the mouse does.
     #[test]
-    fn a_swipe_over_the_layers_does_not_reorder_them() {
+    fn a_swipe_over_the_layers_scrolls_and_does_not_reorder_them() {
         use egui_kittest::kittest::Queryable;
-        let app = RustGisApp::with_sample();
+        let _turn = crate::fetching::turn();
+        let mut app = RustGisApp::with_sample();
+        for i in 0..30 {
+            app.run("map.addTiles", json!({"url": format!("https://wms.example.org/{i}/{{z}}/{{x}}/{{y}}.png"), "name": format!("Depths {i}"), "overlay": true}))
+                .unwrap();
+        }
         let original: Vec<_> = app.session.map().layers.iter().map(|l| l.id).collect();
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 900.0)).with_max_steps(64).build_ui_state(
+        let tiles: Vec<_> = app.session.map().tiles.iter().map(|t| t.name.clone()).collect();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 700.0)).with_max_steps(64).build_ui_state(
             |ui, app: &mut RustGisApp| {
                 let ctx = ui.ctx().clone();
                 app.logic(&ctx);
@@ -8554,12 +8560,16 @@ mod tests {
             app,
         );
         h.run_steps(6);
-        let from = h.get_by_label("Countries").rect().center();
-        let first = h.get_by_label("Cities").rect();
-        touch_drag(&mut h, from, pos2(first.center().x, first.min.y + 2.0), 0);
+        let row = h.get_by_label("Depths 29").rect();
+        assert!(row.max.y < 650.0, "the row is on screen: {row:?}");
+        let from = row.center();
+        touch_drag(&mut h, from, from - vec2(0.0, 3.0 * row.height()), 0);
         h.run_steps(3);
-        assert_eq!(h.state().session.map().layers.iter().map(|l| l.id).collect::<Vec<_>>(), original);
-        assert_eq!(h.state().session.undo_depth(), 0);
+        let state = h.state().session.map();
+        assert_eq!(state.layers.iter().map(|l| l.id).collect::<Vec<_>>(), original);
+        assert_eq!(state.tiles.iter().map(|t| t.name.clone()).collect::<Vec<_>>(), tiles);
+        assert_eq!(h.state().session.undo_depth(), 30);
+        assert!(h.get_by_label("Depths 29").rect().center().y < from.y - 1.0, "the swipe did not scroll the list");
     }
 
     /// #2958: a finger held on a layer row and then moved takes the row to another place, as the
@@ -8586,7 +8596,27 @@ mod tests {
         let order: Vec<_> = h.state().session.map().layers.iter().map(|l| l.id).collect();
         assert_eq!(order.first(), Some(&moved), "{order:?} from {original:?}");
         assert_eq!(h.state().session.undo_depth(), 1);
-        assert!(h.query_by_label("Zoom to Layer").is_none(), "the menu of the long press is still open");
+        assert!(h.query_by_label("Labeling Properties…").is_none(), "the menu of the long press is still open");
+    }
+
+    /// #2958: a finger held on a layer row without moving opens the row's menu, as today.
+    #[test]
+    fn a_long_press_on_a_layer_still_opens_its_menu() {
+        use egui_kittest::kittest::Queryable;
+        let app = RustGisApp::with_sample();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 900.0)).with_max_steps(64).build_ui_state(
+            |ui, app: &mut RustGisApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run_steps(6);
+        let from = h.get_by_label("Countries").rect().center();
+        touch_drag(&mut h, from, from, 6);
+        h.run_steps(2);
+        assert!(h.query_by_label("Labeling Properties…").is_some(), "no menu after the long press");
     }
 
     /// #1321: double-clicking a layer opens its Symbology pane even at 4 frames a second (CPU
