@@ -90,7 +90,7 @@ public class MainActivity extends NativeActivity {
     /** The user is being asked for leave to use the location, and hasn't answered. */
     private boolean asking;
     /** The activity is in sight (between onStart and onStop). */
-    private boolean started;
+    private volatile boolean started;
     /** A picker for opening is shown and has not answered (written on the main thread). */
     private volatile boolean picking;
     /** The photo the camera app is writing, until it answers (the main thread's alone). */
@@ -742,12 +742,12 @@ public class MainActivity extends NativeActivity {
 
     /**
      * Android 14 and later tell an app in use nothing when memory runs short (no onLowMemory, no
-     * "running" trim level), so it is asked, at most every MEMORY_LOOK_MILLIS: each time it
-     * turns low is a "low-memory" event.
+     * "running" trim level), so it is asked while the app is in sight, at most every
+     * MEMORY_LOOK_MILLIS: each time it is found to have turned low is a "low-memory" event.
      */
     private void lookAtMemory() {
         long now = android.os.SystemClock.elapsedRealtime();
-        if (now - memoryLooked < MEMORY_LOOK_MILLIS) {
+        if (!started || now - memoryLooked < MEMORY_LOOK_MILLIS) {
             return;
         }
         memoryLooked = now;

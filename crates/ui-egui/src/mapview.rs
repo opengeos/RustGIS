@@ -606,6 +606,12 @@ impl MapView {
         self.drape.clear();
         self.tilt_drape.clear();
         self.drop_gpu();
+        // A frame drawn mid-motion, finished or stopped, would put back the drawing copies of
+        // its map when taken: it is let go untaken.
+        let relay = self.motion_frame.relay.clone();
+        self.motion_frame = Default::default();
+        self.motion_frame.relay = relay;
+        self.motion_dropped = false;
     }
 
     /// Drops the GPU renderer's scenes, textures and buffers (the renderer itself too): a frame

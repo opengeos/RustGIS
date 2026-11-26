@@ -122,9 +122,8 @@ pub enum Event {
 impl Event {
     /// Reads an event a shell passed as one line of tab-separated fields (`picked`, `cancelled`,
     /// `ended`, `saved`, `project-saved`, `project-save-failed`, `project-document`,
-    /// `write-back-failed`, `photo`,
-    /// `position`, `stopped`, `low-memory`, `failed`). A `picked` line may end with the document it can write
-    /// back to. Unrecognized lines become failures that quote the line. A position is
+    /// `write-back-failed`, `photo`, `position`, `stopped`, `low-memory`, `failed`). A `picked`
+    /// line may end with the document it can write back to. Unrecognized lines become failures that quote the line. A position is
     /// `position`, longitude, latitude, accuracy (empty when unknown), optionally its time in
     /// milliseconds since 1970, then optionally the monotonic fix time in nanoseconds since boot.
     pub fn parse(line: &str) -> Event {
