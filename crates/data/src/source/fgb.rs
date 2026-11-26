@@ -404,7 +404,7 @@ impl FgbSource {
             if !late && !sample.wants() {
                 continue;
             }
-            let geometry = f.to_wkb(CoordDimensions::xy()).ok().as_deref().and_then(wkb::decode).and_then(|g| self.reproject.place(g, req));
+            let geometry = wkb_of(f).as_deref().and_then(wkb::decode).and_then(|g| self.reproject.place(g, req));
             let Some(geometry) = geometry else {
                 out.skipped += 1;
                 continue;
@@ -470,8 +470,7 @@ impl FgbSource {
             crate::progress::step(1)?;
             n += 1;
             let id = numbers.as_ref().and_then(|v| v.get(usize::try_from(n - 1).unwrap_or(usize::MAX)).copied()).unwrap_or(n);
-            let geometry =
-                f.to_wkb(CoordDimensions::xy()).ok().as_deref().and_then(wkb::decode).and_then(|g| self.reproject.place(g, &req));
+            let geometry = wkb_of(f).as_deref().and_then(wkb::decode).and_then(|g| self.reproject.place(g, &req));
             let Some(geometry) = geometry else {
                 out.skipped += 1;
                 continue;
@@ -507,7 +506,7 @@ impl FgbSource {
             let mut iter = open_reader(r).ok()?.select_all().ok()?;
             for _ in 0..16 {
                 let f = iter.next().ok()??;
-                if let Some(g) = f.to_wkb(CoordDimensions::xy()).ok().as_deref().and_then(wkb::decode) {
+                if let Some(g) = wkb_of(f).as_deref().and_then(wkb::decode) {
                     return Some(g.kind());
                 }
             }
@@ -784,8 +783,7 @@ impl FgbSource {
                 continue;
             }
             let id = hits.items.get(this).map(|(_, i)| i + 1).unwrap_or(this as u64 + 1);
-            let geometry =
-                feat.to_wkb(CoordDimensions::xy()).ok().as_deref().and_then(wkb::decode).and_then(|g| self.reproject.place(g, req));
+            let geometry = wkb_of(feat).as_deref().and_then(wkb::decode).and_then(|g| self.reproject.place(g, req));
             let Some(geometry) = geometry else {
                 out.skipped += 1;
                 continue;
@@ -920,6 +918,47 @@ fn field_type(t: ColumnType) -> Option<FieldType> {
         ColumnType::Binary => return None,
         _ => FieldType::Text,
     })
+}
+
+/// A feature's geometry as WKB, or `None` when it can't be read: also when its ring or part ends
+/// don't fit its coordinates ([`geometry_fits`]).
+fn wkb_of(feature: &flatgeobuf::FgbFeature) -> Option<Vec<u8>> {
+    if !geometry_fits(feature) {
+        return None;
+    }
+    feature.to_wkb(CoordDimensions::xy()).ok()
+}
+
+/// Whether a feature's geometry holds the coordinates its ends say, in it and in each of its parts:
+/// an even number of `xy` values, and ring or line ends that never go back and stay within them.
+/// flatgeobuf 6.0.1 indexes `xy` by those ends as the file gives them and panics past the end or
+/// on an end before the last one, which the browser can't catch. A feature that fails this is
+/// skipped as unreadable, as one whose geometry the reader refuses. Found by fuzzing
+/// `read_layers` (#3006).
+fn geometry_fits(feature: &flatgeobuf::FgbFeature) -> bool {
+    feature.fbs_feature().geometry().is_none_or(|g| geometry_part_fits(&g, 0))
+}
+
+fn geometry_part_fits(g: &flatgeobuf::Geometry<'_>, depth: u32) -> bool {
+    // Parts within parts are a collection's; a file nesting them deeper is refused, not followed.
+    if depth > 32 {
+        return false;
+    }
+    let values = g.xy().map_or(0, |xy| xy.len());
+    if !values.is_multiple_of(2) {
+        return false;
+    }
+    if let Some(ends) = g.ends() {
+        let mut last = 0usize;
+        for end in ends.iter() {
+            let end = usize::try_from(end).unwrap_or(usize::MAX);
+            if end < last || end.saturating_mul(2) > values {
+                return false;
+            }
+            last = end;
+        }
+    }
+    g.parts().is_none_or(|parts| parts.iter().all(|part| geometry_part_fits(&part, depth + 1)))
 }
 
 /// Whether a feature's property bytes hold what they say, laid out as FlatGeobuf has them: each a

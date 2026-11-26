@@ -4631,6 +4631,42 @@ fn flatgeobuf_property_lengths_past_the_end_skip_the_feature() {
     assert_eq!((rows, streamed.skipped), (2, 1));
 }
 
+/// A polygon's ring ends that run past its coordinates, or go back, skip that feature as
+/// unreadable, whole and streamed, instead of panicking in the reader; the features around it are
+/// read. Found by fuzzing `read_layers` (#3006).
+#[test]
+fn flatgeobuf_ring_ends_past_the_coordinates_skip_the_feature() {
+    let square = |x: f64, size: f64| {
+        vec![Coord::new(x, 0.0), Coord::new(x + size, 0.0), Coord::new(x + size, size), Coord::new(x, size), Coord::new(x, 0.0)]
+    };
+    let mut ds = Dataset::new("parcels", GeometryType::Polygon, vec![Field::new("n", FieldType::Integer)]);
+    ds.push(Some(Geometry::Polygon(vec![vec![square(0.0, 1.0)]])), vec![Value::Int(1)]);
+    // Two rings: its ends are written as [5, 10].
+    ds.push(Some(Geometry::Polygon(vec![vec![square(10.0, 4.0), square(11.0, 1.0)]])), vec![Value::Int(2)]);
+    ds.push(Some(Geometry::Polygon(vec![vec![square(20.0, 1.0)]])), vec![Value::Int(3)]);
+    let written = fgb::write(&ds).unwrap();
+    let at = written.windows(12).position(|w| w == [2, 0, 0, 0, 5, 0, 0, 0, 10, 0, 0, 0]).unwrap();
+    for (first, second) in [(5u32, 11u32), (5, 0x7fff_ffff), (7, 6)] {
+        let mut bytes = written.clone();
+        bytes[at + 4..at + 8].copy_from_slice(&first.to_le_bytes());
+        bytes[at + 8..at + 12].copy_from_slice(&second.to_le_bytes());
+        let src = open_bytes("parcels.fgb", bytes, None).unwrap();
+        let batch = src.read(&Request::all()).unwrap();
+        assert_eq!(batch.skipped, 1, "ends {first}, {second}");
+        let mut kept: Vec<String> = batch.features.iter().map(|f| f.attrs[0].to_string()).collect();
+        kept.sort();
+        assert_eq!(kept, ["1", "3"], "ends {first}, {second}");
+        let mut rows = 0;
+        let streamed = src
+            .visit_chunks(None, 256, &mut |chunk| {
+                rows += chunk.len();
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!((rows, streamed.skipped), (2, 1), "ends {first}, {second}");
+    }
+}
+
 /// A readable size prefix can contain invalid UTF-8 properties. Classification ignores
 /// that row just as whole and streamed reads do, and the read reports the skipped feature.
 #[test]
