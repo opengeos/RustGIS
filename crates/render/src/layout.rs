@@ -480,8 +480,7 @@ fn losses(layout: &Layout, maps: &[Map], dpi: f64, info: &PageInfo, only: Option
             let mut cy = if title {
                 r.y() + LEGEND_ROW * (size / LEGEND_TITLE_PT) * ppp / 2.0
             } else {
-                let n = s.lines().take(200).count();
-                let shift = block_shift(block.0, f64::from(r.height()), f64::from(px), n, f64::from(block.1)) as f32;
+                let shift = text_shift(block.0, f64::from(r.height()), f64::from(px), &s, f64::from(block.1)) as f32;
                 r.y() + shift + px * 0.6
             };
             let turn = Transform::from_rotate_at(rotation, r.x() + r.width() / 2.0, r.y() + r.height() / 2.0);
@@ -4532,6 +4531,18 @@ pub(crate) fn drawn_text(expanded: String, case: TextCase, wrap: bool, width_mm:
     if wrap { wrapped(&s, width_mm, size, style) } else { s }
 }
 
+/// The most lines a text draws.
+const MAX_TEXT_LINES: usize = 200;
+
+/// [`block_shift`] for the text `s` as it is drawn ([`drawn_text`]), by its lines. A text of more
+/// lines than a text draws is cut at them, so it starts at the top like any block that doesn't fit
+/// its box, though the lines kept would: one rule for the page, its cut-off check, a turned text's
+/// picture and the SVG.
+pub(crate) fn text_shift(valign: TextVAlign, box_h: f64, px: f64, s: &str, line_spacing: f64) -> f64 {
+    let lines = s.lines().take(MAX_TEXT_LINES + 1).count();
+    if lines > MAX_TEXT_LINES { 0.0 } else { block_shift(valign, box_h, px, lines, line_spacing) }
+}
+
 /// How far down its box of `box_h` pixels a text's block of `lines` lines at `px` pixels, spaced
 /// `line_spacing` times the usual, starts: 0 at the top; half the room it leaves in the middle;
 /// all of it at the bottom, its last line's pitch ending on the box's bottom edge. A block taller
@@ -4650,7 +4661,7 @@ fn text_area(r: Rect, s: &str, size: f32, style: TextStyle, ppp: f64) -> Option<
         (x0, x1, lines) = (x0.min(a), x1.max(b), lines + 1);
     }
     // Down to its last line, where its block alignment and line spacing put it.
-    let shift = block_shift(style.valign, f64::from(r.height()), f64::from(px), usize::from(lines), f64::from(style.line_spacing)) as f32;
+    let shift = text_shift(style.valign, f64::from(r.height()), f64::from(px), s, f64::from(style.line_spacing)) as f32;
     let block = (1.0 + (f32::from(lines) - 1.0) * style.line_spacing) * px * 1.25;
     let down = (r.height() + px).min(shift + block);
     (lines > 0).then(|| Rect::from_ltrb(x0 - px, shift - px, x1 + px, down + px)).flatten()
@@ -4708,8 +4719,7 @@ fn text_block(pm: &mut Canvas, r: Rect, s: &str, size: f32, color: Rgba, style: 
     let px = size.clamp(2.0, 400.0) * 1.33 * ppp as f32;
     // Letter spacing is in points, as the size is.
     let spacing = style.spacing * 1.33 * ppp as f32;
-    let n = s.lines().take(200).count();
-    let shift = block_shift(style.valign, f64::from(r.height()), f64::from(px), n, f64::from(style.line_spacing)) as f32;
+    let shift = text_shift(style.valign, f64::from(r.height()), f64::from(px), s, f64::from(style.line_spacing)) as f32;
     let mut y = r.y() + shift + px * 0.6;
     for line in s.lines().take(200) {
         if y > r.y() + r.height() + px {
@@ -8301,6 +8311,45 @@ Elaboração: RustGIS",
             assert_eq!(text_losses(&l, &[], 96.0, &info), loss, "{v:?}");
             assert_eq!(lines_left_out_notice(&text_losses(&l, &[], 96.0, &info)[0]), lines_left_out_notice(&loss[0]));
         }
+    }
+
+    /// A text of more lines than a text draws is cut at them, so it is drawn from the top whatever
+    /// its alignment, though the lines kept would fit its box; one of exactly that many, all
+    /// drawn, is still aligned.
+    #[test]
+    fn a_text_cut_at_the_most_lines_it_draws_starts_at_the_top() {
+        let info = PageInfo::default();
+        // 2 pt lines are 0.88 mm apart: 200 of them fill 176 mm of a 200 mm box.
+        let page = |lines: usize, v| {
+            let text = (0..lines).map(|i| format!("line {i}")).collect::<Vec<_>>().join(
+                "
+",
+            );
+            let mut l = Layout::new("L", 100.0, 300.0);
+            let mut kind = ElementKind::text(&text, 2.0, Rgba::rgb(0, 0, 0), false);
+            set_block(&mut kind, v, 1.0, TextCase::None);
+            l.add("Block", (10.0, 10.0, 40.0, 200.0), kind);
+            l
+        };
+        let drawn = |l: &Layout| render(l, &mut [], 96.0, &info).unwrap();
+        let top = page(300, TextVAlign::Top);
+        for v in [TextVAlign::Middle, TextVAlign::Bottom] {
+            let l = page(300, v);
+            assert_eq!(drawn(&l).data(), drawn(&top).data(), "{v:?}");
+            assert_eq!(text_losses(&l, &[], 96.0, &info), text_losses(&top, &[], 96.0, &info), "{v:?}");
+            let svg = |l: &Layout| crate::svg::layout_svg(l, &mut [], 96.0, &info).unwrap().0;
+            assert_eq!(svg(&l), svg(&top), "{v:?}");
+            assert_ne!(drawn(&page(200, v)).data(), drawn(&page(200, TextVAlign::Top)).data(), "{v:?}: all drawn, aligned");
+        }
+        let text = |n: usize| {
+            vec!["x"; n].join(
+                "
+",
+            )
+        };
+        assert_eq!(text_shift(TextVAlign::Bottom, 5000.0, 10.0, &text(201), 1.0), 0.0);
+        assert_eq!(text_shift(TextVAlign::Bottom, 5000.0, 10.0, &text(200), 1.0), block_shift(TextVAlign::Bottom, 5000.0, 10.0, 200, 1.0));
+        assert!(text_shift(TextVAlign::Bottom, 5000.0, 10.0, &text(200), 1.0) > 0.0);
     }
 
     /// The cut-off check steps by the spaced pitch, as the page draws: a wider spacing leaves lines

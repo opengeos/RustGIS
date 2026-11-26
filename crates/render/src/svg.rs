@@ -129,8 +129,7 @@ fn elements(
                 // past the frame left out.
                 let em = size.clamp(2.0, 400.0) * 1.33 / PT_PER_MM;
                 let ls = f64::from(style.line_spacing);
-                let n = text.lines().take(200).count();
-                let top = y + crate::layout::block_shift(style.valign, h, em, n, ls);
+                let top = y + crate::layout::text_shift(style.valign, h, em, &text, ls);
                 let (anchor, tx) = match align {
                     TextAlign::Left => ("start", x),
                     TextAlign::Center => ("middle", x + w / 2.0),
