@@ -96,6 +96,8 @@ pub(crate) struct DragOwner {
     project: u64,
     map: usize,
     map_name: String,
+    /// The map's projection: a drag's place is in its view coordinates ([`VertexDrag::at`]).
+    projection: Projection,
     rows: std::sync::Weak<Vec<Feature>>,
     shared: bool,
     /// Bounded geographic edges captured once, discarded with this gesture's row identity.
@@ -112,6 +114,7 @@ impl DragOwner {
             project: app.session.opened,
             map: app.session.project.active_map,
             map_name: map.name.clone(),
+            projection: map.projection.clone(),
             rows: layer.dataset.features.allocation_key(),
             shared: app.map.move_shared_vertices,
             preview: shared_origin(app, d).and_then(|original| {
@@ -130,12 +133,13 @@ impl DragOwner {
     }
 
     /// A gesture is usable only in its original context while its source is still an editable
-    /// target. Row edits or a changed shared mode cancel; styles and camera changes do not.
+    /// target. Row edits, a changed projection or shared mode cancel; styles and camera changes do not.
     fn matches(&self, app: &RustGisApp, d: VertexDrag) -> bool {
         let map = app.session.map();
         self.project == app.session.opened
             && self.map == app.session.project.active_map
             && self.map_name == map.name
+            && self.projection == map.projection
             && self.shared == app.map.move_shared_vertices
             && app.session.tool == rustgis_engine::Tool::EditVertices
             && map.layer(d.layer).is_some_and(|l| self.rows.ptr_eq(&l.dataset.features.allocation_key()))
@@ -589,11 +593,7 @@ fn commit(app: &mut RustGisApp, d: VertexDrag) {
     // in the layer's coordinates. A snapped one goes by longitude/latitude, so the place snapped
     // to is kept as stored (`held_places`).
     let own = d.snapped_lonlat.is_none() && own_placing(app, d.layer);
-    let place = match d.snapped_lonlat {
-        _ if own => Some(("x", "y", d.at)),
-        Some(lonlat) => Some(("lon", "lat", lonlat)),
-        None => view_to_lonlat(app, d.at).map(|c| ("lon", "lat", c)),
-    };
+    let place = if own { Some(("x", "y", d.at)) } else { d.lonlat(app).map(|c| ("lon", "lat", c)) };
     let Some((kx, ky, at)) = place else {
         // Let go where the map's coordinates have no longitude/latitude: said, not dropped.
         app.session.notify(crate::tl!("The vertex can't be placed there: that place has no longitude/latitude"), true);
@@ -950,6 +950,57 @@ mod tests {
         drag_stop(&mut app);
         let g = app.session.map().layer(id).unwrap().dataset.features.geometry(0).unwrap().clone();
         assert_eq!(g.vertex(VertexId::new(0, 0, 2)), Some(target), "{g:?}");
+    }
+
+    /// A vertex let go where the map's coordinates have no longitude/latitude is said once and
+    /// not edited; one let go at a place that has one is moved, with nothing said.
+    #[test]
+    fn a_vertex_let_go_at_no_longitude_latitude_is_said_not_dropped() {
+        let mut app = app([square(0.)].into_iter());
+        let id = app.session.active_layer.unwrap();
+        app.session.map_mut().editing.settings.enabled = true;
+        app.map.move_shared_vertices = false;
+        app.run("map.projection", json!({"type": "EPSG:32631"})).unwrap();
+        let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(1000., 800.));
+        let nowhere = Coord::new(1e12, 1e12);
+        assert!(view_to_lonlat(&app, nowhere).is_none(), "the place must have no longitude/latitude, or the test proves nothing");
+        let said = |app: &RustGisApp, mark| {
+            app.session.notices_since(mark).iter().filter(|n| n.text.contains("has no longitude/latitude")).count()
+        };
+        let before = app.session.map().layer(id).unwrap().dataset.features.geometry(0).unwrap().clone();
+        let from = lonlat_to_screen(&app, rect, Coord::new(1., 1.)).unwrap();
+        assert!(drag_start(&mut app, rect, from));
+        drag_to(&mut app, rect, from + egui::vec2(5.0, 5.0));
+        app.map.vertex_drag.as_mut().unwrap().at = nowhere;
+        let mark = app.session.notice_mark();
+        drag_stop(&mut app);
+        assert_eq!(said(&app, mark), 1);
+        assert_eq!(app.session.map().layer(id).unwrap().dataset.features.geometry(0), Some(&before));
+        // A clean release moves the vertex and says nothing.
+        assert!(drag_start(&mut app, rect, from));
+        drag_to(&mut app, rect, from + egui::vec2(5.0, 5.0));
+        let mark = app.session.notice_mark();
+        drag_stop(&mut app);
+        assert_eq!(said(&app, mark), 0);
+        assert_ne!(app.session.map().layer(id).unwrap().dataset.features.geometry(0), Some(&before));
+    }
+
+    /// A projection change during a drag cancels it: its place is in the old view's coordinates.
+    #[test]
+    fn a_projection_change_cancels_a_held_drag() {
+        let mut app = app([square(0.)].into_iter());
+        let id = app.session.active_layer.unwrap();
+        app.session.map_mut().editing.settings.enabled = true;
+        app.map.move_shared_vertices = false;
+        let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(1000., 800.));
+        let before = app.session.map().layer(id).unwrap().dataset.features.geometry(0).unwrap().clone();
+        let from = lonlat_to_screen(&app, rect, Coord::new(1., 1.)).unwrap();
+        assert!(drag_start(&mut app, rect, from));
+        drag_to(&mut app, rect, from + egui::vec2(5.0, 5.0));
+        app.run("map.projection", json!({"type": "EPSG:32631"})).unwrap();
+        drag_stop(&mut app);
+        assert!(app.map.vertex_drag.is_none());
+        assert_eq!(app.session.map().layer(id).unwrap().dataset.features.geometry(0), Some(&before));
     }
 
     /// The count stops where the handles do: at their cap of placed features. With 49 placed

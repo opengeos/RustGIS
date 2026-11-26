@@ -1454,10 +1454,29 @@ fn edit_vertex(s: &mut Session, p: &Json) -> CmdResult {
         return Ok(json!({"part": v.part, "ring": v.ring, "index": v.index}));
     }
     // In longitude/latitude, from the layer's own coordinates (`replace_geometry` writes it back).
-    let g = l.dataset.feature_to_lonlat(feature.id(), own)?.into_owned();
-    let (g, v) = vertex_edit(g, action, v, || lonlat_place(p))?;
+    let Ok(g) = l.dataset.feature_to_lonlat(feature.id(), own) else {
+        // A feature with a place that has no longitude/latitude: edited as stored, the place given
+        // in longitude/latitude written in the layer's coordinates (a place snapped to as stored).
+        let g = own.clone();
+        let (g, v) = vertex_edit(g, action, v, || lonlat_in_own(s, id, lonlat_place(p)?))?;
+        replace_geometry_own(s, id, row, g)?;
+        return Ok(json!({"part": v.part, "ring": v.ring, "index": v.index}));
+    };
+    let (g, v) = vertex_edit(g.into_owned(), action, v, || lonlat_place(p))?;
     replace_geometry(s, id, row, g)?;
     Ok(json!({"part": v.part, "ring": v.ring, "index": v.index}))
+}
+
+/// A place in longitude/latitude in the coordinates of layer `id`, as [`replace_geometry`] writes
+/// an edit's places: a stored place of a layer in its system that it reads as ([`held_places`]),
+/// as stored; any other converted as the layer is drawn.
+fn lonlat_in_own(s: &Session, id: u32, at: Coord) -> Result<Coord, String> {
+    let point = Geometry::Point(at);
+    let held = held_places(s, id, &[], &[&point]);
+    match s.map().layer(id).ok_or("no such layer")?.dataset.edit_from_lonlat(point, &held)? {
+        Geometry::Point(c) => Ok(c),
+        _ => Err("the place can't be given in the layer's coordinates".into()),
+    }
 }
 
 /// A vertex's place given in the layer's own coordinates (`x`, `y`: as the vertex editor gives it
@@ -1466,6 +1485,10 @@ fn edit_vertex(s: &mut Session, p: &Json) -> CmdResult {
 pub(super) fn own_place(p: &Json) -> Result<Option<Coord>, String> {
     let given = |k: &str| p.get(k).is_some_and(|v| !v.is_null());
     if !given("x") && !given("y") {
+        // Half a pair is refused here too, even where no place is needed (a deleted vertex).
+        if given("lon") != given("lat") {
+            return Err("lon and lat are both required".into());
+        }
         return Ok(None);
     }
     if given("lon") || given("lat") {
