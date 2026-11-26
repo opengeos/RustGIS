@@ -236,6 +236,10 @@ pub fn prepare(ui: &egui::Ui, box_id: egui::Id, script: &str) -> Option<Shown> {
             let (a, b) = (r.primary.index.0.min(r.secondary.index.0), r.primary.index.0.max(r.secondary.index.0));
             let picked: String = script.chars().skip(a).take(b - a).collect();
             if !picked.is_empty() && picked.chars().count() <= FIELD_MAX && !picked.contains(['\n', '\r']) {
+                // A query the selection changes leaves the note about the cut text behind.
+                if bar.query != picked {
+                    bar.query_cut = None;
+                }
                 bar.query = picked;
             }
             bar.anchor = a;

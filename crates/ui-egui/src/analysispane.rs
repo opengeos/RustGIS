@@ -3353,7 +3353,23 @@ mod tests {
         h.key_press(Key::Backspace);
         h.run();
         assert!(h.query_by_label(cut).is_none(), "the Replace note went");
-        h.get_by_label("The Find field takes 200 characters: 200 left out");
+        let found = "The Find field takes 200 characters: 200 left out";
+        h.get_by_label(found);
+        // Reopened with nothing picked, the query and its note stay; opened on a selection, the
+        // query is the selection's and the note about the cut text goes with the old one.
+        h.key_press(Key::Escape);
+        h.run();
+        let range = |a, b| egui::text::CCursorRange::two(egui::text::CCursor::new(a), egui::text::CCursor::new(b));
+        crate::widgets::set_cursor_range(&h.ctx, box_id, range(0, 0));
+        h.key_press_modifiers(Modifiers::COMMAND, Key::F);
+        h.run();
+        h.get_by_label(found);
+        h.key_press(Key::Escape);
+        h.run();
+        crate::widgets::set_cursor_range(&h.ctx, box_id, range(0, 3));
+        h.key_press_modifiers(Modifiers::COMMAND, Key::F);
+        h.run();
+        assert!(h.query_by_label(found).is_none(), "the note was about the old query");
     }
 
     /// In a browser the find shortcuts are kept from the browser's own (#2996): while the box or a
