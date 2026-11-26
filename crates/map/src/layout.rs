@@ -2511,7 +2511,7 @@ pub enum StatMissing {
 /// `stat` of `layer`'s `field` (none for a count) over the features its definition query keeps
 /// ([`crate::Layer::visible_rows`]), its numbers read as a chart's are (finite, nulls skipped).
 pub fn layer_statistic(layer: &crate::Layer, stat: StatKind, field: Option<&str>) -> Result<f64, StatMissing> {
-    layer_statistics(layer, &[(stat, field)]).remove(0)
+    layer_statistics(layer, &[(stat, field)]).into_iter().next().unwrap_or(Err(StatMissing::NoValue))
 }
 
 /// [`layer_statistic`] for each of `wanted` (a statistic and its field), in one pass over the layer's
