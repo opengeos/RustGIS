@@ -4046,25 +4046,32 @@ fn read_zip_layers_budget(file_name: &str, bytes: &[u8], crs: Option<Crs>, budge
     if geodatabase.get() {
         skipped.push("File Geodatabase contents (unzip the archive and add the .gdb folder on the desktop)".into());
     }
+    // One notice for every member's overlays, said with the layers or, when there are none, with
+    // the refusal.
+    let overlays = (!overlays_left.is_empty()).then(|| {
+        let count: usize = overlays_left.iter().map(|(_, c)| c).sum();
+        let names: Vec<String> = overlays_left.iter().map(|(n, c)| format!("{n} ({c})")).collect();
+        format!(
+            "{count} ground overlays (pictures) aren't drawn from inside a zip, in {}; unzip it and add the KML to draw them",
+            names.join(", ")
+        )
+    });
     if out.is_empty() {
         let why = if skipped.is_empty() { String::new() } else { format!(": {}", skipped.join("; ")) };
-        let hint = if skipped.is_empty() {
+        let hint = if skipped.is_empty() && overlays.is_none() {
             "; unzip it and add a supported file (rename delimited text to .txt if it was not recognised)"
         } else {
             ""
         };
-        return Err(DataError::Format(format!("{file_name}: no supported layers or tables in the archive could be read{why}{hint}")));
+        let overlays = overlays.map(|o| format!("; {o}")).unwrap_or_default();
+        return Err(DataError::Format(format!(
+            "{file_name}: no supported layers or tables in the archive could be read{why}{hint}{overlays}"
+        )));
     }
-    // One notice for every member's overlays.
     if let Some(first) = out.first_mut()
-        && !overlays_left.is_empty()
+        && let Some(overlays) = overlays
     {
-        let count: usize = overlays_left.iter().map(|(_, c)| c).sum();
-        let names: Vec<String> = overlays_left.iter().map(|(n, c)| format!("{n} ({c})")).collect();
-        first.report.messages.push(format!(
-            "{file_name}: {count} ground overlays (pictures) aren't drawn from inside a zip, in {}; unzip it and add the KML to draw them",
-            names.join(", ")
-        ));
+        first.report.messages.push(format!("{file_name}: {overlays}"));
     }
     if let Some(first) = out.first_mut()
         && !skipped.is_empty()
@@ -9137,6 +9144,9 @@ mod tests {
         let read = read_zip("mixed.zip", &zip).unwrap();
         assert_eq!(read.len(), 1);
         assert!(read[0].1.messages.iter().any(|m| m.contains("1 ground overlays") && m.contains("o.kml (1)")), "{:?}", read[0].1.messages);
+        // A zip of only that document is refused, saying its overlays and how to draw them.
+        let e = read_zip("only.zip", &crate::zip::write(&[("o.kml".into(), only.to_vec())]).unwrap()).unwrap_err().to_string();
+        assert!(e.contains("1 ground overlays") && e.contains("o.kml (1)") && e.contains("unzip it and add the KML"), "{e}");
         // Without overlays, nothing is said.
         let plain = crate::zip::write(&[("a.gpx".into(), br#"<?xml version="1.0"?><gpx version="1.1" creator="t" xmlns="http://www.topografix.com/GPX/1/1"><wpt lat="1" lon="2"/></gpx>"#.to_vec())]).unwrap();
         assert!(read_zip("p.zip", &plain).unwrap().iter().all(|(_, r)| r.messages.is_empty()));
