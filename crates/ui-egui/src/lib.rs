@@ -259,13 +259,7 @@ pub type Slot<T> = std::sync::Arc<std::sync::Mutex<Option<T>>>;
 /// an error rather than the app (AGENTS.md › Use the threads). In the browser, which has no
 /// threads, that is every time.
 pub(crate) fn work_off_frame<T, E: From<String>>(name: &str, slot: &Slot<Result<T, E>>, work: impl FnOnce() + Send + 'static) {
-    work_off_frame_with(named_thread(name), slot, work);
-}
-
-/// The spawner [`work_off_frame`] uses: a thread named `name`.
-pub(crate) fn named_thread(name: &str) -> impl FnOnce(Box<dyn FnOnce() + Send>) -> std::io::Result<()> {
-    let name = name.to_string();
-    move |work| std::thread::Builder::new().name(name).spawn(work).map(drop)
+    work_off_frame_with(|work| std::thread::Builder::new().name(name.into()).spawn(work).map(drop), slot, work);
 }
 
 /// [`work_off_frame`], its thread started by `spawn`, which a test can make refuse.

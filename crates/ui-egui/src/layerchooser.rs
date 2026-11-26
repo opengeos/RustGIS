@@ -107,7 +107,7 @@ pub fn add_file(app: &mut RustGisApp, path: &str) -> Result<Value, String> {
         return add(app, json!({"path": path}));
     }
     let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let slot = list_in_background(path, stop.clone(), crate::named_thread("rustgis-list-layers"));
+    let slot = list_in_background(path, stop.clone(), |slot, work| crate::work_off_frame("rustgis-list-layers", slot, work));
     let opened = app.session.opened;
     app.ui.choosing.push(Chooser {
         path: path.to_string(),
@@ -124,20 +124,23 @@ pub fn add_file(app: &mut RustGisApp, path: &str) -> Result<Value, String> {
 
 /// Lists `path`'s layers (and Add Data's question about it) off the frame: a geodatabase's or
 /// GDAL's listing can take a while. A `stop` set, by a chooser cancelled or closed, ends the
-/// question between a GeoPackage's tables ([`list_layers`]). `spawn` starts the thread (a test
-/// runs the work where it stands).
+/// question between a GeoPackage's tables ([`list_layers`]). `start` starts the thread with the
+/// work (a test runs the work where it stands).
 fn list_in_background(
     path: &str,
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    spawn: impl FnOnce(Box<dyn FnOnce() + Send>) -> std::io::Result<()>,
+    start: impl FnOnce(&crate::Slot<Result<Value, String>>, Box<dyn FnOnce() + Send>),
 ) -> crate::Slot<Result<Value, String>> {
     let slot: crate::Slot<Result<Value, String>> = crate::Slot::default();
     let out = slot.clone();
     let listed = path.to_string();
-    crate::work_off_frame_with(spawn, &slot, move || {
-        let result = list_layers(&listed, stop);
-        *out.lock().unwrap_or_else(|e| e.into_inner()) = Some(result);
-    });
+    start(
+        &slot,
+        Box::new(move || {
+            let result = list_layers(&listed, stop);
+            *out.lock().unwrap_or_else(|e| e.into_inner()) = Some(result);
+        }),
+    );
     slot
 }
 
@@ -659,10 +662,7 @@ mod tests {
         let gpkg = dir.path().join("two.gpkg");
         two_table_gpkg(&ds, &gpkg);
         let gpkg = gpkg.display().to_string();
-        let inline = |work: Box<dyn FnOnce() + Send>| {
-            work();
-            Ok(())
-        };
+        let inline = |_: &crate::Slot<Result<Value, String>>, work: Box<dyn FnOnce() + Send>| work();
         let landed = |slot: crate::Slot<Result<Value, String>>| slot.lock().unwrap().take().expect("the work ran").unwrap();
         let told = landed(list_in_background(&gpkg, Arc::new(AtomicBool::new(true)), inline));
         assert_eq!(told["layers"], json!(["a", "b"]));
