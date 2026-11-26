@@ -194,7 +194,8 @@ impl<P: Phone> App<P> {
         for text in self.refusals.borrow_mut().drain(..) {
             self.app.session.notify(text, true);
         }
-        for text in std::mem::take(&mut *settings_notices()) {
+        let notices = std::mem::take(&mut *settings_notices());
+        for text in notices {
             self.app.session.notify(text, true);
         }
         let Some(phone) = self.phone.clone() else { return };

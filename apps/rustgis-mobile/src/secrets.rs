@@ -2,6 +2,7 @@
 //! each secret encrypted with AES-GCM, under a key the Android Keystore makes once and never lets
 //! out, in the app's private storage.
 
+use crate::vaultanswer::answer;
 use jni::objects::{JObject, JString};
 use jni::refs::Global;
 use jni::{JValue, JavaVM, jni_sig, jni_str};
@@ -27,18 +28,6 @@ impl Vault {
         JavaVM::singleton()
             .and_then(|vm| vm.attach_current_thread(|env| call(env, &self.activity)))
             .map_err(|e| SecretError::Unavailable(e.to_string()))
-    }
-}
-
-/// Reads the Java half's answer: `ok` (with the secret after a tab, for a load that found one),
-/// `none`, or `unavailable` or `failed` with the reason after a tab.
-fn answer(line: &str) -> Result<Option<Secret>, SecretError> {
-    match line.split_once('\t') {
-        Some(("ok", secret)) => Ok(Some(Secret::new(secret))),
-        Some(("unavailable", why)) => Err(SecretError::Unavailable(why.to_string())),
-        Some(("failed", why)) => Err(SecretError::Failed(why.to_string())),
-        None if line == "ok" || line == "none" => Ok(None),
-        _ => Err(SecretError::Failed("the Android keystore gave an answer RustGIS doesn't know".into())),
     }
 }
 

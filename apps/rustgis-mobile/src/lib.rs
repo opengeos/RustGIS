@@ -17,6 +17,8 @@ mod android;
 mod phone;
 #[cfg(target_os = "android")]
 mod secrets;
+#[cfg(any(target_os = "android", test))]
+mod vaultanswer;
 
 #[cfg(target_os = "ios")]
 mod ios;

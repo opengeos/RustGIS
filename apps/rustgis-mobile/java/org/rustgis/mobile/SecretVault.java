@@ -25,7 +25,7 @@ final class SecretVault {
     private static final String NEWER = "failed\tit was kept by a newer RustGIS: update RustGIS to use it";
     private static final String UNWRITTEN = "failed\tthe app's storage can't be written to";
     private static final String UNCERTAIN =
-            "failed\tthe app's storage can't be written to, and the secret as it was couldn't be put back: it may still be kept";
+            "uncertain\tthe app's storage can't be written to, and the secret as it was couldn't be put back: it may still be kept";
 
     private SecretVault() {}
 
