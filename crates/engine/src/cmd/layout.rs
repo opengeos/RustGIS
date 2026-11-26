@@ -562,6 +562,24 @@ fn projected_extent(s: &Session, e: &Extent) -> Extent {
     ext
 }
 
+/// The width a layer statistic (#2853) is measured at in a publication, a typical figure.
+const LIKE_FIGURE: &str = "1,234,567.89";
+
+/// `t` with each layer statistic token a typical figure wide where the token as written is
+/// narrower: the layout fills a token in only when it draws, so a short one (`{sum:Ab:f}`) can
+/// draw a figure wider than itself, and the text is measured at the wider of the two.
+pub(crate) fn like_figures(t: &str) -> String {
+    let mut out = t.to_string();
+    let mut done: Vec<&str> = Vec::new();
+    for token in rustgis_map::layout::stat_tokens(t) {
+        if token.token.len() < LIKE_FIGURE.len() && !done.contains(&token.token) {
+            done.push(token.token);
+            out = out.replace(token.token, LIKE_FIGURE);
+        }
+    }
+    out
+}
+
 /// `t` in capitals, its `{tokens}` as they are: the layout fills a token (`{date}`) when it draws
 /// only in its own case. A token is a closed `{name}` of letters and digits, or a layer statistic
 /// (`{count:Cities}`, #2853); a lone brace is text.
@@ -1377,6 +1395,7 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
         if !t.contains('{') {
             return t.to_string();
         }
+        let t = like_figures(t);
         [
             ("{date}", "0000-00-00"),
             ("{time}", "00:00"),
@@ -1389,7 +1408,7 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
             ("{crs}", crs.as_str()),
         ]
         .iter()
-        .fold(t.to_string(), |t, (token, like)| t.replace(token, like))
+        .fold(t, |t, (token, like)| t.replace(token, like))
     };
     // A text breaks at spaces, but `{map}` is one word as wide as the map's name. Where a line
     // holding it is wider than the box with the name in it, the text is stored as it is and its
@@ -3737,6 +3756,16 @@ fn say_text_fit(s: &mut Session, li: usize, id: u32, lines: bool) {
     }
 }
 
+/// Whether two maps of a first frame are the same map, as the project names maps (case aside); two
+/// frames with none are.
+fn same_map(a: Option<&str>, b: Option<&str>) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
 /// The map of the first frame of the layout `li`, which the figures of its texts are read from.
 fn first_frame_map(s: &Session, li: usize) -> Option<String> {
     let l = s.project.layouts.get(li)?;
@@ -5987,7 +6016,10 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
     }
     // The first frame's map decides every text's figures (#2853): another map, which may lack a
     // layer or a field, says what the layout's texts lose.
-    if given(&["map"]) && s.project.layouts.get(li).is_some_and(|l| l.first_frame() == Some(id)) && first_frame_map(s, li) != map_before {
+    if given(&["map"])
+        && s.project.layouts.get(li).is_some_and(|l| l.first_frame() == Some(id))
+        && !same_map(first_frame_map(s, li).as_deref(), map_before.as_deref())
+    {
         say_layout_text_statistics(s, li);
     }
     // A centre the frame's map can't place (a pole on Web Mercator) is said (#2684).

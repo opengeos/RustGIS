@@ -40157,6 +40157,17 @@ fn a_publications_wrapped_text_keeps_its_statistic_tokens_whole() {
     assert!(wrap, "the page wraps it when it draws");
 }
 
+/// A publication measures a text as it is drawn (#2853): a layer statistic token narrower than a
+/// typical figure is measured as one, as `{scale}` and `{date}` are; a longer one, and any other
+/// text, as it is written.
+#[test]
+fn a_statistic_token_is_measured_as_wide_as_its_figure() {
+    use crate::cmd::layout::like_figures;
+    assert_eq!(like_figures("{count:A} of {sum:Ab:f}"), "1,234,567.89 of 1,234,567.89");
+    assert_eq!(like_figures("{max:Cities of Spain:population} {min:A:f}"), "{max:Cities of Spain:population} 1,234,567.89");
+    assert_eq!(like_figures("Plain {scale} {foo} text"), "Plain {scale} {foo} text");
+}
+
 #[test]
 fn locked_layout_elements_take_no_change_until_unlocked() {
     use rustgis_map::layout::ElementKind;
