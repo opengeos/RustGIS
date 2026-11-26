@@ -3642,6 +3642,95 @@ mod tests {
         assert_eq!(crate::widgets::cursor_range(&h.ctx, box_id), cursor);
     }
 
+    /// The bar's keys work wherever the keyboard is in it, its buttons and toggles too, reached with
+    /// Tab: Escape closes it back to the box, F3 steps, Ctrl+F returns to the query (#2996).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn the_find_keys_work_on_every_button_of_the_bar() {
+        use egui::{Event, Key, Modifiers};
+        use egui_kittest::kittest::Queryable;
+        let box_id = egui::Id::unique("script_text");
+        let (query_id, replace_id) = (box_id.with("find_query"), box_id.with("find_replace"));
+        // Tab stops after each field: the toggles and buttons.
+        for (field, tabs) in [(query_id, 1..=5), (replace_id, 1..=2)] {
+            for n in tabs {
+                let on_button = || {
+                    let mut h = find_harness("a Cities b\nCities c\nCities d");
+                    h.key_press_modifiers(Modifiers::COMMAND, Key::H);
+                    h.run();
+                    h.event(Event::Text("Cities".into()));
+                    h.run();
+                    h.ctx.memory_mut(|m| m.request_focus(field));
+                    h.run();
+                    for _ in 0..n {
+                        h.key_press(Key::Tab);
+                        h.run();
+                    }
+                    let focus = h.ctx.memory(|m| m.focused());
+                    assert!(focus.is_some_and(|f| ![box_id, query_id, replace_id].contains(&f)), "{n}: on a button");
+                    h
+                };
+                let mut h = on_button();
+                assert!(h.state().script_find_keys(&h.ctx).takes("f", "KeyF", true, false, false), "{n}: the browser's Find");
+                h.key_press(Key::F3);
+                h.run();
+                h.get_by_label("2 of 3");
+                h.key_press_modifiers(Modifiers::COMMAND, Key::F);
+                h.run();
+                assert!(h.ctx.memory(|m| m.has_focus(query_id)), "{n}: Ctrl+F");
+                let mut h = on_button();
+                h.key_press(Key::Escape);
+                h.run();
+                assert!(h.query_by_label("Close (Esc)").is_none(), "{n}: Escape closes");
+                assert!(h.ctx.memory(|m| m.has_focus(box_id)), "{n}: back in the box");
+            }
+        }
+    }
+
+    /// In the whole app, where Escape also picks the Pan tool, the Escape pressed in the find bar
+    /// is the bar's: it closes, and the tool stays (#2996).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn in_the_app_escape_in_the_find_bar_is_not_the_tool_shortcut() {
+        use egui::{Key, Modifiers};
+        use egui_kittest::kittest::Queryable;
+        let box_id = egui::Id::unique("script_text");
+        for tabs in [0, 3] {
+            let mut app = RustGisApp::with_sample();
+            app.run("ui.pane.script", serde_json::json!({})).unwrap();
+            app.session.tool = rustgis_engine::Tool::Measure;
+            let mut fonts = false;
+            let builder = egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).with_max_steps(100);
+            let mut h = builder.build_ui_state(
+                move |ui, app: &mut RustGisApp| {
+                    if !fonts {
+                        crate::theme::install_fonts(ui.ctx(), &[], None);
+                        fonts = true;
+                        return;
+                    }
+                    let ctx = ui.ctx().clone();
+                    app.logic(&ctx);
+                    app.ui(ui);
+                },
+                app,
+            );
+            h.run();
+            h.ctx.memory_mut(|m| m.request_focus(box_id));
+            h.run();
+            h.key_press_modifiers(Modifiers::COMMAND, Key::F);
+            h.run();
+            for _ in 0..tabs {
+                h.key_press(Key::Tab);
+                h.run();
+            }
+            h.get_by_label("Close (Esc)");
+            h.key_press(Key::Escape);
+            h.run();
+            assert!(h.query_by_label("Close (Esc)").is_none(), "{tabs}: closed");
+            assert_eq!(h.state().session.tool, rustgis_engine::Tool::Measure, "{tabs}: the tool stays");
+        }
+    }
+
     /// The pane with `script` in it, its fonts installed first (the icons draw letters), and the
     /// focus in the box.
     #[cfg(not(target_arch = "wasm32"))]

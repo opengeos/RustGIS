@@ -213,6 +213,10 @@ pub struct Bar {
     scroll: bool,
     /// Put the focus in the query field, its text selected.
     focus_query: bool,
+    /// The widget of the bar (a field, a button, a toggle) the keyboard was on when the bar was
+    /// last drawn, with that pass's number, none when it was elsewhere: where the bar's keys work,
+    /// besides the box.
+    focus: Option<(egui::Id, u64)>,
     /// The Replace row is shown.
     replace_open: bool,
     /// The matches [`Bar::refresh`] last worked out: read only after it.
@@ -222,9 +226,16 @@ pub struct Bar {
 }
 
 impl Bar {
-    /// Whether the bar shows, so F3 and Shift+F3 are its keys.
+    /// Whether the bar shows, so F3, Shift+F3 and Escape are its keys.
     pub(crate) fn is_open(&self) -> bool {
         self.open
+    }
+
+    /// Whether the keyboard was on a widget of the bar in the pass before `pass`: the app's
+    /// shortcuts then leave Escape to the bar, though egui has taken the focus away by now. Stale
+    /// when the bar isn't drawn (its pane closed), so nothing is held off by a bar not shown.
+    pub(crate) fn had_focus(&self, pass: u64) -> bool {
+        self.focus.is_some_and(|(_, p)| p + 1 == pass)
     }
 
     /// The matches of `script`, worked out again if it, the query or a toggle changed since, and the
@@ -253,6 +264,7 @@ impl Bar {
     /// opening.
     fn close(&mut self) {
         self.open = false;
+        self.focus = None;
         self.found = Found::default();
         self.key = None;
     }
@@ -334,10 +346,32 @@ impl Chord {
     }
 }
 
-/// The focus is in the Script box or in a field of its bar: where the shortcuts work.
-fn here(ctx: &egui::Context, box_id: egui::Id) -> bool {
-    let ours = [box_id, box_id.with("find_query"), box_id.with("find_replace")];
-    ctx.memory(|m| m.focused()).is_some_and(|f| ours.contains(&f))
+/// The keyboard is in the Script box or on a widget of its bar: where the shortcuts work.
+fn here(ctx: &egui::Context, box_id: egui::Id, bar: &Bar) -> bool {
+    ctx.memory(|m| m.focused()).is_some_and(|f| f == box_id || bar.focus.is_some_and(|(w, _)| w == f))
+}
+
+/// The bar closed from itself (`select`: the cursor goes where the search was, the current match
+/// selected, in the box) or from the box, whose cursor stays; the keyboard goes to the box.
+fn dismiss(ctx: &egui::Context, box_id: egui::Id, bar: &mut Bar, select: bool) {
+    if let Some(r) = bar.current.and_then(|i| bar.found.ranges.get(i)).filter(|_| select) {
+        use egui::text::{CCursor, CCursorRange};
+        crate::widgets::set_cursor_range(ctx, box_id, CCursorRange::two(CCursor::new(r.start), CCursor::new(r.end)));
+    }
+    bar.close();
+    ctx.memory_mut(|m| m.request_focus(box_id));
+}
+
+/// Escape closes an open bar, from the box (after a list or the help over it took its own, read
+/// before this) or from any widget of the bar, which egui has taken the focus off by now.
+fn escape(ui: &egui::Ui, box_id: egui::Id, script: &str, bar: &mut Bar) {
+    let focused = ui.memory(|m| m.focused());
+    let boxed = focused == Some(box_id);
+    let barred = bar.focus.is_some_and(|(w, _)| focused.is_none_or(|f| f == w));
+    if bar.open && (boxed || barred) && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+        bar.refresh(script, bar.anchor);
+        dismiss(ui.ctx(), box_id, bar, !boxed);
+    }
 }
 
 /// The chords the box and its bar take now: the next and previous match only with the bar `open`.
@@ -348,7 +382,8 @@ fn taken_now(mac: bool, open: bool) -> impl Iterator<Item = Chord> {
 /// Before the box: the shortcuts pressed in the box or the bar ([`chords`]). Finding opens the bar,
 /// with the selection in its field; the next and previous match move an open one; Escape closes it.
 pub fn keys(ui: &egui::Ui, box_id: egui::Id, script: &str, bar: &mut Bar) {
-    if !here(ui.ctx(), box_id) {
+    escape(ui, box_id, script, bar);
+    if !here(ui.ctx(), box_id, bar) {
         return;
     }
     for chord in taken_now(ui.ctx().os().is_mac(), bar.open) {
@@ -379,11 +414,6 @@ pub fn keys(ui: &egui::Ui, box_id: egui::Id, script: &str, bar: &mut Bar) {
         bar.reseek = true;
         bar.focus_query = true;
     }
-    // Escape in the box closes an open bar too, after a list or the help over the box took its own
-    // (read before this); the cursor stays where it is.
-    if bar.open && ui.memory(|m| m.has_focus(box_id)) && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
-        bar.close();
-    }
 }
 
 /// The chords the Script box and its bar take at one moment, none while neither has the focus:
@@ -400,12 +430,12 @@ impl FindChords {
     }
 }
 
-/// [`FindChords`] as they are now, the bar `open` or not.
-pub fn browser_keys(ctx: &egui::Context, open: bool) -> FindChords {
-    if !here(ctx, egui::Id::unique("script_text")) {
+/// [`FindChords`] as they are now.
+pub fn browser_keys(ctx: &egui::Context, bar: &Bar) -> FindChords {
+    if !here(ctx, egui::Id::unique("script_text"), bar) {
         return FindChords::default();
     }
-    FindChords(taken_now(ctx.os().is_mac(), open).collect())
+    FindChords(taken_now(ctx.os().is_mac(), bar.open).collect())
 }
 
 /// The room the bar leaves at the box's edges, and the widths it takes: what the count takes, the
@@ -483,6 +513,7 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
     // there instead.
     let seen = ui.clip_rect();
     if !bar.open || !seen.intersects(area) {
+        bar.focus = None;
         return said;
     }
     let cursor = crate::widgets::cursor_range(ui.ctx(), box_id).map_or(bar.anchor, |r| r.primary.index.0);
@@ -500,9 +531,11 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
     let mut todo = None;
     // A widget of the bar was used, or a field changed.
     let (mut used, mut edited) = (false, false);
+    let mut layer = None;
     crate::completion::popup(ui, box_id.with("find_area"), pos, area.height(), |ui| {
         ui.set_width(width - 2.0 * margin - 2.0);
         ui.spacing_mut().item_spacing = egui::vec2(GAP, GAP);
+        layer = Some(ui.layer_id());
         ui.horizontal_top(|ui| {
             // The arrow that shows or hides the Replace row, as tall as the rows it covers.
             let tall = if bar.replace_open { 2.0 * crate::widgets::FLAT_BUTTON + GAP } else { crate::widgets::FLAT_BUTTON };
@@ -573,11 +606,6 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
                     if crate::widgets::flat_icon_button(ui, "close", &close, &close, true).clicked() {
                         todo = Some(Action::Close);
                     }
-                    // Escape in either field closes the bar (the field gives the focus up on it).
-                    let escaped = ui.input(|i| i.key_pressed(egui::Key::Escape));
-                    if escaped && (query.has_focus() || query.lost_focus() || ui.memory(|m| m.has_focus(replace_id))) {
-                        todo = Some(Action::Close);
-                    }
                 });
                 if bar.replace_open {
                     ui.horizontal_wrapped(|ui| {
@@ -645,6 +673,10 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
             });
         });
     });
+    // The widget of the bar with the keyboard, asked of the bar's layer. Before the focus goes back
+    // to a field below: reading a widget's response after that would take it off again on a click.
+    let focused = ui.memory(|m| m.focused());
+    let mut focus = focused.filter(|f| ui.ctx().read_response(*f).is_some_and(|r| Some(r.layer_id) == layer));
     // As in a code editor, the keyboard stays in the bar after any of it was used: a click takes
     // the focus from a field, and so does Enter. Asked here, after the fields are drawn.
     if (used || todo.is_some()) && todo != Some(Action::Close) {
@@ -652,6 +684,7 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
         let from_replace = replacing || ui.memory(|m| m.had_focus_last_frame(replace_id));
         let field = if from_replace && bar.replace_open { replace_id } else { query_id };
         ui.memory_mut(|m| m.request_focus(field));
+        focus = Some(field);
     }
     // What was typed in the fields this frame, before it is acted on.
     bar.refresh(script, cursor);
@@ -682,20 +715,16 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
                 }
             }
         }
-        Some(Action::Close) => {
-            // The cursor where the search was: the current match, selected, in the box.
-            if let Some(r) = bar.current.and_then(|i| bar.found.ranges.get(i)) {
-                crate::widgets::set_cursor_range(ui.ctx(), box_id, CCursorRange::two(CCursor::new(r.start), CCursor::new(r.end)));
-            }
-            bar.close();
-            ui.memory_mut(|m| m.request_focus(box_id));
-        }
+        Some(Action::Close) => dismiss(ui.ctx(), box_id, bar, true),
         None => {}
     }
     if todo.is_some() || edited || used {
         // The box was painted before the bar: it shows what changed on the next frame.
         ui.ctx().request_repaint();
     }
+    // Where the keyboard is now, for the next frame's keys.
+    let pass = ui.ctx().cumulative_pass_nr();
+    bar.focus = focus.filter(|_| bar.open).map(|f| (f, pass));
     said
 }
 

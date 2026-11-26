@@ -1666,7 +1666,7 @@ impl RustGisApp {
     /// The chords the Script box and its find bar take now, none while neither has the focus: with
     /// [`Self::command_keys`], what the web app keeps from the browser's own shortcuts.
     pub fn script_find_keys(&self, ctx: &egui::Context) -> FindChords {
-        scriptfind::browser_keys(ctx, self.workflow.script_find.is_open())
+        scriptfind::browser_keys(ctx, &self.workflow.script_find)
     }
 
     /// The keyboard shortcuts of a command run without parameters, in the keymap's order, for a

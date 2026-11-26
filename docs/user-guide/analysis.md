@@ -1907,9 +1907,10 @@ arrow at the bar's left (or Ctrl+H, ⌥⌘F on macOS) shows a second field, for 
 and two buttons: Replace changes the current match and Replace All every one, each as one step of
 the box's Undo (Ctrl+Z); both are off while a run is under way, and Replace All is off too when
 there are more matches than the bar keeps (10,000); one that would make the script larger than 1 MB
-replaces nothing and says so in Messages. Escape in its fields, or the close button, closes the bar
-and leaves the current match selected in the box. Escape in the box closes it too, once no list or
-help is open over the box, and the cursor stays where it is.
+replaces nothing and says so in Messages. The bar's shortcuts work from its fields, its buttons and
+the box. Escape in the bar, or the close button, closes it and leaves the current match selected in
+the box. Escape in the box closes it too, once no list or help is open over the box, and the cursor
+stays where it is.
 
 ## ModelBuilder
 
