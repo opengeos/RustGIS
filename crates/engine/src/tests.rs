@@ -40009,7 +40009,14 @@ fn layout_text_statistics_without_a_figure_are_said() {
     let (_, said) = run(&mut s, "layout.update", json!({"element": frame, "map": "Empty"}));
     assert_eq!(said, Vec::<String>::new(), "the same map again says nothing");
     let (_, said) = run(&mut s, "layout.update", json!({"element": frame, "map": home}));
-    assert_eq!(said.len(), 2, "the texts' figures are back, but the two tokens that never had one are said again: {said:?}");
+    assert_eq!(
+        said,
+        [
+            "{sum:Nowhere:pop} shows as written: the map of the layout's first frame has no layer named 'Nowhere'",
+            "{max:Countries:nosuch} shows as written: 'Countries' has no field named 'nosuch'",
+        ],
+        "the texts' figures are back, but the two tokens that never had one are said again"
+    );
     // So are those of an imported layout, a copy of the first one here.
     let copy = serde_json::to_string(&s.project.layouts[0]).unwrap();
     let (_, said) = run(&mut s, "layout.import", json!({"text": copy}));
