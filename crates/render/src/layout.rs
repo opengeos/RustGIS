@@ -1183,7 +1183,7 @@ pub fn statistic_notices(layout: &Layout, maps: &[Map], text: &str) -> Vec<Strin
         _ => None,
     });
     let mut said: Vec<String> = Vec::new();
-    let tokens = distinct_stat_tokens(text);
+    let tokens = distinct_stat_tokens(text, true);
     // Each layer's figures in one pass, whatever their number.
     let figures: Vec<Option<Option<(bool, Result<f64, StatMissing>)>>> = match map {
         Some(m) => figures_of(m, &tokens).into_iter().map(Some).collect(),
@@ -1202,6 +1202,9 @@ pub fn statistic_notices(layout: &Layout, maps: &[Map], text: &str) -> Vec<Strin
             Some(None) => format!("the map of the layout's first frame has no layer named '{layer}'"),
             Some(Some(Ok(_))) => continue,
             Some(Some(Err(StatMissing::Raster))) => format!("'{layer}' is a raster layer, which has no features"),
+            Some(Some(Err(StatMissing::Field))) if t.field.is_none() => {
+                format!("a {} takes a field: write {{{}:{layer}:field}}", t.stat.code(), t.stat.code())
+            }
             Some(Some(Err(StatMissing::Field))) => format!("'{layer}' has no field named '{field}'"),
             Some(Some(Err(StatMissing::NotNumeric))) => format!("'{field}' of '{layer}' holds no numbers"),
             Some(Some(Err(StatMissing::NoValue))) => {
@@ -1223,7 +1226,7 @@ fn statistics(t: &str, comma: bool, map: Option<&Map>) -> String {
     let mut out = t.to_string();
     // `replace` below puts in every occurrence, so a repeated token is worked out once, and the
     // figures of one layer in one pass over it.
-    let tokens = distinct_stat_tokens(t);
+    let tokens = distinct_stat_tokens(t, false);
     for (s, figure) in tokens.iter().zip(figures_of(m, &tokens)) {
         if let Some((_, Ok(v))) = figure {
             out = out.replace(s.token, &decimal(rustgis_map::layout::chart_value_text(v, None), comma));
@@ -1232,10 +1235,12 @@ fn statistics(t: &str, comma: bool, map: Option<&Map>) -> String {
     out
 }
 
-/// The statistic tokens of `text`, each once, in the order they come.
-fn distinct_stat_tokens(text: &str) -> Vec<rustgis_map::layout::StatToken<'_>> {
+/// The statistic tokens of `text`, each once, in the order they come; with `gaps`, the figures
+/// written without their field too.
+fn distinct_stat_tokens(text: &str, gaps: bool) -> Vec<rustgis_map::layout::StatToken<'_>> {
     let mut tokens: Vec<rustgis_map::layout::StatToken<'_>> = Vec::new();
-    for t in rustgis_map::layout::stat_tokens(text) {
+    let read = if gaps { rustgis_map::layout::stat_tokens_and_gaps(text) } else { rustgis_map::layout::stat_tokens(text) };
+    for t in read {
         if !tokens.iter().any(|seen| seen.token == t.token) {
             tokens.push(t);
         }
@@ -10776,6 +10781,28 @@ Elaboração: RustGIS",
         assert_eq!(
             said(&layout),
             vec!["{count:Cities} shows as written: the map of the layout's first frame is not in the project".to_string()]
+        );
+    }
+
+    /// A figure written without its field (`{sum:Plants}`) is drawn as written, which is no token for
+    /// the page, and is said (#2853), as one with a field the layer lacks is.
+    #[test]
+    fn a_statistic_without_its_field_is_said() {
+        use rustgis_data::{Dataset, Field, FieldType, GeometryType};
+        let mut map = Map::new("m");
+        map.add_dataset(Dataset::new("Plants", GeometryType::None, vec![Field::new("mw", FieldType::Double)]));
+        let mut layout = Layout::new("L", 100.0, 100.0);
+        let kind =
+            serde_json::from_value(serde_json::json!({"MapFrame": {"map": "m", "center": {"x": 0, "y": 0}, "scale": 6300000}})).unwrap();
+        layout.add("Frame", (0.0, 0.0, 50.0, 50.0), kind);
+        let maps = [map];
+        assert_eq!(
+            statistic_notices(&layout, &maps, "{sum:Plants} {count:Plants} {max:Nowhere} {mean:Plants:mw}"),
+            vec![
+                "{sum:Plants} shows as written: a sum takes a field: write {sum:Plants:field}".to_string(),
+                "{max:Nowhere} shows as written: the map of the layout's first frame has no layer named 'Nowhere'".to_string(),
+                "{mean:Plants:mw} shows as written: no feature of 'Plants' its definition query keeps has a number in 'mw', or the figure is past a number's range".to_string(),
+            ]
         );
     }
 

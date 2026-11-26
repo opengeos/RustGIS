@@ -2433,6 +2433,16 @@ pub struct StatToken<'a> {
 /// The [`StatToken`]s in `text`, in the order they come; other braces (`{scale}`, `{foo}`,
 /// `{sum:}`) are not among them.
 pub fn stat_tokens(text: &str) -> Vec<StatToken<'_>> {
+    scan_stat_tokens(text, false)
+}
+
+/// [`stat_tokens`] and also the `{sum:Layer}`, `{mean:Layer}`, `{min:Layer}` and `{max:Layer}` written
+/// without their field, which are no tokens to draw but a figure the writer meant: for a notice.
+pub fn stat_tokens_and_gaps(text: &str) -> Vec<StatToken<'_>> {
+    scan_stat_tokens(text, true)
+}
+
+fn scan_stat_tokens(text: &str, gaps: bool) -> Vec<StatToken<'_>> {
     let mut out = Vec::new();
     for (open, _) in text.match_indices('{') {
         let Some(after) = text.get(open + 1..) else { continue };
@@ -2452,6 +2462,8 @@ pub fn stat_tokens(text: &str) -> Vec<StatToken<'_>> {
             StatKind::Count => (rest, None),
             _ => match rest.rsplit_once(':') {
                 Some((layer, field)) if !field.is_empty() => (layer, Some(field)),
+                // No field at all: only a notice reads it.
+                None if gaps => (rest, None),
                 _ => continue,
             },
         };
@@ -2475,13 +2487,7 @@ pub fn rename_stat_layers(text: &str, mut rename: impl FnMut(&str) -> Option<Str
         }
         done.push(t.token);
         let Some(layer) = rename(t.layer) else { continue };
-        let code = match t.stat {
-            StatKind::Count => "count",
-            StatKind::Sum => "sum",
-            StatKind::Mean => "mean",
-            StatKind::Min => "min",
-            StatKind::Max => "max",
-        };
+        let code = t.stat.code();
         let new = match t.field {
             Some(field) => format!("{{{code}:{layer}:{field}}}"),
             None => format!("{{{code}:{layer}}}"),
@@ -3498,6 +3504,25 @@ mod tests {
 
     /// A text's statistic tokens (#2853): each kind, a layer named with a colon, and braces that
     /// aren't one left alone.
+    /// The tokens a notice reads also include the figure kinds written without their field, which
+    /// are no tokens to draw or to require a capability for (#2853).
+    #[test]
+    fn statistic_tokens_and_gaps_include_a_figure_without_its_field() {
+        fn read(t: &str) -> Vec<(&str, StatKind, &str, Option<&str>)> {
+            stat_tokens_and_gaps(t).into_iter().map(|s| (s.token, s.stat, s.layer, s.field)).collect()
+        }
+        assert_eq!(
+            read("{sum:A} {sum:A:b} {count:C} {mean:Zone: north} {max:} {sum::x} {min:A:} {foo:A}"),
+            vec![
+                ("{sum:A}", StatKind::Sum, "A", None),
+                ("{sum:A:b}", StatKind::Sum, "A", Some("b")),
+                ("{count:C}", StatKind::Count, "C", None),
+                ("{mean:Zone: north}", StatKind::Mean, "Zone", Some(" north")),
+            ]
+        );
+        assert_eq!(stat_tokens("{sum:A} {sum:A:b}").len(), 1, "a figure without its field is no token");
+    }
+
     #[test]
     fn statistic_tokens_are_read_from_a_text() {
         fn read(t: &str) -> Vec<(&str, StatKind, &str, Option<&str>)> {
