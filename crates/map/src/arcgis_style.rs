@@ -494,6 +494,8 @@ fn symbol(s: &Value, g: GeometryType, picture: Option<Rgba>, pictures: &mut Pict
                 // drawn that wide, not that tall; with neither (a height of 0 is none), RustGIS's
                 // size does. A height of 0 beside a width is said: the width alone draws it.
                 Ok(p) => {
+                    // A side that isn't a number is said as the circle says it, whether this uses it or not.
+                    say_unreadable_sizes(s, notes);
                     let wide = s.get("width").and_then(Value::as_f64).is_some_and(|w| w.is_finite() && w > 0.0);
                     let height = s.get("height").filter(|h| !h.is_null());
                     let flat = height.and_then(Value::as_f64).is_some_and(|h| h == 0.0);
@@ -517,11 +519,7 @@ fn symbol(s: &Value, g: GeometryType, picture: Option<Rgba>, pictures: &mut Pict
             // As a circle, the larger of its width and height, so that one past the largest is
             // said once; each side that isn't a number is said, as `size()` says one it can't read.
             let num = |k: &str| s.get(k).and_then(Value::as_f64).filter(|v| v.is_finite());
-            for k in ["width", "height"] {
-                if s.get(k).is_some_and(|v| !v.is_null()) && num(k).is_none() {
-                    notes.add("marker sizes RustGIS can't read, drawn at RustGIS's");
-                }
-            }
+            say_unreadable_sizes(s, notes);
             let top = match (num("height"), num("width")) {
                 (Some(h), Some(w)) => Some(h.max(w)),
                 (h, w) => h.or(w),
@@ -641,6 +639,14 @@ fn size(v: Option<&Value>, default: f32, notes: &mut Notes) -> f32 {
         }
         (s as f32).clamp(0.0, MAX_MARKER_SIZE)
     })
+}
+
+/// Says a picture marker's `width` or `height` that is given but isn't a number, once for either or both.
+fn say_unreadable_sizes(s: &Value, notes: &mut Notes) {
+    let unreadable = |k: &str| s.get(k).is_some_and(|v| !v.is_null()) && !s.get(k).and_then(Value::as_f64).is_some_and(f64::is_finite);
+    if unreadable("width") || unreadable("height") {
+        notes.add("marker sizes RustGIS can't read, drawn at RustGIS's");
+    }
 }
 
 /// A symbol's style (`style`), `None` when it names none; one that isn't text is noted and taken as
@@ -817,21 +823,37 @@ mod tests {
         };
         let Renderer::Single(base) = layer(GeometryType::Point).renderer else { panic!("a single symbol") };
         // With no width above 0 either, it has no size: RustGIS's.
-        // (A height that isn't a number can't size it either: said once, as no size.)
-        let cases =
-            [(json!(null), json!(0)), (json!(0), json!(0)), (json!(0), json!(-4)), (json!(null), json!("18")), (json!(0), json!("abc"))];
+        let cases = [(json!(null), json!(0)), (json!(0), json!(0)), (json!(0), json!(-4))];
         for (width, height) in cases {
             let (s, text) = styled_pms(width.clone(), height.clone());
             assert_eq!(s.size, base.size, "width {width}, height {height}");
             assert_eq!(text, "picture markers with no size, drawn at RustGIS's", "width {width}, height {height}");
         }
+        // A side that isn't a number can't size it either, and is said, as the circle says it.
+        for (width, height) in [(json!(null), json!("18")), (json!(0), json!("abc"))] {
+            let (s, text) = styled_pms(width.clone(), height.clone());
+            assert_eq!(s.size, base.size, "width {width}, height {height}");
+            assert_eq!(
+                text, "marker sizes RustGIS can't read, drawn at RustGIS's; picture markers with no size, drawn at RustGIS's",
+                "width {width}, height {height}"
+            );
+        }
+        // So is one a width makes no use of, and a width that isn't a number beside a height that is.
+        let (s, text) = styled_pms(json!(15), json!("abc"));
+        assert_eq!(s.size, 15.0);
+        assert_eq!(text, "marker sizes RustGIS can't read, drawn at RustGIS's");
+        let (s, text) = styled_pms(json!("abc"), json!(18));
+        assert_eq!(s.size, 18.0);
+        assert_eq!(
+            text,
+            "marker sizes RustGIS can't read, drawn at RustGIS's; picture markers with no width, drawn with their height as their width"
+        );
         // With a width, it is drawn by it, and the height's 0 said.
         let (s, text) = styled_pms(json!(15), json!(0));
         assert_eq!(s.size, 15.0);
         assert_eq!(text, "picture markers of no height, drawn as tall as their image is");
-        // A height above 0 says nothing of the kind; nor does one below 0 or not a number, which a width
-        // makes no use of.
-        for height in [json!(18), json!(-4), json!("18")] {
+        // A height above 0 says nothing of the kind; nor does one below 0, which a width makes no use of.
+        for height in [json!(18), json!(-4)] {
             let (s, text) = styled_pms(json!(15), height.clone());
             assert_eq!(s.size, 15.0, "height {height}");
             assert!(text.is_empty(), "height {height}: {text}");
