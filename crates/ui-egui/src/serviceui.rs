@@ -470,8 +470,8 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
     let moved = !task.owner.holds(&app.session);
     if !pending || moved {
         app.session.download_failed(task.token);
-        // Said unless the download was already over for the user's own reason (Cancel): opening
-        // another project puts its downloads aside, so they are never pending here.
+        // Said unless the download was already over before the map moved (it failed elsewhere,
+        // say): opening another project puts its downloads aside, so they are never pending here.
         if moved && (pending || !task.owner.in_project(&app.session)) {
             app.session.notify(tl!("The service import was cancelled because the map or project in view changed.").to_string(), false);
         }
@@ -728,7 +728,7 @@ mod tests {
         app.run("map.rename", json!({"name": "Renamed"})).unwrap();
         poll(&mut app, &ctx);
         assert_eq!(said(&app, mark), 1);
-        // A download already over (cancelled by the user, say): nothing more to say.
+        // A download already over (failed elsewhere, say): nothing more to say.
         let mark = app.session.notice_mark();
         let import = task(&mut app);
         app.session.download_failed(import.token);

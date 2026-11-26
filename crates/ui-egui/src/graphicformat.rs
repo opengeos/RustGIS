@@ -356,6 +356,7 @@ mod tests {
         h.run_steps(3);
         let said = h.state().session.notices_since(mark).iter().filter(|n| n.text.contains("was not saved")).count();
         assert_eq!(said, 1, "{:?}", h.state().session.notices_since(mark).iter().map(|n| &n.text).collect::<Vec<_>>());
+        assert!(h.state().graphic_format.draft.is_none());
     }
 
     /// A text field focused but not edited has nothing pending: switching map says nothing of it (#2987).
