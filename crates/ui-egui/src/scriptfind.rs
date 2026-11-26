@@ -112,6 +112,8 @@ pub fn replace_all(text: &str, found: &Found, with: &str) -> String {
 /// The find bar's state, kept in the context under the box's id: it isn't saved with the project.
 #[derive(Clone, Default)]
 struct Bar {
+    /// The project it was used in ([`rustgis_engine::Session::opened`]): another starts it over.
+    project: Option<u64>,
     open: bool,
     query: String,
     replace: String,
@@ -213,10 +215,14 @@ const FIELD_MAX: usize = 200;
 /// Before the box: Ctrl+F (⌘F) in the box or in the bar opens it, with the selection in its field;
 /// the matches are worked out, and what the box has to draw of them is returned, None while the bar
 /// is closed. The bar itself is drawn over the box once it has been laid out ([`show`]).
-pub fn prepare(ui: &egui::Ui, box_id: egui::Id, script: &str) -> Option<Shown> {
+pub fn prepare(ui: &egui::Ui, box_id: egui::Id, script: &str, project: u64) -> Option<Shown> {
     let id = box_id.with("find");
     let (query_id, replace_id) = (box_id.with("find_query"), box_id.with("find_replace"));
     let mut bar: Bar = ui.data_mut(|d| d.get_temp(id)).unwrap_or_default();
+    // Another project starts the bar over, as it starts the pane over.
+    if bar.project != Some(project) {
+        bar = Bar { project: Some(project), ..Bar::default() };
+    }
     let in_box = ui.memory(|m| m.has_focus(box_id));
     let in_bar = ui.memory(|m| m.has_focus(query_id) || m.has_focus(replace_id));
     // Ctrl+F (⌘F) opens the bar; Ctrl+H (⌥⌘F on a Mac, where ⌘H hides the app) opens it with the
@@ -325,7 +331,10 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
     let id = box_id.with("find");
     let (query_id, replace_id) = (box_id.with("find_query"), box_id.with("find_replace"));
     let mut bar: Bar = ui.data_mut(|d| d.get_temp(id)).unwrap_or_default();
-    if !bar.open {
+    // Over the box only while it shows: scrolled out of the pane, the bar would float over what is
+    // there instead.
+    let seen = ui.clip_rect();
+    if !bar.open || !seen.intersects(area) {
         return None;
     }
     // What a field lost this frame, for Messages too.
@@ -333,11 +342,13 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
     let total = bar.found.ranges.len();
     let capped = bar.found.capped;
     let width = (area.width() - 2.0 * EDGE).clamp(MIN_BAR, MAX_BAR);
-    let pos = egui::pos2((area.right() - EDGE - width).max(area.left()), area.top() + EDGE);
+    let pos = egui::pos2((area.right() - EDGE - width).max(area.left()), area.top().max(seen.top()) + EDGE);
     // The popup's own margin (`Frame::popup`) and its stroke.
     let margin = 6.0;
     let field = width - 2.0 * margin - 2.0 - TOGGLE_WIDTH - COUNT_WIDTH - 3.0 * crate::widgets::FLAT_BUTTON - 5.0 * GAP;
     let mut todo = None;
+    // The arrow was clicked: the keyboard stays in the query field, as in a code editor.
+    let mut keep_query = false;
     crate::completion::popup(ui, box_id.with("find_area"), pos, area.height(), |ui| {
         ui.set_width(width - 2.0 * margin - 2.0);
         ui.spacing_mut().item_spacing = egui::vec2(GAP, GAP);
@@ -356,6 +367,7 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
             toggle.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, bar.replace_open, tl!("Toggle Replace")));
             if toggle.on_hover_text(tl!("Toggle Replace")).clicked() {
                 bar.replace_open = !bar.replace_open;
+                keep_query = true;
             }
             ui.vertical(|ui| {
                 ui.horizontal(|ui| {
@@ -366,6 +378,10 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
                             .margin(egui::Margin { left: 6, right: 54, top: 3, bottom: 3 })
                             .hint_text(tl!("Find")),
                     );
+                    // After the field: it gives the focus up on a click elsewhere, the arrow's too.
+                    if keep_query {
+                        ui.memory_mut(|m| m.request_focus(query_id));
+                    }
                     let toggled = field_toggles(ui, query_id.with("toggle"), query.rect, bar.case, bar.whole);
                     match toggled {
                         Some(Toggle::Case) => bar.case = !bar.case,
@@ -488,7 +504,8 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
                         }
                     });
                 }
-                for cut in [&bar.query_cut, &bar.replace_cut].into_iter().flatten() {
+                let replace_cut = bar.replace_cut.as_ref().filter(|_| bar.replace_open);
+                for cut in bar.query_cut.iter().chain(replace_cut) {
                     ui.label(egui::RichText::new(cut).small().color(ui.visuals().warn_fg_color));
                 }
             });
@@ -498,6 +515,16 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
     // What was found is of the script as it was when the matches were worked out: a key typed in the
     // box since, in this frame, leaves them for the next.
     let current_text = bar.is_current(script);
+    // A click on a button takes the keyboard from the field: give it back, as a code editor keeps
+    // it, so Enter, F3 and the shortcuts go on working.
+    let field_for = match todo {
+        Some(Action::Next | Action::Previous) => Some(query_id),
+        Some(Action::Replace | Action::ReplaceAll) => Some(replace_id),
+        _ => None,
+    };
+    if let Some(field) = field_for {
+        ui.memory_mut(|m| m.request_focus(field));
+    }
     match todo {
         Some(Action::Next) => bar.go(step(total, bar.current, false)),
         Some(Action::Previous) => bar.go(step(total, bar.current, true)),
@@ -640,6 +667,37 @@ mod tests {
         bar.case = false;
         bar.whole = true;
         assert!(!bar.is_current("cat dog"), "Match Whole Word changed");
+    }
+
+    /// Scrolled out of the pane, the box has no bar floating where it was.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn the_bar_is_not_drawn_over_a_box_out_of_view() {
+        use egui_kittest::kittest::Queryable;
+        let box_id = egui::Id::unique("script_text");
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(400.0, 300.0)).build_ui_state(
+            move |ui, area: &mut egui::Rect| {
+                if !fonts {
+                    crate::theme::install_fonts(ui.ctx(), &[], None);
+                    fonts = true;
+                    return;
+                }
+                let open = Bar { open: true, project: Some(0), ..Bar::default() };
+                if ui.data(|d| d.get_temp::<Bar>(box_id.with("find"))).is_none() {
+                    ui.data_mut(|d| d.insert_temp(box_id.with("find"), open));
+                }
+                let mut script = String::new();
+                prepare(ui, box_id, &script, 0);
+                show(ui, box_id, &mut script, false, *area);
+            },
+            egui::Rect::from_min_size(egui::pos2(0.0, 20.0), egui::vec2(380.0, 100.0)),
+        );
+        h.run();
+        h.get_by_label("Close (Esc)");
+        *h.state_mut() = egui::Rect::from_min_size(egui::pos2(0.0, -600.0), egui::vec2(380.0, 100.0));
+        h.run();
+        assert!(h.query_by_label("Close (Esc)").is_none());
     }
 
     #[test]

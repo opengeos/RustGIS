@@ -2285,7 +2285,7 @@ fn script(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, fit: bool) {
     let stopped = stopped_at(app);
     // The find bar (#2996), above the box: Ctrl+F opens it; a replace changes the script here.
     let running = script_running(app);
-    let found = crate::scriptfind::prepare(ui, box_id, &app.workflow.script);
+    let found = crate::scriptfind::prepare(ui, box_id, &app.workflow.script, app.session.opened);
     let before = crate::completion::before(ui, box_id, &app.workflow.script);
     let out = egui::ScrollArea::vertical().id_salt("script_box").max_height(room).auto_shrink([false, true]).show(ui, |ui| {
         let out = egui::TextEdit::multiline(&mut app.workflow.script)
@@ -3452,6 +3452,108 @@ mod tests {
         h.get_by_label("1 of 2");
         assert!(h.query_by_label_contains("left out").is_none());
         assert!(!h.state().session.notices.iter().any(|n| n.text.contains("left out")));
+    }
+
+    /// A click on one of the bar's buttons leaves the keyboard in the bar, as in a code editor, so
+    /// Enter, F3 and the shortcuts go on working (#2996).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn the_find_buttons_leave_the_keyboard_in_the_bar() {
+        use egui::{Event, Key, Modifiers};
+        use egui_kittest::kittest::Queryable;
+        let mut h = find_harness("cities cities cities");
+        let box_id = egui::Id::unique("script_text");
+        let (query_id, replace_id) = (box_id.with("find_query"), box_id.with("find_replace"));
+        let focused = |h: &egui_kittest::Harness<'_, RustGisApp>, id| h.ctx.memory(|m| m.has_focus(id));
+        h.key_press_modifiers(Modifiers::COMMAND, Key::F);
+        h.run();
+        h.event(Event::Text("cities".into()));
+        h.run();
+        for button in ["Next match (Enter)", "Previous match (Shift+Enter)", "Toggle Replace"] {
+            h.get_by_label(button).click();
+            h.run();
+            assert!(focused(&h, query_id), "{button}");
+        }
+        h.ctx.memory_mut(|m| m.request_focus(replace_id));
+        h.run();
+        h.event(Event::Text("towns".into()));
+        h.run();
+        for button in ["Replace (Enter)", "Replace All"] {
+            h.get_by_label(button).click();
+            h.run();
+            assert!(focused(&h, replace_id), "{button}");
+        }
+    }
+
+    /// The Replace field's note is shown with its row, not while the row is hidden (#2996).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn the_replace_note_shows_with_its_row() {
+        use egui::{Event, Key, Modifiers};
+        use egui_kittest::kittest::Queryable;
+        let mut h = find_harness("a");
+        let replace_id = egui::Id::unique("script_text").with("find_replace");
+        h.key_press_modifiers(Modifiers::COMMAND, Key::H);
+        h.run();
+        h.ctx.memory_mut(|m| m.request_focus(replace_id));
+        h.run();
+        h.event(Event::Text("b".repeat(300)));
+        h.run();
+        let cut = "The Replace field takes 200 characters: 100 left out";
+        h.get_by_label(cut);
+        h.get_by_label("Toggle Replace").click();
+        h.run();
+        assert!(h.query_by_label(cut).is_none(), "the row is hidden");
+        h.get_by_label("Toggle Replace").click();
+        h.run();
+        h.get_by_label(cut);
+    }
+
+    /// Another project starts the bar over, as it starts the pane over: no query, replacement or
+    /// note of the old one (#2996).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn another_project_starts_the_find_bar_over() {
+        use egui::{Event, Key, Modifiers};
+        use egui_kittest::kittest::Queryable;
+        let mut h = find_harness("map.zoomFull");
+        h.key_press_modifiers(Modifiers::COMMAND, Key::F);
+        h.run();
+        h.event(Event::Text("map".into()));
+        h.run();
+        h.get_by_label("1 of 1");
+        h.state_mut().run("project.new", Value::Null).unwrap();
+        h.run();
+        assert!(h.query_by_label("Close (Esc)").is_none(), "closed");
+        h.ctx.memory_mut(|m| m.request_focus(egui::Id::unique("script_text")));
+        h.run();
+        h.key_press_modifiers(Modifiers::COMMAND, Key::F);
+        h.run();
+        assert!(h.query_by_label("1 of 1").is_none() && h.query_by_label("No results").is_none(), "an empty field");
+    }
+
+    /// The pane with `script` in it, its fonts installed first (the icons draw letters), and the
+    /// focus in the box.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn find_harness(script: &str) -> egui_kittest::Harness<'static, RustGisApp> {
+        let mut app = RustGisApp::with_sample();
+        app.workflow.script = script.to_string();
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(900.0, 800.0)).build_ui_state(
+            move |ui, app: &mut RustGisApp| {
+                if !fonts {
+                    crate::theme::install_fonts(ui.ctx(), &[], None);
+                    fonts = true;
+                    return;
+                }
+                script_pane(app, ui, &Tokens::light());
+            },
+            app,
+        );
+        h.run();
+        h.ctx.memory_mut(|m| m.request_focus(egui::Id::unique("script_text")));
+        h.run();
+        h
     }
 
     /// The editor shortcuts around the find bar (#2996): Ctrl+H opens it with the Replace row, F3 and
