@@ -1111,7 +1111,7 @@ fn every_corpus_file_reads() {
     };
     // Pin the corpus sizes so a regeneration cannot silently drop fixtures.
     let styles = files("generated/qml", &["qml"]);
-    assert_eq!(styles.len(), 110, "style corpus changed: {styles:?}");
+    assert_eq!(styles.len(), 126, "style corpus changed: {styles:?}");
     // Raster image markers' files are found from the style's folder and the project's.
     let mut read = |source: &str| {
         use base64::Engine;
@@ -1136,7 +1136,7 @@ fn every_corpus_file_reads() {
         }
     }
     let projects = files("generated/qgs", &["qgs", "qgz"]);
-    assert_eq!(projects.len(), 37, "project corpus changed: {projects:?}");
+    assert_eq!(projects.len(), 38, "project corpus changed: {projects:?}");
     for path in &projects {
         let bytes = std::fs::read(path).unwrap();
         let text = if path.extension().is_some_and(|e| e == "qgz") {
