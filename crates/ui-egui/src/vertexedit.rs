@@ -42,9 +42,10 @@ pub struct VertexDrag {
 }
 
 impl VertexDrag {
-    /// Where letting go would put the vertex, in longitude/latitude: where it snapped, as snapping
-    /// gave it, else the pointer's place ([`VertexDrag::at`], in view coordinates) there. `None`
-    /// where the map's coordinates have none.
+    /// The vertex's place in longitude/latitude: where it snapped, as snapping gave it (what
+    /// letting go writes), else the pointer's place ([`VertexDrag::at`], in view coordinates) in
+    /// longitude/latitude. On a map in the layer's own system an unsnapped release writes `at` in
+    /// the layer's coordinates instead. `None` where the map's coordinates have none.
     pub fn lonlat(&self, app: &RustGisApp) -> Option<Coord> {
         self.snapped_lonlat.or_else(|| view_to_lonlat(app, self.at))
     }
@@ -940,9 +941,7 @@ mod tests {
         app.session.map_mut().editing.snapping.enabled = true;
         app.map.move_shared_vertices = false;
         let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(1000., 800.));
-        if back(&app) == target {
-            eprintln!("this place round-trips exactly; the test proves nothing here");
-        }
+        assert_ne!(back(&app), target, "the place must not round-trip exactly, or the test proves nothing");
         let from = lonlat_to_screen(&app, rect, Coord::new(1., 1.)).unwrap();
         assert!(drag_start(&mut app, rect, from));
         let near = lonlat_to_screen(&app, rect, target).unwrap() + egui::vec2(1.0, 1.0);
