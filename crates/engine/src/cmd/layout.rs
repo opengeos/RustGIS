@@ -3798,9 +3798,10 @@ fn say_layout_text_statistics(s: &mut Session, li: usize) {
 
 /// Says which layer statistics (#2853) of the text `id` of the layout `li` are drawn as written,
 /// and what each misses ([`rustgis_render::layout::statistic_notices`]).
-/// One pass over the layer per distinct token, as the text-fit measure beside it makes one: about 8
-/// to 33 ms a pass over a million rows (a debug build; a layer read in place holds only its loaded
-/// window), the same read a bar chart on the layer makes each time it is drawn.
+/// One pass over each layer the text names, whatever the number of its figures (they are tallied
+/// together), as the text-fit measure beside it makes one: about 8 to 33 ms a pass over a million
+/// rows (a debug build; a layer read in place holds only its loaded window), the same read a bar
+/// chart on the layer makes each time it is drawn.
 fn say_text_statistics(s: &mut Session, li: usize, id: u32) {
     let said = match s.project.layouts.get(li).map(|l| (l, l.element(id).map(|e| &e.kind))) {
         Some((l, Some(ElementKind::Text { text, .. }))) => rustgis_render::layout::statistic_notices(l, &s.project.maps, text),

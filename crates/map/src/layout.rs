@@ -2511,29 +2511,60 @@ pub enum StatMissing {
 /// `stat` of `layer`'s `field` (none for a count) over the features its definition query keeps
 /// ([`crate::Layer::visible_rows`]), its numbers read as a chart's are (finite, nulls skipped).
 pub fn layer_statistic(layer: &crate::Layer, stat: StatKind, field: Option<&str>) -> Result<f64, StatMissing> {
+    layer_statistics(layer, &[(stat, field)]).remove(0)
+}
+
+/// [`layer_statistic`] for each of `wanted` (a statistic and its field), in one pass over the layer's
+/// rows: the rows its definition query keeps are worked out once, and every field wanted is tallied
+/// in that pass, so a text with many figures of one layer costs one pass, not one for each.
+pub fn layer_statistics(layer: &crate::Layer, wanted: &[(StatKind, Option<&str>)]) -> Vec<Result<f64, StatMissing>> {
     if layer.raster.is_some() {
-        return Err(StatMissing::Raster);
+        return wanted.iter().map(|_| Err(StatMissing::Raster)).collect();
     }
     let ds = &layer.dataset;
-    let fi = match (stat, field) {
-        (StatKind::Count, _) => None,
-        (_, Some(f)) => Some(ds.field_index(f).ok_or(StatMissing::Field)?),
-        (_, None) => return Err(StatMissing::Field),
-    };
-    if fi.is_some_and(|fi| !ds.fields.get(fi).is_some_and(|f| f.ty.is_numeric())) {
-        return Err(StatMissing::NotNumeric);
-    }
-    let mut t = Tally::default();
-    for (row, kept) in layer.visible_rows().into_iter().enumerate() {
-        if !kept {
-            continue;
+    // Each statistic's field as a column, or why it has none; the columns, once each.
+    let mut columns: Vec<usize> = Vec::new();
+    let slots: Vec<Result<Option<usize>, StatMissing>> = wanted
+        .iter()
+        .map(|(stat, field)| {
+            let fi = match (stat, field) {
+                (StatKind::Count, _) => return Ok(None),
+                (_, Some(f)) => ds.field_index(f).ok_or(StatMissing::Field)?,
+                (_, None) => return Err(StatMissing::Field),
+            };
+            if !ds.fields.get(fi).is_some_and(|f| f.ty.is_numeric()) {
+                return Err(StatMissing::NotNumeric);
+            }
+            let slot = columns.iter().position(|c| *c == fi).unwrap_or_else(|| {
+                columns.push(fi);
+                columns.len() - 1
+            });
+            Ok(Some(slot))
+        })
+        .collect();
+    let mut records = 0usize;
+    let mut tallies = vec![Tally::default(); columns.len()];
+    if slots.iter().any(Result::is_ok) {
+        for (row, kept) in layer.visible_rows().into_iter().enumerate() {
+            if !kept {
+                continue;
+            }
+            records += 1;
+            for (tally, fi) in tallies.iter_mut().zip(&columns) {
+                if let Some(n) = ds.value(row, *fi).as_f64().filter(|v| v.is_finite()) {
+                    tally.add(n, true);
+                }
+            }
         }
-        t.records += 1;
-        if let Some(n) = fi.and_then(|fi| ds.value(row, fi).as_f64()).filter(|v| v.is_finite()) {
-            t.add(n, stat == StatKind::Mean);
-        }
     }
-    t.value(stat).ok_or(StatMissing::NoValue)
+    wanted
+        .iter()
+        .zip(slots)
+        .map(|((stat, _), slot)| match slot? {
+            None => Tally { records, ..Tally::default() }.value(*stat).ok_or(StatMissing::NoValue),
+            Some(slot) => Tally { records, ..tallies[slot] }.value(*stat).ok_or(StatMissing::NoValue),
+        })
+        .collect()
 }
 
 /// A chart bar's features as its statistic reads them: how many, and their numbers' sum, mean,
@@ -3421,6 +3452,37 @@ pub fn color_scale(rl: &RasterLayer) -> Option<ColorScale> {
 mod tests {
     use super::*;
     use crate::symbology::MAX_DASH_STEP;
+
+    /// Several figures of one layer, worked out in one pass over its rows, are the figures worked out
+    /// one by one, errors included (#2853).
+    #[test]
+    fn a_layers_figures_in_one_pass_are_the_figures_one_by_one() {
+        use rustgis_data::{Dataset, Field, FieldType, GeometryType, Value};
+        let fields = vec![Field::new("n", FieldType::Double), Field::new("m", FieldType::Integer), Field::new("name", FieldType::Text)];
+        let mut ds = Dataset::new("sites", GeometryType::None, fields);
+        for (n, m) in
+            [(Value::Float(2.5), 3), (Value::Float(-1.0), 4), (Value::Null, 5), (Value::Float(f64::NAN), 6), (Value::Float(100.0), 7)]
+        {
+            ds.push(None, vec![n, Value::Int(m), Value::Text("x".into())]);
+        }
+        let mut layer = crate::Layer::new(1, ds);
+        let wanted = [
+            (StatKind::Count, None),
+            (StatKind::Sum, Some("n")),
+            (StatKind::Mean, Some("n")),
+            (StatKind::Min, Some("m")),
+            (StatKind::Max, Some("m")),
+            (StatKind::Sum, Some("name")),
+            (StatKind::Sum, Some("nosuch")),
+            (StatKind::Sum, None),
+            (StatKind::Mean, Some("n")),
+        ];
+        for query in [None, Some("m > 3")] {
+            layer.definition_query = query.map(String::from);
+            let one_by_one: Vec<_> = wanted.iter().map(|(stat, field)| layer_statistic(&layer, *stat, *field)).collect();
+            assert_eq!(layer_statistics(&layer, &wanted), one_by_one, "{query:?}");
+        }
+    }
 
     /// A layer renamed is renamed in the tokens that name it, whatever their statistic or field, and
     /// a text none of them names is left as it is (#2853).

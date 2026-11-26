@@ -1183,15 +1183,14 @@ pub fn statistic_notices(layout: &Layout, maps: &[Map], text: &str) -> Vec<Strin
         _ => None,
     });
     let mut said: Vec<String> = Vec::new();
-    let mut seen: Vec<&str> = Vec::new();
-    for t in rustgis_map::layout::stat_tokens(text) {
-        if seen.contains(&t.token) {
-            continue;
-        }
-        seen.push(t.token);
+    let tokens = distinct_stat_tokens(text);
+    // Each layer's figures in one pass, whatever their number.
+    let figures: Vec<Option<Option<(bool, Result<f64, StatMissing>)>>> = match map {
+        Some(m) => figures_of(m, &tokens).into_iter().map(Some).collect(),
+        None => vec![None; tokens.len()],
+    };
+    for (t, found) in tokens.iter().zip(figures) {
         let (layer, field) = (t.layer, t.field.unwrap_or_default());
-        let found =
-            map.map(|m| m.layer_by_name(layer).map(|l| (l.is_streamed(), rustgis_map::layout::layer_statistic(l, t.stat, t.field))));
         // A layer read in place holds only what is loaded, so its figure is partial, and one with
         // no number yet gets some as more is loaded.
         if let Some(Some((true, Ok(_) | Err(StatMissing::NoValue)))) = found {
@@ -1222,17 +1221,51 @@ pub fn statistic_notices(layout: &Layout, maps: &[Map], text: &str) -> Vec<Strin
 fn statistics(t: &str, comma: bool, map: Option<&Map>) -> String {
     let Some(m) = map else { return t.to_string() };
     let mut out = t.to_string();
-    let mut done: Vec<&str> = Vec::new();
-    for s in rustgis_map::layout::stat_tokens(t) {
-        // `replace` below puts in every occurrence, so a repeated token is worked out once.
-        if done.contains(&s.token) {
+    // `replace` below puts in every occurrence, so a repeated token is worked out once, and the
+    // figures of one layer in one pass over it.
+    let tokens = distinct_stat_tokens(t);
+    for (s, figure) in tokens.iter().zip(figures_of(m, &tokens)) {
+        if let Some((_, Ok(v))) = figure {
+            out = out.replace(s.token, &decimal(rustgis_map::layout::chart_value_text(v, None), comma));
+        }
+    }
+    out
+}
+
+/// The statistic tokens of `text`, each once, in the order they come.
+fn distinct_stat_tokens(text: &str) -> Vec<rustgis_map::layout::StatToken<'_>> {
+    let mut tokens: Vec<rustgis_map::layout::StatToken<'_>> = Vec::new();
+    for t in rustgis_map::layout::stat_tokens(text) {
+        if !tokens.iter().any(|seen| seen.token == t.token) {
+            tokens.push(t);
+        }
+    }
+    tokens
+}
+
+/// The figure of each of `tokens` in `map`, with whether its layer is read in place; none for a token
+/// whose layer the map lacks. The figures of one layer are worked out in one pass over its rows
+/// ([`rustgis_map::layout::layer_statistics`]), so a text with many figures costs a pass for each
+/// layer, not for each figure.
+fn figures_of(
+    map: &Map,
+    tokens: &[rustgis_map::layout::StatToken<'_>],
+) -> Vec<Option<(bool, Result<f64, rustgis_map::layout::StatMissing>)>> {
+    let mut out = vec![None; tokens.len()];
+    let mut done = vec![false; tokens.len()];
+    for i in 0..tokens.len() {
+        if done[i] {
             continue;
         }
-        done.push(s.token);
-        let Some(v) = m.layer_by_name(s.layer).and_then(|l| rustgis_map::layout::layer_statistic(l, s.stat, s.field).ok()) else {
-            continue;
-        };
-        out = out.replace(s.token, &decimal(rustgis_map::layout::chart_value_text(v, None), comma));
+        let same: Vec<usize> = (i..tokens.len()).filter(|j| !done[*j] && tokens[*j].layer.eq_ignore_ascii_case(tokens[i].layer)).collect();
+        for j in &same {
+            done[*j] = true;
+        }
+        let Some(layer) = map.layer_by_name(tokens[i].layer) else { continue };
+        let wanted: Vec<_> = same.iter().map(|j| (tokens[*j].stat, tokens[*j].field)).collect();
+        for (j, figure) in same.iter().zip(rustgis_map::layout::layer_statistics(layer, &wanted)) {
+            out[*j] = Some((layer.is_streamed(), figure));
+        }
     }
     out
 }
