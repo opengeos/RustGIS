@@ -163,31 +163,32 @@ fn a_wrapped_map_title_is_sized_for_its_drawn_lines() {
     let extent = json!([-46.8, -11.6, -38.5, -2.2]);
     // Each style, and what its title's box holds besides the text (1.5 mm for a classic one on A4).
     for (style, pad) in [("classic", 1.5), ("banner", 0.0), ("panel", 0.0), ("editorial", 0.0)] {
-        // The sheet titled `name`: its title's box width, size and face.
+        // The sheet titled `name`: its title's box width, size, face and alignment.
         let titled = |s: &mut Session, name: &str| {
             s.project.layouts.clear();
             s.run("map.rename", &json!({"name": name})).unwrap();
             s.run("layout.publication", &json!({"profile": "a4-portrait", "extent": extent, "title": "{map}", "style": style})).unwrap();
             let e = element(s, 0, "Title");
-            let ElementKind::Text { size, bold, font, .. } = &e.kind else { panic!("{style}: the title isn't text") };
-            (e.w, *size, *bold, *font)
+            let ElementKind::Text { size, bold, font, align, .. } = &e.kind else { panic!("{style}: the title isn't text") };
+            (e.w, *size, *bold, *font, *align)
         };
-        let breaks_differ = |name: &str, (w, size, bold, font): (f64, f64, bool, FontFamily)| {
+        // The page's lines for `name` in that box, where the sheet's line breaking counts them differently.
+        let breaks_differ = |name: &str, (w, size, bold, font, align): (f64, f64, bool, FontFamily, TextAlign)| {
             let by_the_sheet = crate::render::report::wrap_with(name, w, |x| match font {
                 FontFamily::Serif => crate::render::report::serif_width_mm(x, size as f32, bold),
                 FontFamily::Sans => crate::render::report::width_mm(x, size as f32, bold),
             });
-            let by_the_page = crate::render::layout::wrapped_lines(name, w, size, bold, font, TextAlign::Left);
-            by_the_page.len() > 1 && by_the_sheet.len() != by_the_page.len()
+            let by_the_page = crate::render::layout::wrapped_lines(name, w, size, bold, font, align);
+            (by_the_page.len() > 1 && by_the_sheet.len() != by_the_page.len()).then_some(by_the_page.len())
         };
-        // Names are first tried against the box a long name gets, which needs no sheet each.
+        // A name is screened against the box `LONG` gets and then checked on its own sheet, so only the
+        // likely ones need a sheet.
         let long_box = titled(&mut s, LONG);
-        let found = (0..20_000).map(candidate).filter(|name| breaks_differ(name, long_box)).any(|name| {
+        let found = (0..20_000).map(candidate).filter(|name| breaks_differ(name, long_box).is_some()).any(|name| {
             let title = titled(&mut s, &name);
-            if !wraps(&s, 0, "Title") || !breaks_differ(&name, title) {
-                return false;
-            }
+            let Some(counted) = breaks_differ(&name, title).filter(|_| wraps(&s, 0, "Title")) else { return false };
             let lines = drawn_lines(&s, 0, "Title");
+            assert_eq!(lines.len(), counted, "{style}: {lines:?}");
             assert_eq!(sized_lines(&s, 0, "Title", pad), lines.len(), "{style}: {lines:?}");
             true
         });
