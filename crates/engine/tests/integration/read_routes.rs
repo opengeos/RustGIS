@@ -250,22 +250,27 @@ fn a_zips_own_notices_reach_the_layer_picked() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let kml = br##"<?xml version="1.0"?><kml xmlns="http://www.opengis.net/kml/2.2"><Document><Placemark><Point><coordinates>1,2</coordinates></Point></Placemark><GroundOverlay><name>o</name><Icon><href>p.png</href></Icon><LatLonBox><north>1</north><south>0</south><east>1</east><west>0</west></LatLonBox></GroundOverlay></Document></kml>"##;
-    let zip = rustgis_engine::data::zip::write(&[("a.csv".into(), b"id,x,y\n1,1,2\n".to_vec()), ("b.kml".into(), kml.to_vec())]).unwrap();
-    let path = dir.join("trip.zip");
-    std::fs::write(&path, zip).unwrap();
-    for layer in [None, Some("b")] {
-        let mut s = Session::new(Project::default());
-        let mark = s.notice_mark();
-        let mut p = json!({"path": path});
-        if let Some(l) = layer {
-            p["layer"] = json!(l);
+    // Its first layer from another member, then from the same member as the layer picked.
+    let two = br##"<?xml version="1.0"?><kml xmlns="http://www.opengis.net/kml/2.2"><Document><Placemark><Point><coordinates>1,2</coordinates></Point></Placemark><Placemark><LineString><coordinates>0,0 1,1</coordinates></LineString></Placemark><GroundOverlay><name>o</name><Icon><href>p.png</href></Icon><LatLonBox><north>1</north><south>0</south><east>1</east><west>0</west></LatLonBox></GroundOverlay></Document></kml>"##;
+    let cases: [(&[(&str, &[u8])], &str, &str); 2] =
+        [(&[("a.csv", b"id,x,y\n1,1,2\n"), ("b.kml", kml)], "b", "b.kml (1)"), (&[("a.kml", two)], "lines", "a.kml (1)")];
+    for (i, (members, pick, named)) in cases.into_iter().enumerate() {
+        let entries: Vec<(String, Vec<u8>)> = members.iter().map(|(n, b)| (n.to_string(), b.to_vec())).collect();
+        let path = dir.join(format!("trip{i}.zip"));
+        std::fs::write(&path, rustgis_engine::data::zip::write(&entries).unwrap()).unwrap();
+        for layer in [None, Some(pick)] {
+            let mut s = Session::new(Project::default());
+            let mark = s.notice_mark();
+            let mut p = json!({"path": path});
+            if let Some(l) = layer {
+                p["layer"] = json!(l);
+            }
+            s.run("layer.addData", &p).unwrap();
+            let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+            // Said once, whichever layer is picked.
+            let overlays: Vec<&String> = said.iter().filter(|n| n.contains("ground overlays (pictures) aren't drawn")).collect();
+            assert!(overlays.len() == 1 && overlays[0].contains(named), "{i} {layer:?}: {said:?}");
         }
-        s.run("layer.addData", &p).unwrap();
-        let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
-        assert!(
-            said.iter().any(|n| n.contains("ground overlays (pictures) aren't drawn") && n.contains("b.kml (1)")),
-            "{layer:?}: {said:?}"
-        );
     }
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -2869,6 +2869,11 @@ fn add_picked(
             })
             .map(|(_, r)| {
                 let mut said = r.report.clone();
+                // What the zip says of itself goes to the picked layer once, below.
+                if lower.ends_with(".zip") {
+                    let prefix = format!("{file_name}: ");
+                    said.messages.retain(|n| !n.text.starts_with(&prefix));
+                }
                 // The layer's own Z/M note, by its code: that layer says it.
                 if r.dataset.zm_dropped
                     && let Some(at) = said.messages.iter().position(|n| n.loss == Some(rustgis_data::loss::LossCode::DroppedZm))
