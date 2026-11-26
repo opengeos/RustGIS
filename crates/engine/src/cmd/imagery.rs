@@ -2481,7 +2481,12 @@ impl Tiles {
             .iter()
             .skip(1)
             .filter(|r| r.copyright.is_some() && r.copyright != first.copyright)
-            .map(|r| (r.name.clone(), rustgis_data::loss::Note::plain("its copyright differs from the first input's and is not kept in the mosaic")))
+            .map(|r| {
+                (
+                    r.name.clone(),
+                    rustgis_data::loss::Note::plain("its copyright differs from the first input's and is not kept in the mosaic"),
+                )
+            })
             .collect();
         notes.extend(super::raster::loss_lines(credits).into_iter().map(|n| (n.text, false)));
         // Cells rounded when an input was read may be among those the mosaic keeps.
