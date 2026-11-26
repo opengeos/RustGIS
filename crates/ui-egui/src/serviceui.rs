@@ -471,7 +471,8 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
     if !pending || moved {
         app.session.download_failed(task.token);
         // Said unless the download was already over before the map moved (it failed elsewhere,
-        // say): opening another project puts its downloads aside, so they are never pending here.
+        // say). Opening another project drops or puts aside its downloads, so they are never
+        // pending here.
         if moved && (pending || !task.owner.in_project(&app.session)) {
             app.session.notify(tl!("The service import was cancelled because the map or project in view changed.").to_string(), false);
         }

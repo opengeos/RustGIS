@@ -181,7 +181,7 @@ pub(crate) fn save_draft(app: &mut RustGisApp) {
     }
     let (map, layer, row) = k;
     let here = opened == app.session.opened && map == app.session.map().instance_id();
-    // What was typed for a map no longer in view can't be saved there, and the typing isn't lost without a word.
+    // Typing for a map no longer in view can't be saved there: it is dropped, and said.
     if !here {
         app.session.notify(tl!("Text typed for a graphic on another map or project was not saved.").to_string(), false);
         return;
