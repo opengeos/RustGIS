@@ -8,12 +8,12 @@ use std::sync::LazyLock;
 use rustgis_geom::{Coord, Extent};
 use rustgis_map::layout::{
     Arrange, ArrowStyle, Background, CHART_BAR, CHART_BARS, CHART_OUTLINE, ChartOrder, ChartOutline, CoordFormat, ElementKind, FontFamily,
-    FrameShape, GRID_LABEL_PT, Grid, GridEdges, GridKind, GridStyle, Guides, LAYOUT_TEXT_SIZE, LINE_SPACING, Layout, LineDir, LineHead,
-    MAX_CHART_BARS, MAX_CHART_DECIMALS, MAX_CHART_OUTLINE_WIDTH, MAX_COLORBAR_TICKS, MAX_GRID_WIDTH, MAX_GUIDES, MAX_LEGEND_COLUMNS,
-    MAX_LEGEND_LABEL_CHARS, MAX_LEGEND_LABELS, MAX_LINE_SPACING, MAX_SCALE_BEFORE_ZERO, MAX_SCALE_DECIMALS, MAX_SCALE_DIVISIONS,
-    MAX_SCALE_SUBDIVISIONS, MAX_TICK_MM, MAX_UNIT_LABEL_CHARS, MIN_ELEMENT_MM, MIN_LINE_SPACING, MapSeries, Orientation, PAGES,
-    SCALE_BAR_TEXT_PT, ScaleBarFit, ScaleBarStyle, ScaleLabelPosition, ScaleUnits, TextAlign, TextCase, TextVAlign, TickSide,
-    UnitLabelPosition, fit_scale, line_angle, line_at_angle, line_length,
+    FrameShape, GRID_LABEL_PT, Grid, GridEdges, GridKind, GridStyle, Guides, LAYOUT_TEXT_SIZE, LINE_SPACING, LayerNames, Layout, LegendFit,
+    LineDir, LineHead, MAX_CHART_BARS, MAX_CHART_DECIMALS, MAX_CHART_OUTLINE_WIDTH, MAX_COLORBAR_TICKS, MAX_GRID_WIDTH, MAX_GUIDES,
+    MAX_LEGEND_COLUMNS, MAX_LEGEND_LABEL_CHARS, MAX_LEGEND_LABELS, MAX_LINE_SPACING, MAX_SCALE_BEFORE_ZERO, MAX_SCALE_DECIMALS,
+    MAX_SCALE_DIVISIONS, MAX_SCALE_SUBDIVISIONS, MAX_TICK_MM, MAX_UNIT_LABEL_CHARS, MIN_ELEMENT_MM, MIN_LINE_SPACING, MapSeries,
+    Orientation, PAGES, SCALE_BAR_TEXT_PT, ScaleBarFit, ScaleBarStyle, ScaleLabelPosition, ScaleUnits, TextAlign, TextCase, TextVAlign,
+    TickSide, UnitLabelPosition, fit_scale, line_angle, line_at_angle, line_length,
 };
 use rustgis_map::report::StatKind;
 use rustgis_map::symbology::{Dash, MAX_DASH_STEP, MAX_DASH_STEPS};
@@ -118,10 +118,10 @@ pub fn commands() -> Vec<C> {
             r#"{"layout"?, "shape"?: "rectangle"|"circle"|"ellipse"|"polygon"|"lasso", "points"?: [[u, v], …] (polygon/lasso, 0..1 across the frame), "map"?: name, "x"?, "y"?, "w"?, "h"?: mm}"#,
         ),
         C::new("layout.addElement", "Add Element", "Publish › Map Surrounds", add_element).inputs(element_inputs).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files)).params(
-            r##"{"layout"?, "kind": "northArrow"|"scaleBar"|"legend"|"colorbar"|"text"|"dynamicText"|"picture"|"table"|"chart"|"rectangle" (a neatline framing the page unless any of x, y, w, h is given)|"ellipse"|"circle"|"line"|"arrow"|"extentIndicator"|"grid", "frame"?: element id (default: the first map frame), "of"?: frame id (extentIndicator, which also takes "color" and "width" in points, default red and 2), "text"?, "size"?, "color"?: "#RRGGBB"|"#RRGGBBAA" (text, dynamicText, line, arrow, rectangle, ellipse, circle: its outline; extentIndicator; grid; scaleBar; legend, colorbar, table, chart: the ink of its text and lines, default #222222, a chart's bars and a colorbar's colours keeping theirs, and a table drawn without its white cells; refused for other kinds), "bold"?: bool (text), "italic"?: bool, "align"?: "left"|"center"|"right", "letterSpacing"?: points, -5 to 50 (text, dynamicText), "rotation"?: degrees clockwise about the box's centre, 90 reading top to bottom and -90 bottom to top, kept within -180 to 180 (text, dynamicText; refused for other kinds), "wrap"?: bool (text, dynamicText: broken into lines at spaces to fit the box's width when drawn, after its dynamic text is filled in, a word wider than the box broken across lines; default false, lines breaking only at the text's own line breaks; refused for other kinds), "valign"?: "top"|"middle"|"bottom" (text, dynamicText: where its block of lines sits down its box; default top; a block taller than its box is drawn from the top, its last lines left out, which a warning says; refused for other kinds), "lineSpacing"?: 0.5 to 3 (text, dynamicText: the distance between its lines, a multiple of the usual; default 1; refused outside that range, and for other kinds), "case"?: "none"|"upper"|"lower" (text, dynamicText: drawn in upper or lower case once its dynamic text is filled in, its text kept as typed; default none; refused for other kinds), "font"?: "sans"|"serif"|an installed font family's name, as labels.fonts lists them (text, dynamicText; a family not installed here is drawn in its fallback, and a serif where none is installed in the sans, with a warning; refused for other kinds), "fallback"?: "sans"|"serif" (a named font's, where it isn't installed; default its own class, else sans), "title"?: legend title (default "Legend"); chart: its own title ("" for none; default: its field, or the statistic of its field by the group), "allClasses"?: bool (legend: every class, not only those the frame draws), "hideOther"?: bool (legend: leave out <all other values>), "showNoData"?: bool (legend: include Graduated Colors’ missing-value symbol; default false), "exclude"?: [layer names] (legend: layers it leaves out though the map draws them), "columns"?: 1..6 (legend: the columns its rows are laid in; default 1), "textSize"?: points, 4 to 100 (legend: its layers' names and classes' labels, its title, rows, swatches and gaps following in proportion and a point symbol keeping the size the map draws it at; default 9; scaleBar: its labels, the room over the bar and between them following, the bar keeping its size; default 8; refused outside that range, and for other kinds unless null, as showNoData is), "orientation"?: "horizontal"|"vertical" (colorbar; chart: bars running across, the default, or columns standing up, each label centred under its column), "ticks"?: 2..21 (colorbar: labelled values, ends included), "tickSide"?: "below"|"above"|"right"|"left" (colorbar), "reverse"?: bool (colorbar: high values first), "fill"?: "#RRGGBBAA" (rectangle, ellipse, circle, northArrow; scaleBar: the alternating bar's light divisions, default white; refused for other kinds), "width"?: outline width in points (rectangle, ellipse, circle; 0 for none) or line width in points (line, grid), "radius"?: mm, 0 to 50 (rectangle: rounded corners), "dash"?: [points, …] (line, arrow, and a rectangle's, ellipse's or circle's outline: dash, gap, … in turn, as layer.lineStrokes takes it, at most 8, each 0 to 500; an arrow's heads stay solid; [] or null for solid; refused, null too, for other kinds), "dir"?: "horizontal"|"vertical"|"falling"|"rising" (line), "head"?: "none"|"end"|"start"|"both" (line; default "end" for an arrow), "angle"?: degrees anticlockwise from pointing right, centred on the page unless x or y is given (line, arrow; it sets the box and the direction, so w, h and dir are not used with it), "length"?: mm (line, arrow), "image"?: base64, "path"?: picture file, "layer"?: (table, chart; colorbar: a raster layer, default the top visible raster with a colour scale, not drawn by classes, which a legend lists), "field"?: (chart: a numeric field, default the layer's first; any field when it groups and counts, default then the field it groups by), "label"?: a field (chart: each bar's label when not grouped), "group"?: a field (chart: a bar per value of this field, its statistic of field over that value's features; blank values make one "(blank)" bar; default none, a bar per feature), "statistic"?: "sum" (the default)|"count" (features, numbers or not)|"mean"|"min"|"max" (chart, grouped), "order"?: "descending" (the default: largest first)|"ascending"|"category" (by label, A to Z)|"layer" (as the features come) (chart), "bars"?: 1..100 (chart: the most bars drawn, default 20), "other"?: bool (chart: the bars past "bars" gathered in a last Other bar, its statistic over their features, their sum when not grouped, last whatever the order; default false: left out, which a warning says, as it says features with no number left out), "stack"?: a field (chart, grouped by another field, summing or counting: each bar split by this field's values, a stretch per value in the key over the bars, the values its bars show by their total, largest first (A to Z when ordered by category), past 8 values 7 and a grey Other, which a warning counts; in the palette diagrams take, or with classes in the colour each value's features share on the map, a value with several keeping its palette colour, which a warning counts; values written are the bar's total; default none), "values"?: bool (chart: each bar's value written past its end, its thousands apart with commas; default false), "decimals"?: "auto" (the default: a chart's values up to 2, the zeros they end in dropped; a scale bar's labels each the decimals it needs, as before)|0..6 (chart: its values' decimals)|0..3 (scaleBar: its labels' decimals, fixed, with the thousands set apart), "barColor"?: "#RRGGBB"|"#RRGGBBAA" (chart: its bars' colour, default #3B82C4), "classes"?: bool (chart: each bar in the colour its features have on the map, by the layer's symbology classes: a bar per feature its feature's, a grouped bar the colour its features share; a bar whose features have several, which a warning counts, and an Other bar keep barColor; default false), "labelAlign"?: "left" (the default)|"right" (chart: bars running across have their labels at the left of their column, or at its right against the bars), "mirror"?: bool (chart: drawn as its mirror image, its text reading as ever: bars running across from the right, their labels at the right, or columns hanging from the top, their labels over them; beside a chart drawn the usual way the two face each other; default false), "max"?: a number above 0|"auto" (chart: the value at the far end of its bars' room, so charts given the same one share a scale; a bar past it runs to that end, which a warning counts; default "auto", its bars' own), "hideLabels"?: bool (chart: its labels left out, their room given to the bars; default false), "barOutline"?: {"color"?: "#RRGGBB"|"#RRGGBBAA" (default #222222), "width"?: points, 0 to 5 (default 0.5; 0 for none)} (chart: a line round each bar, or each stretch of a stacked one; default none) (label, group, statistic, order, bars, other, stack, values, decimals, barColor, classes, labelAlign, mirror, max, hideLabels and barOutline refused for other kinds unless null, as showNoData is, a scaleBar's decimals aside), "rows"?, "step"?: degrees, or a measured grid's units (metres) (0 picks one), "type"?: "graticule" (latitudes and longitudes, default) | "measured" (eastings and northings in a projected system), "crs"?: a measured grid's coordinate system: EPSG:25832, WKT or a PROJ string ("" or none: the map's when projected, else the UTM zone at the frame's centre), "short"?: bool (a measured grid's labels as their kilometres' last two digits, 43 for 543000), "mgrs"?: bool (a measured grid labelled as MGRS: each 100 km square named with its grid zone designation, 32T MT, and the lines by their kilometres' last two digits; its crs a WGS 84 UTM zone by EPSG code, EPSG:32601–32660 or 32701–32760, or none: the map's when it is one, else the zone at the frame's centre), "labels"?: bool (grid) | {"<layer>": "<label>"} (legend: what it shows instead of a layer's name, as in layout.update; a layer the map hasn't is refused), "style"?: "lines"|"ticks"|"linesAndTicks" (grid) or "classic"|"compass"|"triangle"|"star" (northArrow) or "alternating"|"stepped"|"line" (scaleBar), "tickLength"?: mm, "format"?: "decimal"|"dms", "hemisphere"?: bool (N/S/E/W rather than a sign), "edges"?: ["top","bottom","left","right"] (labelled edges), "labelOrientation"?: "horizontal"|"vertical", "labelSize"?: points, 4 to 100 (its labels, their room from the frame's edge and MGRS squares' names following; default 8; null gives it back; refused outside that range, and for other kinds unless null), "off"?: bool (grid; options not given keep the grid's), "outline"?: "#RRGGBB" (northArrow, or a rectangle's, ellipse's or circle's outline instead of color; refused for other kinds), "units"?: "auto"|"kilometers"|"meters"|"miles"|"feet", "divisions"?: 1..10, at most 10 with divisionsBeforeZero together, more refused (scaleBar, whose "color" is its lines, dark divisions and labels, default #222222), "subdivisions"?: 0..10 (scaleBar: parts the first division after zero is cut into, not labelled; 0 or 1 leaves it whole), "divisionsBeforeZero"?: 0..2 (scaleBar: whole divisions left of zero, labelled with negatives, counted toward the ten in all with "divisions", more refused), "labelPosition"?: "above"|"below" (scaleBar: its division labels, default above), "unitLabel"?: text, one line, up to 100 characters (scaleBar: the unit's name as printed, default its abbreviation; "" prints none), "unitLabelPosition"?: "afterLabels"|"afterBar"|"above"|"below" (scaleBar: default afterLabels, after the last label), "fit"?: "adjustDivisionValue"|"adjustDivision"|"adjustWidth" (scaleBar: when round divisions don't fill the box: adjustDivisionValue, the default, divides the roundest length that fits, so a division may not be round; adjustDivision keeps a round division and adds or drops divisions, at most ten in all, the divisions before zero included, to fill the width; adjustWidth keeps the divisions and draws the bar only as wide as they need) (a value out of range or not one of the names is refused, and these are refused for other kinds), "x"?, "y"?, "w"?, "h"?: mm, "background"?: {"fill"?: "#RRGGBB"|"#RRGGBBAA" (default white), "outline"?: colour (default #222222), "width"?: the outline's points (default 0, none), "radius"?: mm, its corners (0 to 50), "padding"?: mm it reaches past the box on every side (0 to 50)} | null (a box drawn behind the element, turned with a turned text; none by default; a map frame takes none, so it is refused for grid and extentIndicator)}"##,
+            r##"{"layout"?, "kind": "northArrow"|"scaleBar"|"legend"|"colorbar"|"text"|"dynamicText"|"picture"|"table"|"chart"|"rectangle" (a neatline framing the page unless any of x, y, w, h is given)|"ellipse"|"circle"|"line"|"arrow"|"extentIndicator"|"grid", "frame"?: element id (default: the first map frame), "of"?: frame id (extentIndicator, which also takes "color" and "width" in points, default red and 2), "text"?, "size"?, "color"?: "#RRGGBB"|"#RRGGBBAA" (text, dynamicText, line, arrow, rectangle, ellipse, circle: its outline; extentIndicator; grid; scaleBar; legend, colorbar, table, chart: the ink of its text and lines, default #222222, a chart's bars and a colorbar's colours keeping theirs, and a table drawn without its white cells; refused for other kinds), "bold"?: bool (text), "italic"?: bool, "align"?: "left"|"center"|"right", "letterSpacing"?: points, -5 to 50 (text, dynamicText), "rotation"?: degrees clockwise about the box's centre, 90 reading top to bottom and -90 bottom to top, kept within -180 to 180 (text, dynamicText; refused for other kinds), "wrap"?: bool (text, dynamicText: broken into lines at spaces to fit the box's width when drawn, after its dynamic text is filled in, a word wider than the box broken across lines; default false, lines breaking only at the text's own line breaks; refused for other kinds), "valign"?: "top"|"middle"|"bottom" (text, dynamicText: where its block of lines sits down its box; default top; a block taller than its box is drawn from the top, its last lines left out, which a warning says; refused for other kinds), "lineSpacing"?: 0.5 to 3 (text, dynamicText: the distance between its lines, a multiple of the usual; default 1; refused outside that range, and for other kinds), "case"?: "none"|"upper"|"lower" (text, dynamicText: drawn in upper or lower case once its dynamic text is filled in, its text kept as typed; default none; refused for other kinds), "font"?: "sans"|"serif"|an installed font family's name, as labels.fonts lists them (text, dynamicText; a family not installed here is drawn in its fallback, and a serif where none is installed in the sans, with a warning; refused for other kinds), "fallback"?: "sans"|"serif" (a named font's, where it isn't installed; default its own class, else sans), "title"?: legend title (default "Legend"); chart: its own title ("" for none; default: its field, or the statistic of its field by the group), "allClasses"?: bool (legend: every class, not only those the frame draws), "hideOther"?: bool (legend: leave out <all other values>), "showNoData"?: bool (legend: include Graduated Colors’ missing-value symbol; default false), "exclude"?: [layer names] (legend: layers it leaves out though the map draws them), "columns"?: 1..6 (legend: the columns its rows are laid in; default 1; with a fit that adds columns, the fewest it starts from), "textSize"?: points, 4 to 100 (legend: its layers' names and classes' labels, its title, rows, swatches and gaps following in proportion and a point symbol keeping the size the map draws it at; default 9; scaleBar: its labels, the room over the bar and between them following, the bar keeping its size; default 8; refused outside that range, and for other kinds unless null, as showNoData is), "showLayerNames"?: bool (legend: the name over each layer's classes and over a web layer's legend picture; default true; a layer drawn in one symbol keeps its name; refused for other kinds), "orientation"?: "horizontal"|"vertical" (colorbar; chart: bars running across, the default, or columns standing up, each label centred under its column), "ticks"?: 2..21 (colorbar: labelled values, ends included), "tickSide"?: "below"|"above"|"right"|"left" (colorbar), "reverse"?: bool (colorbar: high values first), "fill"?: "#RRGGBBAA" (rectangle, ellipse, circle, northArrow; scaleBar: the alternating bar's light divisions, default white; refused for other kinds), "width"?: outline width in points (rectangle, ellipse, circle; 0 for none) or line width in points (line, grid), "radius"?: mm, 0 to 50 (rectangle: rounded corners), "dash"?: [points, …] (line, arrow, and a rectangle's, ellipse's or circle's outline: dash, gap, … in turn, as layer.lineStrokes takes it, at most 8, each 0 to 500; an arrow's heads stay solid; [] or null for solid; refused, null too, for other kinds), "dir"?: "horizontal"|"vertical"|"falling"|"rising" (line), "head"?: "none"|"end"|"start"|"both" (line; default "end" for an arrow), "angle"?: degrees anticlockwise from pointing right, centred on the page unless x or y is given (line, arrow; it sets the box and the direction, so w, h and dir are not used with it), "length"?: mm (line, arrow), "image"?: base64, "path"?: picture file, "layer"?: (table, chart; colorbar: a raster layer, default the top visible raster with a colour scale, not drawn by classes, which a legend lists), "field"?: (chart: a numeric field, default the layer's first; any field when it groups and counts, default then the field it groups by), "label"?: a field (chart: each bar's label when not grouped), "group"?: a field (chart: a bar per value of this field, its statistic of field over that value's features; blank values make one "(blank)" bar; default none, a bar per feature), "statistic"?: "sum" (the default)|"count" (features, numbers or not)|"mean"|"min"|"max" (chart, grouped), "order"?: "descending" (the default: largest first)|"ascending"|"category" (by label, A to Z)|"layer" (as the features come) (chart), "bars"?: 1..100 (chart: the most bars drawn, default 20), "other"?: bool (chart: the bars past "bars" gathered in a last Other bar, its statistic over their features, their sum when not grouped, last whatever the order; default false: left out, which a warning says, as it says features with no number left out), "stack"?: a field (chart, grouped by another field, summing or counting: each bar split by this field's values, a stretch per value in the key over the bars, the values its bars show by their total, largest first (A to Z when ordered by category), past 8 values 7 and a grey Other, which a warning counts; in the palette diagrams take, or with classes in the colour each value's features share on the map, a value with several keeping its palette colour, which a warning counts; values written are the bar's total; default none), "values"?: bool (chart: each bar's value written past its end, its thousands apart with commas; default false), "decimals"?: "auto" (the default: a chart's values up to 2, the zeros they end in dropped; a scale bar's labels each the decimals it needs, as before)|0..6 (chart: its values' decimals)|0..3 (scaleBar: its labels' decimals, fixed, with the thousands set apart), "barColor"?: "#RRGGBB"|"#RRGGBBAA" (chart: its bars' colour, default #3B82C4), "classes"?: bool (chart: each bar in the colour its features have on the map, by the layer's symbology classes: a bar per feature its feature's, a grouped bar the colour its features share; a bar whose features have several, which a warning counts, and an Other bar keep barColor; default false), "labelAlign"?: "left" (the default)|"right" (chart: bars running across have their labels at the left of their column, or at its right against the bars), "mirror"?: bool (chart: drawn as its mirror image, its text reading as ever: bars running across from the right, their labels at the right, or columns hanging from the top, their labels over them; beside a chart drawn the usual way the two face each other; default false), "max"?: a number above 0|"auto" (chart: the value at the far end of its bars' room, so charts given the same one share a scale; a bar past it runs to that end, which a warning counts; default "auto", its bars' own), "hideLabels"?: bool (chart: its labels left out, their room given to the bars; default false), "barOutline"?: {"color"?: "#RRGGBB"|"#RRGGBBAA" (default #222222), "width"?: points, 0 to 5 (default 0.5; 0 for none)} (chart: a line round each bar, or each stretch of a stacked one; default none) (label, group, statistic, order, bars, other, stack, values, decimals, barColor, classes, labelAlign, mirror, max, hideLabels and barOutline refused for other kinds unless null, as showNoData is, a scaleBar's decimals aside), "rows"?, "step"?: degrees, or a measured grid's units (metres) (0 picks one), "type"?: "graticule" (latitudes and longitudes, default) | "measured" (eastings and northings in a projected system), "crs"?: a measured grid's coordinate system: EPSG:25832, WKT or a PROJ string ("" or none: the map's when projected, else the UTM zone at the frame's centre), "short"?: bool (a measured grid's labels as their kilometres' last two digits, 43 for 543000), "mgrs"?: bool (a measured grid labelled as MGRS: each 100 km square named with its grid zone designation, 32T MT, and the lines by their kilometres' last two digits; its crs a WGS 84 UTM zone by EPSG code, EPSG:32601–32660 or 32701–32760, or none: the map's when it is one, else the zone at the frame's centre), "labels"?: bool (grid) | {"<layer>": "<label>"} (legend: what it shows instead of a layer's name, as in layout.update; a layer the map hasn't is refused), "style"?: "lines"|"ticks"|"linesAndTicks" (grid) or "classic"|"compass"|"triangle"|"star" (northArrow) or "alternating"|"stepped"|"line" (scaleBar), "tickLength"?: mm, "format"?: "decimal"|"dms", "hemisphere"?: bool (N/S/E/W rather than a sign), "edges"?: ["top","bottom","left","right"] (labelled edges), "labelOrientation"?: "horizontal"|"vertical", "labelSize"?: points, 4 to 100 (its labels, their room from the frame's edge and MGRS squares' names following; default 8; null gives it back; refused outside that range, and for other kinds unless null), "off"?: bool (grid; options not given keep the grid's), "outline"?: "#RRGGBB" (northArrow, or a rectangle's, ellipse's or circle's outline instead of color; refused for other kinds), "units"?: "auto"|"kilometers"|"meters"|"miles"|"feet", "divisions"?: 1..10, at most 10 with divisionsBeforeZero together, more refused (scaleBar, whose "color" is its lines, dark divisions and labels, default #222222), "subdivisions"?: 0..10 (scaleBar: parts the first division after zero is cut into, not labelled; 0 or 1 leaves it whole), "divisionsBeforeZero"?: 0..2 (scaleBar: whole divisions left of zero, labelled with negatives, counted toward the ten in all with "divisions", more refused), "labelPosition"?: "above"|"below" (scaleBar: its division labels, default above), "unitLabel"?: text, one line, up to 100 characters (scaleBar: the unit's name as printed, default its abbreviation; "" prints none), "unitLabelPosition"?: "afterLabels"|"afterBar"|"above"|"below" (scaleBar: default afterLabels, after the last label), "fit"?: "adjustDivisionValue"|"adjustDivision"|"adjustWidth" (scaleBar: when round divisions don't fill the box: adjustDivisionValue, the default, divides the roundest length that fits, so a division may not be round; adjustDivision keeps a round division and adds or drops divisions, at most ten in all, the divisions before zero included, to fill the width; adjustWidth keeps the divisions and draws the bar only as wide as they need) or "manual"|"adjustSize"|"adjustColumns"|"adjustColumnsAndSize" (legend: manual, the default, keeps its size and columns and leaves out what its box doesn't hold; adjustSize shrinks its rows' text, down to 4 points, until they fit; adjustColumns adds columns, up to 6, until they fit, never more than fit across; adjustColumnsAndSize adds columns first, then shrinks the text; its title keeps its size; one that can't fit says so) (a value out of range or not one of the names is refused, and these are refused for other kinds, fit for any but a legend or a scale bar), "x"?, "y"?, "w"?, "h"?: mm, "background"?: {"fill"?: "#RRGGBB"|"#RRGGBBAA" (default white), "outline"?: colour (default #222222), "width"?: the outline's points (default 0, none), "radius"?: mm, its corners (0 to 50), "padding"?: mm it reaches past the box on every side (0 to 50)} | null (a box drawn behind the element, turned with a turned text; none by default; a map frame takes none, so it is refused for grid and extentIndicator)}"##,
         ),
         C::new("layout.update", "Element Properties", "Publish › Element", update).inputs(update_inputs).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files)).params(
-            r##"{"layout"?, "element": id, "x"?, "y"?, "w"?, "h"?: mm, "name"?, "visible"?, "locked"?: bool (a locked element takes no other change until unlocked; "locked": false unlocks it and may come with changes), "text"?, "size"?, "color"? (text, line, rectangle, ellipse: its outline; scaleBar: its lines, dark divisions and labels; legend, colorbar, table, chart: its ink, as in layout.addElement, null giving it the default again; refused for other elements), "bold"?, "italic"?, "align"?, "letterSpacing"?, "rotation"?: degrees clockwise (text, as in layout.addElement; refused for other elements), "wrap"?: bool (text, as in layout.addElement; refused for other elements), "valign"?, "lineSpacing"?, "case"? (text, as in layout.addElement; null leaves each as it is; refused for other elements), "font"?: "sans"|"serif"|an installed font family's name, "fallback"?: "sans"|"serif" (text, as in layout.addElement; refused for other elements), "title"? (legend, colorbar; chart: its own title ("" for none; null giving it the title it is given again)), "allClasses"?: bool (legend), "hideOther"?: bool (legend), "showNoData"?: bool (legend; default false), "exclude"?: [layer names] (legend; [] lists every layer again), "labels"?: {"<layer>": "<label>"|null} (legend: what it shows instead of a layer's name, up to 200 characters, a longer one is refused; each entry replaces that layer's label, null or "" shows its name again, {} every layer's; a layer the map hasn't is refused), "columns"?: 1..6 (legend), "textSize"?: points, 4 to 100 (legend, scaleBar, as in layout.addElement, null giving each its default again; refused outside that range, and for other elements unless null), "orientation"? (colorbar, chart), "ticks"?, "tickSide"?, "reverse"?: (colorbar), "style"?: (northArrow, scaleBar), "fill"?, "outline"? (northArrow, rectangle, ellipse, and a scaleBar's fill; refused for other elements; for a rectangle or ellipse, color sets it when outline is not given; a scaleBar's fill is the alternating bar's light divisions), "radius"?: mm (rectangle: rounded corners), "width"?: points (rectangle, ellipse, line), "dash"?: [points, …]|[]|null (line, rectangle, ellipse, as in layout.addElement; [] or null makes it solid; refused, null too, for other elements), "dir"?, "head"?, "angle"?, "length"? (line: turned or sized about its centre, then moved by any x or y; dir does not come with angle or length), "units"?, "divisions"? (scaleBar; at most 10 with divisionsBeforeZero together, more refused), "subdivisions"?, "divisionsBeforeZero"?, "labelPosition"?, "unitLabel"? (null: the unit's abbreviation again), "unitLabelPosition"?, "fit"? (scaleBar, as in layout.addElement; refused for other elements, a null unitLabel too), "map"?, "scale"?, "center"?: [lon, lat], "bearing"?: degrees clockwise from north, "pitch"?: degrees of tilt (0 to 85), "grid"?: {grid options as in layout.addElement} | false (map frame; a grid's "labelSize" goes in it, and is refused outside it unless null), "extentIndicator"?: {"color"?, "width"?: points} | false (map frame: its extent indicator's style, or removes it), "border"?: {"color"?: "#RRGGBB"|"#RRGGBBAA", "width"?: points, 0 to 20, 0 for none} | null (map frame: the outline along its shape, default #303030 and 0.8, the keys not given keeping theirs; null gives the default back; refused for other elements), "layer"?: (colorbar: "" for the top visible raster with a colour scale, not drawn by classes), "field"?, "label"?, "group"?, "statistic"?, "order"?, "bars"?, "other"?, "stack"? (chart, as in layout.addElement: "" for a label, group or stack takes it away; on a new layer a label, group or stack field it hasn't is let go, a stack the chart can no longer draw (ungrouped, grouped by the stack field, or not summing or counting) too, and a field not named that it no longer measures gives way to the first numeric field, which warnings say; refused for other elements), "values"?: bool, "decimals"?: 0..6|"auto" (a scaleBar's 0..3|"auto", as in layout.addElement), "barColor"? (null giving the default again), "classes"?: bool, "labelAlign"?: "left"|"right", "mirror"?: bool, "max"?: a number above 0|"auto"|null (null or "auto" giving it its bars' own again), "barOutline"?: {"color"?, "width"?: points, 0 to 5, a wider one held to 5, the keys not given keeping the outline's}|null (null or a width of 0 for none), "hideLabels"?: bool (chart, as in layout.addElement: null leaves each other one as it is; refused for other elements unless null), "rows"?, "background"?: {"fill"?, "outline"?, "width"?, "radius"?, "padding"?, as in layout.addElement, the keys not given keeping theirs} | null (removes it); a map frame takes none}"##,
+            r##"{"layout"?, "element": id, "x"?, "y"?, "w"?, "h"?: mm, "name"?, "visible"?, "locked"?: bool (a locked element takes no other change until unlocked; "locked": false unlocks it and may come with changes), "text"?, "size"?, "color"? (text, line, rectangle, ellipse: its outline; scaleBar: its lines, dark divisions and labels; legend, colorbar, table, chart: its ink, as in layout.addElement, null giving it the default again; refused for other elements), "bold"?, "italic"?, "align"?, "letterSpacing"?, "rotation"?: degrees clockwise (text, as in layout.addElement; refused for other elements), "wrap"?: bool (text, as in layout.addElement; refused for other elements), "valign"?, "lineSpacing"?, "case"? (text, as in layout.addElement; null leaves each as it is; refused for other elements), "font"?: "sans"|"serif"|an installed font family's name, "fallback"?: "sans"|"serif" (text, as in layout.addElement; refused for other elements), "title"? (legend, colorbar; chart: its own title ("" for none; null giving it the title it is given again)), "allClasses"?: bool (legend), "hideOther"?: bool (legend), "showNoData"?: bool (legend; default false), "exclude"?: [layer names] (legend; [] lists every layer again), "labels"?: {"<layer>": "<label>"|null} (legend: what it shows instead of a layer's name, up to 200 characters, a longer one is refused; each entry replaces that layer's label, null or "" shows its name again, {} every layer's; a layer the map hasn't is refused), "columns"?: 1..6 (legend), "textSize"?: points, 4 to 100 (legend, scaleBar, as in layout.addElement, null giving each its default again; refused outside that range, and for other elements unless null), "showLayerNames"?: bool (legend, as in layout.addElement; null leaves it as it is), "orientation"? (colorbar, chart), "ticks"?, "tickSide"?, "reverse"?: (colorbar), "style"?: (northArrow, scaleBar), "fill"?, "outline"? (northArrow, rectangle, ellipse, and a scaleBar's fill; refused for other elements; for a rectangle or ellipse, color sets it when outline is not given; a scaleBar's fill is the alternating bar's light divisions), "radius"?: mm (rectangle: rounded corners), "width"?: points (rectangle, ellipse, line), "dash"?: [points, …]|[]|null (line, rectangle, ellipse, as in layout.addElement; [] or null makes it solid; refused, null too, for other elements), "dir"?, "head"?, "angle"?, "length"? (line: turned or sized about its centre, then moved by any x or y; dir does not come with angle or length), "units"?, "divisions"? (scaleBar; at most 10 with divisionsBeforeZero together, more refused), "subdivisions"?, "divisionsBeforeZero"?, "labelPosition"?, "unitLabel"? (null: the unit's abbreviation again), "unitLabelPosition"?, "fit"? (scaleBar or legend, as in layout.addElement, each by its own names; refused for other elements, a null unitLabel too), "map"?, "scale"?, "center"?: [lon, lat], "bearing"?: degrees clockwise from north, "pitch"?: degrees of tilt (0 to 85), "grid"?: {grid options as in layout.addElement} | false (map frame; a grid's "labelSize" goes in it, and is refused outside it unless null), "extentIndicator"?: {"color"?, "width"?: points} | false (map frame: its extent indicator's style, or removes it), "border"?: {"color"?: "#RRGGBB"|"#RRGGBBAA", "width"?: points, 0 to 20, 0 for none} | null (map frame: the outline along its shape, default #303030 and 0.8, the keys not given keeping theirs; null gives the default back; refused for other elements), "layer"?: (colorbar: "" for the top visible raster with a colour scale, not drawn by classes), "field"?, "label"?, "group"?, "statistic"?, "order"?, "bars"?, "other"?, "stack"? (chart, as in layout.addElement: "" for a label, group or stack takes it away; on a new layer a label, group or stack field it hasn't is let go, a stack the chart can no longer draw (ungrouped, grouped by the stack field, or not summing or counting) too, and a field not named that it no longer measures gives way to the first numeric field, which warnings say; refused for other elements), "values"?: bool, "decimals"?: 0..6|"auto" (a scaleBar's 0..3|"auto", as in layout.addElement), "barColor"? (null giving the default again), "classes"?: bool, "labelAlign"?: "left"|"right", "mirror"?: bool, "max"?: a number above 0|"auto"|null (null or "auto" giving it its bars' own again), "barOutline"?: {"color"?, "width"?: points, 0 to 5, a wider one held to 5, the keys not given keeping the outline's}|null (null or a width of 0 for none), "hideLabels"?: bool (chart, as in layout.addElement: null leaves each other one as it is; refused for other elements unless null), "rows"?, "background"?: {"fill"?, "outline"?, "width"?, "radius"?, "padding"?, as in layout.addElement, the keys not given keeping theirs} | null (removes it); a map frame takes none}"##,
 
         ),
         C::new("layout.guides", "Guides", "Publish › Page Setup", guides).inputs(object_inputs).roles(&[]).effects(crate::policy::Effects::NONE).params(
@@ -2959,7 +2959,7 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
         let bar_need = bar.as_deref().map_or(0.0, |title| colorbar_mm(title, iw));
         let bar_fit = colorbar_fit(bar_need, ih, ch + bar_gap, over_map);
         let rows_h = (ih - bar_fit - if bar.is_some() { bar_gap } else { 0.0 }).max(0.0);
-        warnings.extend(legend_fit_warnings(legend_cols, (cw, ch), (iw, rows_h)).into_iter().map(String::from));
+        warnings.extend(legend_fit_warnings(LegendFit::Manual, legend_cols, overflows((cw, ch), (iw, rows_h))));
         let short = bar_need > bar_fit + LEGEND_FIT_MM;
         // In a column the colorbar takes the column's width, as its rows do.
         if let Some(layer) = bar.as_deref().filter(|_| (base_w > iw + LEGEND_FIT_MM && !legend_in_column) || short) {
@@ -2985,8 +2985,8 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
                     labels: Default::default(),
                     color: None,
                     text_size: legend_pt,
-                    fit: rustgis_map::layout::LegendFit::Manual,
-                    show_layer_names: rustgis_map::layout::LayerNames::Shown,
+                    fit: LegendFit::Manual,
+                    show_layer_names: LayerNames::Shown,
                 },
             );
         }
@@ -3575,6 +3575,11 @@ pub(crate) fn color(p: &Value, k: &str, d: Rgba) -> Result<Rgba, String> {
 }
 
 const ONLY_LEGEND_COLUMNS: &str = "only legends have columns";
+/// A legend's layer names given to another element.
+const ONLY_LEGEND_NAMES: &str = "only legends take showLayerNames";
+/// A fit given to an element that is neither a legend nor a scale bar, each of which reads `fit`
+/// as its own.
+const ONLY_FIT: &str = "only legends and scale bars take fit";
 /// Refuse the optional no-data key on an element that cannot display it.
 const ONLY_LEGEND_NO_DATA: &str = "only legends take showNoData";
 const ONLY_LEGEND_LABELS: &str = "only legends label layers";
@@ -3585,21 +3590,38 @@ const ONLY_GRID_LABEL_SIZE: &str = "only grids take labelSize (a map frame's in 
 /// that still fits.
 const LEGEND_FIT_MM: f64 = 1e-6;
 
-/// What a legend's rows `size` in `columns` columns lose in a box `room`, in mm, each said once.
-fn legend_fit_warnings(columns: usize, (w, h): (f64, f64), (room_w, room_h): (f64, f64)) -> Vec<&'static str> {
-    // With no rows there is nothing to lose, in a box shorter than its title too.
-    let (too_wide, too_tall) = (h > 0.0 && w > room_w + LEGEND_FIT_MM, h > 0.0 && h > room_h + LEGEND_FIT_MM);
+/// Whether a legend's rows `(w, h)` in mm are wider and taller than their room: none are when it
+/// has no rows, in a box shorter than its title too.
+fn overflows((w, h): (f64, f64), (room_w, room_h): (f64, f64)) -> (bool, bool) {
+    (h > 0.0 && w > room_w + LEGEND_FIT_MM, h > 0.0 && h > room_h + LEGEND_FIT_MM)
+}
+
+/// What a legend drawn in `columns` columns loses in its box when its rows are `too_wide` or
+/// `too_tall` for it, each said once. A manual legend says it as it always has; a fit that still
+/// leaves them out says what it tried: the smallest text, the most columns its box takes across,
+/// or both.
+fn legend_fit_warnings(fit: LegendFit, columns: usize, (too_wide, too_tall): (bool, bool)) -> Vec<String> {
+    let smallest = LAYOUT_TEXT_SIZE.start();
+    let across = if columns == 1 { "one column".to_string() } else { format!("{columns} columns") };
+    let even = match fit.kept() {
+        LegendFit::AdjustSize => format!(" even with its text shrunk to {smallest} points"),
+        LegendFit::AdjustColumns => format!(" even in {across}"),
+        LegendFit::AdjustColumnsAndSize => format!(" even in {across} with its text shrunk to {smallest} points"),
+        LegendFit::Manual | LegendFit::Invalid => String::new(),
+    };
     let mut said = Vec::new();
     if columns > 1 {
         // Its columns close up rather than leave one out.
         if too_wide {
-            said.push("the legend's columns are wider than its box: they close up, long labels run into the next, and the last column's past the box");
+            said.push(format!(
+                "the legend's columns are wider than its box{even}: they close up, long labels run into the next, and the last column's past the box"
+            ));
         }
         if too_tall {
-            said.push("the legend lists more than fits its box: its last rows are left out");
+            said.push(format!("the legend lists more than fits its box{even}: its last rows are left out"));
         }
     } else if too_wide || too_tall {
-        said.push("the legend lists more than fits its box: its last rows or the ends of long labels are left out");
+        said.push(format!("the legend lists more than fits its box{even}: its last rows or the ends of long labels are left out"));
     }
     said
 }
@@ -3663,23 +3685,41 @@ fn say_raster_keys(s: &mut Session, li: usize, id: u32) {
 
 /// Whether a legend `kind`, after a command with `p`, says what it loses in its box (#2581): the
 /// one rule `layout.addElement` and `layout.update` both take. Told when it is given what sets
-/// what it needs of its box (its columns, its missing-value row, or its text size, `null`
-/// included, which gives the default back) or labels (text chosen for the box), and, in columns
-/// or at a text size of its own, when its box or what it lists changes. A move changes neither.
+/// what it needs of its box (its columns, its missing-value row, its fit, its layer names, or its
+/// text size, `null` included, which gives the default back) or labels (text chosen for the box),
+/// and, in columns, at a text size of its own or under a fit, which can stop fitting, when its box
+/// or what it lists changes. A move changes neither.
 fn tells_legend_fit(kind: &ElementKind, p: &Value) -> bool {
-    let ElementKind::Legend { columns, text_size, .. } = kind else { return false };
+    let ElementKind::Legend { columns, text_size, fit, .. } = kind else { return false };
     let given = |k: &str| p.get(k).is_some_and(|v| !v.is_null());
-    let watched = *columns > 1 || *text_size != rustgis_map::layout::LEGEND_TEXT_PT;
+    let watched = *columns > 1 || *text_size != rustgis_map::layout::LEGEND_TEXT_PT || fit.kept() != LegendFit::Manual;
     let refitted = ["w", "h", "title", "allClasses", "hideOther", "exclude", "labels"].iter().any(|k| given(k));
-    ["columns", "showNoData", "labels"].iter().any(|k| given(k)) || p.get("textSize").is_some() || (watched && refitted)
+    ["columns", "showNoData", "labels", "fit", "showLayerNames"].iter().any(|k| given(k))
+        || p.get("textSize").is_some()
+        || (watched && refitted)
 }
 
 /// Says what a legend loses in its box, as `layout.publication` does for its own, or that it can't
-/// tell.
+/// tell. A manual legend is measured in its own columns at its own size; a fitted one by the
+/// drawing's own fit ([`crate::render::layout::legend_fitted_mm`]), in the room its title leaves,
+/// so it says nothing when the page draws it whole and what it tried when it can't.
 fn say_legend_fit(s: &mut Session, li: usize, id: u32) {
     let Some(l) = s.project.layouts.get(li) else { return };
     let Some(e) = l.element(id) else { return };
-    let ElementKind::Legend { frame, title, all_classes, hide_other, show_no_data, exclude, columns, labels, text_size, .. } = &e.kind
+    let ElementKind::Legend {
+        frame,
+        title,
+        all_classes,
+        hide_other,
+        show_no_data,
+        exclude,
+        columns,
+        labels,
+        text_size,
+        fit,
+        show_layer_names,
+        ..
+    } = &e.kind
     else {
         return;
     };
@@ -3687,9 +3727,10 @@ fn say_legend_fit(s: &mut Session, li: usize, id: u32) {
         Some(ElementKind::MapFrame { map, center, scale, .. }) => Some((map.clone(), *center, *scale)),
         _ => None,
     };
-    let (room_w, room_h) = (e.w, e.h - if title.is_empty() { 0.0 } else { crate::render::layout::legend_title_mm(*text_size) });
+    let room = (e.w, e.h - if title.is_empty() { 0.0 } else { crate::render::layout::legend_title_mm(*text_size) });
     let (all_classes, hide_other, show_no_data, exclude, columns, labels, text_size) =
         (*all_classes, *hide_other, *show_no_data, exclude.clone(), *columns, labels.clone(), *text_size);
+    let (fit, layer_names) = (fit.kept(), show_layer_names.shown());
     let found = shown
         .and_then(|(name, center, scale)| Some((s.project.maps.iter_mut().find(|m| m.name.eq_ignore_ascii_case(&name))?, center, scale)));
     let Some((map, center, scale)) = found else {
@@ -3697,19 +3738,27 @@ fn say_legend_fit(s: &mut Session, li: usize, id: u32) {
         return;
     };
     let at = crate::render::layout::frame_render_scale(map, center, scale);
-    let Some(sizes) = crate::render::layout::legend_sizes_with_no_data_mm(
-        map,
-        at,
+    let asked = crate::render::layout::LegendAsked {
         all_classes,
         hide_other,
-        (show_no_data, text_size),
-        (&exclude, &labels),
-    ) else {
+        show_no_data,
+        layer_names,
+        text_size,
+        exclude: &exclude,
+        labels: &labels,
+    };
+    let measured = if fit == LegendFit::Manual {
+        let n = rustgis_map::layout::legend_columns_in_range(columns);
+        crate::render::layout::legend_sizes_asked_mm(map, at, &asked)
+            .map(|sizes| (n, overflows(sizes.get(n.saturating_sub(1)).copied().unwrap_or_default(), room)))
+    } else {
+        crate::render::layout::legend_fitted_mm(map, at, &asked, (columns, fit), room).map(|f| (f.columns, (f.too_wide, f.too_tall)))
+    };
+    let Some((drawn, verdict)) = measured else {
         s.warn("a layer's source couldn't be read through, so the legend's fit in its box wasn't checked; exporting says why");
         return;
     };
-    let size = sizes[columns.clamp(1, MAX_LEGEND_COLUMNS) - 1];
-    for said in legend_fit_warnings(columns, size, (room_w, room_h)) {
+    for said in legend_fit_warnings(fit, drawn, verdict) {
         s.warn(said);
     }
 }
@@ -3776,14 +3825,31 @@ const BAR_FIT_KEYS: [&str; 10] = [
     "fit",
 ];
 
-/// The `"columns"` a legend is given, refused outside 1 to [`MAX_LEGEND_COLUMNS`].
-fn legend_columns_param(p: &Value) -> Result<Option<usize>, String> {
+/// The `"columns"` a legend is given, refused outside 1 to [`MAX_LEGEND_COLUMNS`]: the one reader
+/// the commands and the `layout-legend-fit` capability check share.
+pub(crate) fn legend_columns_param(p: &Value) -> Result<Option<usize>, String> {
     let Some(v) = p.get("columns").filter(|v| !v.is_null()) else { return Ok(None) };
     v.as_u64()
         .and_then(|n| usize::try_from(n).ok())
         .filter(|n| (1..=MAX_LEGEND_COLUMNS).contains(n))
         .map(Some)
         .ok_or_else(|| format!("columns is a whole number from 1 to {MAX_LEGEND_COLUMNS}"))
+}
+
+/// The `"fit"` a legend is given, by name in any case: the one reader the commands and the
+/// `layout-legend-fit` capability check share. A scale bar reads its own `fit` (`restyle`).
+pub(crate) fn legend_fit_param(p: &Value) -> Result<Option<LegendFit>, String> {
+    given_choice(p, "fit", LegendFit::from_name, "manual, adjustSize, adjustColumns or adjustColumnsAndSize")
+}
+
+/// The `"showLayerNames"` a legend is given, `true` or `false` only (`null` is not given): the one
+/// reader the commands and the `layout-legend-fit` capability check share.
+pub(crate) fn legend_names_param(p: &Value) -> Result<Option<bool>, String> {
+    match p.get("showLayerNames") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Bool(shown)) => Ok(Some(*shown)),
+        Some(_) => Err("showLayerNames is true or false".into()),
+    }
 }
 
 /// A text size given as `key` (#2581): a legend's or a scale bar's `textSize`, a grid's
@@ -3818,6 +3884,14 @@ fn add_element(s: &mut Session, p: &Value) -> CmdResult {
     }
     if kind != "legend" && p.get("columns").is_some_and(|v| !v.is_null()) {
         return Err(ONLY_LEGEND_COLUMNS.into());
+    }
+    // A value that isn't true or false is refused on any kind first, as the legend's arm would.
+    if legend_names_param(p)?.is_some() && kind != "legend" {
+        return Err(ONLY_LEGEND_NAMES.into());
+    }
+    // A legend and a scale bar each read `fit` as their own (their names don't overlap).
+    if !matches!(kind, "legend" | "scaleBar") && gives(p, "fit") {
+        return Err(ONLY_FIT.into());
     }
     // A grid's "labels" is a bool and a legend's an object (read with it); on any other kind, or as
     // anything else on a grid, it is refused rather than left unread.
@@ -3920,6 +3994,8 @@ fn add_element(s: &mut Session, p: &Value) -> CmdResult {
             };
             let text_size =
                 text_size_param(p, "textSize", rustgis_map::layout::LEGEND_TEXT_PT)?.unwrap_or(rustgis_map::layout::LEGEND_TEXT_PT);
+            let fit = legend_fit_param(p)?.unwrap_or_default();
+            let show_layer_names = legend_names_param(p)?.map_or(LayerNames::Shown, LayerNames::from_shown);
             (
                 "Legend",
                 place(p, l, (pw - 70.0, 45.0, 60.0, 80.0))?,
@@ -3934,8 +4010,8 @@ fn add_element(s: &mut Session, p: &Value) -> CmdResult {
                     labels,
                     color: ink,
                     text_size,
-                    fit: rustgis_map::layout::LegendFit::Manual,
-                    show_layer_names: rustgis_map::layout::LayerNames::Shown,
+                    fit,
+                    show_layer_names,
                 },
             )
         }
@@ -4535,14 +4611,16 @@ fn changes_chart_look(p: &Value) -> bool {
 
 /// What a scale bar's details given for another element are told.
 const ONLY_SCALE_BAR_DETAILS: &str =
-    "only scale bars take subdivisions, divisionsBeforeZero, labelPosition, unitLabel, unitLabelPosition or fit";
+    "only scale bars take subdivisions, divisionsBeforeZero, labelPosition, unitLabel or unitLabelPosition";
 
 /// The keys only a scale bar takes: its details beyond its units, divisions, style and colours,
 /// and its `decimals`, which a chart takes too.
 const SCALE_BAR_KEYS: [&str; 6] = ["subdivisions", "divisionsBeforeZero", "labelPosition", "unitLabel", "unitLabelPosition", "fit"];
 
+/// Whether `p` gives a detail only a scale bar takes: its `fit` aside, which a legend takes too, by
+/// its own names ([`ONLY_FIT`]).
 fn gives_scale_bar_details(p: &Value) -> bool {
-    SCALE_BAR_KEYS.iter().any(|k| gives(p, k))
+    SCALE_BAR_KEYS.iter().filter(|k| **k != "fit").any(|k| gives(p, k))
 }
 
 /// A whole number from 0 to `hi` given as `k`, when it's given (and not null): an error when it's
@@ -5686,9 +5764,18 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
         }
     };
     let new_columns = legend_columns_param(p)?;
+    let new_names = legend_names_param(p)?;
     let kind_of = s.project.layouts.get(li).and_then(|l| l.element(id)).map(|e| &e.kind);
     let is_legend = kind_of.is_some_and(|k| matches!(k, ElementKind::Legend { .. }));
     let sized = is_legend || kind_of.is_some_and(|k| matches!(k, ElementKind::ScaleBar { .. }));
+    // A legend's fit; a scale bar's is read with its other options (`restyle`), by its own names.
+    let new_fit = if is_legend { legend_fit_param(p)? } else { None };
+    if gives(p, "fit") && !sized {
+        return Err(ONLY_FIT.into());
+    }
+    if new_names.is_some() && !is_legend {
+        return Err(ONLY_LEGEND_NAMES.into());
+    }
     if p.get("textSize").is_some_and(|v| !v.is_null()) && !sized {
         return Err(ONLY_LAYOUT_TEXT_SIZE.into());
     }
@@ -5801,9 +5888,27 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
                 *bold = v;
             }
         }
-        ElementKind::Legend { title, all_classes, hide_other, show_no_data, exclude, columns, labels, text_size, .. } => {
+        ElementKind::Legend {
+            title,
+            all_classes,
+            hide_other,
+            show_no_data,
+            exclude,
+            columns,
+            labels,
+            text_size,
+            fit,
+            show_layer_names,
+            ..
+        } => {
             if let Some(names) = new_exclude {
                 *exclude = names;
+            }
+            if let Some(v) = new_fit {
+                *fit = v;
+            }
+            if let Some(shown) = new_names {
+                *show_layer_names = LayerNames::from_shown(shown);
             }
             if let Some(pt) = new_text_size {
                 *text_size = pt;
