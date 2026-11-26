@@ -1091,6 +1091,64 @@ fn geopackage_reprojects_and_uses_its_rtree() {
     assert!(open_path(&p2, Some("missing")).is_err());
 }
 
+/// A read through the R-tree gives its features in the table's order, as a whole read does,
+/// though the index lists them in another: the map draws them in it, each over the ones before.
+#[test]
+fn geopackage_view_reads_keep_the_tables_order() {
+    // Places scattered against the ids, in more than one fetch of them.
+    let mut ds = Dataset::new("scattered", GeometryType::Point, vec![]);
+    for i in 0..1200u32 {
+        let at = i * 719 % 1200;
+        ds.push(Some(Geometry::Point(Coord::new(f64::from(at % 40), f64::from(at / 40)))), vec![]);
+    }
+    // The table as written, keyed by its rowid as a GeoPackage asks; then made again with other
+    // keys, `fid` numbering the places against the order they were added in.
+    let layouts = [
+        None,
+        // A key of its own, apart from the rowid.
+        Some("(fid INT PRIMARY KEY, geom MULTIPOINT)"),
+        // And a column that takes one of the rowid's names, holding the keys.
+        Some("(fid INT PRIMARY KEY, geom MULTIPOINT, rowid INTEGER)"),
+        // No rowid: the table is in its key's order, here downward.
+        Some("(fid INTEGER PRIMARY KEY DESC, geom MULTIPOINT) WITHOUT ROWID"),
+    ];
+    for (n, layout) in layouts.into_iter().enumerate() {
+        let p = dir().join(format!("scattered-{n}.gpkg"));
+        crate::io::write_path(&ds, &p).unwrap();
+        if let Some(layout) = layout {
+            let taken = if layout.contains("rowid INTEGER") { ", 1201 - fid" } else { "" };
+            let new_fid = if layout.contains("DESC") { "fid" } else { "1201 - fid" };
+            rusqlite::Connection::open(&p)
+                .unwrap()
+                .execute_batch(&format!(
+                    "CREATE TABLE rows AS SELECT * FROM scattered;
+                     CREATE TABLE places AS SELECT * FROM rtree_scattered_geom;
+                     DROP TABLE scattered;
+                     CREATE TABLE scattered {layout};
+                     INSERT INTO scattered SELECT {new_fid}, geom{taken} FROM rows ORDER BY fid;
+                     DELETE FROM rtree_scattered_geom;
+                     INSERT INTO rtree_scattered_geom SELECT {}, minx, maxx, miny, maxy FROM places;",
+                    new_fid.replace("fid", "id")
+                ))
+                .unwrap();
+        }
+        let src = open_path(&p, None).unwrap();
+        let read = |extent, limit| -> Vec<u64> {
+            src.read(&Request { extent, limit, own: None }).unwrap().features.iter().map(|f| f.id).collect()
+        };
+        let whole = read(None, 10_000);
+        assert_eq!(whole.len(), 1200);
+        // The table's order is the keys' only where the first is written.
+        assert_eq!(whole.first(), Some(if n == 0 { &1 } else { &1200 }), "{layout:?}");
+        let all = Some(Extent::new(-1.0, -1.0, 41.0, 31.0));
+        assert_eq!(read(all, 10_000), whole, "{layout:?}");
+        // A sample of them, in the same order.
+        let sample = read(all, 700);
+        assert_eq!(sample.len(), 600);
+        assert!(sample.is_sorted_by_key(|id| whole.iter().position(|w| w == id)), "{layout:?}");
+    }
+}
+
 /// The browser's GeoPackage reader (pure Rust) gives what SQLite gives, without the R-tree.
 #[test]
 fn geopackage_in_memory() {
@@ -5416,6 +5474,58 @@ fn geopackage_index_lists_only_features_with_a_place() {
     assert_eq!((indexed(&path, "first"), indexed(&path, "second")), (vec![1, 2], vec![1, 3, 4]));
     gpkg::write_table_in(&layer("x", vec![None, at(6.0)]), &path, Crs::LonLat, &to(GpkgMode::ReplaceTable, "second")).unwrap();
     assert_eq!((indexed(&path, "first"), indexed(&path, "second")), (vec![1, 2], vec![2]));
+}
+
+/// A new GeoPackage whose rows 16 KiB pages hold in much less space (rows of about 2 KiB) is
+/// made with them, and any other with SQLite's own 4 KiB, whether the layer is written whole or
+/// streamed. A table added to a file leaves its pages as they were.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn geopackage_pages_follow_the_row_size() {
+    use crate::io::{GpkgMode, GpkgTable};
+    let folder = tempfile::tempdir().unwrap();
+    // 400 rings of about 16 bytes a place, each with as many places as `places` says.
+    let rings = |places: &dyn Fn(u32) -> u32| {
+        let mut ds = Dataset::new("rings", GeometryType::Polygon, vec![]);
+        for i in 0..400u32 {
+            let vertices = places(i);
+            let ring = (0..=vertices).map(|k| Coord::new(f64::from(i), f64::from(k % vertices) / 1000.0)).collect();
+            ds.push(Some(Geometry::Polygon(vec![vec![ring]])), vec![]);
+        }
+        ds
+    };
+    let mut notes = Dataset::new("notes", GeometryType::None, vec![Field::new("note", FieldType::Text)]);
+    for _ in 0..400 {
+        notes.push(None, vec![Value::Text("n".repeat(2100))]);
+    }
+    let page_size =
+        |path: &Path| -> i64 { rusqlite::Connection::open(path).unwrap().query_row("PRAGMA page_size", [], |r| r.get(0)).unwrap() };
+    for (name, ds, size) in [
+        ("small", rings(&|_| 8), 4096),
+        ("middling", rings(&|_| 128), 16384),
+        ("large", rings(&|_| 400), 4096),
+        // Three rows in ten just over half a wide page, which would hold one apiece.
+        ("mixed", rings(&|i| if i % 10 < 3 { 520 } else { 8 }), 4096),
+        ("text", notes, 16384),
+        ("empty", Dataset::new("none", GeometryType::Polygon, vec![]), 4096),
+    ] {
+        let (whole, streamed) = (folder.path().join(format!("{name}.gpkg")), folder.path().join(format!("{name}-streamed.gpkg")));
+        gpkg::write(&ds, &whole).unwrap();
+        let mut feed = |put: &mut dyn FnMut(&[crate::Feature]) -> crate::Result<()>| ds.features.chunks(300).try_for_each(&mut *put);
+        gpkg::write_features_in(&ds.name, ds.geometry_type, &ds.fields, &streamed, Crs::LonLat, &GpkgTable::default(), &mut feed).unwrap();
+        for path in [&whole, &streamed] {
+            assert_eq!(page_size(path), size, "{name}");
+            // An attribute table isn't a layer this reader opens.
+            if ds.geometry_type != GeometryType::None {
+                let source = gpkg::GpkgSource::open(path, None).unwrap();
+                assert_eq!(crate::source::materialize(&source).unwrap().0.features, ds.features, "{name}");
+            }
+        }
+    }
+    let path = folder.path().join("small.gpkg");
+    let target = GpkgTable { mode: GpkgMode::AddTable, name: Some("added".into()) };
+    gpkg::write_table_in(&rings(&|_| 128), &path, Crs::LonLat, &target).unwrap();
+    assert_eq!(page_size(&path), 4096, "an existing file keeps its pages");
 }
 
 /// A streamed export loads the spatial index in several runs once it holds enough boxes: every
