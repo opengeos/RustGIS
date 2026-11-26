@@ -101,8 +101,8 @@ The same World Atlas data, styled the same way, in each app.
   DWG, JPEG 2000 and NetCDF also need GDAL's programs. QGIS connects to
   PostGIS, SpatiaLite, Oracle and SQL Server and edits in them directly; RustGIS reads
   PostGIS, MySQL/MariaDB and SQL Server/Azure SQL tables live and DuckDB databases through
-  DuckDB, on the desktop, where it edits PostGIS tables (see Editing); MySQL/MariaDB and
-  SQL Server/Azure SQL tables are read only.
+  DuckDB, on the desktop. There it also edits PostGIS tables (see Editing); MySQL/MariaDB
+  and SQL Server/Azure SQL tables are read only.
 - **Coordinate systems.** QGIS uses full PROJ: every CRS, datum transformations and grids, and
   layers kept in their own CRS. RustGIS holds vector coordinates as WGS 84 longitude/latitude
   and reprojects rasters and the map by EPSG code, which covers mapping and most analysis but
