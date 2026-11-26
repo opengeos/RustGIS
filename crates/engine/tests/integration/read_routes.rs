@@ -241,3 +241,31 @@ fn a_download_reads_as_its_path_does() {
 fn a_zipped_file_reads_as_its_path_does() {
     route_reads_as_the_path_does(Route::Zip);
 }
+
+/// What a zip says of itself (its KML's overlays not drawn, here) sits on its first layer; picking
+/// another layer with `layer` still says it.
+#[test]
+fn a_zips_own_notices_reach_the_layer_picked() {
+    let dir = std::env::temp_dir().join(format!("rustgis-read-routes-picked-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let kml = br##"<?xml version="1.0"?><kml xmlns="http://www.opengis.net/kml/2.2"><Document><Placemark><Point><coordinates>1,2</coordinates></Point></Placemark><GroundOverlay><name>o</name><Icon><href>p.png</href></Icon><LatLonBox><north>1</north><south>0</south><east>1</east><west>0</west></LatLonBox></GroundOverlay></Document></kml>"##;
+    let zip = rustgis_engine::data::zip::write(&[("a.csv".into(), b"id,x,y\n1,1,2\n".to_vec()), ("b.kml".into(), kml.to_vec())]).unwrap();
+    let path = dir.join("trip.zip");
+    std::fs::write(&path, zip).unwrap();
+    for layer in [None, Some("b")] {
+        let mut s = Session::new(Project::default());
+        let mark = s.notice_mark();
+        let mut p = json!({"path": path});
+        if let Some(l) = layer {
+            p["layer"] = json!(l);
+        }
+        s.run("layer.addData", &p).unwrap();
+        let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+        assert!(
+            said.iter().any(|n| n.contains("ground overlays (pictures) aren't drawn") && n.contains("b.kml (1)")),
+            "{layer:?}: {said:?}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

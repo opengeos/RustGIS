@@ -2878,9 +2878,21 @@ fn add_picked(
                 (r.dataset.source.clone(), said)
             })
             .collect();
+        // What a zip says of itself (members skipped, overlays not drawn) sits on its first layer,
+        // named by the zip: it goes with whichever layer is picked.
+        let zip_wide: Vec<rustgis_data::loss::Note> = match reads.first() {
+            Some(first) if lower.ends_with(".zip") && !pick(&first.dataset.name) => {
+                let prefix = format!("{file_name}: ");
+                first.report.messages.iter().filter(|n| n.text.starts_with(&prefix)).cloned().collect()
+            }
+            _ => Vec::new(),
+        };
         reads.retain(|r| pick(&r.dataset.name));
         if reads.is_empty() {
             return Err(format!("{file_name}: no layer '{want}' (layers: {})", names.join(", ")));
+        }
+        if let Some(kept) = reads.first_mut() {
+            kept.report.messages.extend(zip_wide);
         }
         for (source, said) in file_wide {
             if let Some(kept) = reads.iter_mut().find(|r| r.dataset.source == source) {
