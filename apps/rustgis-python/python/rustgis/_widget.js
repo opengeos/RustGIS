@@ -5,9 +5,13 @@
 
 function render({ model, el }) {
   const src = model.get("_src");
-  const origin = new URL(src, window.location.href).origin;
+  const parsed = new URL(src, window.location.href);
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(`Refusing non-HTTP(S) RustGIS app URL: ${parsed.protocol}`);
+  }
+  const origin = parsed.origin;
   const iframe = document.createElement("iframe");
-  iframe.src = src;
+  iframe.src = parsed.href;
   iframe.style.width = "100%";
   iframe.style.height = model.get("height") || "800px";
   iframe.style.border = "0";

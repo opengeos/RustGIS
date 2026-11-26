@@ -149,7 +149,7 @@ fn per_cell_on(threads: Option<usize>, r: &Raster, cost: usize, f: impl Fn(i64, 
         || (),
         |_, row, line: &mut [f32]| {
             for (col, slot) in line.iter_mut().enumerate() {
-                *slot = f(col as i64, row as i64).filter(|v| v.is_finite()).map(|v| v as f32).unwrap_or(NODATA);
+                *slot = f(col as i64, row as i64).map(|v| v as f32).filter(|v| v.is_finite()).unwrap_or(NODATA);
             }
         },
     )?;
@@ -206,7 +206,7 @@ fn terrain_on(
     if w < 3 || h < 3 || data.len() != len {
         return per_cell(r, 1, scalar);
     }
-    let value = |v: Option<f64>| v.filter(|v| v.is_finite()).map(|v| v as f32).unwrap_or(NODATA);
+    let value = |v: Option<f64>| v.map(|v| v as f32).filter(|v| v.is_finite()).unwrap_or(NODATA);
     let mut out = new_band(w, h, NODATA)?;
     // A cell's gradient and its function cost about one unit of the threshold's (some 30 ns).
     let threads = threads.unwrap_or_else(|| crate::parallel::threads_for_rows(h, len, 0));
@@ -370,19 +370,14 @@ fn band_math_on(threads: Option<usize>, r: &Raster, expr: &str) -> Result<Vec<f3
         |vals, row, line: &mut [f32]| {
             for (col, slot) in line.iter_mut().enumerate() {
                 let i = row * w + col;
-                let mut ok = true;
                 for (bi, b) in r.bands.iter().enumerate() {
                     let v = b.data.get(i).copied().unwrap_or(NODATA);
-                    if !r.is_valid(v) {
-                        ok = false;
-                        break;
-                    }
-                    if let Some(slot) = vals.get_mut(bi) {
-                        *slot = v as f64;
+                    if let Some(val) = vals.get_mut(bi) {
+                        *val = if r.is_valid(v) { f64::from(v) } else { f64::NAN };
                     }
                 }
-                let v = if ok { e.eval(vals) } else { f64::NAN };
-                *slot = if v.is_finite() { v as f32 } else { NODATA };
+                let v = e.eval(vals) as f32;
+                *slot = if v.is_finite() { v } else { NODATA };
             }
         },
     )?;
@@ -411,7 +406,10 @@ pub fn remap(r: &Raster, b: usize, ranges: &[(f64, f64, f64)], keep: bool) -> Re
             let Some(v) = d.get(i).copied().filter(|v| r.is_valid(*v)) else { return NODATA };
             let x = v as f64;
             match ranges.iter().find(|(lo, hi, _)| x >= *lo && x < *hi) {
-                Some((_, _, new)) => *new as f32,
+                Some((_, _, new)) => {
+                    let out = *new as f32;
+                    if out.is_finite() { out } else { NODATA }
+                }
                 None if keep => v,
                 None => NODATA,
             }
@@ -509,7 +507,8 @@ pub fn weighted_overlay(criteria: &[(Vec<f32>, f64)]) -> Result<Vec<f32>, String
                 }
                 s += v as f64 * w.max(0.0) / total;
             }
-            s as f32
+            let out = s as f32;
+            if out.is_finite() { out } else { NODATA }
         },
     )
 }
@@ -762,6 +761,9 @@ fn viewshed_on(
     radius_m: f64,
     heights: Heights,
 ) -> Result<Viewshed, String> {
+    if !height.is_finite() {
+        return Err("the observer height must be a finite number".into());
+    }
     let (oc, or) = r.pixel_at(observer).ok_or("the observer is outside the raster")?;
     let z0 = r.value(b, oc, or).ok_or("the observer stands on no-data")? as f64 + height;
     let (cx, cy) = r.cell_size_m();
@@ -1097,7 +1099,7 @@ fn idw_on(
                     near.extend(points.iter().map(|(p, v)| (d2(c, kx, p.x, p.y).sqrt(), *v)));
                 }
                 if k < near.len() {
-                    near.select_nth_unstable_by(k - 1, |a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+                    near.select_nth_unstable_by(k - 1, |a, b| a.0.total_cmp(&b.0));
                     near.truncate(k);
                 }
                 let v = if let Some(on) = near.iter().find(|(d, _)| *d < exact) {
@@ -1112,7 +1114,8 @@ fn idw_on(
                     });
                     num / den
                 };
-                *o = if v.is_finite() { v as f32 } else { NODATA };
+                let out = v as f32;
+                *o = if out.is_finite() { out } else { NODATA };
             }
         },
     )?;
@@ -1157,7 +1160,7 @@ fn kmeans_on(threads: Option<usize>, r: &Raster, bands: &[usize], k: usize, iter
     sorted.sort_by(|a, b| {
         let (va, vb) =
             (pixel(*a).and_then(|p| p.first().copied()).unwrap_or(0.0), pixel(*b).and_then(|p| p.first().copied()).unwrap_or(0.0));
-        va.partial_cmp(&vb).unwrap_or(std::cmp::Ordering::Equal)
+        va.total_cmp(&vb)
     });
     let mut centres: Vec<Vec<f64>> =
         (0..k).filter_map(|i| sorted.get((i * 2 + 1) * sorted.len() / (2 * k)).and_then(|j| pixel(*j))).collect();
@@ -1165,7 +1168,7 @@ fn kmeans_on(threads: Option<usize>, r: &Raster, bands: &[usize], k: usize, iter
         cs.iter()
             .enumerate()
             .map(|(i, c)| (i, c.iter().zip(p).map(|(a, b)| (a - b).powi(2)).sum::<f64>()))
-            .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+            .min_by(|a, b| a.1.total_cmp(&b.1))
             .map_or(0, |x| x.0)
     };
     for _ in 0..iterations.clamp(1, 50) {
@@ -1190,7 +1193,9 @@ fn kmeans_on(threads: Option<usize>, r: &Raster, bands: &[usize], k: usize, iter
     // Classes numbered by the first band's centre, low to high.
     let mut order: Vec<usize> = (0..centres.len()).collect();
     order.sort_by(|a, b| {
-        centres.get(*a).and_then(|c| c.first()).partial_cmp(&centres.get(*b).and_then(|c| c.first())).unwrap_or(std::cmp::Ordering::Equal)
+        let fa = centres.get(*a).and_then(|c| c.first().copied()).unwrap_or(f64::NAN);
+        let fb = centres.get(*b).and_then(|c| c.first().copied()).unwrap_or(f64::NAN);
+        fa.total_cmp(&fb)
     });
     let rank: Vec<usize> = (0..centres.len()).map(|c| order.iter().position(|o| *o == c).unwrap_or(0)).collect();
     let (w, h) = (r.width as usize, r.height as usize);
@@ -1243,7 +1248,7 @@ pub fn classify_min_distance(r: &Raster, bands: &[usize], means: &[(f32, Vec<f64
             means
                 .iter()
                 .map(|(c, m)| (*c, m.iter().zip(p.iter()).map(|(a, b)| (a - b).powi(2)).sum::<f64>()))
-                .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+                .min_by(|a, b| a.1.total_cmp(&b.1))
                 .map_or(NODATA, |x| x.0)
         },
     )
@@ -3774,6 +3779,59 @@ mod tests {
             assert!(inside > 1000, "{inside} cells are in the zone");
             let got = zonal_means_in(&r, polar, &[0], &[vec![ring]]).unwrap_or_else(|e| panic!("{e}"));
             assert_eq!(got, Some((vec![1.0], inside)), "{x0} {x1} {y0} {y1}");
+        }
+    }
+
+    #[test]
+    fn band_math_ignores_nodata_in_unreferenced_band() {
+        let gt = GeoTransform { origin_x: 0.0, origin_y: 2.0, pixel_width: 1.0, pixel_height: -1.0 };
+        let b1 = vec![10.0, NODATA, 30.0, 40.0];
+        let b2 = vec![NODATA, 2.0, NODATA, 4.0];
+        let r = Raster::new("m", 2, 2, vec![b1, b2], gt, Crs::LonLat, Some(NODATA as f64), ColorHint::Gray, "Float32").unwrap();
+        let out = band_math(&r, "b1 * 2").unwrap();
+        assert_eq!(out, vec![20.0, NODATA, 60.0, 80.0]);
+        let both = band_math(&r, "b1 + b2").unwrap();
+        assert_eq!(both, vec![NODATA, NODATA, NODATA, 44.0]);
+    }
+
+    #[test]
+    fn raster_ops_turn_f64_to_f32_overflow_into_nodata() {
+        let gt = GeoTransform { origin_x: 0.0, origin_y: 2.0, pixel_width: 1.0, pixel_height: -1.0 };
+        let r = Raster::new(
+            "big",
+            2,
+            1,
+            vec![vec![1e20f32, 2.0], vec![1e20f32, 3.0]],
+            gt,
+            Crs::LonLat,
+            Some(NODATA as f64),
+            ColorHint::Gray,
+            "Float32",
+        )
+        .unwrap();
+        let prod = band_math(&r, "b1 * b2").unwrap();
+        assert_eq!(prod, vec![NODATA, 6.0]);
+
+        let remapped = remap(&r, 0, &[(0.0, 10.0, 1e40)], true).unwrap();
+        assert_eq!(remapped.cells[1], NODATA);
+
+        let pts = vec![(Coord::new(0.0, 0.0), 1e40), (Coord::new(1.0, 1.0), 1e40)];
+        let ext = Extent::new(0.0, 0.0, 1.0, 1.0);
+        let idw_r = idw(&pts, &ext, 0.5, 2.0, 0, "idw", Crs::LonLat).unwrap();
+        assert!(idw_r.bands[0].data.iter().all(|&v| v == NODATA), "{:?}", idw_r.bands[0].data);
+
+        let vp = crate::kriging::auto_variogram(&pts, &ext, crate::kriging::VariogramModel::Spherical);
+        let krig_r = crate::kriging::kriging(&pts, &ext, 0.5, &vp, 2, "krig", Crs::LonLat).unwrap();
+        assert!(krig_r.bands[0].data.iter().all(|&v| v == NODATA), "{:?}", krig_r.bands[0].data);
+    }
+
+    #[test]
+    fn viewshed_rejects_non_finite_observer_height() {
+        let gt = GeoTransform { origin_x: 0.0, origin_y: 0.003, pixel_width: 0.001, pixel_height: -0.001 };
+        let r = Raster::new("dem", 3, 3, vec![vec![100.0; 9]], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
+        let obs = Coord::new(0.0015, 0.0015);
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(viewshed(&r, 0, obs, bad, 1_000.0, Heights::Nearest).is_err(), "height={bad}");
         }
     }
 }

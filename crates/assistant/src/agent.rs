@@ -1039,6 +1039,9 @@ impl Agent {
         // Its steps count against this message's budget; its "always" approvals stay.
         self.steps = self.steps.saturating_add(child.steps);
         for key in &child.always {
+            if self.always.contains(key) {
+                continue;
+            }
             if self.always.len() >= 64 {
                 self.always.remove(0);
             }
@@ -1108,6 +1111,7 @@ impl Agent {
         if allow
             && always
             && let Some(remembered) = self.pending_policy.as_ref().and_then(Pending::remember)
+            && !self.always.contains(&remembered)
         {
             if self.always.len() >= 64 {
                 self.always.remove(0);
@@ -1372,5 +1376,89 @@ pub fn run_blocking_with<E: Into<crate::Error>>(
 impl Drop for Agent {
     fn drop(&mut self) {
         self.live.0.store(false, Ordering::SeqCst);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::provider::Config;
+    use rustgis_engine::{Project, Session};
+    use serde_json::json;
+
+    fn test_cfg() -> Config {
+        let mut c = Config::from_env("openai");
+        c.key = "k".into();
+        c
+    }
+
+    #[test]
+    fn repeated_subagent_delegation_does_not_duplicate_or_evict_always_approvals() {
+        let mut s = Session::new(Project::default());
+        let mut a = Agent::new(test_cfg(), &s);
+
+        let reply = |body: serde_json::Value| Ok(HttpResponse { status: 200, body: body.to_string().into_bytes(), headers: vec![] });
+        let call_msg = |id: &str, name: &str, args: serde_json::Value| {
+            reply(json!({
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": null,
+                        "tool_calls": [{
+                            "id": id,
+                            "type": "function",
+                            "function": { "name": name, "arguments": args.to_string() }
+                        }]
+                    }
+                }]
+            }))
+        };
+        let say_msg = |text: &str| reply(json!({ "choices": [{ "message": { "role": "assistant", "content": text } }] }));
+
+        // Approve one action with always=true, then delegate to a subagent three times.
+        assert!(matches!(a.ask("add data", &s), Step::Send(_)));
+        let add = call_msg("e0", "run_command", json!({"command": "layer.addData", "params": {"path": "nonexistent-always.geojson"}}));
+        assert_eq!(a.receive(a.generation(), add, &mut s), Step::Confirm);
+        assert!(matches!(a.decide(true, true, &mut s), Step::Send(_)));
+        assert_eq!(a.always.len(), 1);
+
+        for i in 0..3 {
+            let del = call_msg(&format!("d{i}"), "delegate", json!({"task": "check map"}));
+            assert!(matches!(a.receive(a.generation(), del, &mut s), Step::Send(_)));
+            assert!(matches!(a.receive(a.generation(), say_msg("done"), &mut s), Step::Send(_)));
+            assert_eq!(a.always.len(), 1, "delegation {i} duplicated always approvals");
+        }
+        assert_eq!(a.receive(a.generation(), say_msg("all done"), &mut s), Step::Done);
+
+        // Filling all 64 slots and merging a child with an already-remembered key must not evict slot 0.
+        let mut parent = Agent::new(test_cfg(), &s);
+        for i in 0..64 {
+            assert!(matches!(parent.ask("run", &s), Step::Send(_)));
+            let c = call_msg(
+                &format!("k{i}"),
+                "run_command",
+                json!({"command": "layer.addData", "params": {"path": format!("nonexistent-{i}.geojson")}}),
+            );
+            assert_eq!(parent.receive(parent.generation(), c, &mut s), Step::Confirm);
+            assert!(matches!(parent.decide(true, true, &mut s), Step::Send(_)));
+            assert_eq!(parent.receive(parent.generation(), say_msg("ok"), &mut s), Step::Done);
+        }
+        assert_eq!(parent.always.len(), 64);
+        assert!(matches!(parent.ask("delegate", &s), Step::Send(_)));
+        let del = call_msg("d-full", "delegate", json!({"task": "noop"}));
+        assert!(matches!(parent.receive(parent.generation(), del, &mut s), Step::Send(_)));
+        // Simulate a child that carries only the newest remembered key (already in parent.always).
+        if let Some(child) = parent.child.as_mut() {
+            child.always.drain(..63);
+        }
+        assert!(matches!(parent.receive(parent.generation(), say_msg("done"), &mut s), Step::Send(_)));
+        assert_eq!(parent.always.len(), 64);
+        // Re-running the oldest approved call must still be covered without prompting again.
+        let repeat_first =
+            call_msg("k0-again", "run_command", json!({"command": "layer.addData", "params": {"path": "nonexistent-0.geojson"}}));
+        assert!(
+            matches!(parent.receive(parent.generation(), repeat_first, &mut s), Step::Send(_)),
+            "duplicate key from child evicted oldest approval"
+        );
     }
 }

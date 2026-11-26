@@ -843,11 +843,18 @@ pub struct Aeqd {
 
 impl Aeqd {
     pub fn new(centre: Coord) -> Self {
+        if !centre.is_finite() {
+            return Aeqd { lon0: f64::NAN, lat0: f64::NAN };
+        }
         Aeqd { lon0: centre.x, lat0: centre.y.clamp(-90.0, 90.0) }
     }
 
-    /// Lon/lat (degrees) → metres from the centre.
+    /// Lon/lat (degrees) → metres from the centre. Non-finite coordinates give no place (both
+    /// coordinates NaN).
     pub fn forward(&self, c: Coord) -> Coord {
+        if !(self.lon0.is_finite() && self.lat0.is_finite() && c.is_finite()) {
+            return Coord::new(f64::NAN, f64::NAN);
+        }
         let (s12, azi1, _, _): (f64, f64, f64, f64) = WGS84.inverse(self.lat0, self.lon0, c.y.clamp(-90.0, 90.0), c.x);
         let (sa, ca) = azi1.to_radians().sin_cos();
         Coord::new(s12 * sa, s12 * ca)
@@ -857,7 +864,7 @@ impl Aeqd {
     /// not folded into −180..180, so a shape across the antimeridian stays in one piece. Metres
     /// that aren't finite give no place (both coordinates NaN).
     pub fn inverse(&self, p: Coord) -> Coord {
-        if !(p.x.is_finite() && p.y.is_finite()) {
+        if !(self.lon0.is_finite() && self.lat0.is_finite() && p.is_finite()) {
             return Coord::new(f64::NAN, f64::NAN);
         }
         // At a pole the azimuth is taken from the meridian `lon0`, as `forward` gives it.
@@ -869,7 +876,7 @@ impl Aeqd {
     /// center arrives there with: a direction carried along it turns as much as that differs from
     /// the azimuth it left with, `p.x.atan2(p.y)`.
     pub fn inverse_heading(&self, p: Coord) -> (Coord, f64) {
-        if !(p.x.is_finite() && p.y.is_finite()) {
+        if !(self.lon0.is_finite() && self.lat0.is_finite() && p.is_finite()) {
             return (Coord::new(f64::NAN, f64::NAN), f64::NAN);
         }
         let (lat, lon, azi2): (f64, f64, f64) = WGS84.direct(self.lat0, self.lon0, p.x.atan2(p.y).to_degrees(), p.x.hypot(p.y));
@@ -1641,6 +1648,26 @@ mod tests {
                 let back = p.inverse(p.forward(c));
                 assert!((wrap_lon(back.x - c.x)).abs() < 1e-9 && (back.y - c.y).abs() < 1e-9, "{c:?} → {back:?}");
             }
+        }
+    }
+
+    #[test]
+    fn aeqd_rejects_non_finite_coordinates() {
+        let proj = Aeqd::new(Coord::new(10.0, 45.0));
+        for bad in [
+            Coord::new(10.0, f64::INFINITY),
+            Coord::new(10.0, f64::NEG_INFINITY),
+            Coord::new(f64::INFINITY, 45.0),
+            Coord::new(f64::NEG_INFINITY, 45.0),
+            Coord::new(10.0, f64::NAN),
+        ] {
+            let m = proj.forward(bad);
+            assert!(m.x.is_nan() && m.y.is_nan(), "forward({bad:?}) = {m:?}");
+            let bad_centre = Aeqd::new(bad);
+            let fwd = bad_centre.forward(Coord::new(10.0, 45.0));
+            assert!(fwd.x.is_nan() && fwd.y.is_nan(), "Aeqd::new({bad:?}).forward = {fwd:?}");
+            let inv = bad_centre.inverse(Coord::new(1_000.0, 1_000.0));
+            assert!(inv.x.is_nan() && inv.y.is_nan(), "Aeqd::new({bad:?}).inverse = {inv:?}");
         }
     }
 

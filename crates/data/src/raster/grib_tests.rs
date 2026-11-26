@@ -1543,3 +1543,54 @@ fn hostile_complex_packing_never_panics() {
         }
     }
 }
+
+#[test]
+fn complex_packing_constant_zero_group_with_zero_ref_bits_is_not_missing() {
+    for missing in [1, 2] {
+        let mut c = Cx::new(&[(0, 0, &[0, 0, 0])]);
+        c.ref_bits = 0;
+        c.missing = missing;
+        assert_eq!(there(&c.values()), [Some(0.0), Some(0.0), Some(0.0)], "missing={missing}");
+    }
+}
+
+#[test]
+fn complex_packing_zero_width_and_length_bits_and_cancellation() {
+    // Zero width_bits and zero length_bits: O(1) validation for uniform group widths/lengths.
+    let c = Cx::new(&[(0, 0, &[0, 0]), (0, 0, &[0, 0]), (0, 0, &[0])]);
+    let (mut s5, _) = c.sections();
+    s5[19] = 0; // ref_bits = 0
+    s5[35] = 0; // width_ref = 0
+    s5[36] = 0; // width_bits = 0
+    s5[37..41].copy_from_slice(&u(2, 4)); // length_ref = 2
+    s5[42..46].copy_from_slice(&u(1, 4)); // last_length = 1
+    s5[46] = 0; // length_bits = 0
+    let s7 = [0, 0, 0, 5, 7];
+    let r = read_bytes(&c.message_of(&s5, &s7), "t").unwrap();
+    assert_eq!(r.bands[0].data, vec![0.0; 5]);
+
+    // width_ref past MAX_BITS is still rejected on the O(1) path.
+    let mut bad_width = s5.clone();
+    bad_width[35] = 33;
+    refused(&c.message_of(&bad_width, &s7), "values of 33 bits");
+
+    // Cancellation stops the group-validation loop when width_bits or length_bits is non-zero.
+    struct AlwaysCancelled;
+    impl crate::progress::Probe for AlwaysCancelled {
+        fn cancelled(&self) -> bool {
+            true
+        }
+        fn begin(&self, _: u64) {}
+        fn advance(&self, _: u64) {}
+    }
+    let first = Cx::new(&[(7, 3, &[5]), (300, 0, &[0; 5]), (2, 9, &[0, 511, 100])]).message();
+    // Append a second valid field inside the same GRIB2 message so we also prove decoding stops
+    // immediately after cancellation instead of continuing to later fields.
+    let mut two_fields = first[16 + 21..first.len() - 4].to_vec();
+    two_fields.extend(F2::new(2, 1, vec![1, 2]).sections());
+    let msg = message_of(&two_fields);
+    let _guard = crate::progress::install(Some(std::sync::Arc::new(AlwaysCancelled)));
+    let decoded = grib2(&msg, usize::MAX, None, Uncounted::default());
+    assert_eq!(decoded.len(), 1, "expected decoding to stop after cancellation");
+    assert!(matches!(decoded.first(), Some(Err(Skip::Cancelled))), "expected Skip::Cancelled");
+}

@@ -100,7 +100,7 @@ pub fn silverman_bandwidth(points: &[(Coord, f64)], extent: &Extent) -> f64 {
             (((p.x - mean_x).powi(2) + (p.y - mean_y).powi(2)).sqrt(), weight)
         })
         .collect();
-    dists.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    dists.sort_by(|a, b| a.0.total_cmp(&b.0));
 
     let half_w = sum_w * 0.5;
     let mut cum_w = 0.0;

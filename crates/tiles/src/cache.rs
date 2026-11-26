@@ -3648,7 +3648,7 @@ mod native {
             if let Some(local) = url.strip_prefix(LOCAL) {
                 let (path, range) = super::split_range(local);
                 let (a, b) = range.ok_or("a local read without a range")?;
-                return crate::pmtiles::read_file(path, a, b - a + 1)
+                return crate::pmtiles::read_file(path, a, b.saturating_sub(a).saturating_add(1))
                     .map(|bytes| Fetched { bytes, origin: Origin::named(url) })
                     .map_err(Failure::from);
             }
@@ -3856,10 +3856,11 @@ mod native {
                 return Err(format!("larger than {max} bytes").into());
             }
             if let Some((a, b)) = range.filter(|_| whole) {
-                if buf.len() as u64 > b - a + 1 {
+                let span = b.saturating_sub(a).saturating_add(1);
+                if buf.len() as u64 > span {
                     return Err(rustgis_data::diagnostics::message_with_address(url, super::NO_RANGES).into());
                 }
-                buf.truncate(usize::try_from(b - a + 1).unwrap_or(usize::MAX));
+                buf.truncate(usize::try_from(span).unwrap_or(usize::MAX));
             }
             Ok(Fetched { bytes: buf, origin })
         })();
@@ -8032,5 +8033,26 @@ Connection: close
         let tile = crate::template::expand(template, crate::template::TileId { z: 0, x: 0, y: 0 }, 256, false, &[]);
         assert_eq!(ceiling_for(&tile), crate::address::Reach::Public);
         assert!(matches!(get_tile(&tile, Want::Image), State::Failed(_)));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn full_u64_range_does_not_overflow() {
+        let _turn = turn();
+        // HTTP 200 whole-file answer to `#rustgis-range=0-18446744073709551615`.
+        let base = serve(vec!["HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello".into()]);
+        let (tx, rx) = std::sync::mpsc::channel();
+        native::fetch(format!("{base}/file.bin#rustgis-range=0-18446744073709551615"), Box::new(move |r| tx.send(r).unwrap()), &[]);
+        let bytes = rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap().unwrap();
+        assert_eq!(bytes, b"hello");
+
+        // Local file read with `#rustgis-range=0-18446744073709551615`.
+        let path = std::env::temp_dir().join(format!("rustgis-range-max-{}.bin", std::process::id()));
+        std::fs::write(&path, b"world").unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        native::fetch_local(format!("{}#rustgis-range=0-18446744073709551615", path.display()), Box::new(move |r| tx.send(r).unwrap()));
+        let bytes = rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap().unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(bytes, b"world");
     }
 }

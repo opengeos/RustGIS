@@ -112,20 +112,38 @@ impl<B: AsRef<[u8]>> Db<B> {
             match kind {
                 // An interior table page: child pointers, then the right-most child.
                 0x05 => {
+                    let mut used = hdr.saturating_add(12).saturating_add(2usize.saturating_mul(cells));
+                    if used > self.usable {
+                        return Err(bad("overlapping cells"));
+                    }
                     let mut children = Vec::with_capacity(cells + 1);
                     for i in 0..cells {
                         let at = be16(page, hdr + 12 + 2 * i).ok_or_else(|| bad("cell pointer"))?;
-                        children.push(be32(page, at).ok_or_else(|| bad("interior cell"))?);
+                        let child = be32(page, at).ok_or_else(|| bad("interior cell"))?;
+                        let (_, a) = varint(page, at + 4).ok_or_else(|| bad("interior cell"))?;
+                        used = used.saturating_add(a - at);
+                        if used > self.usable {
+                            return Err(bad("overlapping cells"));
+                        }
+                        children.push(child);
                     }
                     children.push(be32(page, hdr + 8).ok_or_else(|| bad("page header"))?);
                     stack.extend(children.into_iter().rev());
                 }
                 // A leaf table page: (payload size, rowid, payload) cells.
                 0x0d => {
+                    let mut used = hdr.saturating_add(8).saturating_add(2usize.saturating_mul(cells));
+                    if used > self.usable {
+                        return Err(bad("overlapping cells"));
+                    }
                     for i in 0..cells {
                         let at = be16(page, hdr + 8 + 2 * i).ok_or_else(|| bad("cell pointer"))?;
                         let (size, a) = varint(page, at).ok_or_else(|| bad("leaf cell"))?;
                         let (rowid, a) = varint(page, a).ok_or_else(|| bad("leaf cell"))?;
+                        used = used.saturating_add(self.cell_local_span(a - at, size, self.usable - 35)?);
+                        if used > self.usable {
+                            return Err(bad("overlapping cells"));
+                        }
                         let payload = self.payload_seen(page, a, size, &mut seen)?;
                         if f(rowid as i64, record(&payload)?).is_break() {
                             return Ok(());
@@ -171,11 +189,20 @@ impl<B: AsRef<[u8]>> Db<B> {
                 // An interior index page: (left child, payload size, payload) cells, then the
                 // right-most child. Each cell's entry comes after its left child's.
                 0x02 => {
+                    let mut used = hdr.saturating_add(12).saturating_add(2usize.saturating_mul(cells));
+                    if used > self.usable {
+                        return Err(bad("overlapping cells"));
+                    }
                     let mut steps = Vec::with_capacity(2 * cells + 1);
                     for i in 0..cells {
                         let at = be16(page, hdr + 12 + 2 * i).ok_or_else(|| bad("cell pointer"))?;
-                        steps.push(Step::Page(be32(page, at).ok_or_else(|| bad("interior cell"))?));
+                        let child = be32(page, at).ok_or_else(|| bad("interior cell"))?;
                         let (size, a) = varint(page, at + 4).ok_or_else(|| bad("interior cell"))?;
+                        used = used.saturating_add(self.cell_local_span(a - at, size, max_local)?);
+                        if used > self.usable {
+                            return Err(bad("overlapping cells"));
+                        }
+                        steps.push(Step::Page(child));
                         steps.push(Step::Entry(self.payload_with(page, a, size, max_local, Some(&mut seen))?));
                     }
                     steps.push(Step::Page(be32(page, hdr + 8).ok_or_else(|| bad("page header"))?));
@@ -183,9 +210,17 @@ impl<B: AsRef<[u8]>> Db<B> {
                 }
                 // A leaf index page: (payload size, payload) cells.
                 0x0a => {
+                    let mut used = hdr.saturating_add(8).saturating_add(2usize.saturating_mul(cells));
+                    if used > self.usable {
+                        return Err(bad("overlapping cells"));
+                    }
                     for i in 0..cells {
                         let at = be16(page, hdr + 8 + 2 * i).ok_or_else(|| bad("cell pointer"))?;
                         let (size, a) = varint(page, at).ok_or_else(|| bad("leaf cell"))?;
+                        used = used.saturating_add(self.cell_local_span(a - at, size, max_local)?);
+                        if used > self.usable {
+                            return Err(bad("overlapping cells"));
+                        }
                         let payload = self.payload_with(page, a, size, max_local, Some(&mut seen))?;
                         if f(record(&payload)?).is_break() {
                             return Ok(());
@@ -214,9 +249,19 @@ impl<B: AsRef<[u8]>> Db<B> {
             let cells = be16(page, hdr + 3).ok_or_else(|| bad("page header"))?;
             match page.get(hdr) {
                 Some(0x05) => {
+                    let mut used = hdr.saturating_add(12).saturating_add(2usize.saturating_mul(cells));
+                    if used > self.usable {
+                        return Err(bad("overlapping cells"));
+                    }
                     for i in 0..cells {
                         let at = be16(page, hdr + 12 + 2 * i).ok_or_else(|| bad("cell pointer"))?;
-                        stack.push(be32(page, at).ok_or_else(|| bad("interior cell"))?);
+                        let child = be32(page, at).ok_or_else(|| bad("interior cell"))?;
+                        let (_, a) = varint(page, at + 4).ok_or_else(|| bad("interior cell"))?;
+                        used = used.saturating_add(a - at);
+                        if used > self.usable {
+                            return Err(bad("overlapping cells"));
+                        }
+                        stack.push(child);
                     }
                     stack.push(be32(page, hdr + 8).ok_or_else(|| bad("page header"))?);
                 }
@@ -225,6 +270,31 @@ impl<B: AsRef<[u8]>> Db<B> {
             }
         }
         Ok(n_rows)
+    }
+
+    /// How many bytes of a `size`-byte payload sit on the b-tree page itself (SQLite's rule).
+    fn local_len(&self, size: usize, max_local: usize) -> usize {
+        if size <= max_local {
+            size
+        } else {
+            let u = self.usable;
+            let min_local = (u - 12) * 32 / 255 - 23;
+            let k = min_local + (size - min_local) % (u - 4);
+            if k <= max_local { k } else { min_local }
+        }
+    }
+
+    /// The bytes a cell occupies on its b-tree page: header, local payload and optional 4-byte
+    /// overflow pointer.
+    fn cell_local_span(&self, header_len: usize, size: u64, max_local: usize) -> Result<usize, String> {
+        let total = self.bytes.as_ref().len() as u64;
+        if size > total {
+            return Err(bad("a payload larger than the file"));
+        }
+        let size = size as usize;
+        let local = self.local_len(size, max_local);
+        let overflow = if local < size { 4 } else { 0 };
+        header_len.checked_add(local).and_then(|n| n.checked_add(overflow)).ok_or_else(|| bad("overlapping cells"))
     }
 
     /// A cell's payload of `size` bytes starting at `at` on `page`, following its overflow pages.
@@ -241,13 +311,7 @@ impl<B: AsRef<[u8]>> Db<B> {
         let size = size as usize;
         let u = self.usable;
         // How much of the payload is on the page itself (the SQLite file format's rule).
-        let local = if size <= max_local {
-            size
-        } else {
-            let min_local = (u - 12) * 32 / 255 - 23;
-            let k = min_local + (size - min_local) % (u - 4);
-            if k <= max_local { k } else { min_local }
-        };
+        let local = self.local_len(size, max_local);
         // Grown as pages are read: a forged size can't make a large allocation up front.
         let mut out = Vec::with_capacity(size.min(local + 4096));
         out.extend_from_slice(page.get(at..at + local).ok_or_else(|| bad("a cell past its page"))?);
@@ -688,6 +752,76 @@ mod tests {
     fn page_end_overflow_returns_an_error() {
         let db = Db { bytes: Vec::<u8>::new(), page_size: usize::MAX, usable: 480, pages: 2 };
         assert_eq!(db.page(2).unwrap_err(), bad("page offset"));
+    }
+
+    #[test]
+    fn overlapping_cell_pointers_are_rejected() {
+        let make_db = |page2: [u8; 512]| {
+            let mut bytes = vec![0u8; 512 * 3];
+            bytes[..16].copy_from_slice(b"SQLite format 3\0");
+            bytes[16..18].copy_from_slice(&512u16.to_be_bytes());
+            bytes[56..60].copy_from_slice(&1u32.to_be_bytes());
+            bytes[512..1024].copy_from_slice(&page2);
+            // Page 3: empty leaf page so valid child pointers would resolve if not rejected.
+            bytes[1024] = 0x0d;
+            Db::open(bytes).unwrap()
+        };
+
+        // 0x0d leaf table page: 60 pointers all aliasing one 20-byte cell at offset 450.
+        let mut leaf_table = [0u8; 512];
+        leaf_table[0] = 0x0d;
+        leaf_table[3..5].copy_from_slice(&60u16.to_be_bytes());
+        for i in 0..60usize {
+            leaf_table[8 + 2 * i..10 + 2 * i].copy_from_slice(&450u16.to_be_bytes());
+        }
+        // Cell at 450: payload size = 20, rowid = 1, 20-byte record (header 2, type 0 = NULL, 18 pad).
+        leaf_table[450] = 20;
+        leaf_table[451] = 1;
+        leaf_table[452] = 2;
+        leaf_table[453] = 0;
+        let db = make_db(leaf_table);
+        assert_eq!(db.scan(2, |_, _| ControlFlow::Continue(())).unwrap_err(), bad("overlapping cells"));
+
+        // 0x0a leaf index page: 60 pointers all aliasing one 20-byte cell at offset 450.
+        let mut leaf_index = [0u8; 512];
+        leaf_index[0] = 0x0a;
+        leaf_index[3..5].copy_from_slice(&60u16.to_be_bytes());
+        for i in 0..60usize {
+            leaf_index[8 + 2 * i..10 + 2 * i].copy_from_slice(&450u16.to_be_bytes());
+        }
+        leaf_index[450] = 20;
+        leaf_index[451] = 2;
+        leaf_index[452] = 0;
+        let db = make_db(leaf_index);
+        assert_eq!(db.scan_index(2, |_| ControlFlow::Continue(())).unwrap_err(), bad("overlapping cells"));
+
+        // 0x02 interior index page: 60 pointers all aliasing one cell at offset 450.
+        let mut interior_index = [0u8; 512];
+        interior_index[0] = 0x02;
+        interior_index[3..5].copy_from_slice(&60u16.to_be_bytes());
+        interior_index[8..12].copy_from_slice(&3u32.to_be_bytes());
+        for i in 0..60usize {
+            interior_index[12 + 2 * i..14 + 2 * i].copy_from_slice(&450u16.to_be_bytes());
+        }
+        interior_index[450..454].copy_from_slice(&3u32.to_be_bytes());
+        interior_index[454] = 20;
+        interior_index[455] = 2;
+        interior_index[456] = 0;
+        let db = make_db(interior_index);
+        assert_eq!(db.scan_index(2, |_| ControlFlow::Continue(())).unwrap_err(), bad("overlapping cells"));
+
+        // 0x05 interior table page: 90 pointers all aliasing one 5-byte cell at offset 480.
+        let mut interior_table = [0u8; 512];
+        interior_table[0] = 0x05;
+        interior_table[3..5].copy_from_slice(&90u16.to_be_bytes());
+        interior_table[8..12].copy_from_slice(&3u32.to_be_bytes());
+        for i in 0..90usize {
+            interior_table[12 + 2 * i..14 + 2 * i].copy_from_slice(&480u16.to_be_bytes());
+        }
+        interior_table[480..484].copy_from_slice(&3u32.to_be_bytes());
+        interior_table[484] = 1;
+        let db = make_db(interior_table);
+        assert_eq!(db.scan(2, |_, _| ControlFlow::Continue(())).unwrap_err(), bad("overlapping cells"));
     }
 
     #[test]

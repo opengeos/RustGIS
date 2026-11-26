@@ -154,7 +154,7 @@ fn shapes(
     }
     // Painted by where they stand on the ground: a part raised over a building behind it may be
     // painted under it; the GPU's depth buffer has no such limit.
-    shapes.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    shapes.sort_by(|a, b| a.0.total_cmp(&b.0));
     shapes
 }
 
@@ -467,7 +467,7 @@ pub fn tilted_walls(
             walls.push(TiltedWall { depth: mid.1, quad: [fa, fb, tb, ta], top, foot });
         }
     }
-    walls.sort_by(|a, b| a.depth.partial_cmp(&b.depth).unwrap_or(std::cmp::Ordering::Equal));
+    walls.sort_by(|a, b| a.depth.total_cmp(&b.depth));
     walls
 }
 
@@ -582,7 +582,7 @@ pub(crate) fn extrude_tilted(
         shapes.push((cam.ground_px(centroid).1, rings, holes, base, up, t * t * (3.0 - 2.0 * t), row));
     }
     // Far (up the screen) first.
-    shapes.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    shapes.sort_by(|a, b| a.0.total_cmp(&b.0));
     let at = |u: f64, v: f64, up: f64| cam.project_raised(u, v, up, w, h).map(|(x, y)| (x as f32 * ppp, y as f32 * ppp));
     let path = |pts: &[(f32, f32)]| {
         let mut pb = PathBuilder::new();

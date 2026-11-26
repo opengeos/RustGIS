@@ -110,13 +110,31 @@ impl Complex {
             too_large: false,
         };
         let (mut held, mut need) = (0u64, at);
-        for g in 0..self.groups {
-            let (width, length) = values.size(g);
-            if width > u64::from(MAX_BITS) {
-                return Err(Skip::Other(format!("values of {width} bits")));
+        if self.width_bits == 0 && self.length_bits == 0 {
+            if self.groups > 0 {
+                let width = u64::from(self.width_ref);
+                if width > u64::from(MAX_BITS) {
+                    return Err(Skip::Other(format!("values of {width} bits")));
+                }
+                let before = (self.groups - 1) as u64;
+                let len_ref = u64::from(self.length_ref);
+                let last_len = u64::from(self.last_length);
+                held = before.saturating_mul(len_ref).saturating_add(last_len);
+                need =
+                    at.saturating_add(before.saturating_mul(width.saturating_mul(len_ref))).saturating_add(width.saturating_mul(last_len));
             }
-            held = held.saturating_add(length);
-            need = need.saturating_add(width.saturating_mul(length));
+        } else {
+            for g in 0..self.groups {
+                if g & 0xfff == 0 && crate::progress::check().is_err() {
+                    return Err(Skip::Cancelled);
+                }
+                let (width, length) = values.size(g);
+                if width > u64::from(MAX_BITS) {
+                    return Err(Skip::Other(format!("values of {width} bits")));
+                }
+                held = held.saturating_add(length);
+                need = need.saturating_add(width.saturating_mul(length));
+            }
         }
         if held != count as u64 {
             return Err(Skip::Damaged("a field whose groups don't hold its values".to_string()));
@@ -198,9 +216,11 @@ impl Values<'_> {
         // reference of a group of no bits.
         if p.missing > 0 {
             let (v, width) = if self.width == 0 { (self.reference, p.ref_bits) } else { (packed, self.width) };
-            let ones = (1u64 << width) - 1;
-            if v == ones || (p.missing == 2 && v + 1 == ones) {
-                return None;
+            if width > 0 {
+                let ones = (1u64 << width) - 1;
+                if v == ones || (p.missing == 2 && v + 1 == ones) {
+                    return None;
+                }
             }
         }
         // At most 33 bits, so the sums below are far from `i64`'s range.

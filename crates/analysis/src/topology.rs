@@ -143,7 +143,7 @@ fn rects_touch(a: &geo::Rect<f64>, b: &geo::Rect<f64>) -> bool {
 pub fn overlaps(ds: &Dataset, rows: &[usize]) -> Checked {
     let mut p = polygons(ds, rows);
     // Sweep from west to east: only polygons whose boxes overlap in x are compared.
-    p.sort_by(|a, b| a.2.min().x.partial_cmp(&b.2.min().x).unwrap_or(std::cmp::Ordering::Equal));
+    p.sort_by(|a, b| a.2.min().x.total_cmp(&b.2.min().x));
     let mut out = Vec::new();
     let mut work = 0usize;
     crate::control::begin(p.len());
@@ -222,7 +222,7 @@ fn self_crossing(path: &[Coord], closed: bool) -> Result<Option<Coord>, Coord> {
     let mut order: Vec<usize> = (0..n).collect();
     order.sort_by(|a, b| {
         let (sa, sb) = (segs.get(*a).map_or(0.0, minx), segs.get(*b).map_or(0.0, minx));
-        sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
+        sa.total_cmp(&sb)
     });
     let mut work = 0usize;
     for (k, &i) in order.iter().enumerate() {
@@ -1682,5 +1682,25 @@ mod tests {
         // (on a boundary, which the guide says is still reported), in the gap, east of everything
         // and west of everything: reported.
         assert_eq!(reported, [1, 2, 3, 4, 5, 6]);
+    }
+
+    #[test]
+    fn self_intersections_with_nan_vertices_never_panics() {
+        // Interleave finite and NaN pairs so the sweep sort sees both NaN and finite segment
+        // min-x keys across enough elements to exercise driftsort's ordering check.
+        let mut path = Vec::new();
+        for i in 0..40 {
+            if i % 3 == 0 {
+                path.push(Coord::new(f64::NAN, f64::NAN));
+                path.push(Coord::new(f64::NAN, f64::NAN));
+            } else {
+                let x = ((i * 17) % 31) as f64 * 0.01;
+                path.push(Coord::new(x, i as f64 * 0.01));
+            }
+        }
+        let mut ds = Dataset::new("nan_line", GeometryType::Polyline, vec![]);
+        ds.push(Some(Geometry::Line(vec![path])), vec![]);
+        let checked = self_intersections(&ds, &[0]);
+        assert!(checked.complete);
     }
 }

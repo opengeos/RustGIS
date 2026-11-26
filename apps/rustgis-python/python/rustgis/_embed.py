@@ -16,7 +16,7 @@ import os
 import pathlib
 import threading
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit, urlunsplit
 
 from . import PathLike, RustGISError, Session, _Api, _warn_losses
 
@@ -289,10 +289,17 @@ def _app_src(url: Optional[str], lang: Optional[str]) -> str:
     Args:
         url: The web app's address, or None for ``RUSTGIS_WEB_URL`` or the default.
         lang: The interface language code, or None.
+
+    Raises:
+        ValueError: When the address is not an ``http://`` or ``https://`` URL with a host.
     """
     base = url or os.environ.get("RUSTGIS_WEB_URL") or DEFAULT_URL
-    query = "embed" + (f"&lang={quote(lang)}" if lang else "")
-    return base + ("&" if "?" in base else "?") + query
+    parts = urlsplit(base)
+    if parts.scheme.lower() not in ("http", "https") or not parts.netloc or not parts.hostname:
+        raise ValueError(f"web app url must be an http:// or https:// address with a host, got {base!r}")
+    extra = "embed" + (f"&lang={quote(lang)}" if lang else "")
+    query = f"{parts.query}&{extra}" if parts.query else extra
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, query, parts.fragment))
 
 
 def _data_args(path: PathLike) -> Tuple[str, Dict[str, Any]]:

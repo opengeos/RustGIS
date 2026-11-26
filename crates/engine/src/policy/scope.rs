@@ -162,7 +162,7 @@ pub struct Permit {
     pub(super) plan: Arc<Plan>,
     pub(super) request: String,
 }
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct Remembered {
     pub(super) plan: Arc<Plan>,
 }

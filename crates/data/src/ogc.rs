@@ -3823,7 +3823,7 @@ enum Phase {
         duplicates: usize,
     },
     /// An OGC API or WFS page, retaining the largest reported legacy total across the chain.
-    Linked { total: Option<u64> },
+    Linked { total: Option<u64>, pages: usize, empty_streak: usize },
     /// An ArcGIS page, `size` long from an offset, in `order`. `start` is the first such page's
     /// first feature (a server that ignores the offset sends it again), once it is read; until
     /// then `first` keeps the first page as it came, to fall back on (none: the address asked
@@ -3859,6 +3859,11 @@ fn split_page(bytes: &[u8]) -> Result<Option<(serde_json::Value, Vec<Box<RawValu
     let rest = members.into_iter().map(|(k, v)| Ok((k, serde_json::from_str(v.get())?))).collect::<serde_json::Result<_>>();
     Ok(Some((serde_json::Value::Object(rest.map_err(|e| e.to_string())?), features)))
 }
+
+/// Most linked pages (`Phase::Linked`) followed in one read, even if each page returns few items.
+const MAX_LINKED_PAGES: usize = 10_000;
+/// Most consecutive empty linked pages followed before stopping an endless chain of empty `next` links.
+const MAX_EMPTY_LINKED_PAGES: usize = 50;
 
 /// Most arrays and objects a page may nest, as reading it into values allows (serde_json's limit).
 const MAX_DEPTH: usize = 127;
@@ -3983,7 +3988,14 @@ fn read_first(url: &str, first: Vec<u8>, max: usize, paging: Option<ArcgisPaging
     }
     let Ok(Some((doc, mut features))) = split_page(&first) else { return Step::Done(first, None) };
     let (next, phase) = if linked && let Some(next) = next_page(url, &doc) {
-        (next, Phase::Linked { total: doc.get("totalFeatures").and_then(serde_json::Value::as_u64) })
+        (
+            next,
+            Phase::Linked {
+                total: doc.get("totalFeatures").and_then(serde_json::Value::as_u64),
+                pages: 1,
+                empty_streak: usize::from(features.is_empty()),
+            },
+        )
     } else if limited
         && exceeded(&doc)
         && let Some(paging) = paging
@@ -4272,6 +4284,7 @@ impl Pages {
                 return self.stop(why);
             }
         };
+        let mut linked_stop: Option<String> = None;
         let following = match &mut self.phase {
             Phase::WfsOffsets { matched, offset, size, ids, unidentified, overlap, duplicates } => {
                 let returned = more.len();
@@ -4323,9 +4336,25 @@ impl Pages {
                 }
                 exceeded(&page).then(|| arcgis_page_url(&self.url, read + more.len(), *size, order.as_deref()))
             }
-            Phase::Linked { total } => {
+            Phase::Linked { total, pages, empty_streak } => {
                 *total = (*total).max(page.get("totalFeatures").and_then(serde_json::Value::as_u64));
-                next_page(&self.next, &page)
+                *pages += 1;
+                if more.is_empty() {
+                    *empty_streak += 1;
+                } else {
+                    *empty_streak = 0;
+                }
+                let next = next_page(&self.next, &page);
+                if next.is_some() {
+                    if *empty_streak >= MAX_EMPTY_LINKED_PAGES {
+                        linked_stop = Some(format!(
+                            "the server sent {MAX_EMPTY_LINKED_PAGES} empty pages in a row while still giving a next link; the rest aren't read"
+                        ));
+                    } else if *pages >= MAX_LINKED_PAGES {
+                        linked_stop = Some(format!("the server's next links ran past {MAX_LINKED_PAGES} pages; the rest aren't read"));
+                    }
+                }
+                next
             }
             _ => next_page(&self.next, &page),
         };
@@ -4337,6 +4366,9 @@ impl Pages {
         self.features.extend(more);
         if self.features.len() > self.max {
             return self.finish_at_max();
+        }
+        if let Some(why) = linked_stop {
+            return self.stop(why);
         }
         match following {
             Some(n) => {
@@ -4350,7 +4382,7 @@ impl Pages {
                 self.phase = Phase::WfsHits;
                 self.advance()
             }
-            None if let Phase::Linked { total } = self.phase
+            None if let Phase::Linked { total, .. } = self.phase
                 && is_legacy_wfs_query(&self.url) =>
             {
                 let read = self.features.len();
@@ -9334,5 +9366,24 @@ mod tests {
         assert_eq!(s.layers.len(), MAX_LISTED_LAYERS + 1);
         assert_eq!(s.listed, Some(MAX_LISTED_LAYERS));
         assert!(!s.notes.iter().any(|n| n.contains(PAST_READ_LIMIT)), "{:?}", s.notes);
+    }
+
+    #[test]
+    fn linked_pages_stop_on_endless_empty_next_chain() {
+        let url = "https://api.example.org/collections/a/items?page=0";
+        let empty = |next: usize| {
+            format!(
+                r#"{{"type":"FeatureCollection","features":[],"links":[{{"rel":"next","type":"application/geo+json","href":"items?page={next}"}}]}}"#
+            )
+            .into_bytes()
+        };
+        let mut calls = 0usize;
+        let (_joined, note) = join_pages(url, empty(1), 100, |_u| {
+            calls += 1;
+            assert!(calls <= MAX_EMPTY_LINKED_PAGES * 2, "linked paging did not stop on endless empty next links");
+            Ok(empty(calls + 1))
+        });
+        assert!(calls <= MAX_EMPTY_LINKED_PAGES, "expected cutoff after consecutive empty pages, got {calls} fetches");
+        assert!(note.is_some_and(|n| n.contains("empty pages")), "missing empty-page stop notice");
     }
 }

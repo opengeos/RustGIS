@@ -198,6 +198,7 @@ fn read_limited<R: Read + Seek>(mut source: R, name: &str, sidecar_nodata: Optio
                         fields.push(f);
                     }
                 }
+                Err(Skip::Cancelled) => return Err(DataError::Cancelled),
                 Err(Skip::TooLarge) => skipped.over_limit += 1,
                 Err(Skip::OtherGrid) => skipped.other_grid += 1,
                 Err(Skip::Other(why)) => skipped.add(why),
@@ -466,6 +467,7 @@ fn count_fields<R: Read + Seek>(source: &mut R, start: u64, len: u64, grib2: boo
 /// packing, a grid), or damage; each reason is said once with a count.
 #[derive(Clone)]
 enum Skip {
+    Cancelled,
     TooLarge,
     /// On another grid than the first field kept: told before it is decoded, so it takes none of
     /// the room a later field on that grid may need.
@@ -1255,7 +1257,12 @@ fn grib2(b: &[u8], room: usize, mut first: Option<Grid>, uncounted: Uncounted) -
                     first.get_or_insert(grid);
                     Ok(Field { name: format!("{reference}:discipline={discipline}:{product}"), grid, values, rounded, past })
                 })();
+                let cancelled = matches!(field, Err(Skip::Cancelled));
                 out.push(field);
+                if cancelled {
+                    broken = true;
+                    break;
+                }
             }
             _ => {}
         }

@@ -387,13 +387,14 @@ fn kriging_on(
             }));
 
             if k < near.len() {
-                near.select_nth_unstable_by(k - 1, |a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+                near.select_nth_unstable_by(k - 1, |a, b| a.0.total_cmp(&b.0));
                 near.truncate(k);
             }
 
             let (val, var_est) = ordinary_kriging_point(c, near, params, kx, buffers);
-            *pred = if val.is_finite() { val as f32 } else { NODATA };
-            *var = if var_est.is_finite() { var_est as f32 } else { NODATA };
+            let (p, v) = (val as f32, var_est as f32);
+            *pred = if p.is_finite() { p } else { NODATA };
+            *var = if v.is_finite() { v } else { NODATA };
         }
     })?;
 

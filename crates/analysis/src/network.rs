@@ -30,7 +30,7 @@ impl PartialOrd for State {
 }
 impl Ord for State {
     fn cmp(&self, o: &Self) -> std::cmp::Ordering {
-        o.0.partial_cmp(&self.0).unwrap_or(std::cmp::Ordering::Equal)
+        o.0.total_cmp(&self.0)
     }
 }
 
@@ -969,7 +969,7 @@ pub fn similar(ds: &Dataset, row: usize, fields: &[usize], n: usize) -> Result<S
         }
     }
     control::check()?;
-    out.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+    out.sort_by(|a, b| a.1.total_cmp(&b.1));
     control::check()?;
     out.truncate(n);
     control::finish();
@@ -1124,7 +1124,7 @@ pub fn within_report(ds: &Dataset, rows: &[usize], at: Coord, radius_m: f64) -> 
             (d.is_finite() && d <= radius_m).then_some((*r, d))
         })
         .collect();
-    out.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+    out.sort_by(|a, b| a.1.total_cmp(&b.1));
     WithinReport { rows: out, bounded, invalid_latitudes, missing_coordinates }
 }
 
