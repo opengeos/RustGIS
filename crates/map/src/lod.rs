@@ -192,8 +192,14 @@ pub(crate) fn cache_bytes(geoms: &Vec<Option<Geometry>>) -> usize {
 
 /// Build one level without first allocating a whole window's extra geometry. Running out of
 /// budget discards only this optional display cache; drawing still uses the full projection.
-pub(crate) fn thin_budgeted(geoms: &[Option<Geometry>], tol: f64, budget: usize) -> Option<Vec<Option<Geometry>>> {
-    map_budgeted(geoms, budget, Option::as_ref, |g| thin(g, tol))
+pub(crate) fn thin_budgeted(geoms: crate::shapes::Shapes<'_>, tol: f64, budget: usize) -> Option<Vec<Option<Geometry>>> {
+    match geoms {
+        crate::shapes::Shapes::Rows(rows) => {
+            let rows: Vec<Option<&Geometry>> = rows.rows().map(|r| r.geometry()).collect();
+            map_budgeted(&rows, budget, |g| *g, |g| thin(g, tol))
+        }
+        crate::shapes::Shapes::Copies(c) => map_budgeted(c, budget, Option::as_ref, |g| thin(g, tol)),
+    }
 }
 
 /// `build` of each item's geometry (`geometry`), in order ([`map_budgeted_on`]), on up to the
@@ -712,9 +718,9 @@ mod tests {
             Coord::new(0.0, 0.0),
         ]]]))];
         let before = original.clone();
-        assert!(thin_budgeted(&original, 0.1, 0).is_none());
-        assert!(thin_budgeted(&original, 0.1, std::mem::size_of::<Option<Geometry>>()).is_none());
-        let copy = thin_budgeted(&original, 0.1, 1024).unwrap();
+        assert!(thin_budgeted(crate::Shapes::Copies(&original), 0.1, 0).is_none());
+        assert!(thin_budgeted(crate::Shapes::Copies(&original), 0.1, std::mem::size_of::<Option<Geometry>>()).is_none());
+        let copy = thin_budgeted(crate::Shapes::Copies(&original), 0.1, 1024).unwrap();
         assert!(cache_bytes(&copy) <= 1024);
         assert_eq!(copy, before);
         assert_eq!(original, before);

@@ -1074,7 +1074,7 @@ fn undo_steps_share_the_layers_they_leave_alone() {
     for (snap, ..) in &s.undo {
         let old = snap.maps.iter().flat_map(|m| &m.layers).find(|l| l.id == id).unwrap();
         assert!(old.dataset.features.shares(&live.dataset.features), "the snapshot copied the features");
-        assert_eq!(old.projected_cache().as_ptr(), live.projected_cache().as_ptr(), "the snapshot copied the projected geometry");
+        assert!(old.projected_cache().same(live.projected_cache()), "the snapshot copied the projected geometry");
     }
     // An edit copies the layer it changes, once, and leaves the snapshot as it was.
     let before = s.map().layer_by_name("Cities").unwrap().dataset.features.len();

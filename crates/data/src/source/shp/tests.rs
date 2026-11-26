@@ -788,10 +788,7 @@ fn a_nan_shape_under_a_finite_box_is_said_when_kept_without_geometry() {
         // geometry is in no area), its box said.
         let area = Some(Extent::new(1.4, 1.4, 1.6, 1.6));
         let by_area = src.read(&Request { extent: area, ..Request::all() }).unwrap();
-        assert_eq!(
-            (by_area.features.len(), by_area.skipped, said(&by_area.notes), kept(&by_area.notes)),
-            (0, 0, one.clone(), Vec::new())
-        );
+        assert_eq!((by_area.features.len(), by_area.skipped, said(&by_area.notes), kept(&by_area.notes)), (0, 0, one.clone(), Vec::new()));
         assert_eq!(chunk_notes(src.as_ref(), None), (0, 1, one.clone(), one_kept.clone()));
         assert_eq!(chunk_notes(src.as_ref(), area), (0, 0, one.clone(), Vec::new()));
         // A limited read visits a sample (here the first and third records), so its count is of
