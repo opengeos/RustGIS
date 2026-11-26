@@ -2798,11 +2798,24 @@ pub(crate) fn add_layers(s: &mut Session, p: &Value, file_name: &str, bytes: &[u
     let kml = lower.ends_with(".kml") || lower.ends_with(".kmz");
     // A KML's ground overlays (pictures) are raster layers, added after its placemarks.
     // Past the size a KML is read within, it is refused below without being scanned first.
-    let overlays = if kml && ps(p, "layer").is_none() && bytes.len() as u64 <= rustgis_data::io::BYTES_FLOOR {
-        ground_overlays(s, file_name, bytes, local_file)
-    } else {
-        Vec::new()
-    };
+    let within = bytes.len() as u64 <= rustgis_data::io::BYTES_FLOOR;
+    let picked = ps(p, "layer").is_some_and(|l| !l.trim().is_empty());
+    let overlays = if kml && !picked && within { ground_overlays(s, file_name, bytes, local_file) } else { Vec::new() };
+    // A layer picked leaves the document's ground overlays (pictures, not layers) out: said.
+    if kml
+        && picked
+        && within
+        && let Ok((found, undrawn, over_budget)) = rustgis_data::kml::ground_overlays(file_name, bytes)
+        && found.len() + undrawn + over_budget > 0
+    {
+        s.notify(
+            format!(
+                "{file_name}: {} ground overlays (pictures) aren't added with a layer picked; add the file without \"layer\" to draw them",
+                found.len() + undrawn + over_budget
+            ),
+            false,
+        );
+    }
     // A DXF drawing: its coordinate system (it never says) and one of its own layers.
     let dxf = rustgis_data::dxf::is_dxf_name(file_name);
     let reads = match crs.filter(|_| landxml) {

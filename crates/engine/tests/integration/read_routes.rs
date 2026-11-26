@@ -274,3 +274,24 @@ fn a_zips_own_notices_reach_the_layer_picked() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A KML added with `layer` leaves its ground overlays out, and says how many.
+#[test]
+fn a_kml_layer_picked_says_the_overlays_left_out() {
+    let dir = std::env::temp_dir().join(format!("rustgis-read-routes-overlays-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let kml = br##"<?xml version="1.0"?><kml xmlns="http://www.opengis.net/kml/2.2"><Document><Placemark><Point><coordinates>1,2</coordinates></Point></Placemark><GroundOverlay><name>o</name><Icon><href>p.png</href></Icon><LatLonBox><north>1</north><south>0</south><east>1</east><west>0</west></LatLonBox></GroundOverlay></Document></kml>"##;
+    let path = dir.join("trip.kml");
+    std::fs::write(&path, kml).unwrap();
+    for picked in [false, true] {
+        let mut s = Session::new(Project::default());
+        let mark = s.notice_mark();
+        let p = if picked { json!({"path": path, "layer": "trip"}) } else { json!({"path": path}) };
+        s.run("layer.addData", &p).unwrap();
+        let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+        let left_out = said.iter().filter(|n| n.contains("1 ground overlays (pictures) aren't added with a layer picked")).count();
+        assert_eq!(left_out, usize::from(picked), "picked {picked}: {said:?}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
