@@ -7260,6 +7260,7 @@ fn references_follow_layer(s: &mut Session, old: &str, new: &str) {
     if let Elevation::Surface(layer) = &mut editing.settings.elevation {
         replace(layer);
     }
+    let mut texts_too_long = 0usize;
     for layout in &mut s.project.layouts {
         let frames: Vec<u32> = layout
             .elements
@@ -7283,8 +7284,12 @@ fn references_follow_layer(s: &mut Session, old: &str, new: &str) {
                         replace(&mut name);
                         (name != layer).then_some(name)
                     });
-                    if let Some(renamed) = renamed {
-                        *text = renamed;
+                    // A longer name must not take the text past what a text holds: the file would
+                    // cut its tail, so that text keeps the old name.
+                    match renamed {
+                        Some(renamed) if renamed.chars().count() <= rustgis_map::layout::MAX_TEXT_CHARS => *text = renamed,
+                        Some(_) => texts_too_long += 1,
+                        None => {}
                     }
                 }
                 _ => {}
@@ -7349,6 +7354,16 @@ fn references_follow_layer(s: &mut Session, old: &str, new: &str) {
         for image in &mut workspace.images {
             project_reference(image);
         }
+    }
+    if texts_too_long > 0 {
+        s.notify_text(crate::notice_text::NoticeText::format(
+            "{count} layout text(s) keep the old layer name '{old}' in their statistics: the new name would take them past the {limit} characters a text holds",
+            [
+                ("count", texts_too_long.to_string().into()),
+                ("old", old.to_string().into()),
+                ("limit", rustgis_map::layout::MAX_TEXT_CHARS.to_string().into()),
+            ],
+        ), false);
     }
     if left > 0 {
         s.notify_text(crate::notice_text::NoticeText::format(

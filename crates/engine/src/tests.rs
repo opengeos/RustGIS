@@ -40168,6 +40168,32 @@ fn a_statistic_token_is_measured_as_wide_as_its_figure() {
     assert_eq!(like_figures("Plain {scale} {foo} text"), "Plain {scale} {foo} text");
 }
 
+/// A layer renamed to a longer name must not take a text past the characters a text holds
+/// (#2853): the file would cut its tail when read again, so that text keeps the old name and the
+/// rename says so; a text that stays within the limit follows.
+#[test]
+fn renaming_a_layer_leaves_a_statistic_text_that_would_outgrow_its_limit() {
+    let mut s = world();
+    s.run("layout.new", &json!({"name": "L"})).unwrap();
+    let add = |s: &mut Session, text: String| {
+        s.run("layout.addElement", &json!({"kind": "text", "text": text, "x": 10, "y": 10})).unwrap()["element"].as_u64().unwrap() as u32
+    };
+    let full = format!("{}{{count:Countries}}", "x".repeat(4980));
+    let small = add(&mut s, "{count:Countries}".into());
+    let near = add(&mut s, full.clone());
+    let mark = s.notice_mark();
+    s.run("layer.rename", &json!({"layer": "Countries", "name": "The Countries of the whole wide world"})).unwrap();
+    let li = s.active_layout.unwrap();
+    let text = |s: &Session, id: u32| match &s.project.layouts[li].element(id).unwrap().kind {
+        rustgis_map::layout::ElementKind::Text { text, .. } => text.clone(),
+        _ => panic!("a text"),
+    };
+    assert_eq!(text(&s, small), "{count:The Countries of the whole wide world}");
+    assert_eq!(text(&s, near), full, "past the limit it keeps the old name");
+    let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.as_str().to_string()).collect();
+    assert!(said.iter().any(|n| n.contains("1 layout text(s) keep the old layer name") && n.contains("5000")), "{said:?}");
+}
+
 #[test]
 fn locked_layout_elements_take_no_change_until_unlocked() {
     use rustgis_map::layout::ElementKind;

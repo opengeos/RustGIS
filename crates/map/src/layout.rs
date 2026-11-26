@@ -2414,6 +2414,9 @@ impl GroupKey {
     }
 }
 
+/// The most characters a layout text holds: a longer one is cut when a layout is read.
+pub const MAX_TEXT_CHARS: usize = 5000;
+
 /// A layer's figure in a layout text (#2853): `{count:<layer>}`, or `{sum:<layer>:<field>}` and
 /// the same with `mean`, `min` and `max`. The layer is everything between the first colon and the
 /// field's (the last), so a layer named with a colon still reads; a count's, everything after it.
@@ -3079,7 +3082,7 @@ impl Layout {
                     *turn = rotation(*turn);
                     *size = finite_or(*size, 12.0).clamp(*crate::graphics::FONT_SIZE.start(), *crate::graphics::FONT_SIZE.end());
                     *letter_spacing = finite_or(*letter_spacing, 0.0).clamp(MIN_LETTER_SPACING, MAX_LETTER_SPACING);
-                    let end = text.char_indices().nth(5000).map_or(text.len(), |(i, _)| i);
+                    let end = text.char_indices().nth(MAX_TEXT_CHARS).map_or(text.len(), |(i, _)| i);
                     cut |= end < text.len();
                     text.truncate(end);
                 }
@@ -3486,6 +3489,10 @@ mod tests {
         assert_eq!(stat(&layer, StatKind::Sum, Some("nosuch")), Err(StatMissing::Field));
         assert_eq!(stat(&layer, StatKind::Sum, None), Err(StatMissing::Field));
         assert_eq!(stat(&layer, StatKind::Sum, Some("name")), Err(StatMissing::NotNumeric));
+        // A figure is over the whole layer, so a query that reads the series page's values (`@page_number`)
+        // is read with no page: the values are null and it keeps nothing.
+        layer.definition_query = Some("@page_number > 0".into());
+        assert_eq!(stat(&layer, StatKind::Count, None), Ok(0.0));
         // A query keeping none: a count of 0, no sum.
         layer.definition_query = Some("keep = 7".into());
         assert_eq!(stat(&layer, StatKind::Count, None), Ok(0.0));
