@@ -1437,6 +1437,10 @@ pub(crate) mod tests {
         let agent = app.assistant.agent.as_ref().unwrap();
         assert_eq!(agent.transcript.len(), entries);
         assert!(app.assistant.history.iter().all(|h| h != "second thoughts"));
+        // A suggestion, or a command's message, refused while busy is put in the box to send again.
+        app.assistant.input.clear();
+        send(&mut app, "a suggestion".into(), &ctx);
+        assert_eq!(app.assistant.input, "a suggestion");
     }
 
     /// A sent message clears the draft only when the draft still holds it: text typed while a

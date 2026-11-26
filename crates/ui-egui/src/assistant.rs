@@ -798,18 +798,21 @@ pub fn open(app: &mut RustGisApp, ctx: &egui::Context) {
 /// Sends the user's message, with the pictures attached to it, to the selected provider (loading
 /// it the first time), and clears the draft ([`AssistantState::input`]). While the key or a picture
 /// is still being read, the message waits in [`AssistantState::queued`] and goes once it is;
-/// another sent meanwhile takes its place, and the draft is left as it is until then. Once sent,
-/// the draft is cleared only if it still holds that message: text typed while it waited stays.
-/// While the assistant is busy it isn't sent, and a notice says so.
+/// another sent meanwhile takes its place, the one it replaces going back to the box, and the
+/// draft is left as it is until then. Once sent, the draft is cleared only if it still holds that
+/// message: text typed while it waited stays. While the assistant is busy it isn't sent: a notice
+/// says so, and the message is in the box to send again.
 pub fn send(app: &mut RustGisApp, text: String, ctx: &egui::Context) {
     ensure_loaded(app, ctx);
     if app.assistant.busy() {
+        to_box(&mut app.assistant, &text);
         app.session.notify(tl!("The assistant is busy; stop it or wait for it to finish."), true);
         return;
     }
     // A message waits for the key, and for a picture still being read, which goes with it (a
     // suggestion clicked meanwhile, say).
     if key_loading(app) || app.assistant.pictures.reading() {
+        unqueue(&mut app.assistant);
         app.assistant.queued = Some(text);
         return;
     }
@@ -870,13 +873,19 @@ pub fn stop(app: &mut RustGisApp) {
 /// Puts a message still waiting to be sent back into the input box, so it is never lost: as the
 /// draft when the box is empty or already holds it, above newer typing otherwise.
 fn unqueue(state: &mut AssistantState) {
-    let Some(text) = state.queued.take() else { return };
-    let draft = state.input.trim();
-    if draft.is_empty() {
-        state.input = text;
-    } else if draft != text.trim() {
-        state.input = format!("{text}\n{}", state.input);
+    if let Some(text) = state.queued.take() {
+        to_box(state, &text);
     }
+}
+
+/// Puts a message that isn't being sent into the input box: as the draft when the box is empty
+/// or already holds it, above newer typing otherwise. A message of pictures alone adds no line.
+fn to_box(state: &mut AssistantState, text: &str) {
+    let (text, draft) = (text.trim(), state.input.trim());
+    if text.is_empty() || draft == text {
+        return;
+    }
+    state.input = if draft.is_empty() { text.to_string() } else { format!("{text}\n{}", state.input) };
 }
 
 /// Forgets the conversation, and ends the agent threads it started. A message still waiting to

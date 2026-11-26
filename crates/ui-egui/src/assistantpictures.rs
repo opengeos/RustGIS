@@ -400,6 +400,23 @@ mod tests {
         assert_eq!(sent.len(), 1);
     }
 
+    /// A second message sent while the first waits for a picture takes its place, and the first
+    /// goes back to the box rather than being lost.
+    #[test]
+    fn a_message_replaced_while_waiting_goes_back_to_the_box() {
+        let mut app = RustGisApp::with_sample();
+        app.assistant.agent = Some(rustgis_assistant::Agent::new(rustgis_assistant::Config::from_env("custom"), &app.session));
+        app.assistant.loaded = true;
+        received(&mut app, "map.png", png());
+        // Read in only by `take_read`, which nothing here calls: the messages keep waiting.
+        assert!(app.assistant.pictures.reading());
+        let ctx = egui::Context::default();
+        crate::assistant::send(&mut app, "first".into(), &ctx);
+        crate::assistant::send(&mut app, "second".into(), &ctx);
+        assert_eq!(app.assistant.queued.as_deref(), Some("second"));
+        assert_eq!(app.assistant.input, "first");
+    }
+
     #[test]
     fn a_picked_picture_goes_with_the_next_message() {
         let mut app = RustGisApp::with_sample();
