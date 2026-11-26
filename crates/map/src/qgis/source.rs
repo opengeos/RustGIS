@@ -603,7 +603,7 @@ pub(super) fn file_address_path(url: &str) -> Option<String> {
     // A drive's colon may be encoded (`/C%3A/x`): the drive form is recognized once decoded.
     let b = path.as_bytes();
     let drive = b.first() == Some(&b'/') && b.get(1).is_some_and(u8::is_ascii_alphabetic) && b.get(2) == Some(&b':');
-    Some(if drive { path[1..].to_string() } else { path })
+    Some(if drive { path.get(1..).unwrap_or_default().to_string() } else { path })
 }
 
 /// A tile archive's path: a `file://` address (`file:../x` when relative) as its path, a relative
@@ -1827,5 +1827,18 @@ mod tests {
         );
         assert_eq!(filtered("").as_deref(), Some(r#""kind" = 'a'"#));
         assert!(matches!(unnamed("pts"), Some(VirtualFrom::Missing(_))));
+    }
+
+    /// A tile archive at a `file:` address whose drive's colon is encoded is on that drive, as a
+    /// picture marker's image is (`file:///C%3A/…` is `C:/…`, not `/C:/…`).
+    #[test]
+    fn a_tile_archive_with_an_encoded_drive_colon_is_on_that_drive() {
+        for (url, path) in [
+            ("file:///C%3A/maps/t.mbtiles", "C:/maps/t.mbtiles"),
+            ("file:///C:/maps/t.mbtiles", "C:/maps/t.mbtiles"),
+            ("file:///maps/t.mbtiles", "/maps/t.mbtiles"),
+        ] {
+            assert_eq!(archive_path(url, "/p"), path, "{url}");
+        }
     }
 }
