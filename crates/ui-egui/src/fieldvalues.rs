@@ -133,9 +133,11 @@ impl Form {
         });
         let name = ds.fields.get(field).map(|f| f.name.as_str()).unwrap_or_default();
         self.said = read.written.is_empty().then(|| {
-            let none = crate::i18n::fmt("{field} has no values to list", &[("field", &field_ref(name))]);
+            // The parts in logical order, and the whole put in display form once.
+            let field = field_ref(name);
+            let none = crate::i18n::fmt_raw("{field} has no values to list", &[("field", &field)]);
             match read.from.left_out {
-                0 => none,
+                0 => crate::i18n::display(&none),
                 _ => crate::i18n::fmt("{none}. {left_out}", &[("none", &none), ("left_out", &read.from.left_out_note())]),
             }
         });
@@ -499,6 +501,21 @@ mod tests {
         }
     }
 
+    /// The note under the buttons is put in display form once, as a whole: a field named in
+    /// right-to-left letters starts the line, which then reads as `i18n::fmt` writes it, its
+    /// Latin runs (and the limit, `100`) reversed once, not twice.
+    #[test]
+    fn the_note_of_values_not_listed_is_put_in_display_form_once() {
+        use rustgis_engine::data::{Field, FieldType, GeometryType, Value};
+        let mut ds = Dataset::new("t", GeometryType::Point, vec![Field::new("نام", FieldType::Text)]);
+        ds.push(None, vec![Value::Text("x".repeat(query::VALUE_CHARS + 1))]);
+        let mut form = Form::default();
+        form.list(&ds, 0, 1);
+        let logical = "نام has no values to list. The value of 1 feature isn't listed: longer than 100 characters, with a line break or other control character, or too large";
+        assert_eq!(form.said.as_deref(), Some(crate::i18n::display(logical).as_str()));
+        assert_ne!(crate::i18n::display(logical), logical, "the line is laid out back to front");
+    }
+
     /// A name begun in `!` at the cursor is replaced to its closing `!`, which has no doubling.
     #[test]
     fn a_name_begun_in_bangs_is_replaced_to_its_close() {
@@ -534,6 +551,7 @@ mod tests {
             ("continent =  != 'Old'", Some(12), "continent"),
             // A value after the cursor, though something later doesn't read.
             ("continent =  'Africa' AND pop_est > #", Some(12), "continent"),
+            ("continent =  'Africa'#", Some(12), "continent"),
             // Nothing above refuses it, but the clause would stop reading there.
             ("(pop_est > 1", None, "continent"),
             // A quote never closed holds the rest of the clause.

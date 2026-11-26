@@ -6,7 +6,7 @@
 use std::cell::{OnceCell, RefCell};
 use std::ops::Range;
 
-use super::{Arith, FuncSpec, Kw, Lexed, Open, Parser, Probe, Tok, lex_spans};
+use super::{Arith, FuncSpec, Kw, Lexed, Open, Parser, Probe, Tok, lex_first, lex_spans};
 use crate::value::ClassText;
 use crate::{Dataset, Value};
 
@@ -180,11 +180,10 @@ pub enum Follows {
 }
 
 /// What `text`, what follows a cursor where a value goes, starts with: its first word read as
-/// the lexer reads it, so `!=` is an operator and `!a!` a name. Where something later can't be
-/// read (`'Africa' AND pop > #`), its first word alone is read.
+/// the lexer reads it, so `!=` is an operator and `!a!` a name. Only that word is read, so what
+/// comes after it needn't read (`'Africa'#`).
 pub fn follows(text: &str) -> Follows {
-    let first_word = || text.split_whitespace().next().and_then(|w| lex_spans(w, true).ok());
-    let Some(Lexed { toks, open, .. }) = lex_spans(text, true).ok().or_else(first_word) else { return Follows::Other };
+    let Some(Lexed { toks, open, .. }) = lex_first(text, true, 1).ok() else { return Follows::Other };
     let left_side = [Kw::Is, Kw::Not, Kw::Like, Kw::Ilike, Kw::In, Kw::Between];
     let joins = [Kw::And, Kw::Or, Kw::When, Kw::Then, Kw::Else, Kw::End];
     let is = |word: &str, kws: &[Kw]| kws.iter().any(|k| k.word().eq_ignore_ascii_case(word));
@@ -393,6 +392,8 @@ mod tests {
             ("upper(name)", Follows::Value),
             ("CASE WHEN 1 THEN 2 END", Follows::Value),
             ("'Africa' AND pop > #", Follows::Value),
+            ("'Africa'#", Follows::Value),
+            ("!=#", Follows::Comparison),
             (" != 1", Follows::Comparison),
             ("<> 1", Follows::Comparison),
             ("= 'Old'", Follows::Comparison),

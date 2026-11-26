@@ -652,6 +652,12 @@ struct Lexed {
 /// `@` or `$` that is the last character, ends it instead of being an error. Anything else that
 /// can't be read is an error either way.
 fn lex_spans(s: &str, tolerant: bool) -> Result<Lexed, String> {
+    lex_first(s, tolerant, usize::MAX)
+}
+
+/// As [`lex_spans`], reading no more than the first `most` tokens: what comes after them, which
+/// may not read (`'a'#`), isn't looked at.
+fn lex_first(s: &str, tolerant: bool, most: usize) -> Result<Lexed, String> {
     if s.chars().count() > MAX_LEN {
         return Err("the expression is too long".into());
     }
@@ -667,7 +673,9 @@ fn lex_spans(s: &str, tolerant: bool) -> Result<Lexed, String> {
         }
         cs.get(st..*i).map(|s| s.iter().collect()).unwrap_or_default()
     };
-    while let Some(&c) = cs.get(i) {
+    while let Some(&c) = cs.get(i)
+        && out.len() < most
+    {
         let start = i;
         let before = out.len();
         match c {

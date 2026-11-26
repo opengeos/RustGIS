@@ -61,42 +61,45 @@ impl ValuesRead {
         Self { read: got.read, of: got.of, view: ds.windowed, left_out: got.left_out }
     }
 
-    /// What the help says of where the values come from, and of values not listed; None when
-    /// they are all the layer's.
+    /// What the help says of where the values come from, and of values not listed, in display
+    /// form (put in it once, as a whole); None when they are all the layer's.
     fn note(self) -> Option<String> {
         let from = self.source();
         let left = (self.left_out > 0).then(|| self.left_out_note());
-        match (from, left) {
-            (Some(from), Some(left)) => Some(crate::i18n::fmt("{from}\n{left_out}", &[("from", &from), ("left_out", &left)])),
-            (from, left) => from.or(left),
-        }
+        let note = match (from, left) {
+            (Some(from), Some(left)) => crate::i18n::fmt_raw("{from}\n{left_out}", &[("from", &from), ("left_out", &left)]),
+            (from, left) => from.or(left)?,
+        };
+        Some(crate::i18n::display(&note))
     }
 
-    /// That the values of `left_out` features aren't listed, and why.
+    /// That the values of `left_out` features aren't listed, and why, in logical order: a part
+    /// of a message, which [`i18n::fmt`](crate::i18n::fmt) puts in display form as a whole.
     pub(crate) fn left_out_note(self) -> String {
         let (n, max) = (self.left_out.to_string(), query::VALUE_CHARS.to_string());
         let args = [("n", n.as_str()), ("max", max.as_str())];
         match self.left_out {
-            1 => crate::i18n::fmt(
+            1 => crate::i18n::fmt_raw(
                 "The value of 1 feature isn't listed: longer than {max} characters, with a line break or other control character, or too large",
                 &args,
             ),
-            _ => crate::i18n::fmt(
+            _ => crate::i18n::fmt_raw(
                 "The values of {n} features aren't listed: longer than {max} characters, with a line break or other control character, or too large",
                 &args,
             ),
         }
     }
 
-    /// Where the values come from; None when they are all the layer's.
+    /// Where the values come from, in logical order as [`left_out_note`](Self::left_out_note);
+    /// None when they are all the layer's.
     fn source(self) -> Option<String> {
         let (read, of) = (self.read.to_string(), self.of.to_string());
         let args = [("read", read.as_str()), ("of", of.as_str())];
         match (self.view, self.read < self.of) {
             (false, false) => None,
-            (false, true) => Some(crate::i18n::fmt("Values of {read} of {of} features, evenly spread", &args)),
-            (true, false) => Some(crate::i18n::fmt("Values of the {of} features read for the view", &args)),
-            (true, true) => Some(crate::i18n::fmt("Values of {read} of the {of} features read for the view, evenly spread", &args)),
+            (false, true) => Some(crate::i18n::fmt_raw("Values of {read} of {of} features, evenly spread", &args)),
+            (true, false) => Some(crate::i18n::fmt_raw("Values of the {of} features read for the view", &args)),
+            (true, true) => Some(crate::i18n::fmt_raw("Values of {read} of the {of} features read for the view, evenly spread", &args)),
         }
     }
 }
