@@ -17,7 +17,7 @@ use crate::widgets::Dragged;
 /// found by typing part of a name.
 const MAX_FONTS_SHOWN: usize = 200;
 
-/// A layer a layout text can show a figure of (#2853): its name and its numeric fields, which the
+/// A layer a layout text can show a figure of (#3036): its name and its numeric fields, which the
 /// Dynamic Text menu offers as tokens (`{count:Name}`, `{sum:Name:field}`…).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StatLayer {
@@ -45,6 +45,36 @@ impl StatLayer {
             })
             .collect()
     }
+}
+
+/// The "Layer statistic" section of a Dynamic Text menu (#3036), the Format pane's and the
+/// ribbon's: a submenu per layer, a count and, for each numeric field, its sum, mean, least and
+/// greatest. `pick` takes the token chosen; with no layers there is no section.
+pub fn stat_menu(ui: &mut Ui, layers: &[StatLayer], mut pick: impl FnMut(String)) {
+    if layers.is_empty() {
+        return;
+    }
+    ui.separator();
+    crate::widgets::submenu(ui, tl!("Layer statistic"), |ui| {
+        for layer in layers {
+            crate::widgets::submenu(ui, &layer.name, |ui| {
+                let mut add = |ui: &mut Ui, what: &str, token: String| {
+                    if ui.button(format!("{what}  {token}")).clicked() {
+                        pick(token);
+                        ui.close();
+                    }
+                };
+                add(ui, tl!("Count"), format!("{{count:{}}}", layer.name));
+                for field in &layer.fields {
+                    crate::widgets::submenu(ui, field, |ui| {
+                        for (code, what) in [("sum", tl!("Sum")), ("mean", tl!("Mean")), ("min", tl!("Least")), ("max", tl!("Greatest"))] {
+                            add(ui, what, format!("{{{code}:{}:{field}}}", layer.name));
+                        }
+                    });
+                }
+            });
+        }
+    });
 }
 
 /// What the form edits. A style is left out where the text doesn't have it.
@@ -162,34 +192,10 @@ pub fn show(
                 }
             }
         }
-        // The figures of a layer (#2853): a submenu per layer, a count and, for each numeric field,
-        // its sum, mean, least and greatest.
-        if !layers.is_empty() {
-            ui.separator();
-            crate::widgets::submenu(ui, tl!("Layer statistic"), |ui| {
-                for layer in layers {
-                    crate::widgets::submenu(ui, &layer.name, |ui| {
-                        let mut add = |ui: &mut Ui, what: &str, token: String| {
-                            if ui.button(format!("{what}  {token}")).clicked() {
-                                f.text.push_str(&token);
-                                out.text = true;
-                                ui.close();
-                            }
-                        };
-                        add(ui, tl!("Count"), format!("{{count:{}}}", layer.name));
-                        for field in &layer.fields {
-                            crate::widgets::submenu(ui, field, |ui| {
-                                for (code, what) in
-                                    [("sum", tl!("Sum")), ("mean", tl!("Mean")), ("min", tl!("Least")), ("max", tl!("Greatest"))]
-                                {
-                                    add(ui, what, format!("{{{code}:{}:{field}}}", layer.name));
-                                }
-                            });
-                        }
-                    });
-                }
-            });
-        }
+        stat_menu(ui, layers, |token| {
+            f.text.push_str(&token);
+            out.text = true;
+        });
     });
     out.typing = r.has_focus() && !out.text;
     egui::Grid::new(id.with("style")).num_columns(2).min_col_width(LABEL_W).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
@@ -559,7 +565,7 @@ mod tests {
     }
 
     /// The layers offered are those of the first frame's map, with their numeric fields; a raster
-    /// layer, a graphics layer and a name a token can't hold are left out (#2853).
+    /// layer, a graphics layer and a name a token can't hold are left out (#3036).
     #[test]
     fn the_layers_offered_are_the_first_frames_with_their_numeric_fields() {
         use rustgis_engine::data::{Dataset, Field, FieldType, GeometryType};
@@ -592,7 +598,7 @@ mod tests {
     }
 
     /// A layer statistic is added from a submenu per layer, a count and the four figures of each
-    /// numeric field (#2853); a text with no layers to read has no such section.
+    /// numeric field (#3036); a text with no layers to read has no such section.
     #[test]
     fn a_layer_statistic_is_added_from_its_layers_submenu() {
         let cities = StatLayer { name: "Cities".into(), fields: vec!["pop".into(), "area".into()] };
