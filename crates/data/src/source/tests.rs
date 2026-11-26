@@ -4645,6 +4645,9 @@ fn flatgeobuf_ring_ends_past_the_coordinates_skip_the_feature() {
     ds.push(Some(Geometry::Polygon(vec![vec![square(10.0, 4.0), square(11.0, 1.0)]])), vec![Value::Int(2)]);
     ds.push(Some(Geometry::Polygon(vec![vec![square(20.0, 1.0)]])), vec![Value::Int(3)]);
     let written = fgb::write(&ds).unwrap();
+    // The file as written reads whole: the check refuses no ring that fits.
+    let clean = open_bytes("parcels.fgb", written.clone(), None).unwrap().read(&Request::all()).unwrap();
+    assert_eq!((clean.features.len(), clean.skipped), (3, 0));
     let at = written.windows(12).position(|w| w == [2, 0, 0, 0, 5, 0, 0, 0, 10, 0, 0, 0]).unwrap();
     for (first, second) in [(5u32, 11u32), (5, 0x7fff_ffff), (7, 6)] {
         let mut bytes = written.clone();
@@ -4665,6 +4668,36 @@ fn flatgeobuf_ring_ends_past_the_coordinates_skip_the_feature() {
             .unwrap();
         assert_eq!((rows, streamed.skipped), (2, 1), "ends {first}, {second}");
     }
+}
+
+/// A point whose coordinates are empty is skipped as unreadable, whole and streamed, instead of
+/// panicking in the reader, which reads a point's first coordinate whatever its length (#3006).
+#[test]
+fn flatgeobuf_a_point_without_its_coordinate_skips_the_feature() {
+    let mut ds = Dataset::new("places", GeometryType::Point, vec![]);
+    for x in [1.0, 1234.5, 3.0] {
+        ds.push(Some(Geometry::Point(Coord::new(x, 0.0))), vec![]);
+    }
+    let written = fgb::write(&ds).unwrap();
+    let clean = open_bytes("places.fgb", written.clone(), None).unwrap().read(&Request::all()).unwrap();
+    assert_eq!((clean.features.len(), clean.skipped), (3, 0));
+    // The middle point's xy vector (its length, 2, then x) made empty.
+    let mut needle = 2u32.to_le_bytes().to_vec();
+    needle.extend_from_slice(&1234.5f64.to_le_bytes());
+    let mut bytes = written;
+    let at = bytes.windows(needle.len()).position(|w| w == needle.as_slice()).unwrap();
+    bytes[at..at + 4].copy_from_slice(&0u32.to_le_bytes());
+    let src = open_bytes("places.fgb", bytes, None).unwrap();
+    let batch = src.read(&Request::all()).unwrap();
+    assert_eq!((batch.features.len(), batch.skipped), (2, 1));
+    let mut rows = 0;
+    let streamed = src
+        .visit_chunks(None, 256, &mut |chunk| {
+            rows += chunk.len();
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!((rows, streamed.skipped), (2, 1));
 }
 
 /// A readable size prefix can contain invalid UTF-8 properties. Classification ignores

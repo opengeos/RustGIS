@@ -930,22 +930,25 @@ fn wkb_of(feature: &flatgeobuf::FgbFeature) -> Option<Vec<u8>> {
 }
 
 /// Whether a feature's geometry holds the coordinates its ends say, in it and in each of its parts:
-/// an even number of `xy` values, and ring or line ends that never go back and stay within them.
-/// flatgeobuf 6.0.1 indexes `xy` by those ends as the file gives them and panics past the end or
-/// on an end before the last one, which the browser can't catch. A feature that fails this is
-/// skipped as unreadable, as one whose geometry the reader refuses. Found by fuzzing
-/// `read_layers` (#3006).
+/// an even number of `xy` values, ring or line ends that never go back and stay within them, and a
+/// whole coordinate where a point is read. flatgeobuf 6.0.1 indexes `xy` by those ends as the file
+/// gives them, and a point at 0 and 1, and panics past the end or on an end before the last one,
+/// which the browser can't catch. A feature that fails this is skipped as unreadable, as one whose
+/// geometry the reader refuses. Found by fuzzing `read_layers` (#3006).
 fn geometry_fits(feature: &flatgeobuf::FgbFeature) -> bool {
-    feature.fbs_feature().geometry().is_none_or(|g| geometry_part_fits(&g, 0))
+    // The file's header, which the reader may take over the geometry's own type, isn't reachable
+    // from a feature: the geometry is held to a point's needs. One with no coordinate is empty,
+    // which a read skips anyway.
+    feature.fbs_feature().geometry().is_none_or(|g| geometry_part_fits(&g, 0, true))
 }
 
-fn geometry_part_fits(g: &flatgeobuf::Geometry<'_>, depth: u32) -> bool {
+fn geometry_part_fits(g: &flatgeobuf::Geometry<'_>, depth: u32, point: bool) -> bool {
     // Parts within parts are a collection's; a file nesting them deeper is refused, not followed.
     if depth > 32 {
         return false;
     }
     let values = g.xy().map_or(0, |xy| xy.len());
-    if !values.is_multiple_of(2) {
+    if !values.is_multiple_of(2) || (point && g.xy().is_some() && values < 2) {
         return false;
     }
     if let Some(ends) = g.ends() {
@@ -958,7 +961,9 @@ fn geometry_part_fits(g: &flatgeobuf::Geometry<'_>, depth: u32) -> bool {
             last = end;
         }
     }
-    g.parts().is_none_or(|parts| parts.iter().all(|part| geometry_part_fits(&part, depth + 1)))
+    // A collection's parts are read by their own type; a multi-polygon's are polygons whatever it says.
+    g.parts()
+        .is_none_or(|parts| parts.iter().all(|part| geometry_part_fits(&part, depth + 1, part.type_() == flatgeobuf::GeometryType::Point)))
 }
 
 /// Whether a feature's property bytes hold what they say, laid out as FlatGeobuf has them: each a
