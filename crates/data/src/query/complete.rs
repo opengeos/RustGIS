@@ -225,8 +225,8 @@ pub fn field_values(ds: &Dataset, field: usize, most: usize) -> FieldValues {
 
 /// `v` as an expression writes it, to compare a field with: a number as it is (in full, `3.25`,
 /// not rounded as a table shows it), a text, date or date-time in single quotes (a `'` in it
-/// doubled, as the lexer reads it). None for what is no literal: null, true or false (keywords),
-/// a number that isn't finite, and a whole number of 9e15 or more, which the lexer reads as a
+/// doubled, as the lexer reads it), true or false as `TRUE` or `FALSE`. None for what is no
+/// literal: null, a number that isn't finite, and a whole number of 9e15 or more, which the lexer reads as a
 /// float (`query::num`), so that it would pick no feature, or its neighbour's.
 pub fn literal(v: &Value) -> Option<String> {
     match v {
@@ -235,7 +235,8 @@ pub fn literal(v: &Value) -> Option<String> {
         Value::Float(x) if x.is_finite() => Some(if *x == 0.0 { 0.0 } else { *x }.to_string()),
         Value::Text(t) => Some(format!("'{}'", t.replace('\'', "''"))),
         Value::Date(_) | Value::DateTime(_) => Some(format!("'{v}'")),
-        Value::Int(_) | Value::Float(_) | Value::Null | Value::Bool(_) => None,
+        Value::Bool(b) => Some(if *b { "TRUE" } else { "FALSE" }.to_string()),
+        Value::Int(_) | Value::Float(_) | Value::Null => None,
     }
 }
 
@@ -265,27 +266,30 @@ mod tests {
             Field::new("r", FieldType::Double),
             Field::new("d", FieldType::Date),
             Field::new("s", FieldType::DateTime),
+            Field::new("b", FieldType::Boolean),
         ];
         let mut d = Dataset::new("t", GeometryType::Point, fields);
+        // Each boolean is one feature's, so `b = …` picks only that one: the other rows' are null.
         let rows = [
-            ("O'Brien", -5, 3.25, "2026-03-05", "2026-03-05T08:00:00Z"),
-            ("Pop Est", 7, 0.1 + 0.2, "1999-12-31", "2026-03-05T08:00:00+02:00"),
-            ("", 0, 1e-7, "2000-02-29", "2026-03-05T08:00:00.250"),
-            ("x", 8_999_999_999_999_999, 2.5, "2000-03-01", "2026-03-05T09:00:00Z"),
-            ("y", 8_999_999_999_999_998, 3.5, "2000-03-02", "2026-03-05T10:00:00Z"),
+            ("O'Brien", -5, 3.25, "2026-03-05", "2026-03-05T08:00:00Z", Value::Bool(true)),
+            ("Pop Est", 7, 0.1 + 0.2, "1999-12-31", "2026-03-05T08:00:00+02:00", Value::Bool(false)),
+            ("", 0, 1e-7, "2000-02-29", "2026-03-05T08:00:00.250", Value::Null),
+            ("x", 8_999_999_999_999_999, 2.5, "2000-03-01", "2026-03-05T09:00:00Z", Value::Null),
+            ("y", 8_999_999_999_999_998, 3.5, "2000-03-02", "2026-03-05T10:00:00Z", Value::Null),
         ];
-        for (t, i, r, day, at) in rows {
+        for (t, i, r, day, at, b) in rows {
             let attrs = vec![
                 Value::Text(t.into()),
                 Value::Int(i),
                 Value::Float(r),
                 Value::Date(Date::parse(day).unwrap()),
                 Value::DateTime(DateTime::parse(at).unwrap()),
+                b,
             ];
             d.push(None, attrs);
         }
         for (row, f) in d.features.clone().iter().enumerate() {
-            for (i, v) in f.attrs.iter().enumerate() {
+            for (i, v) in f.attrs.iter().enumerate().filter(|(_, v)| **v != Value::Null) {
                 let written = literal(v).unwrap();
                 let name = &d.fields[i].name;
                 assert_eq!(crate::query::select(&format!("{name} = {written}"), &d), Ok(vec![row]), "{name} = {written}");
@@ -296,9 +300,9 @@ mod tests {
         assert_eq!(literal(&Value::Float(-0.0)).as_deref(), Some("0"));
         assert_eq!(literal(&Value::Int(8_999_999_999_999_999)).as_deref(), Some("8999999999999999"));
         assert_eq!(literal(&Value::Int(-8_999_999_999_999_999)).as_deref(), Some("-8999999999999999"));
+        assert_eq!(literal(&Value::Bool(false)).as_deref(), Some("FALSE"));
         for v in [
             Value::Null,
-            Value::Bool(true),
             Value::Float(f64::NAN),
             Value::Float(f64::INFINITY),
             Value::Int(9_000_000_000_000_000),
@@ -309,9 +313,8 @@ mod tests {
         }
     }
 
-    /// A field's values: each once, in Unique Values' order, without what is no literal (null,
-    /// true, false, a text that breaks a line or too long to list); of a large layer, an evenly
-    /// spread sample.
+    /// A field's values: each once, in Unique Values' order, without what is no literal (null, a
+    /// text that breaks a line or too long to list); of a large layer, an evenly spread sample.
     #[test]
     fn a_fields_values_are_read_once_each_from_a_bounded_sample() {
         let fields = vec![Field::new("t", FieldType::Text), Field::new("n", FieldType::Double), Field::new("b", FieldType::Boolean)];
@@ -348,7 +351,8 @@ mod tests {
         assert_eq!(written(0), ["'A'".to_string(), "'b'".to_string(), format!("'{longest}'")], "up to the longest text listed");
         assert_eq!(v.values.first(), Some(&FieldValue { written: "'A'".into(), text: "A".into() }));
         assert_eq!(written(1), ["-1.5", "9", "10"], "by number, `10` and `10.0` once, none written too long");
-        assert!(field_values(&d, 2, VALUES_READ).values.is_empty(), "true and false are keywords");
+        assert_eq!(written(2), ["TRUE"], "as the keyword, once");
+        assert_eq!(field_values(&d, 2, VALUES_READ).left_out, 0);
         assert!(field_values(&d, 9, VALUES_READ).values.is_empty(), "no such field");
         // Past the most read: every other feature, from the first.
         let mut big = Dataset::new("t", GeometryType::Point, vec![Field::new("i", FieldType::Integer)]);
@@ -446,10 +450,16 @@ mod tests {
             "upper(name) LIKE '",
             "pop + 1 BETWEEN ",
             "pop * 2 IN (",
+            // A bracket where the value goes holds the value.
+            "name = (",
+            "pop > ((",
+            "name IN ((",
         ] {
             assert!(at_end(text).compared, "{text}");
         }
-        for text in ["", "pop ", "pop > 5 ", "upper(", "name = 'a' AND ", "pop BETWEEN 1 "] {
+        assert_eq!(at_end("name = (").field, Some(0));
+        // A bracket that starts a clause, or holds one, compares nothing.
+        for text in ["", "pop ", "pop > 5 ", "upper(", "name = 'a' AND ", "pop BETWEEN 1 ", "(", "pop > 5 AND (", "name = (pop > 1 AND "] {
             assert!(!at_end(text).compared, "{text}");
         }
     }

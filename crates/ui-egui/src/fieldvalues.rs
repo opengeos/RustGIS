@@ -243,12 +243,15 @@ pub(crate) fn insert(text: &mut String, field: &str, value: &str, ds: &Dataset, 
         true => format!("{}{after}", head.trim_end()),
         false => format!("{head}{after}"),
     };
-    // Each bracket left open is closed, unless what follows the value closes it or goes on in it
-    // (`IN (▮, 'Africa')`); what follows doesn't otherwise count (an unfinished clause after it
-    // isn't a bracket left open). At most as many as were opened.
-    let opened = head.matches('(').count();
-    for _ in 0..opened {
-        if after.starts_with([')', ',']) || !at_end(&head, ds).is_some_and(|c| c.symbols.contains(&")")) {
+    // Each bracket left open is closed after the value, unless what follows closes it
+    // (`(continent = ▮ AND pop_est > 1)`) or the value goes on in it (`IN (▮, 'Africa')`); what
+    // follows doesn't otherwise count (an unfinished clause after it isn't a bracket left open).
+    let missing = match after.starts_with(',') {
+        true => 0,
+        false => brackets(&head).0.saturating_sub(brackets(after).1),
+    };
+    for _ in 0..missing {
+        if !at_end(&head, ds).is_some_and(|c| c.symbols.contains(&")")) {
             break;
         }
         head.pop();
@@ -265,13 +268,35 @@ pub(crate) fn insert(text: &mut String, field: &str, value: &str, ds: &Dataset, 
     Ok(())
 }
 
+/// The brackets `text` leaves open, and those it closes that it didn't open, outside its texts
+/// and quoted names.
+fn brackets(text: &str) -> (usize, usize) {
+    let (mut open, mut unopened, mut quote) = (0usize, 0usize, None);
+    for c in text.chars() {
+        match (quote, c) {
+            // A doubled quote in a text closes it and opens it again, which counts the same.
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '\'' | '"') => quote = Some(c),
+            (None, '(') => open += 1,
+            (None, ')') => match open.checked_sub(1) {
+                Some(n) => open = n,
+                None => unopened += 1,
+            },
+            _ => {}
+        }
+    }
+    (open, unopened)
+}
+
 /// Whether `text` (what follows the cursor a value goes at) starts with a value, which the value
-/// added would stand beside (`= ▮'Africa'`): a text or quoted name, a number, a bracket, or a name
-/// that isn't a word coming after a value (`AND`, `THEN`, `LIKE`…).
+/// added would stand beside (`= ▮'Africa'`): a text or quoted name, a number or a sign (a value
+/// before `-5` would subtract it), a bracket, or a name that isn't a word coming after a value
+/// (`AND`, `THEN`, `LIKE`…).
 fn starts_an_operand(text: &str) -> bool {
     let text = text.trim_start();
     let Some(first) = text.chars().next() else { return false };
-    if matches!(first, '\'' | '"' | '(' | '@' | '$' | '.') || first.is_ascii_digit() {
+    if matches!(first, '\'' | '"' | '(' | '@' | '$' | '.' | '-' | '+') || first.is_ascii_digit() {
         return true;
     }
     if !(first.is_alphabetic() || first == '_') {
@@ -355,6 +380,9 @@ mod tests {
             // In a list: the value, and the list closed.
             ("continent IN (", "continent", "'Asia'", "continent IN ('Asia') "),
             ("continent IN ('Asia',", "continent", "'Africa'", "continent IN ('Asia', 'Africa') "),
+            // In a bracket where the value goes: the value, and the bracket closed.
+            ("continent = (", "continent", "'Asia'", "continent = ('Asia') "),
+            ("pop_est > ((", "pop_est", "10", "pop_est > ((10)) "),
             // After a bare `IN` or `NOT IN`, a list is next.
             ("continent IN", "continent", "'Asia'", "continent IN ('Asia') "),
             ("continent not in ", "continent", "'Asia'", "continent not in ('Asia') "),
@@ -440,6 +468,19 @@ mod tests {
         let mut text = "continent IN () AND pop_est > ".to_string();
         insert(&mut text, "continent", "'Asia'", &ds, Some(14)).unwrap();
         assert_eq!(text, "continent IN ('Asia') AND pop_est > ");
+        // What follows closes some of them, or all, later on: only the rest are closed. A bracket
+        // in a text isn't one.
+        for (clause, at, expected) in [
+            ("((continent = )", 14, "((continent = 'Asia'))"),
+            ("(continent =  AND pop_est > 1)", 13, "(continent = 'Asia' AND pop_est > 1)"),
+            ("((continent =  AND pop_est > 1)", 14, "((continent = 'Asia') AND pop_est > 1)"),
+            ("((continent =  AND name <> ')')", 14, "((continent = 'Asia') AND name <> ')')"),
+            ("(name <> '(' AND continent = ", 29, "(name <> '(' AND continent = 'Asia') "),
+        ] {
+            let mut text = clause.to_string();
+            insert(&mut text, "continent", "'Asia'", &ds, Some(at)).unwrap();
+            assert_eq!(text, expected, "{clause}");
+        }
     }
 
     /// What would stand beside a value or a field already there is not written: the draft stays,
@@ -453,6 +494,8 @@ mod tests {
             ("continent =  'Africa'", Some(12), "continent"),
             ("pop_est > 5", Some(10), "pop_est"),
             ("continent = name", Some(12), "continent"),
+            ("pop_est > -5", Some(10), "pop_est"),
+            ("pop_est > +5", Some(10), "pop_est"),
             // The field's button clicked after an operator: the field is the value already.
             ("pop_est > continent ", None, "continent"),
             ("name = continent", None, "continent"),

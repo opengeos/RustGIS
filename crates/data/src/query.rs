@@ -823,6 +823,9 @@ struct Probe {
     pattern: bool,
     /// Whether the value at the end is compared, whatever the left side is (`upper(name) = ▮`).
     compared: bool,
+    /// Where the last compared value starts (a token), with `field` and `pattern` for it: a
+    /// bracket opened there compares the value just inside it too (`name = (▮`).
+    compared_from: Option<(usize, Option<usize>, bool)>,
 }
 
 /// How a token is written, for the symbols [`Probe`] notes.
@@ -874,11 +877,28 @@ impl Parser<'_> {
     /// As [`note_compared`](Self::note_compared), the value a `LIKE` pattern when `pattern`.
     fn note_compared_as(&self, l: &Expr, pattern: bool) {
         let field = if let Expr::Field(f) = l { Some(*f) } else { None };
-        self.note(self.pos, |p| {
+        self.note_compared_at(self.pos, field, pattern);
+    }
+    /// Notes that the value starting at token `i` is compared, with `field` when one.
+    fn note_compared_at(&self, i: usize, field: Option<usize>, pattern: bool) {
+        if let Some(probe) = &self.probe {
+            probe.borrow_mut().compared_from = Some((i, field, pattern));
+        }
+        self.note(i, |p| {
             p.compared = true;
             p.field = field;
             p.pattern = pattern;
         });
+    }
+    /// Notes, for a bracket at token `open` where a compared value starts, that the value just
+    /// inside it is compared as well (`name = (▮`, `pop > ((▮`).
+    fn note_compared_within(&self, open: usize) {
+        let from = self.probe.as_ref().and_then(|p| p.borrow().compared_from);
+        if let Some((at, field, pattern)) = from
+            && at == open
+        {
+            self.note_compared_at(open + 1, field, pattern);
+        }
     }
     fn probing(&self) -> bool {
         self.probe.is_some()
@@ -1257,6 +1277,7 @@ impl Parser<'_> {
         self.note(self.pos, |p| p.operand = true);
         match self.next() {
             Some(Tok::LParen) => {
+                self.note_compared_within(self.pos.saturating_sub(1));
                 let e = self.or()?;
                 self.note(self.pos, |p| p.symbols.push(")"));
                 if self.next() != Some(Tok::RParen) {

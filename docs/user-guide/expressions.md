@@ -289,9 +289,11 @@ suggestions leave it out: it would match more than itself, and the box says to u
 a value that would take the clause past its longest length. The values are read as the
 suggestions' are, once when the list is opened and kept while it stays open, and the help says
 when they come from a sample of the layer or, for a streamed layer, from the features read for the
-view, and how many features have a value not listed (longer than 100 characters, or of several
-lines). A field with nothing to list (all null, true or false, or only text too long) says so
-under the buttons.
+view, and how many features have a value not listed (longer than 100 characters, of several
+lines, or a number too large to write in full). True and false are listed as `TRUE` and `FALSE`,
+and a value inside a bracket where one goes is the value alone (`continent = ('Asia')`), each
+bracket left open closed after it. A field with nothing to list (all null, or only values not
+listed) says so under the buttons.
 
 They help too in the clause boxes of several lines: Select By Attributes' **Where**, the Layer
 Properties **Query** tab and a label class's SQL query. There the list shows under the cursor's
