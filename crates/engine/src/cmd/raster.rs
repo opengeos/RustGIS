@@ -426,7 +426,11 @@ pub(super) fn read_notices(s: &mut Session, name: &str, layer: &mut RasterLayer)
                     false,
                 );
             } else {
-                s.notify(format!("{name}: {count} rounded as the file was read: {held}, so an export writes the rounded values"), false);
+                // Read whole, the count is of every value rounded.
+                s.say(rustgis_data::loss::Note::loss(
+                    rustgis_data::loss::LossCode::ChangedRounded,
+                    format!("{name}: {count} rounded as the file was read: {held}, so an export writes the rounded values"),
+                ));
             }
         }
     }
@@ -792,7 +796,10 @@ fn add_jpeg2000_bytes(s: &mut Session, p: &Value, name: &str, bytes: Vec<u8>, zo
     // The GeoTIFF GDAL made names the WGS 84 it assumed, as if the file had.
     r.crs_assumed |= c.assumed_lonlat;
     if c.assumed_lonlat {
-        s.notify(format!("{name} doesn't say its coordinate system; its coordinates look like longitude/latitude, so it's read as WGS 84 (give \"crs\" if not)"), false);
+        s.say(rustgis_data::loss::Note::loss(
+            rustgis_data::loss::LossCode::AssumedCrs,
+            format!("{name} doesn't say its coordinate system; its coordinates look like longitude/latitude, so it's read as WGS 84 (give \"crs\" if not)"),
+        ));
     }
     let title = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).map(str::to_string).unwrap_or_else(|| r.name.clone());
     add_raster_after(s, &title, RasterLayer::from_bytes(r, file_name, c.tif), zoom)

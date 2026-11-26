@@ -529,13 +529,14 @@ fn vet(mut svc: Service, reach: Reach, completing: bool, read: &std::collections
 /// [`place_answer`](rustgis_data::ogc::place_answer); none: left as they come), and a cut-off
 /// answer and a system assumed pointed out.
 pub fn features_answer(s: &mut Session, name: &str, url: &str, bytes: Vec<u8>, bounds: Option<[f64; 4]>) -> Vec<u8> {
+    // The rest of the features, past the server's limit or its first page, aren't read.
     if let Some(note) = rustgis_data::ogc::partial_note(&bytes) {
-        s.notify(format!("{name}: {note}"), false);
+        s.say(rustgis_data::loss::Note::loss(rustgis_data::loss::LossCode::DroppedOverLimit, format!("{name}: {note}")));
     }
     let (bytes, assumed) = rustgis_data::ogc::place_answer(bytes, url, bounds);
     // Once per kind with a count over the command (a service group reads many answers).
     if let Some(assumed) = assumed {
-        s.notify_counted(None, assumed.template(), 1);
+        s.notify_counted(assumed.loss(), assumed.template(), 1);
     }
     bytes
 }

@@ -122,7 +122,7 @@ pub(crate) fn start_project_save(app: &mut RustGisApp, in_place: bool) -> Result
     });
     report.notify(&mut app.session);
     for note in notes {
-        app.session.notify(note, false);
+        app.session.say(note);
     }
     Ok(())
 }

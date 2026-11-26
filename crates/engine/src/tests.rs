@@ -51243,6 +51243,12 @@ fn a_cog_window_comes_in_as_a_raster() {
     s.run("layer.addUrl", &json!({"url": format!("{wide}/ids.tif"), "bbox": [10.0, 45.0, 10.5, 45.5], "name": "Ids"})).unwrap();
     let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
     assert!(said.iter().any(|n| n.starts_with("Ids: 32768 values were rounded as the file was read")), "{said:?}");
+    assert!(
+        s.notices_since(mark)
+            .iter()
+            .any(|n| n.text.starts_with("Ids: 32768 values were rounded") && n.loss() == Some(rustgis_data::loss::LossCode::ChangedRounded)),
+        "{said:?}"
+    );
     // Across tiles, only the window's own cells are counted (the four tiles hold 131,072 odd
     // values; the 256 × 256 window, half of its own).
     let mark = s.notice_mark();
