@@ -1463,7 +1463,8 @@ fn layer_mesh(s: &Session, p: &Value, keep_lines: bool) -> Result<Mesh, String> 
                             twice += ax * by - bx * ay;
                             terms += (ax * by).abs() + (bx * ay).abs();
                         }
-                        twice.is_finite() && twice.abs() > 1e-12 * terms
+                        // A coordinate that isn't finite gives no sum, but a place to lose all the same.
+                        !twice.is_finite() || twice.abs() > 1e-12 * terms
                     })
                 }),
                 Geometry::MultiPoint(points) => !points.is_empty(),
