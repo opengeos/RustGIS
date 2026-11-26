@@ -376,9 +376,9 @@ fn losses(layout: &Layout, maps: &[Map], dpi: f64, info: &PageInfo, only: Option
             let mut labels_cut = false;
             // `fits`: how many of its lines the element draws, when it decides that itself.
             let (s, size, face, align, spacing, rotation, title, broken, fits) = match &e.kind {
-                ElementKind::Text { text: t, size, color, bold, italic, align, letter_spacing, font, font_name, rotation, wrap }
-                    if color.a() > 0 =>
-                {
+                ElementKind::Text {
+                    text: t, size, color, bold, italic, align, letter_spacing, font, font_name, rotation, wrap, ..
+                } if color.a() > 0 => {
                     let style = text_style(*bold, *italic, *font, font_name.as_deref(), *align, *letter_spacing);
                     let s = expand(t, layout, info, first);
                     // Its lines as they are drawn: a wrapped text's, broken to its box.
@@ -899,7 +899,7 @@ fn draw_page(
                     None => placeholder(&mut pm, r, "Colorbar", ppp),
                 }
             }
-            ElementKind::Text { text: t, size, color, bold, italic, align, letter_spacing, font, font_name, rotation, wrap } => {
+            ElementKind::Text { text: t, size, color, bold, italic, align, letter_spacing, font, font_name, rotation, wrap, .. } => {
                 let first = layout.first_frame().and_then(frame);
                 let s = expand(t, layout, info, first.and_then(|f| maps.get(f.1).map(|m| (m, f.2))));
                 let style = text_style(*bold, *italic, *font, font_name.as_deref(), *align, *letter_spacing);

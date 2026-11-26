@@ -8,11 +8,12 @@ use std::sync::LazyLock;
 use rustgis_geom::{Coord, Extent};
 use rustgis_map::layout::{
     Arrange, ArrowStyle, Background, CHART_BAR, CHART_BARS, CHART_OUTLINE, ChartOrder, ChartOutline, CoordFormat, ElementKind, FontFamily,
-    FrameShape, GRID_LABEL_PT, Grid, GridEdges, GridKind, GridStyle, Guides, LAYOUT_TEXT_SIZE, Layout, LineDir, LineHead, MAX_CHART_BARS,
-    MAX_CHART_DECIMALS, MAX_CHART_OUTLINE_WIDTH, MAX_COLORBAR_TICKS, MAX_GRID_WIDTH, MAX_GUIDES, MAX_LEGEND_COLUMNS,
+    FrameShape, GRID_LABEL_PT, Grid, GridEdges, GridKind, GridStyle, Guides, LAYOUT_TEXT_SIZE, LINE_SPACING, Layout, LineDir, LineHead,
+    MAX_CHART_BARS, MAX_CHART_DECIMALS, MAX_CHART_OUTLINE_WIDTH, MAX_COLORBAR_TICKS, MAX_GRID_WIDTH, MAX_GUIDES, MAX_LEGEND_COLUMNS,
     MAX_LEGEND_LABEL_CHARS, MAX_LEGEND_LABELS, MAX_SCALE_BEFORE_ZERO, MAX_SCALE_DECIMALS, MAX_SCALE_DIVISIONS, MAX_SCALE_SUBDIVISIONS,
     MAX_TICK_MM, MAX_UNIT_LABEL_CHARS, MIN_ELEMENT_MM, MapSeries, Orientation, PAGES, SCALE_BAR_TEXT_PT, ScaleBarFit, ScaleBarStyle,
-    ScaleLabelPosition, ScaleUnits, TextAlign, TickSide, UnitLabelPosition, fit_scale, line_angle, line_at_angle, line_length,
+    ScaleLabelPosition, ScaleUnits, TextAlign, TextCase, TextVAlign, TickSide, UnitLabelPosition, fit_scale, line_angle, line_at_angle,
+    line_length,
 };
 use rustgis_map::report::StatKind;
 use rustgis_map::symbology::{Dash, MAX_DASH_STEP, MAX_DASH_STEPS};
@@ -593,6 +594,9 @@ fn pub_text_in(text: String, size: f64, color: Rgba, bold: bool, align: TextAlig
         font_name: None,
         rotation: 0.0,
         wrap: false,
+        valign: TextVAlign::Top,
+        line_spacing: LINE_SPACING,
+        case: TextCase::None,
     }
 }
 
@@ -3877,6 +3881,9 @@ fn add_element(s: &mut Session, p: &Value) -> CmdResult {
                 font_name,
                 rotation,
                 wrap,
+                valign: TextVAlign::Top,
+                line_spacing: LINE_SPACING,
+                case: TextCase::None,
             };
             (if kind == "text" { "Text" } else { "Dynamic Text" }, place(p, l, (15.0, 12.0, 120.0, (size * 0.5).max(8.0)))?, k)
         }
@@ -5611,7 +5618,7 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
         }
     }
     match &mut e.kind {
-        ElementKind::Text { text, size, color, bold, italic, align, letter_spacing, font, font_name, rotation, wrap } => {
+        ElementKind::Text { text, size, color, bold, italic, align, letter_spacing, font, font_name, rotation, wrap, .. } => {
             if let Some(((i, a, l), (f, n))) = new_text_style {
                 (*italic, *align, *letter_spacing, *font, *font_name) = (i, a, l, f, n);
             }

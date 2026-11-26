@@ -58277,6 +58277,9 @@ fn the_footer_lines_up_with_a_legend_at_the_right() {
         font_name: None,
         rotation: 0.0,
         wrap: false,
+        valign: Default::default(),
+        line_spacing: rustgis_map::layout::LINE_SPACING,
+        case: Default::default(),
     };
     let card = || ElementKind::Rectangle {
         fill: rustgis_map::Rgba::new(0, 0, 0, 0),
