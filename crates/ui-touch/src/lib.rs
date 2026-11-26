@@ -2402,6 +2402,8 @@ mod tests {
     fn model_builder_is_left_for_the_map_by_a_button_in_sight() {
         let mut held = Held::new();
         run(&mut held.app, "ui.modelBuilder", json!({}));
+        // A model on the canvas, never saved: every way back keeps it.
+        held.app.mb.graph = serde_json::from_value(json!({"nodes": [{"id": "in", "kind": "input", "layer": "Cities"}]})).unwrap();
         held.frame(Vec::new());
         assert_eq!(held.find("France"), None, "the model is in view, not the map");
         let back = held.find("Back to the map").unwrap();
@@ -2431,6 +2433,8 @@ mod tests {
         held.frame(Vec::new());
         assert!(held.app.mb.shown());
         assert_eq!(held.find("France"), None, "the model is in view, not the map");
+        let nodes: Vec<_> = held.app.mb.graph.nodes.iter().map(|n| n.id.as_str()).collect();
+        assert_eq!(nodes, ["in"]);
     }
 
     #[test]
