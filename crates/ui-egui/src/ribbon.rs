@@ -376,6 +376,7 @@ fn tab_strip(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             }
             if let Some((label, w)) = tool {
                 let (r, resp) = ui.allocate_exact_size(vec2(w, 22.0), Sense::click());
+                resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
                 ui.painter().rect_filled(r, CornerRadius::same(11), t.checked);
                 ui.painter().text(r.center(), Align2::CENTER_CENTER, label, regular(11.5), t.accent_text);
                 if resp.clicked() {
@@ -5881,6 +5882,27 @@ mod tests {
         );
         h.run();
         h
+    }
+
+    /// The tab strip's tool indicator is a button named with its text, which stops the tool; with
+    /// the Explore tool there is none.
+    #[test]
+    fn the_tool_indicator_is_a_named_button_that_stops_the_tool() {
+        use egui::accesskit::Role;
+        const LABEL: &str = "Measure Distance tool active · Esc to stop";
+        let strip: fn(&mut RustGisApp, &mut Ui) = |app, ui| tab_strip(app, ui, &Tokens::light());
+        let mut h = tab_harness(RustGisApp::with_sample(), strip);
+        assert_eq!(h.state().session.tool, Tool::Explore);
+        assert!(h.query_by_label_contains("tool active").is_none());
+        h.state_mut().session.tool = Tool::Measure;
+        h.state_mut().map.add_sketch_point_for_tests(Default::default());
+        // The strip scrolls to the active tab again as its room changes, for a few frames.
+        h.run_steps(8);
+        h.get_by_role_and_label(Role::Button, LABEL).click();
+        h.run_steps(8);
+        assert_eq!(h.state().session.tool, Tool::Explore);
+        assert_eq!(h.state().map.sketch_len(), 0);
+        assert!(h.query_by_label(LABEL).is_none());
     }
 
     /// View › Display › Graticule: the button shows or hides it, its menu picks the type (and shows
