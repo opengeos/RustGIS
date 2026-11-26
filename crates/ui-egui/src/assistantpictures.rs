@@ -421,6 +421,10 @@ mod tests {
         app.assistant.input = "AB".into();
         crate::assistant::send(&mut app, "AB".into(), &ctx);
         assert_eq!((app.assistant.queued.as_deref(), app.assistant.input.as_str()), (Some("AB"), "AB"));
+        // The box cleared meanwhile: a new conversation puts the waiting draft back.
+        app.assistant.input.clear();
+        crate::assistant::new_conversation(&mut app);
+        assert_eq!((app.assistant.queued.as_deref(), app.assistant.input.as_str()), (None, "AB"));
     }
 
     #[test]

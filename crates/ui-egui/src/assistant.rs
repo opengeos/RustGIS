@@ -816,6 +816,12 @@ pub fn send(app: &mut RustGisApp, text: String, ctx: &egui::Context) {
 /// isn't sent, the box's own is already there.
 fn send_from(app: &mut RustGisApp, text: String, from_box: bool, ctx: &egui::Context) {
     ensure_loaded(app, ctx);
+    // No text and no picture, ready or being read (Enter on an empty box): nothing to send, and
+    // nothing waiting is disturbed.
+    let pictures = &app.assistant.pictures;
+    if text.trim().is_empty() && !pictures.any() && !pictures.reading() {
+        return;
+    }
     if app.assistant.busy() {
         if !from_box {
             to_box(&mut app.assistant, &text);
@@ -842,7 +848,13 @@ fn send_from(app: &mut RustGisApp, text: String, from_box: bool, ctx: &egui::Con
     app.assistant.history_pos = None;
     app.assistant.always = false;
     let session = &app.session;
-    let Some(agent) = app.assistant.agent.as_mut() else { return };
+    // `ensure_loaded` gave it an agent; were there none, the message stays to send again.
+    let Some(agent) = app.assistant.agent.as_mut() else {
+        if !from_box {
+            to_box(&mut app.assistant, &text);
+        }
+        return;
+    };
     let step = agent.ask_with(&text, app.assistant.pictures.take(), session);
     if app.assistant.input.trim() == text {
         app.assistant.input.clear();
@@ -889,8 +901,10 @@ pub fn stop(app: &mut RustGisApp) {
 /// draft when the box is empty or already holds it, above newer typing otherwise.
 pub(crate) fn unqueue(state: &mut AssistantState) {
     let from_box = std::mem::take(&mut state.queued_from_box);
+    // The box's own draft is there still, or what the user typed over it; one they cleared
+    // comes back.
     if let Some(text) = state.queued.take()
-        && !from_box
+        && (!from_box || state.input.trim().is_empty())
     {
         to_box(state, &text);
     }
