@@ -5408,7 +5408,11 @@ fn label_expressions_say_what_they_lose() {
     s.run("labels.by", &json!({"layer": "Cities", "text": long})).unwrap();
     let n = s.run("labels.convert", &json!({"layer": "Cities"})).unwrap()["annotations"].as_u64().unwrap();
     let said = format!("Cities Annotation: {n} label texts cut to {} characters", rustgis_map::label_by::MAX_LABEL_TEXT);
-    assert!(s.notices.iter().any(|x| x.text == said), "{:?}", s.notices.last());
+    assert!(
+        s.notices.iter().any(|x| x.text == said && x.loss() == Some(rustgis_data::loss::LossCode::ChangedCut)),
+        "{:?}",
+        s.notices.last()
+    );
     s.undo();
     // Project Info names the text expression the labels draw by, and the field once it doesn't read.
     s.map_mut().layer_mut(cities).unwrap().labels.default.field = "name".into();
@@ -31464,8 +31468,15 @@ fn geocoding_with_the_locatieserver() {
         (path("Kapot", 5), br#"{"response":{"docs":[{"weergavenaam":"x","centroide_ll":"POINT(x y)"}]}}"#.to_vec()),
     ]);
     let url = format!("{base}/free");
-    let left_out =
-        |s: &Session| s.notices.iter().filter(|n| n.text.contains("no usable position")).map(|n| n.text.clone()).collect::<Vec<_>>();
+    // Each with its code: the places are left out of what the geocoder found.
+    let left_out = |s: &Session| {
+        s.notices
+            .iter()
+            .filter(|n| n.text.contains("no usable position"))
+            .inspect(|n| assert_eq!(n.loss(), Some(rustgis_data::loss::LossCode::DroppedFeature), "{}", n.text))
+            .map(|n| n.text.clone())
+            .collect::<Vec<_>>()
+    };
     let mut s = Session::new(Project::default());
     let r = s.run("map.findPlace", &json!({"query": "Damrak 1, Amsterdam", "provider": "locatieserver", "url": url})).unwrap();
     assert_eq!(r["count"], 2, "{r}");
