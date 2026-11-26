@@ -1500,6 +1500,14 @@ fn raster_image_markers_read_a_file_address_as_the_file_it_names() {
         assert_eq!(*asked.borrow(), [path], "{file}");
         assert!(report.notes.is_empty(), "{file}: {:?}", report.notes);
     }
+    // A relative name with `://` encoded in it isn't read from wherever the program runs, though.
+    asked.borrow_mut().clear();
+    let mut report = Report::default();
+    let s = super::read_style(&marker_qml("1", &raster_marker("file:./a%3A%2F%2Fb.png", "")), "Pins", "/styles", &mut read, &mut report)
+        .unwrap();
+    let Some(Renderer::Single(sym)) = &s.renderer else { panic!() };
+    assert_eq!(sym.marker, Marker::Circle);
+    assert!(asked.borrow().is_empty(), "{:?}", asked.borrow());
 }
 
 /// A raster image marker whose image a field or an expression gives has no image of its own to

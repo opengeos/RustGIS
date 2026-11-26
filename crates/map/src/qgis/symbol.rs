@@ -891,6 +891,12 @@ fn marker(layers: &[(Node, Props)], reference: Option<f64>, still: bool, layer: 
     Converted { symbol, strokes, rotation: None, by: SymbolBy::default(), fills: Vec::new() }
 }
 
+/// Whether `path` starts from a root (`/…`, `\\…`, `C:\…`), not from the project's folder.
+fn rooted(path: &str) -> bool {
+    let b = path.as_bytes();
+    path.starts_with(['/', '\\']) || (b.first().is_some_and(u8::is_ascii_alphabetic) && b.get(1) == Some(&b':'))
+}
+
 /// Whether image path `file` names a network share (`\\host\share`, `//host/share`), which isn't
 /// opened: looking one up can sign in to the host, and a project may be opened on Windows, where
 /// `//` is one (as `paths::is_absolute_local` refuses it on every platform).
@@ -939,8 +945,11 @@ pub(super) fn read_images(root: Node, dir: &str, read: &mut ReadImage, report: &
             // Looking a share up can sign in to the host the file names, which a style or
             // project chose (as an archive on one isn't opened either).
             Err("whose image is on a network share, which RustGIS doesn't open")
-        // (A `file:` address is a web address only as written: `%3A%2F%2F` in a decoded name is a name.)
-        } else if path.contains("://") && (!address || file.trim_start_matches("file:").trim_start_matches('/').contains("://")) {
+        // (A `file:` address is a web address only as written: `%3A%2F%2F` in a decoded name is a name, but one
+        // from the project's folder is refused, as `absolute` would leave it to the working folder.)
+        } else if path.contains("://")
+            && (!address || !rooted(&path) || file.trim_start_matches("file:").trim_start_matches('/').contains("://"))
+        {
             Err("whose image is at a web address, which RustGIS doesn't fetch")
         } else if super::is_drive_relative(&path) {
             Err("whose image file is relative to a drive's working folder, which no project folder tells")

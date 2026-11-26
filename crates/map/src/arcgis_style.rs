@@ -518,7 +518,12 @@ fn symbol(s: &Value, g: GeometryType, picture: Option<Rgba>, pictures: &mut Pict
             // said once.
             let points = |k: &str| s.get(k).and_then(Value::as_f64).filter(|v| v.is_finite()).unwrap_or(f64::NEG_INFINITY);
             let larger = if points("height") > points("width") { s.get("height") } else { s.get("width") };
-            let size = size(larger, base.size, notes);
+            // With a size given and none above 0 (a size of 0 isn't shown), RustGIS's, said.
+            let none = points("height").max(points("width")) <= 0.0 && points("height").max(points("width")) > f64::NEG_INFINITY;
+            if none {
+                notes.add("picture markers with no size, drawn at RustGIS's");
+            }
+            let size = size(if none { None } else { larger }, base.size, notes);
             Some((Symbol { fill, size, ..base }, None))
         }
         ("esriPFS", GeometryType::Polygon) => {
@@ -846,6 +851,18 @@ mod tests {
         // Its image only at its `url`, which RustGIS doesn't fetch.
         let url = json!({"type": "esriPMS", "url": "4d1f6b3c", "width": 15, "height": 18});
         assert_eq!(circle(url), "picture markers whose image is only at a URL, drawn as circles");
+        // With no size above 0 either, the circle is RustGIS's size (not 0, not shown), said.
+        let (l, notes) = styled(
+            GeometryType::Point,
+            json!({"renderer": {"type": "simple", "symbol": {"type": "esriPMS", "imageData": gif, "width": 0, "height": 0}}}),
+        );
+        let Renderer::Single(s) = l.renderer else { panic!("a single symbol") };
+        let Renderer::Single(base) = layer(GeometryType::Point).renderer else { panic!("a single symbol") };
+        assert_eq!((s.marker, s.size), (Marker::Circle, base.size));
+        assert_eq!(
+            notes.text(),
+            "picture markers whose image isn't a PNG, JPEG or SVG RustGIS reads, drawn as circles; picture markers with no size, drawn at RustGIS's"
+        );
         assert_eq!(Picture::kept(gif), None, "an image that isn't drawn isn't kept");
     }
 
