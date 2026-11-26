@@ -3777,6 +3777,28 @@ mod tests {
         h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
         h.run();
         assert_eq!(h.state().workflow.script, script, "Replace All is one undo step");
+        // Replacing a match with the same text records no step: one Undo still goes back past it.
+        h.get_by_label("Replace All").click();
+        h.run();
+        h.ctx.memory_mut(|m| m.request_focus(replace_id));
+        h.run();
+        h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        h.event(Event::Text("Towns".into()));
+        h.run();
+        h.ctx.memory_mut(|m| m.request_focus(box_id.with("find_query")));
+        h.run();
+        h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        h.event(Event::Text("Towns".into()));
+        h.run();
+        h.get_by_label("Replace (Enter)").click();
+        h.run();
+        h.get_by_label("Replace All").click();
+        h.run();
+        h.ctx.memory_mut(|m| m.request_focus(box_id));
+        h.run();
+        h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+        h.run();
+        assert_eq!(h.state().workflow.script, script, "no step that changes nothing");
     }
 
     /// The highlight goes over every row of a script that wraps, and a find with nothing in it, a

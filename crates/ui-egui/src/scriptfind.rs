@@ -114,6 +114,14 @@ pub fn replace_one(text: &str, range: Range<usize>, with: &str) -> String {
     text.chars().take(start).chain(with.chars()).chain(text.chars().skip(end)).collect()
 }
 
+/// `new` in place of `script`, as one step of the box's Undo; the same text records none.
+fn write(ctx: &egui::Context, box_id: egui::Id, script: &mut String, new: String) {
+    if new != *script {
+        crate::analysispane::keep_for_undo_of(ctx, box_id, script);
+        *script = new;
+    }
+}
+
 /// `text` with every match of `found` replaced by `with`.
 pub fn replace_all(text: &str, found: &Found, with: &str) -> String {
     let mut out = String::with_capacity(text.len());
@@ -260,8 +268,8 @@ enum Does {
     Previous,
 }
 
-/// A shortcut of the box and its bar: Ctrl or ⌘ held (`command`), Alt as given, and the key.
-/// A letter takes Shift or not; F3 takes it as given.
+/// A shortcut of the box and its bar: Ctrl or ⌘ held (`command`), Alt and Shift, as given, and the
+/// key.
 #[derive(Clone, Copy, PartialEq)]
 struct Chord {
     command: bool,
@@ -277,8 +285,8 @@ const fn chord(command: bool, alt: bool, shift: bool, key: egui::Key, does: Does
 
 /// The shortcuts of a code editor, the one list the box takes its keys from and the web app keeps
 /// from the browser: Ctrl+F (⌘F) finds; Ctrl+H, ⌥⌘F on a Mac (where ⌘H hides the app), finds with
-/// the Replace row; F3 and Shift+F3 step. Alt is as listed: elsewhere than a Mac, Ctrl+Alt is
-/// AltGr, and AltGr+F types a letter on many layouts.
+/// the Replace row; F3 and Shift+F3 step. Alt and Shift are as listed: elsewhere than a Mac,
+/// Ctrl+Alt is AltGr, and AltGr+F types a letter on many layouts.
 fn chords(mac: bool) -> [Chord; 4] {
     use egui::Key;
     let replace =
@@ -293,8 +301,7 @@ fn chords(mac: bool) -> [Chord; 4] {
 
 impl Chord {
     fn is_pressed_with(&self, m: egui::Modifiers) -> bool {
-        let shift = self.key != egui::Key::F3 || m.shift == self.shift;
-        m.command == self.command && m.alt == self.alt && shift
+        m.command == self.command && m.alt == self.alt && m.shift == self.shift
     }
 
     /// Takes this chord's presses out of the frame's events, so nothing else sees them.
@@ -630,8 +637,7 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
         Some(Action::Previous) => bar.go(step(bar.found.ranges.len(), bar.current, true)),
         Some(Action::Replace) => {
             if let Some(r) = bar.current.and_then(|i| bar.found.ranges.get(i)).cloned().filter(|_| !running) {
-                crate::analysispane::keep_for_undo_of(ui.ctx(), box_id, script);
-                *script = replace_one(script, r.clone(), &bar.replace.text);
+                write(ui.ctx(), box_id, script, replace_one(script, r.clone(), &bar.replace.text));
                 let after = r.start + bar.replace.text.chars().count();
                 crate::widgets::set_cursor_range(ui.ctx(), box_id, CCursorRange::one(CCursor::new(after)));
                 bar.anchor = after;
@@ -646,8 +652,7 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
                 if new.len() > crate::SCRIPT_FILE_MAX_BYTES && new.len() > script.len() {
                     said.push(tl!("Replace All would make the script larger than 1 MB: nothing was replaced").to_string());
                 } else {
-                    crate::analysispane::keep_for_undo_of(ui.ctx(), box_id, script);
-                    *script = new;
+                    write(ui.ctx(), box_id, script, new);
                     crate::widgets::set_cursor_range(ui.ctx(), box_id, CCursorRange::one(CCursor::new(0)));
                     bar.anchor = 0;
                     bar.reseek = true;
@@ -773,7 +778,8 @@ mod tests {
         for mac in [false, true] {
             let does = |key: Key, m: Modifiers| chords(mac).iter().find(|c| c.key == key && c.is_pressed_with(m)).map(|c| c.does);
             assert_eq!(does(Key::F, command), Some(Does::Find));
-            assert_eq!(does(Key::F, command | Modifiers::SHIFT), Some(Does::Find), "a letter takes Shift");
+            assert_eq!(does(Key::F, command | Modifiers::SHIFT), None, "Ctrl+Shift+F is not this box's");
+            assert_eq!(does(Key::H, command | Modifiers::SHIFT), None);
             assert_eq!(does(Key::F, altgr), mac.then_some(Does::FindAndReplace), "AltGr types a letter");
             assert_eq!(does(Key::H, command), (!mac).then_some(Does::FindAndReplace), "⌘H hides the app");
             assert_eq!(does(Key::H, altgr), None);
