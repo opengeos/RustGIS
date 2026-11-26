@@ -3913,17 +3913,28 @@ fn qgis_annotation_layers_import_as_graphics_layers() {
     // Given as text with no folder: the relative picture is noted, the rest comes in.
     let text = std::fs::read_to_string(&path).unwrap();
     let r = s.run("project.importQgis", &json!({"text": text})).unwrap();
-    assert!(
-        notes(&r)
-            .iter()
-            .any(|n| n.starts_with("a picture annotation's picture, which doesn't read (the first: ../data/picture.png, relative")),
-        "{:?}",
-        notes(&r)
-    );
+    assert!(notes(&r).iter().any(|n| n.contains("relative to a folder the import wasn't given")), "{:?}", notes(&r));
     let l = s.map().layer_by_name("styled annotations").unwrap();
     assert!((0..l.dataset.features.len()).all(|r| rustgis_map::graphics::kind(&l.dataset, r) != "picture"));
     let texts = (0..l.dataset.features.len()).filter(|r| rustgis_map::graphics::label(&l.dataset, *r).is_some()).count();
     assert_eq!(texts, 8, "the texts come in all the same");
+
+    // Unsafe picture annotation paths (network shares, drive-relative, web URLs, attachments) are skipped.
+    let unsafe_qgs = r#"<qgis><projectCrs><spatialrefsys><authid>EPSG:4326</authid></spatialrefsys></projectCrs><projectlayers>
+      <maplayer type="annotation"><id>a</id><layername>Unsafe</layername><items>
+        <item type="picture" path="\\server\share\a.png" xMin="0" yMin="0" xMax="1" yMax="1"/>
+        <item type="picture" path="/\server\share\b.png" xMin="0" yMin="0" xMax="1" yMax="1"/>
+        <item type="picture" path="C:rel.png" xMin="0" yMin="0" xMax="1" yMax="1"/>
+        <item type="picture" path="https://example.com/c.png" xMin="0" yMin="0" xMax="1" yMax="1"/>
+        <item type="picture" path="attachment:d.png" xMin="0" yMin="0" xMax="1" yMax="1"/>
+      </items></maplayer></projectlayers></qgis>"#;
+    let r = s.run("project.importQgis", &json!({"text": unsafe_qgs, "dir": "/tmp"})).unwrap();
+    let l = s.map().layer_by_name("Unsafe").unwrap();
+    assert!(l.dataset.features.is_empty());
+    assert!(notes(&r).iter().any(|n| n.contains("network share")), "{:?}", notes(&r));
+    assert!(notes(&r).iter().any(|n| n.contains("drive's working folder")), "{:?}", notes(&r));
+    assert!(notes(&r).iter().any(|n| n.contains("web address")), "{:?}", notes(&r));
+    assert!(notes(&r).iter().any(|n| n.contains(".qgz project")), "{:?}", notes(&r));
 }
 
 /// A QGIS style's raster image markers draw their PNG or JPEG file, read from the style's folder;

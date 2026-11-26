@@ -910,23 +910,10 @@ pub(super) fn read_images(root: Node, dir: &str, read: &mut ReadImage, report: &
         if report.images.contains_key(file) {
             continue;
         }
-        let source = if file.starts_with("base64:") {
-            Ok(None)
-        } else if file.starts_with("attachment:") {
-            Err("whose image is kept inside the .qgz project, which RustGIS doesn't read it from")
-        } else if file.contains("://") {
-            Err("whose image is at a web address, which RustGIS doesn't fetch")
-        } else if file.len() > 1 && file.chars().take(2).all(|c| c == '\\' || c == '/') {
-            // Looking a share up can sign in to the host the file names, which a style or
-            // project chose (as an archive on one isn't opened either).
-            Err("whose image is on a network share, which RustGIS doesn't open")
-        } else if super::is_drive_relative(file) {
-            Err("whose image file is relative to a drive's working folder, which no project folder tells")
-        } else if super::is_relative(file) && dir.is_empty() {
-            Err("whose image file is relative to a folder the import wasn't given")
-        } else {
-            Ok(Some(super::source::absolute(file, dir)))
-        };
+        let source = super::source::local_image_source(file, dir).map(|s| match s {
+            super::source::ImageSource::Base64 => None,
+            super::source::ImageSource::File(path) => Some(path),
+        });
         if let Ok(Some(path)) = &source
             && let Some(got) = files.get(path)
         {

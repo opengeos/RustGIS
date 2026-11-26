@@ -93,6 +93,9 @@ pub fn portal_base(input: &str) -> Result<String, String> {
     }
     let (origin, path) =
         split(raw).ok_or_else(|| rustgis_data::diagnostics::message_with_address(raw, "a portal is given by its https:// address"))?;
+    if crate::address::reach(&origin) == crate::address::Reach::Forbidden {
+        return Err(rustgis_data::diagnostics::message_with_address(raw, "that address is never fetched"));
+    }
     if origin == "https://arcgis.com" {
         return Ok(ONLINE.to_string());
     }
@@ -255,9 +258,13 @@ impl Scope {
     }
 
     fn covers(&self, origin: &str, path: &str) -> bool {
-        // A path whose dot segments a client would resolve (`/server/../other/`) is judged by
+        // A path whose dot segments or encoded/backslash separators a client or server would
+        // resolve (`/server/../other/`, `/server/%2f../other/`, `/server\..\other`) is judged by
         // where it leads, so it gets no token at all.
         let lower = path.to_ascii_lowercase();
+        if lower.contains('\\') || lower.contains("%5c") || lower.contains("%2f") {
+            return false;
+        }
         if lower.split('/').any(|seg| {
             let seg = seg.replace("%2e", ".");
             seg == "." || seg == ".."
@@ -269,7 +276,6 @@ impl Scope {
                 if o != origin {
                     return false;
                 }
-                let lower = path.to_ascii_lowercase();
                 lower.starts_with(p.as_str()) || format!("{lower}/") == *p
             }
             Scope::Org(id) => {
@@ -861,15 +867,16 @@ mod native {
         static READS: OnceLock<ureq::Agent> = OnceLock::new();
         (if forms { &FORMS } else { &READS }).get_or_init(|| {
             // A token request is never redirected: a redirect would replay the code or the refresh token.
-            ureq::Agent::config_builder()
+            let config = ureq::Agent::config_builder()
                 .tls_config(rustgis_data::http::tls_config())
                 .http_status_as_error(!forms)
                 .timeout_global(Some(REQUEST_TIMEOUT))
                 .user_agent(concat!("RustGIS/", env!("CARGO_PKG_VERSION"), " (+https://rustgis.app)"))
+                .proxy(None)
                 .max_redirects(0)
                 .max_idle_connections(0)
-                .build()
-                .into()
+                .build();
+            crate::cache::checked_local_agent(config)
         })
     }
 
@@ -1142,6 +1149,15 @@ mod native {
         assert!(!revoked(br#"{"success": false}"#));
         assert!(!revoked(br#"{"error": {"code": 400, "error": "invalid_request"}}"#));
         assert!(!revoked(b"<html>Bad Gateway</html>"));
+    }
+
+    #[cfg(test)]
+    #[test]
+    fn agent_disables_proxy() {
+        assert!(agent(true).config().proxy().is_none(), "forms agent must not use an ambient proxy");
+        assert!(agent(false).config().proxy().is_none(), "reads agent must not use an ambient proxy");
+        let err = agent(true).get("http://169.254.169.254/").call().unwrap_err();
+        assert!(matches!(err, ureq::Error::Io(ref io) if io.kind() == std::io::ErrorKind::PermissionDenied), "{err:?}");
     }
 
     /// Sends revocations off the caller's thread, on a best-effort basis. When the system refuses

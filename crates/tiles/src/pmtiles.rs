@@ -199,18 +199,50 @@ pub fn check_local(archive: &str) -> Result<(), String> {
     check_local_path(archive, "a PMTiles file", &["pmtiles"])
 }
 
+fn is_path_sep(b: u8) -> bool {
+    b == b'/' || b == b'\\'
+}
+
+fn has_leading_double_sep(p: &str) -> bool {
+    let b = p.as_bytes();
+    b.first().copied().is_some_and(is_path_sep) && b.get(1).copied().is_some_and(is_path_sep)
+}
+
+fn is_drive_abs(p: &str) -> bool {
+    let b = p.as_bytes();
+    b.first().is_some_and(u8::is_ascii_alphabetic) && b.get(1) == Some(&b':') && b.get(2).copied().is_some_and(is_path_sep)
+}
+
+fn is_drive_rel(p: &str) -> bool {
+    let b = p.as_bytes();
+    b.first().is_some_and(u8::is_ascii_alphabetic) && b.get(1) == Some(&b':') && !b.get(2).copied().is_some_and(is_path_sep)
+}
+
+/// Checks that `archive` is an absolute path on this computer (not a network share, mixed-slash
+/// UNC prefix, or Windows drive-relative path) and returns the path with any `file://` prefix
+/// removed. `kind` names the file in the refusal.
+pub(crate) fn check_local_prefix<'a>(archive: &'a str, kind: &str) -> Result<&'a str, String> {
+    let (is_file_url, p) = match archive.strip_prefix("file://") {
+        Some(p) => (true, p),
+        None => (false, archive),
+    };
+    let drive = is_drive_abs(p);
+    // A path on this computer: not a network share (\\server\share, //server/share, /\server\share,
+    // \/server/share, or file://server/…), which a project could use to make Windows connect to
+    // another machine.
+    let share = has_leading_double_sep(p)
+        || (is_file_url && (!p.starts_with('/') || p.strip_prefix('/').is_some_and(|r| has_leading_double_sep(r) || is_drive_rel(r))));
+    if share || !(p.starts_with('/') || drive) || p.chars().any(char::is_control) || p.len() > 4096 {
+        return Err(format!("'{p}': {kind} is given by its full path on this computer"));
+    }
+    Ok(p)
+}
+
 /// Whether a local file may be read by range: an absolute path on this computer (not a network
 /// share) whose extension is one of `extensions` (lowercase, without the dot). `kind` names the
 /// file in the refusal.
 pub(crate) fn check_local_path(archive: &str, kind: &str, extensions: &[&str]) -> Result<(), String> {
-    let p = archive.strip_prefix("file://").unwrap_or(archive);
-    let drive = p.as_bytes().get(1) == Some(&b':') && p.as_bytes().first().is_some_and(u8::is_ascii_alphabetic);
-    // A path on this computer: not a network share (\\server\share, or file://server/…), which a
-    // project could use to make Windows connect to another machine.
-    let share = p.starts_with("\\\\") || p.starts_with("//") || (archive.starts_with("file://") && !p.starts_with('/'));
-    if share || !(p.starts_with('/') || drive) || p.chars().any(char::is_control) || p.len() > 4096 {
-        return Err(format!("'{p}': {kind} is given by its full path on this computer"));
-    }
+    let p = check_local_prefix(archive, kind)?;
     let lower = p.to_ascii_lowercase();
     if !extensions.iter().any(|e| lower.rsplit_once('.').is_some_and(|(_, ext)| ext == *e)) {
         let named: Vec<String> = extensions.iter().map(|e| format!(".{e}")).collect();
@@ -2075,5 +2107,35 @@ pub(crate) mod tests {
             let _ = get(&format!("pmtiles:0/0/0@{}", t.display()));
         }
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn check_local_path_rejects_mixed_separators_and_drive_relative() {
+        for good in [
+            "/data/a.pmtiles",
+            "C:\\data\\a.pmtiles",
+            "C:/data/a.pmtiles",
+            "file:///data/a.pmtiles",
+            "file:///C:/data/a.pmtiles",
+            "file:///C:\\data\\a.pmtiles",
+        ] {
+            assert!(check_local(good).is_ok(), "{good}");
+        }
+        for bad in [
+            "\\\\server\\share\\a.pmtiles",
+            "//server/share/a.pmtiles",
+            "/\\server\\share\\a.pmtiles",
+            "\\/server/share/a.pmtiles",
+            "file://server/share/a.pmtiles",
+            "file:////server/share/a.pmtiles",
+            "file:///\\\\server\\share\\a.pmtiles",
+            "file:///\\server\\share\\a.pmtiles",
+            "file://\\/server/share/a.pmtiles",
+            "C:map.pmtiles",
+            "file:///C:map.pmtiles",
+            "relative.pmtiles",
+        ] {
+            assert!(check_local(bad).is_err(), "{bad}");
+        }
     }
 }

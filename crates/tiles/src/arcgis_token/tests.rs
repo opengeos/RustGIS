@@ -133,6 +133,13 @@ fn arcgis_token_endpoints_stay_on_the_connection_origin() {
         assert_eq!(check_endpoint(bad, origin), Err(BAD_ENDPOINT), "{bad}");
     }
     assert_eq!(check_endpoint(&format!("https://gis.example.test/{}", "a".repeat(MAX_ENDPOINT)), origin), Err(BAD_ENDPOINT));
+    for (endpoint, forbidden_origin) in [
+        ("https://169.254.169.254/arcgis/tokens/generateToken", "https://169.254.169.254"),
+        ("https://100.100.100.200/arcgis/tokens/generateToken", "https://100.100.100.200"),
+        ("https://metadata.google.internal/arcgis/tokens/generateToken", "https://metadata.google.internal"),
+    ] {
+        assert_eq!(check_endpoint(endpoint, forbidden_origin), Err(BAD_ENDPOINT), "{endpoint}");
+    }
 }
 
 #[test]
@@ -159,6 +166,7 @@ mod native {
         ureq::Agent::config_builder()
             .http_status_as_error(false)
             .timeout_global(Some(Duration::from_secs(10)))
+            .proxy(None)
             .max_redirects(0)
             .max_idle_connections(0)
             .build()

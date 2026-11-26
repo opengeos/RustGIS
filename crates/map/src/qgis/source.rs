@@ -1019,6 +1019,119 @@ pub fn is_drive_relative(path: &str) -> bool {
     b.get(1) == Some(&b':') && b.first().is_some_and(u8::is_ascii_alphabetic) && !matches!(b.get(2), Some(b'/' | b'\\'))
 }
 
+/// Where a QGIS image (a raster image marker or a picture annotation) comes from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ImageSource {
+    /// Embedded inline (`base64:…`).
+    Base64,
+    /// A local file path, resolved from the project's folder when relative.
+    File(String),
+}
+
+/// Whether `path` starts with two path separators (`\\`, `//`, `/\`, `\/`), i.e. a UNC/network share.
+fn is_unc_path(path: &str) -> bool {
+    path.len() > 1 && path.chars().take(2).all(|c| c == '\\' || c == '/')
+}
+
+/// Strips the user-opened project folder `dir` and its following separator from `file`, returning
+/// the remainder. For UNC project folders, `/` and `\` are treated as equivalent in the prefix so
+/// Qt's forward-slash UNC spelling matches a Windows backslash folder.
+fn strip_project_dir<'a>(file: &'a str, dir: &str) -> Option<&'a str> {
+    let base = dir.trim_end_matches(['/', '\\']);
+    if base.is_empty() {
+        return None;
+    }
+    if let Some(rest) = file.strip_prefix(base).and_then(|r| r.strip_prefix(['/', '\\'])) {
+        return Some(rest);
+    }
+    if is_unc_path(base) {
+        let mut f = file.char_indices();
+        for bc in base.chars() {
+            let (_, fc) = f.next()?;
+            let both_sep = matches!(bc, '/' | '\\') && matches!(fc, '/' | '\\');
+            if fc != bc && !both_sep {
+                return None;
+            }
+        }
+        let (_, sep) = f.next()?;
+        if matches!(sep, '/' | '\\') {
+            return f.next().and_then(|(i, _)| file.get(i..));
+        }
+    }
+    None
+}
+
+/// Whether `file` already names a file inside `dir` (not empty, not starting with a separator,
+/// and never climbing above `dir` through `..` segments).
+fn is_under_project_dir(file: &str, dir: &str) -> bool {
+    let Some(rest) = strip_project_dir(file, dir) else {
+        return false;
+    };
+    if rest.is_empty() || rest.starts_with(['/', '\\']) {
+        return false;
+    }
+    let mut depth = 0usize;
+    for seg in rest.split(['/', '\\']) {
+        match seg {
+            "" | "." => {}
+            ".." => {
+                let Some(next) = depth.checked_sub(1) else {
+                    return false;
+                };
+                depth = next;
+            }
+            _ => depth += 1,
+        }
+    }
+    depth > 0
+}
+
+/// Shared validation for [`local_image_source`] (`resolve = true`, for raw XML paths) and
+/// [`check_resolved_image_source`] (`resolve = false`, for paths already resolved against `dir`).
+fn check_image_source(file: &str, dir: &str, resolve: bool) -> Result<ImageSource, &'static str> {
+    let file = file.trim();
+    if file.starts_with("base64:") {
+        Ok(ImageSource::Base64)
+    } else if file.get(..11).is_some_and(|p| p.eq_ignore_ascii_case("attachment:")) {
+        Err("whose image is kept inside the .qgz project, which RustGIS doesn't read it from")
+    } else if file.contains("://") {
+        Err("whose image is at a web address, which RustGIS doesn't fetch")
+    } else if !is_relative(file) && is_under_project_dir(file, dir) {
+        Ok(ImageSource::File(file.to_string()))
+    } else if is_unc_path(file) {
+        // Looking a share up can sign in to the host the file names, which a style or
+        // project chose (as an archive on one isn't opened either).
+        Err("whose image is on a network share, which RustGIS doesn't open")
+    } else if is_drive_relative(file) {
+        Err("whose image file is relative to a drive's working folder, which no project folder tells")
+    } else if is_relative(file) && dir.is_empty() {
+        Err("whose image file is relative to a folder the import wasn't given")
+    } else if resolve {
+        let resolved = absolute(file, dir);
+        if is_unc_path(&resolved) && !is_under_project_dir(&resolved, dir) {
+            Err("whose image is on a network share, which RustGIS doesn't open")
+        } else {
+            Ok(ImageSource::File(resolved))
+        }
+    } else {
+        Ok(ImageSource::File(file.to_string()))
+    }
+}
+
+/// Checks a QGIS image path (`imageFile` or picture annotation `path`) against `dir` (empty when
+/// the import has no project folder). Rejects `.qgz` attachments, web addresses, network shares
+/// (`\\host\share`, `//host/share`, `/\host\share`, `\/host/share`) outside the user-opened
+/// project folder `dir`, drive-relative paths (`C:foo.png`), and relative paths without a folder.
+pub fn local_image_source(file: &str, dir: &str) -> Result<ImageSource, &'static str> {
+    check_image_source(file, dir, true)
+}
+
+/// Validates a picture path already resolved against `dir` without joining `dir` a second time.
+/// Applies the same safety checks as [`local_image_source`].
+pub fn check_resolved_image_source(file: &str, dir: &str) -> Result<ImageSource, &'static str> {
+    check_image_source(file, dir, false)
+}
+
 /// Whether `path` is relative to the project's folder: not absolute (`/…`, `\…`, `C:\…`), not
 /// on a drive (`C:…`, see [`is_drive_relative`]) and not a web address.
 pub fn is_relative(path: &str) -> bool {

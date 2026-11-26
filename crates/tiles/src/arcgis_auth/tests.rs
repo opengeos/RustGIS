@@ -86,9 +86,17 @@ fn portal_bases() {
     assert_eq!(portal_base("https://gis.example.org/portal/sharing/rest?f=json").unwrap(), "https://gis.example.org/portal");
     assert_eq!(portal_base("https://gis.example.org:7443/arcgis/home/").unwrap(), "https://gis.example.org:7443/arcgis");
     assert_eq!(portal_base("https://gis.example.org:443/portal").unwrap(), "https://gis.example.org/portal");
-    // Tokens travel to the portal: never over plain HTTP, never with user info.
-    for bad in ["http://gis.example.org/portal", "https://user@gis.example.org/portal", "https://", "https://gis.example.org:x/", "ftp://a"]
-    {
+    // Tokens travel to the portal: never over plain HTTP, never with user info, never to forbidden addresses.
+    for bad in [
+        "http://gis.example.org/portal",
+        "https://user@gis.example.org/portal",
+        "https://",
+        "https://gis.example.org:x/",
+        "ftp://a",
+        "https://169.254.169.254/portal",
+        "https://100.100.100.200/portal",
+        "https://metadata.google.internal/portal",
+    ] {
         assert!(portal_base(bad).is_err(), "{bad}");
     }
     assert!(is_online("https://myorg.maps.arcgis.com") && is_online(ONLINE) && !is_online("https://gis.example.org/portal"));
@@ -191,9 +199,14 @@ fn a_token_in_a_service_address_reaches_its_layers() {
         bearer
     );
     assert_eq!(authorization("https://tokenserver.example.org/other/rest/services"), None);
-    // A path leading elsewhere by its dot segments gets none.
+    // A path leading elsewhere by its dot segments or encoded/backslash separators gets none.
     assert_eq!(authorization("https://tokenserver.example.org/server/../other/rest/services"), None);
     assert_eq!(authorization("https://tokenserver.example.org/server/%2E%2E/other/rest/services"), None);
+    assert_eq!(authorization("https://tokenserver.example.org/server/..%5cother/rest/services"), None);
+    assert_eq!(authorization("https://tokenserver.example.org/server/..%5Cother/rest/services"), None);
+    assert_eq!(authorization("https://tokenserver.example.org/server/%2f../other/rest/services"), None);
+    assert_eq!(authorization("https://tokenserver.example.org/server/%2F../other/rest/services"), None);
+    assert_eq!(authorization("https://tokenserver.example.org/server\\..\\other/rest/services"), None);
     assert!(list().iter().any(|i| i.portal == "https://tokenserver.example.org/server" && i.token && i.expires_at.is_none()));
     // An address without a token is unchanged; a hostile one is refused.
     assert_eq!(

@@ -2555,6 +2555,13 @@ fn premultiply(data: &mut [u8]) {
     }
 }
 
+/// Builds a native agent with `config` whose DNS resolver rejects forbidden addresses (such as
+/// link-local and cloud metadata endpoints) while still allowing loopback and local-network hosts.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn checked_local_agent(config: ureq::config::Config) -> ureq::Agent {
+    native::checked_agent(config, ureq::unversioned::resolver::DefaultResolver::default(), false)
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
     //! Worker threads fetching with `ureq`, newest request first, a few at a time per server.

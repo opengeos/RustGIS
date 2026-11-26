@@ -59,12 +59,7 @@ pub fn check(archive: &str) -> Result<(), String> {
             Ok(())
         };
     }
-    let p = archive.strip_prefix("file://").unwrap_or(archive);
-    let drive = p.as_bytes().get(1) == Some(&b':') && p.as_bytes().first().is_some_and(u8::is_ascii_alphabetic);
-    let share = p.starts_with("\\\\") || p.starts_with("//") || (archive.starts_with("file://") && !p.starts_with('/'));
-    if share || !(p.starts_with('/') || drive) || p.chars().any(char::is_control) || p.len() > 4096 {
-        return Err(format!("'{p}': an MBTiles file is given by its full path on this computer"));
-    }
+    let p = crate::pmtiles::check_local_prefix(archive, "an MBTiles file")?;
     if !p.to_ascii_lowercase().ends_with(".mbtiles") {
         return Err(format!("'{p}' isn't an .mbtiles file"));
     }
@@ -606,10 +601,27 @@ mod tests {
         }
         assert!(check("/data/a.mbtiles").is_ok());
         assert!(check("C:\\data\\a.MBTiles").is_ok());
+        assert!(check("C:/data/a.mbtiles").is_ok());
+        assert!(check("file:///data/a.mbtiles").is_ok());
+        assert!(check("file:///C:/data/a.mbtiles").is_ok());
         assert!(check("upload:a.mbtiles").is_ok());
-        for bad in
-            ["a.mbtiles", "/data/a.pmtiles", "\\\\server\\share\\a.mbtiles", "file://server/a.mbtiles", "upload:", "https://x/a.mbtiles"]
-        {
+        for bad in [
+            "a.mbtiles",
+            "/data/a.pmtiles",
+            "\\\\server\\share\\a.mbtiles",
+            "//server/share/a.mbtiles",
+            "/\\server\\share\\a.mbtiles",
+            "\\/server/share/a.mbtiles",
+            "file://server/a.mbtiles",
+            "file:////server/share/a.mbtiles",
+            "file:///\\\\server\\share\\a.mbtiles",
+            "file:///\\server\\share\\a.mbtiles",
+            "file://\\/server/share/a.mbtiles",
+            "C:map.mbtiles",
+            "file:///C:map.mbtiles",
+            "upload:",
+            "https://x/a.mbtiles",
+        ] {
             assert!(check(bad).is_err(), "{bad}");
         }
         assert_eq!(template("upload:x"), "mbtiles:{z}/{x}/{y}@upload:x");

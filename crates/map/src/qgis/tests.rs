@@ -3347,3 +3347,111 @@ fn a_dropped_virtual_filter_is_not_noted_for_letter_case() {
     assert!(report.notes.iter().any(|n| n.layer == "v" && n.text.contains("too long to read together")), "{:?}", report.notes);
     assert_eq!(letter_case_notes(&report, "v"), 0, "{:?}", report.notes);
 }
+
+#[test]
+fn picture_annotations_reject_unsafe_paths() {
+    let cases = [
+        (r"\\server\share\a.png", "/d", "network share"),
+        ("//server/share/a.png", "/d", "network share"),
+        (r"/\server\share\a.png", "/d", "network share"),
+        (r"\/server/share/a.png", "/d", "network share"),
+        ("C:relative.png", "/d", "drive's working folder"),
+        ("https://example.com/a.png", "/d", "web address"),
+        ("file:///etc/passwd.png", "/d", "web address"),
+        ("attachment:a.png", "/d", ".qgz project"),
+        ("relative.png", "", "folder the import wasn't given"),
+    ];
+    for (path, dir, expected_note) in cases {
+        let qgs = format!(
+            r#"<qgis><projectCrs><spatialrefsys><authid>EPSG:4326</authid></spatialrefsys></projectCrs><projectlayers>
+            <maplayer type="annotation"><id>a</id><layername>Pics</layername><items>
+              <item type="picture" path="{path}" xMin="0" yMin="0" xMax="1" yMax="1"/>
+            </items></maplayer></projectlayers></qgis>"#
+        );
+        let mut report = Report::default();
+        let p = read_project(&qgs, dir, &mut report).unwrap();
+        assert!(p.layers[0].annotations.is_empty(), "{path} (dir={dir:?}) produced {:?}", p.layers[0].annotations);
+        assert!(
+            report.notes.iter().any(|n| n.layer == "Pics" && n.kind == NoteKind::Skipped && n.text.contains(expected_note)),
+            "{path}: {:?}",
+            report.notes
+        );
+    }
+
+    // A refused picture still keeps its background box and frame graphics, omitting only the picture.
+    let qgs = r#"<qgis><projectCrs><spatialrefsys><authid>EPSG:4326</authid></spatialrefsys></projectCrs><projectlayers>
+      <maplayer type="annotation"><id>a</id><layername>Framed</layername><items>
+        <item type="picture" path="\\server\share\a.png" backgroundEnabled="1" frameEnabled="1" xMin="0" yMin="0" xMax="1" yMax="1">
+          <symbol type="fill" name="backgroundSymbol"><layer class="SimpleFill"><prop k="color" v="255,255,255,255"/></layer></symbol>
+          <symbol type="fill" name="frameSymbol"><layer class="SimpleFill"><prop k="outline_color" v="0,0,0,255"/></layer></symbol>
+        </item>
+      </items></maplayer></projectlayers></qgis>"#;
+    let mut report = Report::default();
+    let p = read_project(qgs, "/d", &mut report).unwrap();
+    let anns = &p.layers[0].annotations;
+    assert_eq!(anns.len(), 2, "background and frame must be kept: {anns:?}");
+    assert!(anns.iter().all(|a| a.graphic.kind == "rectangle" && a.picture.is_none()), "{anns:?}");
+    assert!(
+        report.notes.iter().any(|n| n.layer == "Framed" && n.kind == NoteKind::Skipped && n.text.contains("network share")),
+        "{:?}",
+        report.notes
+    );
+
+    // An absolute UNC picture path inside the user-opened UNC project folder is accepted, while
+    // another share, sibling folder, or `..` traversal escaping `dir` stays refused.
+    let unc_dir = r"\\nas\gis\proj";
+    for allowed in [r"\\nas\gis\proj\pic.png", r"\\nas\gis\proj\sub\pic.png", r"\\nas\gis\proj\sub\..\pic.png", "//nas/gis/proj/pic.png"] {
+        let qgs = format!(
+            r#"<qgis><projectCrs><spatialrefsys><authid>EPSG:4326</authid></spatialrefsys></projectCrs><projectlayers>
+            <maplayer type="annotation"><id>a</id><layername>UncOk</layername><items>
+              <item type="picture" path="{allowed}" xMin="0" yMin="0" xMax="1" yMax="1"/>
+            </items></maplayer></projectlayers></qgis>"#
+        );
+        let mut report = Report::default();
+        let p = read_project(&qgs, unc_dir, &mut report).unwrap();
+        assert_eq!(p.layers[0].annotations.len(), 1, "{allowed}: {:?}", report.notes);
+        assert_eq!(p.layers[0].annotations[0].picture.as_deref(), Some(allowed));
+        assert!(!report.notes.iter().any(|n| n.text.contains("network share")), "{allowed}: {:?}", report.notes);
+    }
+    for denied in [
+        r"\\other\share\pic.png",
+        r"\\nas\other\pic.png",
+        r"\\nas\gis\proj2\pic.png",
+        r"\\nas\gis\proj\..\other\pic.png",
+        r"\\nas\gis\proj\sub\..\..\other\pic.png",
+        r"\\nas\gis\proj//other/pic.png",
+        r"\\nas\gis\proj/\other/pic.png",
+    ] {
+        let qgs = format!(
+            r#"<qgis><projectCrs><spatialrefsys><authid>EPSG:4326</authid></spatialrefsys></projectCrs><projectlayers>
+            <maplayer type="annotation"><id>a</id><layername>UncNo</layername><items>
+              <item type="picture" path="{denied}" xMin="0" yMin="0" xMax="1" yMax="1"/>
+            </items></maplayer></projectlayers></qgis>"#
+        );
+        let mut report = Report::default();
+        let p = read_project(&qgs, unc_dir, &mut report).unwrap();
+        assert!(p.layers[0].annotations.is_empty(), "{denied} produced {:?}", p.layers[0].annotations);
+        assert!(
+            report.notes.iter().any(|n| n.layer == "UncNo" && n.kind == NoteKind::Skipped && n.text.contains("network share")),
+            "{denied}: {:?}",
+            report.notes
+        );
+    }
+
+    // A relative picture path whose first segment happens to match a relative project folder is
+    // still resolved relative to `dir` rather than treated as already resolved.
+    assert_eq!(local_image_source("maps/logo.png", "maps"), Ok(ImageSource::File("maps/maps/logo.png".into())));
+    assert_eq!(check_resolved_image_source("data/../pic.png", "data"), Ok(ImageSource::File("data/../pic.png".into())));
+
+    // A relative picture path inside a UNC project folder stays allowed when it remains under
+    // `dir`, but is refused when `..` climbs outside the opened share folder.
+    assert_eq!(local_image_source("sub/../pic.png", unc_dir), Ok(ImageSource::File(format!("{unc_dir}/sub/../pic.png"))));
+    for escaping in ["../other/pic.png", "sub/../../other/pic.png", "../../../other/share/pic.png"] {
+        assert!(
+            local_image_source(escaping, unc_dir).is_err_and(|e| e.contains("network share")),
+            "{escaping} under {unc_dir} should be refused"
+        );
+    }
+    // Local sibling assets remain allowed when the project folder is local.
+    assert_eq!(local_image_source("../other/pic.png", "/d/proj"), Ok(ImageSource::File("/d/proj/../other/pic.png".into())));
+}

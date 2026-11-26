@@ -31,7 +31,10 @@ use crate::effects::Blend;
 use crate::symbology::{Labeling, LineStroke, MarkerRotation, Picture, Renderer};
 pub use annotation::{Annotation, MAX_ITEMS as MAX_ANNOTATIONS};
 pub use expr::{reads_measure, to_sql};
-pub use source::{MAX_MEMORY_FIELDS, Source, VirtualFrom, WebOptions, is_drive_relative, is_relative};
+pub use source::{
+    ImageSource, MAX_MEMORY_FIELDS, Source, VirtualFrom, WebOptions, check_resolved_image_source, is_drive_relative, is_relative,
+    local_image_source,
+};
 pub use structure::{MAX_BOOKMARKS, MAX_RELATIONS, ProjectBookmark, ProjectRelation, listed};
 
 /// The most XML nodes a project or style is read with (a large project's file is some hundred

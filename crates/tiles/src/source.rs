@@ -206,11 +206,20 @@ fn settle(anew: Resolve, cached: Option<Arc<Resolved>>, spec: &Spec, key: String
         // Or while it can't be read again: it is tried again after the next wait. Its own notice
         // still says what it leaves out; why it couldn't be read again goes to the log.
         (Resolve::Failed(e), Some(old)) => {
-            log::warn!("{}: drawn as it was, as it could not be read again: {e}", spec.url);
+            log::warn!("{}", settle_failure_log(&spec.url, &e));
             Resolve::Ready(renewed(old))
         }
         (other, _) => other,
     }
+}
+
+/// Formats the warning logged when a cached source fails to refresh, with addresses and active
+/// login credentials redacted.
+fn settle_failure_log(url: &str, err: &str) -> String {
+    crate::logins::scrub_error(&rustgis_data::diagnostics::message_with_address(
+        url,
+        &format!("drawn as it was, as it could not be read again: {err}"),
+    ))
 }
 
 /// Reads `spec`'s style and resolves its sources, keeping the result under `key`.
@@ -2074,5 +2083,23 @@ mod tests {
     #[test]
     fn plain_attribution() {
         assert_eq!(plain_text("<a href='x'>&copy; OpenStreetMap</a>  contributors &amp; CARTO"), "© OpenStreetMap contributors & CARTO");
+    }
+
+    #[test]
+    fn settle_failure_log_scrubs_secrets() {
+        let _turn = crate::cache::turn();
+        let origin = "https://settle-log.example.com";
+        let binding =
+            crate::logins::activate(origin, "settle", crate::logins::Method::Header("X-Key".into()), "active-secret-val", false).unwrap();
+        let bound_url = crate::logins::bind(&binding, &format!("{origin}/style.json?token=url-tok")).unwrap();
+        let msg = settle_failure_log(
+            &bound_url,
+            "failed fetching https://user:err-pw@settle-log.example.com/a?api_key=err-key with active-secret-val",
+        );
+        assert!(crate::logins::deactivate(&binding));
+        for secret in ["url-tok", "err-pw", "err-key", "active-secret-val", &binding] {
+            assert!(!msg.contains(secret), "leaked {secret} in: {msg}");
+        }
+        assert!(msg.contains("drawn as it was"), "{msg}");
     }
 }

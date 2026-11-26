@@ -132,6 +132,7 @@ pub fn check_endpoint(endpoint: &str, origin: &str) -> Result<(), &'static str> 
         || !crate::address::is_https(endpoint)
         || endpoint.contains(['?', '#'])
         || crate::logins::origin(endpoint).as_deref() != Some(origin)
+        || crate::address::check(endpoint, None).is_err()
     {
         return Err(BAD_ENDPOINT);
     }
@@ -189,7 +190,7 @@ pub fn set_generator(f: impl Fn(String, Secret, Still, Done) + Send + Sync + 'st
 /// but https:// again. `still` turns false when the request is cancelled: the answer is then
 /// discarded, and a transport stops as soon as it next looks.
 pub fn generate(endpoint: String, body: Secret, still: Still, done: Done) {
-    if !crate::address::is_https(&endpoint) {
+    if !crate::address::is_https(&endpoint) || crate::address::check(&endpoint, None).is_err() {
         done(Err(BAD_ENDPOINT.into()));
         return;
     }
@@ -222,15 +223,16 @@ mod native {
     /// One agent, made once (its TLS setup reads the system's certificates). It never follows a
     /// redirect, which would replay the password; keeps no connection; has no cookie jar.
     static AGENT: LazyLock<ureq::Agent> = LazyLock::new(|| {
-        ureq::Agent::config_builder()
+        let config = ureq::Agent::config_builder()
             .tls_config(rustgis_data::http::tls_config())
             .http_status_as_error(false)
             .timeout_global(Some(Duration::from_secs(DEADLINE_SECS)))
             .user_agent(concat!("RustGIS/", env!("CARGO_PKG_VERSION"), " (+https://rustgis.app)"))
+            .proxy(None)
             .max_redirects(0)
             .max_idle_connections(0)
-            .build()
-            .into()
+            .build();
+        crate::cache::checked_local_agent(config)
     });
 
     /// Calls `done` once, whichever of the worker and a failed start gets here first.
@@ -286,6 +288,14 @@ mod native {
         }
         check_still(&still).map_err(cancelled)?;
         from_answer(status, &answer, now_millis())
+    }
+
+    #[cfg(test)]
+    #[test]
+    fn agent_disables_proxy() {
+        assert!(AGENT.config().proxy().is_none(), "token agent must not use an ambient proxy");
+        let err = AGENT.get("http://169.254.169.254/tokens").call().unwrap_err();
+        assert!(matches!(err, ureq::Error::Io(ref io) if io.kind() == std::io::ErrorKind::PermissionDenied), "{err:?}");
     }
 }
 

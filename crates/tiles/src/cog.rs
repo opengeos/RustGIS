@@ -2753,7 +2753,17 @@ mod tests {
         load(url.clone(), crate::address::Reach::Public, Box::new(move |r| tx.send(r.err()).unwrap()));
         let refused = rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap_or_default();
         assert!(refused.contains("a file on this computer can't be read from here"), "{refused}");
-        for not in ["local.tif", "./local.tif", "//server/share/local.tif", "https://example.com/local.tif", "file:///tmp/local.tif"] {
+        for not in [
+            "local.tif",
+            "./local.tif",
+            "//server/share/local.tif",
+            "\\\\server\\share\\local.tif",
+            "/\\server\\share\\local.tif",
+            "\\/server/share/local.tif",
+            "C:local.tif",
+            "https://example.com/local.tif",
+            "file:///tmp/local.tif",
+        ] {
             assert!(!is_local_file(not), "{not}");
         }
         assert!(!is_local_file(&dir.join("local.png").display().to_string()));

@@ -644,15 +644,16 @@ mod native {
     fn agent() -> &'static ureq::Agent {
         static A: OnceLock<ureq::Agent> = OnceLock::new();
         A.get_or_init(|| {
-            ureq::Agent::config_builder()
+            let config = ureq::Agent::config_builder()
                 .tls_config(rustgis_data::http::tls_config())
                 .http_status_as_error(false)
                 .timeout_global(Some(REQUEST_TIMEOUT))
                 .user_agent(concat!("RustGIS/", env!("CARGO_PKG_VERSION"), " (+https://rustgis.app)"))
+                .proxy(None)
                 .max_redirects(0)
                 .max_idle_connections(0)
-                .build()
-                .into()
+                .build();
+            crate::cache::checked_local_agent(config)
         })
     }
 
@@ -826,6 +827,14 @@ mod native {
             }
         }
         super::authorization(url)
+    }
+
+    #[cfg(test)]
+    #[test]
+    fn agent_disables_proxy() {
+        assert!(agent().config().proxy().is_none(), "copernicus agent must not use an ambient proxy");
+        let err = agent().get("http://169.254.169.254/").call().unwrap_err();
+        assert!(matches!(err, ureq::Error::Io(ref io) if io.kind() == std::io::ErrorKind::PermissionDenied), "{err:?}");
     }
 }
 
