@@ -8,7 +8,7 @@ use super::{Batch, FeatureSource, Reproject, Request, Sampler, SourceInfo, clamp
 use crate::raster::Crs;
 use crate::{DataError, Feature, Field, FieldType, GeometryType, Result, Value, wkb};
 use rusqlite::types::ValueRef;
-use rusqlite::{Connection, OpenFlags, params_from_iter};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, params_from_iter};
 use rustgis_geom::Extent;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -299,7 +299,7 @@ impl GpkgSource {
                 }
             }
         }
-        let row_order = row_order(&conn, &table);
+        let row_order = row_order(&conn, &table).map_err(err)?;
         // Looked up without regard to case, as SQLite names are; the real name is kept.
         let rtree_name = format!("rtree_{table}_{geom}");
         let rtree: Option<String> = conn
@@ -695,18 +695,25 @@ impl FeatureSource for GpkgSource {
     }
 }
 
-/// How to fetch rows of `table` in a scan's order ([`RowOrder`]).
-fn row_order(conn: &Connection, table: &str) -> RowOrder {
+/// How to fetch rows of `table` in a scan's order ([`RowOrder`]). Only "no such row" answers a
+/// question here; a statement that fails fails the open, rather than picking an order unseen.
+fn row_order(conn: &Connection, table: &str) -> rusqlite::Result<RowOrder> {
     // SQLite indexes a primary key that isn't the rowid itself.
-    if conn.query_row("SELECT 1 FROM pragma_index_list(?1) WHERE origin = 'pk'", [table], |_| Ok(())).is_err() {
-        return RowOrder::Key;
+    if conn.query_row("SELECT 1 FROM pragma_index_list(?1) WHERE origin = 'pk'", [table], |_| Ok(())).optional()?.is_none() {
+        return Ok(RowOrder::Key);
     }
-    // A column takes a rowid's name from it; a table without rowids has none of them.
-    let free = |name: &&str| {
+    // A column takes a rowid's name from it; a table without rowids has none of them, and a query
+    // naming one doesn't prepare (where it fails otherwise, the table is read by a scan: slower,
+    // never out of order).
+    for name in ["rowid", "_rowid_", "oid"] {
         let taken = "SELECT 1 FROM pragma_table_xinfo(?1) WHERE lower(name) = ?2";
-        conn.query_row(taken, [table, name], |_| Ok(())).is_err() && conn.prepare(&format!("SELECT {name} FROM {}", quote(table))).is_ok()
-    };
-    ["rowid", "_rowid_", "oid"].into_iter().find(free).map_or(RowOrder::Scan, RowOrder::Rowid)
+        if conn.query_row(taken, [table, name], |_| Ok(())).optional()?.is_none()
+            && conn.prepare(&format!("SELECT {name} FROM {}", quote(table))).is_ok()
+        {
+            return Ok(RowOrder::Rowid(name));
+        }
+    }
+    Ok(RowOrder::Scan)
 }
 
 /// The rowids (named `rowid`) of the rows of `table` whose `key` is among `keys`.
