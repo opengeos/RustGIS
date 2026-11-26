@@ -177,6 +177,9 @@ pub const NO_STORE: &str = "The sign-in is kept for this session only: there is 
 pub const NOT_REMEMBERED: &str = "The sign-in is kept for this session, but the system's credential store didn't remember it.";
 /// `login` with `remember` and a one-time code.
 pub const TWO_FACTOR: &str = "The sign-in is kept for this session only: an account with two-factor authentication needs its one-time code at each sign-in, so it isn't remembered.";
+/// `login` with `remember`, when the credential store couldn't confirm what it kept.
+pub const UNCONFIRMED: &str =
+    "The sign-in is kept for this session; the system's credential store couldn't confirm whether it remembered it.";
 /// The credential store didn't delete the sign-in remembered earlier.
 pub const NOT_FORGOTTEN: &str = "The sign-in remembered on this computer couldn't be deleted from the system's credential store.";
 
@@ -308,7 +311,8 @@ fn remember_after(known: &mut Known, username: &str, password: &str, totp: bool,
     let deleted = store.delete(ACCOUNT);
     // Unread: an earlier run may have remembered one, unless there's no store at all.
     let unknown = matches!(*known, Known::Unread | Known::Unreadable);
-    let lingers = |e: &SecretError| was || (unknown && !matches!(e, SecretError::Unavailable(_)));
+    // One the store couldn't confirm may be there whatever this session knew.
+    let lingers = |e: &SecretError| was || matches!(e, SecretError::Uncertain(_)) || (unknown && !matches!(e, SecretError::Unavailable(_)));
     let left = deleted.as_ref().err().is_some_and(lingers);
     // One known to be there that couldn't be deleted is never signed in with again this session;
     // one that may be there stays unknown (`remembered` reports only what was found).
@@ -318,6 +322,7 @@ fn remember_after(known: &mut Known, username: &str, password: &str, totp: bool,
         _ => Known::Nothing,
     };
     match deleted {
+        Err(SecretError::Uncertain(_)) if remember && !was => Some(UNCONFIRMED),
         // Said first: a password remembered before may still be there.
         Err(_) if left => Some(NOT_FORGOTTEN),
         _ if remember && totp => Some(TWO_FACTOR),
