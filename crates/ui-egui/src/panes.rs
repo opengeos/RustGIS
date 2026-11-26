@@ -8538,10 +8538,10 @@ mod tests {
         h.step();
     }
 
-    /// #2958: a swipe of a finger over the layer rows scrolls the list; it does not take the row
+    /// #2958: a swipe of a finger over the web tile rows scrolls the list; it does not take the row
     /// under the finger to another place, as the mouse does.
     #[test]
-    fn a_swipe_over_the_layers_scrolls_and_does_not_reorder_them() {
+    fn a_swipe_over_the_tile_rows_scrolls_and_does_not_reorder_them() {
         use egui_kittest::kittest::Queryable;
         let _turn = crate::fetching::turn();
         let mut app = RustGisApp::with_sample();

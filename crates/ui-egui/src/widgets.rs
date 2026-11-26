@@ -82,10 +82,10 @@ pub(crate) fn reorder_drag(ui: &Ui, resp: &Response, reorder: bool) -> bool {
     let armed = egui::Id::NULL.with("reorder_long_press");
     let ctx = ui.ctx();
     if resp.long_touched() {
-        ctx.data_mut(|d| d.insert_temp(armed, Some(resp.id)));
+        ctx.data_mut(|d| d.insert_temp(armed, resp.id));
         return false;
     }
-    if ctx.data(|d| d.get_temp::<Option<egui::Id>>(armed)).flatten() != Some(resp.id) {
+    if ctx.data(|d| d.get_temp::<egui::Id>(armed)) != Some(resp.id) {
         return false;
     }
     let (down, moved) = ui.input(|i| {
@@ -93,11 +93,11 @@ pub(crate) fn reorder_drag(ui: &Ui, resp: &Response, reorder: bool) -> bool {
         (i.pointer.primary_down(), moved)
     });
     if !down {
-        ctx.data_mut(|d| d.insert_temp(armed, None::<egui::Id>));
+        ctx.data_mut(|d| d.remove::<egui::Id>(armed));
         return false;
     }
     if moved {
-        ctx.data_mut(|d| d.insert_temp(armed, None::<egui::Id>));
+        ctx.data_mut(|d| d.remove::<egui::Id>(armed));
         egui::Popup::close_all(ctx);
     }
     moved
