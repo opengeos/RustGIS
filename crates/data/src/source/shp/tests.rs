@@ -718,6 +718,19 @@ fn a_nan_shape_outside_an_area_its_system_cant_bound_is_counted_as_of_the_layer(
         let all = |r: &Batch| r.features.iter().map(|f| f.geometry.is_some()).collect::<Vec<_>>();
         assert_eq!(all(&unboxed.read(&plane).unwrap()), [false, true, true]);
         assert_eq!(all(&unboxed.read(&Request::all()).unwrap()), [false, true, true]);
+        // With an extent beside it, the whole-plane box is an area again, read alike sampled and
+        // in chunks: the index takes no record without a usable box, and no shape without
+        // geometry is in an area.
+        let both = Request { extent: Some(Extent::new(-180.0, -90.0, 180.0, 90.0)), ..plane };
+        let mut chunked = Vec::new();
+        unboxed
+            .visit_request_chunks(&both, 1 << 20, &mut |f| {
+                chunked.extend(f.iter().map(|f| f.geometry.is_some()));
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(all(&unboxed.read(&both).unwrap()), [true, true]);
+        assert_eq!(chunked, [true, true]);
         // A whole read gives them without geometry, and says that once, with its plain count.
         let whole = src.read(&Request::all()).unwrap();
         assert!(said(&whole.notes).is_empty(), "{:?}", whole.notes);

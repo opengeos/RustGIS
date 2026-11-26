@@ -60876,7 +60876,7 @@ fn a_save_refuses_coordinates_that_arent_numbers_and_keeps_the_file() {
 /// nothing NaN reaches the map, and the project saves and opens again.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
-fn a_shapefile_coordinate_that_isnt_a_number_reaches_no_layer() {
+fn a_shapefile_coordinate_that_isnt_a_number_keeps_its_feature_without_geometry() {
     use rustgis_data::{Coord, Dataset, Geometry, GeometryType};
     // Removed however the test ends.
     struct Dir(std::path::PathBuf);
