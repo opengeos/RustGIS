@@ -1486,6 +1486,8 @@ fn raster_image_markers_read_a_file_address_as_the_file_it_names() {
     let cases = [
         ("file:///data/my%20pin.png", "/data/my pin.png"),
         ("file:///C:/data/a.png", "C:/data/a.png"),
+        // A drive's colon may be encoded.
+        ("file:///C%3A/data/a.png", "C:/data/a.png"),
         ("file://C:/data/a.png", "C:/data/a.png"),
         ("file:./pins/a.png", "/styles/pins/a.png"),
         // `://` encoded in a name is a name, not a web address.

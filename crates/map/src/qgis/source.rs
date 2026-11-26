@@ -599,7 +599,11 @@ fn file_url_path(url: &str) -> Option<&str> {
 /// other address and for one with a host.
 pub(super) fn file_address_path(url: &str) -> Option<String> {
     // Trimmed: what `absolute` trims after the checks must not decide them (`%20%2F%2Fhost` is `//host`).
-    file_url_path(url).map(|path| rustgis_data::address::percent_decode(path).trim().to_string())
+    let path = rustgis_data::address::percent_decode(file_url_path(url)?).trim().to_string();
+    // A drive's colon may be encoded (`/C%3A/x`): the drive form is recognized once decoded.
+    let b = path.as_bytes();
+    let drive = b.first() == Some(&b'/') && b.get(1).is_some_and(u8::is_ascii_alphabetic) && b.get(2) == Some(&b':');
+    Some(if drive { path[1..].to_string() } else { path })
 }
 
 /// A tile archive's path: a `file://` address (`file:../x` when relative) as its path, a relative
