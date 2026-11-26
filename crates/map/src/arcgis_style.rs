@@ -857,11 +857,9 @@ mod tests {
         assert_eq!(s.size, 15.0);
         assert_eq!(text, "picture markers of no height, drawn as tall as their image is");
         // A height above 0 says nothing of the kind.
-        for height in [json!(18)] {
-            let (s, text) = styled_pms(json!(15), height.clone());
-            assert_eq!(s.size, 15.0, "height {height}");
-            assert!(text.is_empty(), "height {height}: {text}");
-        }
+        let (s, text) = styled_pms(json!(15), json!(18));
+        assert_eq!(s.size, 15.0);
+        assert!(text.is_empty(), "{text}");
     }
 
     #[test]

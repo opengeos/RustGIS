@@ -1516,7 +1516,7 @@ fn raster_image_markers_read_a_file_address_as_the_file_it_names() {
     );
     // A relative name that starts with a separator isn't joined to a project at a drive's root into a share
     // (`.//host/share` from `/` is `//host/share`), though a project that is itself on a share reads its own.
-    for (file, dir, shared) in [
+    for (file, dir, refused) in [
         ("file:.//host/share/a.png", "/", true),
         ("file:.//host/share/a.png", "\\", true),
         (".//host/share/a.png", "/", true),
@@ -1527,7 +1527,7 @@ fn raster_image_markers_read_a_file_address_as_the_file_it_names() {
         let mut report = Report::default();
         let s = super::read_style(&marker_qml("1", &raster_marker(file, "")), "Pins", dir, &mut read, &mut report).unwrap();
         let Some(Renderer::Single(sym)) = &s.renderer else { panic!("{file}") };
-        if shared {
+        if refused {
             assert_eq!(sym.marker, Marker::Circle, "{file} from {dir}");
             assert!(asked.borrow().is_empty(), "{file} from {dir}: {:?}", asked.borrow());
             assert_eq!(
