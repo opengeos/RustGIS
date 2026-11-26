@@ -441,6 +441,19 @@ impl GpkgSource {
         cols.join(", ")
     }
 
+    /// The order a scan of the table gives, written out (` ORDER BY …`) so that SQLite can't read
+    /// it another way, such as down a covering index: the order a view read through the R-tree
+    /// fetches in.
+    fn order_by(&self) -> String {
+        match (self.row_order, &self.pk) {
+            // The rowid itself, or a name of it no column has taken: no sort.
+            (RowOrder::Key, Some(pk)) => format!(" ORDER BY {}", quote(pk)),
+            (RowOrder::Rowid(rowid), _) => format!(" ORDER BY {rowid}"),
+            // Without a key no view is read through the R-tree, so there's no order to match.
+            (RowOrder::Key, None) | (RowOrder::Scan, _) => String::new(),
+        }
+    }
+
     /// Turns a row (id, geometry, fields…) into a feature; `None` for an unreadable geometry.
     /// Dates that aren't ones are counted in `unread_dates` ([`Batch::unread_dates`]), date-times
     /// rounded to the microsecond in `rounded_dates`.
@@ -535,7 +548,12 @@ impl FeatureSource for GpkgSource {
             Row::Bad => out.skipped += 1,
         };
         match (native, &self.rtree, &self.pk) {
-            (Some(e), Some(rt), Some(pk)) if !matches!(self.row_order, RowOrder::Scan) => {
+            // A count alone (`limit` 0) fetches no rows, so it needs no order: the index counts it.
+            (Some(e), Some(rt), Some(pk)) if limit == 0 || !matches!(self.row_order, RowOrder::Scan) => {
+                // One read, so a write between picking the ids and fetching them (and, for a key
+                // apart from the rowid, between looking up their rowids and fetching by them)
+                // can't hand back a row that wasn't picked. A read rolls nothing back.
+                let _read = conn.unchecked_transaction().map_err(err)?;
                 // The index gives the matching ids; an evenly spread sample of them is fetched.
                 // Counted first, then streamed keeping every `step`-th, so a huge match never sits
                 // in memory as a list of ids.
@@ -583,7 +601,7 @@ impl FeatureSource for GpkgSource {
             }
             _ => {
                 // A scan: the envelope in each geometry's header tests the extent before decoding.
-                let sql = format!("SELECT {} FROM {}", self.select_list(), quote(&self.table));
+                let sql = format!("SELECT {} FROM {}{}", self.select_list(), quote(&self.table), self.order_by());
                 let mut st = conn.prepare(&sql).map_err(err)?;
                 let mut rows = st.query([]).map_err(err)?;
                 // A whole read knows its count, unless the file's own; an extent, bounded natively
@@ -656,7 +674,7 @@ impl FeatureSource for GpkgSource {
         same_file()?;
         let req = Request { extent, limit: usize::MAX, own: None };
         let native = extent.and_then(|e| self.reproject.extent_from_lonlat(&e));
-        let sql = format!("SELECT {} FROM {}", self.select_list(), quote(&self.table));
+        let sql = format!("SELECT {} FROM {}{}", self.select_list(), quote(&self.table), self.order_by());
         let mut st = conn.prepare(&sql).map_err(err)?;
         let mut rows = st.query([]).map_err(err)?;
         let mut out = Batch { complete: true, ..Batch::default() };
