@@ -37,19 +37,40 @@ pub fn matches(text: &str, query: &str, case: bool, whole: bool) -> Found {
     if query.is_empty() {
         return found;
     }
-    let mut i = 0;
-    while i + query.len() <= text.len() {
-        let word = |c: Option<&char>| c.is_some_and(|c| c.is_alphanumeric() || *c == '_');
-        let apart = !whole || (!word(i.checked_sub(1).and_then(|b| text.get(b))) && !word(text.get(i + query.len())));
-        if apart && text.get(i..i + query.len()) == Some(&query[..]) {
+    let word = |c: Option<&char>| c.is_some_and(|c| c.is_alphanumeric() || *c == '_');
+    // Knuth, Morris and Pratt (1977): each character of the text is read once, whatever the two
+    // hold, so a long query against a long run of one letter costs no more than any other.
+    // `back[k]`: how much of the query still matches when its character after `k + 1` doesn't.
+    let mut back = Vec::with_capacity(query.len());
+    let mut matched = 0;
+    for (k, c) in query.iter().enumerate() {
+        while matched > 0 && query.get(matched) != Some(c) {
+            matched = back.get(matched - 1).copied().unwrap_or(0);
+        }
+        matched += usize::from(k > 0 && query.get(matched) == Some(c));
+        back.push(matched);
+    }
+    let mut matched = 0;
+    for (i, c) in text.iter().enumerate() {
+        while matched > 0 && query.get(matched) != Some(c) {
+            matched = back.get(matched - 1).copied().unwrap_or(0);
+        }
+        matched += usize::from(query.get(matched) == Some(c));
+        if matched < query.len() {
+            continue;
+        }
+        let at = i + 1 - query.len();
+        if !whole || (!word(at.checked_sub(1).and_then(|b| text.get(b))) && !word(text.get(i + 1))) {
             if found.ranges.len() == MAX_MATCHES {
                 found.capped = true;
                 break;
             }
-            found.ranges.push(i..i + query.len());
-            i += query.len();
+            found.ranges.push(at..i + 1);
+            // The next is looked for after this one.
+            matched = 0;
         } else {
-            i += 1;
+            // Not a whole word: one that overlaps it may still be.
+            matched = back.last().copied().unwrap_or(0);
         }
     }
     found
@@ -111,8 +132,7 @@ pub fn replace_all(text: &str, found: &Found, with: &str) -> String {
 
 /// The most characters of a query, and of a replacement: what each field takes, and so of a
 /// selection that fills the query when the bar opens (a longer one is a passage, not a word to look
-/// for). Each change of the script or the query costs the script's length times the query's, on the
-/// UI thread, and Replace All writes the replacement once per match, up to [`MAX_MATCHES`].
+/// for). Replace All writes the replacement once per match, up to [`MAX_MATCHES`].
 const FIELD_MAX: usize = 200;
 
 /// A field of the bar: its text, never over [`FIELD_MAX`], and what the last write of it left out.
@@ -730,6 +750,44 @@ mod tests {
             assert_eq!(does(Key::F3, Modifiers::SHIFT), Some(Does::Previous));
             assert_eq!(does(Key::F3, command), None);
             assert_eq!(does(Key::F, Modifiers::NONE), None, "typing an f");
+        }
+    }
+
+    /// Every text of up to seven of `a`, `b` and a space against every query of up to four: the
+    /// matches are those of trying each place in turn, the plainest way to say what they are.
+    #[test]
+    fn matches_are_those_of_trying_every_place() {
+        let words = |most: usize| {
+            let mut all = vec![String::new()];
+            let mut last = all.clone();
+            for _ in 0..most {
+                last = last.iter().flat_map(|w| ['a', 'b', ' '].map(|c| format!("{w}{c}"))).collect();
+                all.extend(last.clone());
+            }
+            all
+        };
+        let tried = |text: &str, query: &str, whole: bool| {
+            let (t, q): (Vec<char>, Vec<char>) = (text.chars().collect(), query.chars().collect());
+            let word = |i: usize| t.get(i).is_some_and(|c| c.is_alphanumeric());
+            let (mut at, mut found) = (0, Vec::new());
+            while !q.is_empty() && at + q.len() <= t.len() {
+                let apart = !whole || (!at.checked_sub(1).is_some_and(word) && !word(at + q.len()));
+                if apart && t.get(at..at + q.len()) == Some(&q[..]) {
+                    found.push(at..at + q.len());
+                    at += q.len();
+                } else {
+                    at += 1;
+                }
+            }
+            found
+        };
+        let texts = words(7);
+        for query in words(4) {
+            for text in &texts {
+                for whole in [false, true] {
+                    assert_eq!(matches(text, &query, true, whole).ranges, tried(text, &query, whole), "{text:?} {query:?} {whole}");
+                }
+            }
         }
     }
 
