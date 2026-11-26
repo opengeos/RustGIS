@@ -1318,8 +1318,8 @@ fn one_column() -> usize {
 }
 
 /// A legend's columns as they are drawn and kept: 1 to [`MAX_LEGEND_COLUMNS`]. The one reader for
-/// the range in this crate, so a layout's repair and its capability check agree.
-fn legend_columns_in_range(columns: usize) -> usize {
+/// the range, so a layout's repair, its capability check and the drawing agree.
+pub fn legend_columns_in_range(columns: usize) -> usize {
     columns.clamp(1, MAX_LEGEND_COLUMNS)
 }
 
