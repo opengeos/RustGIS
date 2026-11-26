@@ -492,6 +492,8 @@ mod tests {
                 labels: Default::default(),
                 color: None,
                 text_size: rustgis_map::layout::LEGEND_TEXT_PT,
+                fit: rustgis_map::layout::LegendFit::Manual,
+                show_layer_names: rustgis_map::layout::LayerNames::Shown,
             },
         );
         assert_eq!(picture_dpi(&layout, 600.0, |e| !written_as_svg(e)), 600.0);
@@ -534,6 +536,8 @@ mod tests {
                 labels: Default::default(),
                 color: None,
                 text_size: rustgis_map::layout::LEGEND_TEXT_PT,
+                fit: rustgis_map::layout::LegendFit::Manual,
+                show_layer_names: rustgis_map::layout::LayerNames::Shown,
             },
         );
         let info = PageInfo::default();

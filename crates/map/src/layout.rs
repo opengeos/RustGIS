@@ -1159,11 +1159,168 @@ impl ScaleBarFit {
     }
 }
 
+/// How a legend fits its rows into its box.
+///
+/// `Invalid` is what a file's unknown name or wrong kind of value is read as; it is never kept:
+/// [`Layout::clamp`] sends it to the default and counts the element, and a save leaves it out, as
+/// it does the default.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LegendFit {
+    /// Its columns and text size as set; what doesn't fit is said.
+    #[default]
+    Manual,
+    /// Its text shrinks until its rows fit.
+    AdjustSize,
+    /// Columns are added, from those set, until its rows fit.
+    AdjustColumns,
+    /// Columns are added and its text shrinks until its rows fit.
+    AdjustColumnsAndSize,
+    /// A value read from a file that is not a name; repaired to the default on load.
+    #[doc(hidden)]
+    Invalid,
+}
+
+impl LegendFit {
+    pub const ALL: [LegendFit; 4] = [LegendFit::Manual, LegendFit::AdjustSize, LegendFit::AdjustColumns, LegendFit::AdjustColumnsAndSize];
+
+    pub fn code(self) -> &'static str {
+        match self {
+            LegendFit::Manual | LegendFit::Invalid => "manual",
+            LegendFit::AdjustSize => "adjustSize",
+            LegendFit::AdjustColumns => "adjustColumns",
+            LegendFit::AdjustColumnsAndSize => "adjustColumnsAndSize",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            LegendFit::Manual | LegendFit::Invalid => "Manual",
+            LegendFit::AdjustSize => "Shrink the text",
+            LegendFit::AdjustColumns => "Add columns",
+            LegendFit::AdjustColumnsAndSize => "Add columns, then shrink the text",
+        }
+    }
+
+    /// `manual`, `adjustSize`, `adjustColumns` or `adjustColumnsAndSize` in any case, trimmed.
+    pub fn from_name(s: &str) -> Option<LegendFit> {
+        let s = s.trim();
+        LegendFit::ALL.into_iter().find(|v| v.code().eq_ignore_ascii_case(s))
+    }
+
+    /// This value, or the default where it is [`LegendFit::Invalid`].
+    pub fn kept(self) -> LegendFit {
+        if self == LegendFit::Invalid { LegendFit::default() } else { self }
+    }
+
+    /// Whether a save leaves a legend's fit out: manual, or a value that is not a name
+    /// ([`LegendFit::kept`]), which reads back as manual.
+    pub fn is_manual(&self) -> bool {
+        self.kept() == LegendFit::Manual
+    }
+
+    /// Whether this fit adds columns to those set.
+    pub fn adds_columns(self) -> bool {
+        matches!(self.kept(), LegendFit::AdjustColumns | LegendFit::AdjustColumnsAndSize)
+    }
+
+    /// Whether this fit shrinks the text from the size set.
+    pub fn shrinks_text(self) -> bool {
+        matches!(self.kept(), LegendFit::AdjustSize | LegendFit::AdjustColumnsAndSize)
+    }
+}
+
+impl Serialize for LegendFit {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.kept().code())
+    }
+}
+
+impl<'de> Deserialize<'de> for LegendFit {
+    /// A name as [`LegendFit::from_name`] reads it; null as the default; anything else (an
+    /// unknown name, a number, a list) as `Invalid`, so the read never fails and `Layout::clamp`
+    /// repairs and counts it.
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<LegendFit, D::Error> {
+        let v: Option<serde_json::Value> = Deserialize::deserialize(d)?;
+        Ok(match v {
+            None | Some(serde_json::Value::Null) => LegendFit::default(),
+            Some(serde_json::Value::String(s)) => LegendFit::from_name(&s).unwrap_or(LegendFit::Invalid),
+            Some(_) => LegendFit::Invalid,
+        })
+    }
+}
+
+/// Whether a legend shows each layer's name over the layer's classes.
+///
+/// `Invalid` is what a file's value that is not `true` or `false` is read as; it is never kept:
+/// [`Layout::clamp`] sends it to the default and counts the element, and a save leaves it out, as
+/// it does the default.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LayerNames {
+    /// Each layer's name over its classes.
+    #[default]
+    Shown,
+    /// No name over a layer's classes.
+    Hidden,
+    /// A value read from a file that is not `true` or `false`; repaired to the default on load.
+    #[doc(hidden)]
+    Invalid,
+}
+
+impl LayerNames {
+    /// Whether the names are shown: unless hidden, so a value that is neither reads as shown.
+    pub fn shown(self) -> bool {
+        self != LayerNames::Hidden
+    }
+
+    /// This value, or the default where it is [`LayerNames::Invalid`].
+    pub fn kept(self) -> LayerNames {
+        if self == LayerNames::Invalid { LayerNames::default() } else { self }
+    }
+
+    /// Whether a save leaves a legend's layer names out: shown, or a value that is not `true` or
+    /// `false` ([`LayerNames::kept`]), which reads back as shown.
+    pub fn is_shown(&self) -> bool {
+        self.kept().shown()
+    }
+
+    pub fn from_shown(shown: bool) -> LayerNames {
+        if shown { LayerNames::Shown } else { LayerNames::Hidden }
+    }
+}
+
+impl Serialize for LayerNames {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_bool(self.kept().shown())
+    }
+}
+
+impl<'de> Deserialize<'de> for LayerNames {
+    /// `true` or `false`; null as the default; anything else (a name, a number, a list) as
+    /// `Invalid`, so the read never fails and `Layout::clamp` repairs and counts it.
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<LayerNames, D::Error> {
+        let v: Option<serde_json::Value> = Deserialize::deserialize(d)?;
+        Ok(match v {
+            None | Some(serde_json::Value::Null) => LayerNames::default(),
+            Some(serde_json::Value::Bool(shown)) => LayerNames::from_shown(shown),
+            Some(_) => LayerNames::Invalid,
+        })
+    }
+}
+
 /// The most columns a legend lays its rows in.
-pub const MAX_LEGEND_COLUMNS: usize = 3;
+pub const MAX_LEGEND_COLUMNS: usize = 6;
+
+/// The most columns a reader without `layout-legend-fit` lays a legend in.
+pub const LEGEND_COLUMNS_BEFORE_FIT: usize = 3;
 
 fn one_column() -> usize {
     1
+}
+
+/// A legend's columns as they are drawn and kept: 1 to [`MAX_LEGEND_COLUMNS`]. The one reader for
+/// the range in this crate, so a layout's repair and its capability check agree.
+fn legend_columns_in_range(columns: usize) -> usize {
+    columns.clamp(1, MAX_LEGEND_COLUMNS)
 }
 
 fn is_one_column(columns: &usize) -> bool {
@@ -1383,7 +1540,8 @@ pub enum ElementKind {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         exclude: Vec<String>,
         /// The columns its rows are laid in, 1 to [`MAX_LEGEND_COLUMNS`], under its title: as even
-        /// as they can be, a layer's name staying with the row under it.
+        /// as they can be, a layer's name staying with the row under it. Under a fit that adds
+        /// columns ([`LegendFit::adds_columns`]), the fewest it starts from.
         #[serde(default = "one_column", skip_serializing_if = "is_one_column")]
         columns: usize,
         /// The label it shows for a layer instead of the layer's name, by the layer's name (any
@@ -1401,6 +1559,15 @@ pub enum ElementKind {
         /// and left out then, so layouts saved before keep their bytes.
         #[serde(default = "legend_text_pt", skip_serializing_if = "is_legend_text_pt")]
         text_size: f64,
+        /// How its rows are fitted into its box: in its columns and at its text size as set
+        /// (manual), or with its text shrunk, columns added, or both. Left out when manual, so
+        /// layouts saved before keep their bytes.
+        #[serde(default, skip_serializing_if = "LegendFit::is_manual")]
+        fit: LegendFit,
+        /// Whether it shows each layer's name over the layer's classes. Left out when shown, so
+        /// layouts saved before keep their bytes.
+        #[serde(default, skip_serializing_if = "LayerNames::is_shown")]
+        show_layer_names: LayerNames,
     },
     /// The colour scale of a raster layer in a frame's map: a gradient bar for a stretch, steps
     /// for classes, a block per value for unique values and colour tables (#326).
@@ -1906,6 +2073,16 @@ impl ElementKind {
             return false;
         };
         valign.kept() != TextVAlign::Top || case.kept() != TextCase::None || line_spacing_in_range(*line_spacing) != LINE_SPACING
+    }
+
+    /// Whether this is a legend whose fit is not manual, whose layer names are left off, or whose
+    /// columns are more than [`LEGEND_COLUMNS_BEFORE_FIT`], once brought into range as
+    /// [`Layout::clamp`] does: what a layout file needs a newer reader for.
+    pub fn legend_uses_fit(&self) -> bool {
+        let ElementKind::Legend { fit, show_layer_names, columns, .. } = self else {
+            return false;
+        };
+        !fit.is_manual() || !show_layer_names.is_shown() || legend_columns_in_range(*columns) > LEGEND_COLUMNS_BEFORE_FIT
     }
 
     /// Whether this is a scale bar with any of the details set: subdivisions, divisions before
@@ -3153,13 +3330,17 @@ impl Layout {
                         g.label_size = layout_text_in_range(g.label_size, GRID_LABEL_PT);
                     }
                 }
-                ElementKind::Legend { exclude, columns, labels, text_size, .. } => {
+                ElementKind::Legend { exclude, columns, labels, text_size, fit, show_layer_names, .. } => {
                     *text_size = layout_text_in_range(*text_size, LEGEND_TEXT_PT);
+                    // A file's unknown name or wrong kind of value is read as a marker: back to the
+                    // default.
+                    *fit = fit.kept();
+                    *show_layer_names = show_layer_names.kept();
                     // Names stay whole: a layer's own name isn't cut, and a cut one would no
                     // longer match it.
                     cut |= exclude.len() > MAX_LEGEND_EXCLUDED;
                     exclude.truncate(MAX_LEGEND_EXCLUDED);
-                    *columns = (*columns).clamp(1, MAX_LEGEND_COLUMNS);
+                    *columns = legend_columns_in_range(*columns);
                     // The same for the names labelled; a label is cut to its length, and a blank
                     // one shows the name, as it would without.
                     labels.retain(|_, label| !label.trim().is_empty());
@@ -4292,6 +4473,117 @@ mod tests {
         let saved = serde_json::to_string(&big).unwrap();
         assert!(saved.contains(r#""text_size":100.0"#), "{saved}");
         assert_eq!(serde_json::from_str::<Layout>(&saved).unwrap(), big);
+    }
+
+    /// A legend of `columns` columns, as a file would hold it, otherwise plain.
+    fn legend_with_columns(columns: usize) -> ElementKind {
+        serde_json::from_value(serde_json::json!({"Legend": {"frame": 1, "title": "L", "columns": columns}})).unwrap()
+    }
+
+    /// A legend's fit and layer names: left out at their defaults, so a legend saved before saves byte
+    /// for byte; written and read back when set; and a hand-edited value of the wrong kind or not a name
+    /// loads as the default, counted. Four to six columns are kept now.
+    #[test]
+    fn legend_fit_and_layer_names_save_only_when_set_and_load_into_range() {
+        use serde_json::json;
+        for plain in [
+            r#"{"Legend":{"frame":1,"title":"L","all_classes":false,"hide_other":false}}"#,
+            r#"{"Legend":{"frame":1,"title":"","all_classes":true,"hide_other":true,"show_no_data":true,"exclude":["a"],"columns":3,"labels":{"a":"A"},"color":[1,2,3,255],"text_size":12.0}}"#,
+        ] {
+            let k: ElementKind = serde_json::from_str(plain).unwrap();
+            assert_eq!(serde_json::to_string(&k).unwrap(), plain);
+            assert!(!k.legend_uses_fit());
+        }
+        let plain: ElementKind =
+            serde_json::from_str(r#"{"Legend":{"frame":1,"title":"L","all_classes":false,"hide_other":false}}"#).unwrap();
+        let plain_json = serde_json::to_string(&plain).unwrap();
+        let mut set = plain.clone();
+        if let ElementKind::Legend { fit, show_layer_names, .. } = &mut set {
+            (*fit, *show_layer_names) = (LegendFit::AdjustColumnsAndSize, LayerNames::Hidden);
+        }
+        let s = serde_json::to_string(&set).unwrap();
+        assert!(s.ends_with(r#""hide_other":false,"fit":"adjustColumnsAndSize","show_layer_names":false}}"#), "{s}");
+        assert_eq!(serde_json::from_str::<ElementKind>(&s).unwrap(), set);
+        assert!(set.legend_uses_fit());
+        for (name, f) in
+            [(" ADJUSTSIZE ", LegendFit::AdjustSize), ("adjustColumns", LegendFit::AdjustColumns), ("Manual", LegendFit::Manual)]
+        {
+            assert_eq!(LegendFit::from_name(name), Some(f), "{name}");
+        }
+        assert_eq!((LegendFit::from_name("adjustFrame"), LegendFit::from_name("adjustWidth")), (None, None));
+        assert_eq!(LegendFit::ALL.len(), 4);
+        for f in LegendFit::ALL {
+            assert_eq!(LegendFit::from_name(f.code()), Some(f), "{f:?}");
+        }
+        assert_eq!(LegendFit::ALL.map(LegendFit::label), ["Manual", "Shrink the text", "Add columns", "Add columns, then shrink the text"]);
+        assert_eq!(
+            LegendFit::ALL.map(|f| (f.adds_columns(), f.shrinks_text())),
+            [(false, false), (false, true), (true, false), (true, true)]
+        );
+        assert_eq!((LegendFit::Invalid.kept(), LayerNames::Invalid.kept()), (LegendFit::Manual, LayerNames::Shown));
+        assert!(LayerNames::Invalid.shown() && LayerNames::from_shown(true).shown() && !LayerNames::from_shown(false).shown());
+        // An unclamped marker writes as the default, and needs nothing: byte for byte the plain one.
+        for (f, n) in
+            [(LegendFit::Invalid, LayerNames::Invalid), (LegendFit::Invalid, LayerNames::Shown), (LegendFit::Manual, LayerNames::Invalid)]
+        {
+            let mut odd = plain.clone();
+            if let ElementKind::Legend { fit, show_layer_names, .. } = &mut odd {
+                (*fit, *show_layer_names) = (f, n);
+            }
+            assert_eq!(serde_json::to_string(&odd).unwrap(), plain_json, "{f:?} {n:?}");
+            assert!(!odd.legend_uses_fit(), "{f:?} {n:?}");
+        }
+        // A hand-edited layout.
+        let extras = [
+            json!({"fit": "adjustFrame"}),                                // 2: manual, said
+            json!({"fit": 7}),                                            // 3: manual, said
+            json!({"fit": ["adjustSize"]}),                               // 4: manual, said
+            json!({"show_layer_names": "no"}),                            // 5: shown, said
+            json!({"show_layer_names": 0}),                               // 6: shown, said
+            json!({"columns": 5}),                                        // 7: kept, not said
+            json!({"columns": 9}),                                        // 8: 6, said
+            json!({"fit": " adjustcolumns ", "show_layer_names": false}), // 9: kept, not said
+            json!({"fit": null, "show_layer_names": null}),               // 10: defaults, not said
+        ];
+        let frame = json!({"id": 1, "name": "f", "x": 0, "y": 0, "w": 100, "h": 100,
+            "kind": {"MapFrame": {"map": "M", "center": {"x": 0, "y": 0}, "scale": 1e6}}});
+        let elements: Vec<_> = std::iter::once(frame)
+            .chain(extras.iter().enumerate().map(|(i, extra)| {
+                let mut legend = json!({"frame": 1, "title": "L", "all_classes": false, "hide_other": false});
+                legend.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+                json!({"id": i + 2, "name": "l", "x": 0, "y": 0, "w": 50, "h": 50, "kind": {"Legend": legend}})
+            }))
+            .collect();
+        let mut l: Layout = serde_json::from_value(json!({"name": "x", "width": 297, "height": 210, "elements": elements})).unwrap();
+        let repairs = l.clamp();
+        let got = |id| match &l.element(id).unwrap().kind {
+            ElementKind::Legend { fit, show_layer_names, columns, .. } => (*fit, *show_layer_names, *columns),
+            k => panic!("{k:?}"),
+        };
+        use {LayerNames as N, LegendFit as F};
+        let want = [
+            (2, (F::Manual, N::Shown, 1)),
+            (3, (F::Manual, N::Shown, 1)),
+            (4, (F::Manual, N::Shown, 1)),
+            (5, (F::Manual, N::Shown, 1)),
+            (6, (F::Manual, N::Shown, 1)),
+            (7, (F::Manual, N::Shown, 5)),
+            (8, (F::Manual, N::Shown, 6)),
+            (9, (F::AdjustColumns, N::Hidden, 1)),
+            (10, (F::Manual, N::Shown, 1)),
+        ];
+        for (id, b) in want {
+            assert_eq!(got(id), b, "{id}");
+        }
+        assert_eq!((repairs.elements_adjusted, repairs.elements_cut), (6, 0));
+        let saved = serde_json::to_string(&l).unwrap();
+        assert!(
+            !saved.contains("adjustFrame") && saved.matches("\"fit\"").count() == 1 && saved.matches("show_layer_names").count() == 1,
+            "{saved}"
+        );
+        // Columns past the three a reader without the capability lays need it.
+        assert!(legend_with_columns(4).legend_uses_fit() && !legend_with_columns(3).legend_uses_fit());
+        assert!(legend_with_columns(MAX_LEGEND_COLUMNS).legend_uses_fit() && !legend_with_columns(0).legend_uses_fit());
     }
 
     #[test]

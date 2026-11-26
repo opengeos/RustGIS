@@ -15721,9 +15721,9 @@ fn more_columns_win_by_showing_more_or_covering_less() {
     assert!(!more_columns_win((1.0, 0.0), (1.0, 0.0)), "nothing to gain");
 }
 
-/// `"columns"` on a legend: given and changed, refused outside 1 to 3 and on anything else.
+/// `"columns"` on a legend: given and changed, refused outside 1 to 6 and on anything else.
 #[test]
-fn a_legend_takes_columns_from_one_to_three() {
+fn a_legend_takes_columns_from_one_to_six() {
     use rustgis_map::layout::ElementKind;
     let mut s = Session::new(Project::default());
     s.run("layout.new", &json!({"template": "map"})).unwrap();
@@ -15740,9 +15740,18 @@ fn a_legend_takes_columns_from_one_to_three() {
     assert_eq!(columns(&s, id), 3);
     s.run("layout.update", &json!({"element": id, "title": "Key"})).unwrap();
     assert_eq!(columns(&s, id), 3, "another change leaves them");
-    for bad in [json!(0), json!(4), json!(1.5), json!("2"), json!(-1)] {
-        assert!(s.run("layout.update", &json!({"element": id, "columns": bad})).unwrap_err().contains("1 to 3"), "{bad}");
-        assert!(s.run("layout.addElement", &json!({"kind": "legend", "columns": bad})).unwrap_err().contains("1 to 3"), "{bad}");
+    let six = s.run("layout.addElement", &json!({"kind": "legend", "columns": 6})).unwrap();
+    assert_eq!(columns(&s, six["element"].as_u64().unwrap()), 6);
+    for n in [4, 5, 6] {
+        s.run("layout.update", &json!({"element": id, "columns": n})).unwrap();
+        assert_eq!(columns(&s, id), n as usize);
+    }
+    s.run("layout.update", &json!({"element": id, "columns": 3})).unwrap();
+    for bad in [json!(0), json!(7), json!(1.5), json!("2"), json!(-1)] {
+        let err = s.run("layout.update", &json!({"element": id, "columns": bad})).unwrap_err();
+        assert!(err.contains("columns is a whole number from 1 to 6"), "{bad}: {err}");
+        let err = s.run("layout.addElement", &json!({"kind": "legend", "columns": bad})).unwrap_err();
+        assert!(err.contains("columns is a whole number from 1 to 6"), "{bad}: {err}");
     }
     assert_eq!(columns(&s, id), 3);
     let err = s.run("layout.addElement", &json!({"kind": "northArrow", "columns": 2})).unwrap_err();
@@ -15756,7 +15765,7 @@ fn a_legend_takes_columns_from_one_to_three() {
     let old: ElementKind = serde_json::from_str(r#"{"Legend":{"frame":1,"title":"L"}}"#).unwrap();
     assert!(matches!(old, ElementKind::Legend { columns: 1, .. }), "{old:?}");
     // A value out of range, from a file edited by hand, is saved as the nearest.
-    for (given, kept) in [(0, 1), (999, 3)] {
+    for (given, kept) in [(0, 1), (5, 5), (999, 6)] {
         let mut l = s.project.layouts[0].clone();
         let Some(ElementKind::Legend { columns, .. }) = l.element_mut(id as u32).map(|e| &mut e.kind) else { panic!() };
         *columns = given;

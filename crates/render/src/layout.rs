@@ -897,7 +897,20 @@ fn draw_page(
                     scale_bar(&mut pm, r, map.ground_res_at(&cam), &bar, (*color, *fill), ppp, layout.decimal_comma);
                 }
             }
-            ElementKind::Legend { frame: f, title, all_classes, hide_other, show_no_data, exclude, columns, labels, color, text_size } => {
+            ElementKind::Legend {
+                frame: f,
+                title,
+                all_classes,
+                hide_other,
+                show_no_data,
+                exclude,
+                columns,
+                labels,
+                color,
+                text_size,
+                fit: _,
+                show_layer_names: _,
+            } => {
                 if let Some(&(_, mi, cam, ..)) = frame(*f)
                     && let Some(map) = maps.get(mi)
                 {
@@ -5365,6 +5378,8 @@ pub(crate) fn legend_pin_pages() -> Vec<(Layout, Vec<Map>)> {
             labels: BTreeMap::new(),
             color: None,
             text_size: rustgis_map::layout::LEGEND_TEXT_PT,
+            fit: rustgis_map::layout::LegendFit::Manual,
+            show_layer_names: rustgis_map::layout::LayerNames::Shown,
         };
         f(&mut kind);
         l.add("Legend", at, kind);
@@ -6230,6 +6245,8 @@ mod tests {
                 labels: BTreeMap::new(),
                 color: None,
                 text_size: rustgis_map::layout::LEGEND_TEXT_PT,
+                fit: rustgis_map::layout::LegendFit::Manual,
+                show_layer_names: rustgis_map::layout::LayerNames::Shown,
             },
         );
         assert_eq!(clipped_text(&l, &[Map::new("m")], 96.0, &info), vec![(legend, "Legend".into())]);
@@ -6278,6 +6295,8 @@ mod tests {
                 labels: BTreeMap::new(),
                 color: None,
                 text_size: rustgis_map::layout::LEGEND_TEXT_PT,
+                fit: rustgis_map::layout::LegendFit::Manual,
+                show_layer_names: rustgis_map::layout::LayerNames::Shown,
             },
         );
         let mut tile = rustgis_map::TileLayer::new("Walls", rustgis_map::TileKind::Raster, "https://tiles.test/red/{z}/{x}/{y}.png");
@@ -6385,6 +6404,8 @@ mod tests {
                 labels: BTreeMap::new(),
                 color: None,
                 text_size: rustgis_map::layout::LEGEND_TEXT_PT,
+                fit: rustgis_map::layout::LegendFit::Manual,
+                show_layer_names: rustgis_map::layout::LayerNames::Shown,
             },
         );
         // The thread-local budget and the shortened wait belong to this worker alone.
@@ -7118,7 +7139,9 @@ mod tests {
         assert!(f64::from(right3) <= sizes[2].0 * mm_pt + 1.0, "{right3} across {:?}", sizes[2]);
         // A value out of range, from a file edited by hand, draws what the nearest would.
         assert_eq!(ink(0, 500.0, 500.0), (right1, down1));
-        assert_eq!(ink(9, 500.0, 500.0), (right3, down3));
+        let most = ink(MAX_LEGEND_COLUMNS, 500.0, 500.0);
+        assert_eq!(ink(9, 500.0, 500.0), most);
+        assert!(most.0 > right3 && most.1 < down3, "six columns, not three: {most:?}");
         // A box too narrow for the columns closes them up: the last still starts inside it, past
         // where the first two end in a box of their own.
         let narrow = f64::from(right3) as f32 * 0.8;
