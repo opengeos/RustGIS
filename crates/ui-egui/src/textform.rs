@@ -565,7 +565,7 @@ mod tests {
         h.run();
         h.get_by_role_and_label(Role::ComboBox, "Case").click();
         h.run();
-        h.get_by_label(TextCase::Upper.label()).click();
+        h.get_by_label("Upper case").click();
         h.run();
         assert_eq!((h.state().valign, h.state().case), (TextVAlign::Bottom, TextCase::Upper));
         assert_eq!(h.state().settled, ["valign", "case"]);

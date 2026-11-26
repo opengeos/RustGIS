@@ -2684,7 +2684,7 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
         let mut buf = app.layout.typing.remove(&key).unwrap_or_else(|| text.clone());
         let (mut sz, mut c, mut bb) = (*size, crate::theme::c32(*color), *bold);
         let (mut it, mut al, mut ls, mut fam, mut named) = (*italic, *align, *letter_spacing, *font, font_name.clone());
-        let (mut wr, mut va, mut lines, mut cs) = (*wrap, valign.kept(), *line_spacing, case.kept());
+        let (mut wr, mut va, mut line_sp, mut cs) = (*wrap, valign.kept(), *line_spacing, case.kept());
         let tokens = [rustgis_engine::map::graphics::TOKENS, rustgis_engine::map::layout::PAGE_TOKENS];
         let warning = app
             .layout
@@ -2703,7 +2703,7 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
             wrap: Some(&mut wr),
             warning,
             valign: Some(&mut va),
-            line_spacing: Some(&mut lines),
+            line_spacing: Some(&mut line_sp),
             case: Some(&mut cs),
             letter_spacing: Some(&mut ls),
             font: Some(&mut fam),
@@ -2741,7 +2741,7 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
             update(app, json!({"valign": va.code()}));
         }
         if settled.line_spacing {
-            update(app, json!({"lineSpacing": lines}));
+            update(app, json!({"lineSpacing": line_sp}));
         }
         if settled.case {
             update(app, json!({"case": cs.code()}));
@@ -3988,8 +3988,9 @@ mod tests {
         assert!(!wraps(h.state()));
     }
 
-    /// A text element's Vertical alignment, Line spacing and Case in the Format pane: each change one
-    /// undo step, the same value picked again none.
+    /// A text element's Vertical alignment, Line spacing and Case in the Format pane: shown at their
+    /// defaults on opening, each change one undo step, the same value picked again none, a spacing
+    /// past the widest set at the widest.
     #[test]
     fn a_texts_block_alignment_line_spacing_and_case_are_one_undo_step_each() {
         use egui::accesskit::{Action, ActionData, ActionRequest, Role};
@@ -4021,6 +4022,9 @@ mod tests {
         // Opening the pane sends nothing, and shows a plain text's defaults.
         assert_eq!(h.state().session.undo_depth(), depth, "opening the pane changed nothing");
         assert_eq!(block(h.state()), (TextVAlign::Top, 1.0, TextCase::None));
+        assert_eq!(h.get_by_role_and_label(Role::ComboBox, "Vertical alignment").value().as_deref(), Some("Top"));
+        assert_eq!(h.get_by_role_and_label(Role::ComboBox, "Case").value().as_deref(), Some("As typed"));
+        assert_eq!(h.get_by_role_and_label(Role::SpinButton, "Line spacing").accesskit_node().numeric_value(), Some(1.0));
         let pick = |h: &mut egui_kittest::Harness<'_, RustGisApp>, list: &str, item: &str| {
             h.get_by_role_and_label(Role::ComboBox, list).click();
             h.run_steps(2);
@@ -4032,22 +4036,31 @@ mod tests {
         assert_eq!(h.state().session.undo_depth(), depth + 1, "one step");
         pick(&mut h, "Vertical alignment", "Middle");
         assert_eq!(h.state().session.undo_depth(), depth + 1, "the same item again is no step");
-        pick(&mut h, "Case", TextCase::Lower.label());
+        pick(&mut h, "Case", "Lower case");
         assert_eq!(block(h.state()).2, TextCase::Lower);
         assert_eq!(h.state().session.undo_depth(), depth + 2);
         // The spacing set as assistive technology does.
-        let (node, tree) = h.get_by_role_and_label(Role::SpinButton, "Line spacing").accesskit_node().locate();
-        h.event(egui::Event::AccessKitActionRequest(ActionRequest {
-            action: Action::SetValue,
-            target_tree: tree,
-            target_node: node,
-            data: Some(ActionData::NumericValue(1.5)),
-        }));
-        h.run_steps(3);
+        let set_spacing = |h: &mut egui_kittest::Harness<'_, RustGisApp>, v: f64| {
+            let (node, tree) = h.get_by_role_and_label(Role::SpinButton, "Line spacing").accesskit_node().locate();
+            h.event(egui::Event::AccessKitActionRequest(ActionRequest {
+                action: Action::SetValue,
+                target_tree: tree,
+                target_node: node,
+                data: Some(ActionData::NumericValue(v)),
+            }));
+            h.run_steps(3);
+        };
+        set_spacing(&mut h, 1.5);
         assert_eq!(block(h.state()), (TextVAlign::Middle, 1.5, TextCase::Lower));
         assert_eq!(h.state().session.undo_depth(), depth + 3);
         h.state_mut().run("edit.undo", json!({})).unwrap();
         assert_eq!(block(h.state()), (TextVAlign::Middle, 1.0, TextCase::Lower), "one step undoes the spacing alone");
+        // Past the widest: set at the widest, in one step.
+        h.run_steps(3);
+        let before = h.state().session.undo_depth();
+        set_spacing(&mut h, 5.0);
+        assert_eq!(block(h.state()), (TextVAlign::Middle, 3.0, TextCase::Lower));
+        assert_eq!(h.state().session.undo_depth(), before + 1, "one step");
     }
 
     /// The Format pane tells lines below a text's box from lines past the 200 a text draws, and
