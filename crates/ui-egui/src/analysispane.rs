@@ -2291,11 +2291,14 @@ fn script(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, fit: bool) {
     let running = script_running(app);
     crate::scriptfind::keys(ui, box_id, &app.workflow.script, &mut app.workflow.script_find);
     let before = crate::completion::before(ui, box_id, &app.workflow.script);
+    // With the find bar open the box keeps Escape too, to close it, rather than drop the focus.
+    let mut filter = crate::scriptcomplete::filter(ui, box_id);
+    filter.escape |= app.workflow.script_find.is_open();
     let out = egui::ScrollArea::vertical().id_salt("script_box").max_height(room).auto_shrink([false, true]).show(ui, |ui| {
         let out = egui::TextEdit::multiline(&mut app.workflow.script)
             .id(box_id)
             .code_editor()
-            .event_filter(crate::scriptcomplete::filter(ui, box_id))
+            .event_filter(filter)
             .layouter(&mut layouter)
             .desired_rows(SCRIPT_MIN_ROWS)
             .desired_width(f32::INFINITY)
@@ -3608,6 +3611,35 @@ mod tests {
         open_script(h.state_mut(), &ctx, "map.zoomFull".into());
         h.run();
         assert!(h.query_by_label("Close (Esc)").is_none(), "closed again");
+    }
+
+    /// Escape in the box closes the bar, after the list open over the box has taken its own; the box
+    /// keeps the focus and its cursor (#2996).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn escape_in_the_box_closes_the_find_bar_after_the_list() {
+        use egui::{Event, Key, Modifiers};
+        use egui_kittest::kittest::Queryable;
+        let mut h = find_harness("");
+        let box_id = egui::Id::unique("script_text");
+        h.key_press_modifiers(Modifiers::COMMAND, Key::F);
+        h.run();
+        h.ctx.memory_mut(|m| m.request_focus(box_id));
+        h.run();
+        // Typing a command opens the list: the first Escape is its own.
+        h.event(Event::Text("map.zo".into()));
+        h.run();
+        h.run();
+        h.key_press(Key::Escape);
+        h.run();
+        h.get_by_label("Close (Esc)");
+        assert!(h.ctx.memory(|m| m.has_focus(box_id)));
+        let cursor = crate::widgets::cursor_range(&h.ctx, box_id);
+        h.key_press(Key::Escape);
+        h.run();
+        assert!(h.query_by_label("Close (Esc)").is_none(), "closed");
+        assert!(h.ctx.memory(|m| m.has_focus(box_id)), "the box keeps the focus");
+        assert_eq!(crate::widgets::cursor_range(&h.ctx, box_id), cursor);
     }
 
     /// The pane with `script` in it, its fonts installed first (the icons draw letters), and the

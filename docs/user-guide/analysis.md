@@ -1818,8 +1818,7 @@ naming it, and the script stays. Opening a
 project (New, Open, the sample, a template, or the same one again), from the app, a script, the
 assistant or an agent, starts the pane blank: the script, its results, the count and the Details
 window go with the old project, and the find bar closes, forgetting what was in it. A script that
-opens a project itself stays, with its results, as
-the new project's Run #1. On the desktop, a script's tools, models and batches, with selections, layer
+opens a project itself stays, with its results, as the new project's Run #1. On the desktop, a script's tools, models and batches, with selections, layer
 renames and definition queries, the environment, the projection and spectral zones between them, are worked out
 in the background first, so the map and the rest of the window stay in use: the status bar shows
 **Run Script** and **Cancel**, and the results say **Running…** until the run is added. From the
@@ -1909,7 +1908,8 @@ and two buttons: Replace changes the current match and Replace All every one, ea
 the box's Undo (Ctrl+Z); both are off while a run is under way, and Replace All is off too when
 there are more matches than the bar keeps (10,000); one that would make the script larger than 1 MB
 replaces nothing and says so in Messages. Escape in its fields, or the close button, closes the bar
-and leaves the current match selected in the box.
+and leaves the current match selected in the box. Escape in the box closes it too, once no list or
+help is open over the box, and the cursor stays where it is.
 
 ## ModelBuilder
 

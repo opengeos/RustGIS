@@ -249,6 +249,14 @@ impl Bar {
         }
     }
 
+    /// The bar closed. What it found goes with it (up to 10,000 ranges), and is worked out again on
+    /// opening.
+    fn close(&mut self) {
+        self.open = false;
+        self.found = Found::default();
+        self.key = None;
+    }
+
     /// The bar moved to the match `at` of the found ones.
     fn go(&mut self, at: Option<usize>) {
         self.current = at;
@@ -338,7 +346,7 @@ fn taken_now(mac: bool, open: bool) -> impl Iterator<Item = Chord> {
 }
 
 /// Before the box: the shortcuts pressed in the box or the bar ([`chords`]). Finding opens the bar,
-/// with the selection in its field; the next and previous match move an open one.
+/// with the selection in its field; the next and previous match move an open one; Escape closes it.
 pub fn keys(ui: &egui::Ui, box_id: egui::Id, script: &str, bar: &mut Bar) {
     if !here(ui.ctx(), box_id) {
         return;
@@ -370,6 +378,11 @@ pub fn keys(ui: &egui::Ui, box_id: egui::Id, script: &str, bar: &mut Bar) {
         bar.replace_open |= chord.does == Does::FindAndReplace;
         bar.reseek = true;
         bar.focus_query = true;
+    }
+    // Escape in the box closes an open bar too, after a list or the help over the box took its own
+    // (read before this); the cursor stays where it is.
+    if bar.open && ui.memory(|m| m.has_focus(box_id)) && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+        bar.close();
     }
 }
 
@@ -670,14 +683,11 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
             }
         }
         Some(Action::Close) => {
-            bar.open = false;
             // The cursor where the search was: the current match, selected, in the box.
             if let Some(r) = bar.current.and_then(|i| bar.found.ranges.get(i)) {
                 crate::widgets::set_cursor_range(ui.ctx(), box_id, CCursorRange::two(CCursor::new(r.start), CCursor::new(r.end)));
             }
-            // What it found goes with it (up to 10,000 ranges), and is worked out again on opening.
-            bar.found = Found::default();
-            bar.key = None;
+            bar.close();
             ui.memory_mut(|m| m.request_focus(box_id));
         }
         None => {}
