@@ -429,7 +429,7 @@ fn losses(layout: &Layout, maps: &[Map], dpi: f64, info: &PageInfo, only: Option
                         true,
                         false,
                         None,
-                        (TextVAlign::Top, 1.0),
+                        (TextVAlign::Top, USUAL_LINE_SPACING),
                     )
                 }
                 // A colorbar's title in the lines it is drawn in (#2493), when it draws one: its
@@ -469,7 +469,7 @@ fn losses(layout: &Layout, maps: &[Map], dpi: f64, info: &PageInfo, only: Option
                         false,
                         true,
                         Some(fits),
-                        (TextVAlign::Top, 1.0),
+                        (TextVAlign::Top, USUAL_LINE_SPACING),
                     )
                 }
                 _ => return None,
@@ -4498,7 +4498,7 @@ pub(crate) fn text_style(
 ) -> TextStyle {
     let family = font_name.and_then(crate::families::find_ready);
     let face = text::Face { bold, italic, serif: font == rustgis_map::layout::FontFamily::Serif, family };
-    TextStyle { face, align, spacing: letter_spacing as f32, valign: TextVAlign::Top, line_spacing: 1.0 }
+    TextStyle { face, align, spacing: letter_spacing as f32, valign: TextVAlign::Top, line_spacing: USUAL_LINE_SPACING }
 }
 
 /// Pixels per millimetre a wrapped text's lines are measured at (300 dpi), whatever the
@@ -4571,7 +4571,7 @@ fn colorbar_title_style() -> TextStyle {
         align: TextAlign::Left,
         spacing: 0.0,
         valign: TextVAlign::Top,
-        line_spacing: 1.0,
+        line_spacing: USUAL_LINE_SPACING,
     }
 }
 
@@ -4620,6 +4620,9 @@ fn colorbar_bar_room(ppp: f32, orientation: Orientation) -> f32 {
         Orientation::Vertical => 2.0 * 8.0 * 1.33 * ppp,
     }
 }
+
+/// The usual line spacing ([`rustgis_map::layout::LINE_SPACING`]) as the drawing holds it.
+const USUAL_LINE_SPACING: f32 = rustgis_map::layout::LINE_SPACING as f32;
 
 /// The distance between two lines of text at `size` points, in mm, at the usual line spacing (1),
 /// as [`text_block`] sets them there; a text's line spacing multiplies it.
