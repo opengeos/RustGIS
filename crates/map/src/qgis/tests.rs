@@ -1508,6 +1508,10 @@ fn raster_image_markers_read_a_file_address_as_the_file_it_names() {
     let Some(Renderer::Single(sym)) = &s.renderer else { panic!() };
     assert_eq!(sym.marker, Marker::Circle);
     assert!(asked.borrow().is_empty(), "{:?}", asked.borrow());
+    assert_eq!(
+        report.notes.iter().map(|n| n.text.as_str()).collect::<Vec<_>>(),
+        ["raster image markers whose image is a relative file name with `://` in it, which RustGIS doesn't read, drawn as circles"]
+    );
 }
 
 /// A raster image marker whose image a field or an expression gives has no image of its own to
