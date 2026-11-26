@@ -273,11 +273,14 @@ pub(crate) fn insert(text: &mut String, field: &str, value: &str, ds: &Dataset, 
     // (`IN (▮, 'Africa')`); what follows doesn't otherwise count (an unfinished clause after it
     // isn't a bracket left open).
     let opened = |text: &str| query::brackets(text).unwrap_or_default();
-    let mut missing = match after.starts_with(',') {
+    // Before an operator that goes on with it (`BETWEEN ▮ * 2`, `IN (▮ * 2`), the value isn't
+    // finished, so nothing is added after it.
+    let goes_on = next == query::Follows::Operator;
+    let mut missing = match after.starts_with(',') || goes_on {
         true => 0,
         false => opened(&head).0.saturating_sub(opened(after).1),
     };
-    let mut second_end = !starts_with_word(after, "and");
+    let mut second_end = !goes_on && !starts_with_word(after, "and");
     loop {
         let then = at_end(&head, ds);
         if second_end && then.as_ref().is_some_and(|c| !c.operand && c.keywords == [Kw::And]) {
@@ -497,6 +500,14 @@ mod tests {
         ] {
             let mut text = clause.to_string();
             insert(&mut text, "continent", "'Asia'", &ds, Some(at)).unwrap();
+            assert_eq!(text, expected, "{clause}");
+        }
+        // What follows goes on with the value (`* 2`): nothing is finished before it.
+        for (clause, at, expected) in
+            [("pop_est BETWEEN  * 2 AND 50", 16, "pop_est BETWEEN 10 * 2 AND 50"), ("pop_est IN ( * 2", 12, "pop_est IN (10 * 2")]
+        {
+            let mut text = clause.to_string();
+            insert(&mut text, "pop_est", "10", &ds, Some(at)).unwrap();
             assert_eq!(text, expected, "{clause}");
         }
     }
