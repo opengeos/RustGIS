@@ -326,9 +326,14 @@ fn read_from_limited(file_name: &str, mut source: impl std::io::Read, max: usize
     }
     match field(bytes, DSI + 144, 5) {
         Some("WGS84") => {}
+        // A datum it names but isn't read: its places are taken on WGS 84, without the shift.
         Some(other) if !other.trim().is_empty() => {
-            lost.push(format!("its horizontal datum is {:?}, not WGS84; it is read as WGS 84", other.trim()));
+            lost.push(crate::loss::Note::loss(
+                crate::loss::LossCode::ApproximatedDatum,
+                format!("its horizontal datum is {:?}, not WGS84; it is read as WGS 84", other.trim()),
+            ));
         }
+        // None named: the standard sets WGS 84, so nothing is assumed past it.
         _ => lost.push("it doesn't name its horizontal datum; it is read as WGS 84, as MIL-PRF-89020B sets"),
     }
     let surface = match field(bytes, DSI + 141, 3) {
@@ -604,6 +609,21 @@ mod tests {
             r.lost
         );
         assert!(!r.lost.iter().any(|l| l.contains("checksum")), "{:?}", r.lost);
+    }
+
+    /// A datum the file names that isn't WGS84 is read as WGS 84, without its shift, and said with
+    /// its code; one the file doesn't name is WGS 84 as the standard sets, said plain.
+    #[test]
+    fn a_datum_named_but_not_read_is_coded() {
+        let b = dted("0000000E", "0000000N", (30, 30), (11, 11), |_, _| Some(1));
+        let datum = |name: &[u8; 5]| {
+            let mut b = b.clone();
+            b[DSI + 144..DSI + 149].copy_from_slice(name);
+            read("x.dt1", &b).unwrap().lost.iter().filter(|l| l.contains("horizontal datum")).map(|l| l.loss).collect::<Vec<_>>()
+        };
+        assert_eq!(datum(b"NAD27"), [Some(crate::loss::LossCode::ApproximatedDatum)]);
+        assert_eq!(datum(b"     "), [None]);
+        assert!(datum(b"WGS84").is_empty());
     }
 
     #[test]
