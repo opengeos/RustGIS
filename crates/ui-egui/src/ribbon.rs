@@ -3635,7 +3635,6 @@ fn layout_groups(app: &mut RustGisApp, ui: &mut Ui) {
         if big(ui, app, "g_text", "Text", "Add a text element.", "ui.menu", Value::Null, false, false).clicked() {
             add(app, json!({"kind": "text"}));
         }
-        let layers = crate::textform::StatLayer::of(&layout, &app.session.project.maps);
         big_menu(ui, app, "dynamic_text", "Dynamic\nText", "Add text that updates: page, date, scale, map and more.", |ui, app| {
             for (token, what) in [
                 ("{date}", "Current date"),
@@ -3652,6 +3651,7 @@ fn layout_groups(app: &mut RustGisApp, ui: &mut Ui) {
                     ui.close();
                 }
             }
+            let layers = crate::textform::StatLayer::of(&layout, &app.session.project.maps);
             crate::textform::stat_menu(ui, &layers, |token| add(app, json!({"kind": "dynamicText", "text": token})));
         });
         if big(ui, app, "picture", "Picture", "Add a PNG or JPEG picture to the page.", "ui.layoutPicture", Value::Null, false, false)

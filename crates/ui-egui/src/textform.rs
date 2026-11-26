@@ -28,7 +28,8 @@ pub struct StatLayer {
 impl StatLayer {
     /// The layers a text of `layout` can show figures of: those of the map its first frame shows
     /// (as the page reads them), without a raster's or a graphics layer's, each with its numeric
-    /// fields. A name a token can't hold (`{`, `}`, or a field's `:`) is left out.
+    /// fields. A name a token can't hold (`{`, `}`, or a field's `:`) is left out, and so is a layer
+    /// under another of its name, which no token reads.
     pub fn of(layout: &rustgis_engine::map::layout::Layout, maps: &[rustgis_engine::map::Map]) -> Vec<StatLayer> {
         use rustgis_engine::map::layout::ElementKind;
         let Some(ElementKind::MapFrame { map, .. }) = layout.first_frame().and_then(|f| layout.element(f)).map(|e| &e.kind) else {
@@ -39,6 +40,7 @@ impl StatLayer {
         map.layers
             .iter()
             .filter(|l| !l.graphics && l.raster.is_none() && holds(&l.name, false))
+            .filter(|l| map.layer_by_name(&l.name).is_some_and(|first| first.id == l.id))
             .map(|l| StatLayer {
                 name: l.name.clone(),
                 fields: l.dataset.fields.iter().filter(|f| f.ty.is_numeric() && holds(&f.name, true)).map(|f| f.name.clone()).collect(),
@@ -577,8 +579,12 @@ mod tests {
             Dataset::new(name, GeometryType::None, fields.into_iter().map(|(n, t)| Field::new(n, t)).collect())
         };
         let mut map = Map::new("Main");
+        // A token reads the first layer of a name, case aside, so one under it is not offered
+        // (a layer is added above the others).
+        map.add_dataset(layer("Under", vec![("other", FieldType::Double)]));
         map.add_dataset(layer("Cities", vec![("pop", FieldType::Double), ("name", FieldType::Text), ("a:b", FieldType::Double)]));
         map.add_dataset(layer("Bad {name}", vec![("x", FieldType::Double)]));
+        map.layers.last_mut().unwrap_or_else(|| panic!("a layer")).name = "cities".into();
         let mut other = Map::new("Other");
         other.add_dataset(layer("Rivers", vec![("km", FieldType::Double)]));
         let mut layout = Layout::new("L", 100.0, 100.0);
