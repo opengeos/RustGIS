@@ -3895,6 +3895,17 @@ fn the_assistant_hands_tasks_to_agent_threads_in_the_background() {
     assert_eq!(a.threads()[0].id, "claude-code-2", "thread ids aren't reused");
     a.clear();
     assert!(a.threads().is_empty() && a.take_delegations().is_empty());
+    // Suspended (the app turned the assistant off): a report waiting stays in the transcript and
+    // is never sent.
+    assert!(matches!(a.ask("once more", &s), Step::Send(_)));
+    let call = calls("delegate", json!({"task": "w", "agent": "claude-code"}));
+    assert!(matches!(a.receive(a.generation(), ok(call), &mut s), Step::Send(_)));
+    let thread = a.threads()[0].id.clone();
+    a.thread_report(&thread, "Made 3 layers.".into(), false);
+    a.suspend();
+    assert!(!a.busy() && a.threads().is_empty() && a.take_delegations().is_empty());
+    assert!(a.deliver(&s).is_none(), "not sent to the model");
+    assert!(a.transcript.iter().any(|e| matches!(e, Entry::Note(n) if n.to_string().contains("Made 3 layers."))));
     // The command line offers no agents: such a delegation is refused.
     let mut c = Agent::new(cfg("openai"), &s);
     let mut replies = VecDeque::from(vec![ok(calls("delegate", json!({"task": "z", "agent": "codex"}))), ok(say("Couldn't."))]);

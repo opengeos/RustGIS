@@ -1152,6 +1152,18 @@ impl Agent {
         self.halt(Entry::Note(Note::new("Stopped.")), "Stopped by the user.", "Stopped by the user.");
     }
 
+    /// Ends everything that would go on by itself, keeping the conversation: the run stops, and
+    /// the agent threads are forgotten. Reports waiting for the model stay in the transcript and
+    /// aren't sent to it.
+    pub fn suspend(&mut self) {
+        self.stop();
+        self.threads.clear();
+        self.delegations.clear();
+        for (id, label, report, _) in std::mem::take(&mut self.reports) {
+            self.transcript.push(Entry::Note(Note::text(format!("{id} ({label}): {}", tools::clip(&report, 600)))));
+        }
+    }
+
     /// Runs one step of the conversation. A bug in RustGIS that panics while reading a reply or
     /// running its calls ends the turn with an error in the transcript instead of taking the app
     /// down with it (the commands it runs are guarded the same way by `Session::run`). As there,
