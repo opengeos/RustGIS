@@ -1030,9 +1030,9 @@ fn pivot_table_reports_rounded_cells() {
         said(&res),
         [
             "Pivot Table: 2 rows, 3 pivot fields".to_string(),
-            note("3 results", "y2020, y2021"),
             "1 whole number written as text in v is past the 64-bit integer range and was read as a decimal, so statistics of it may be rounded"
-                .to_string()
+                .to_string(),
+            note("3 results", "y2020, y2021")
         ]
     );
     let res = pivot(json!({"input": "years", "fields": "r", "pivot": "y", "value": "v"}));
