@@ -166,7 +166,7 @@ pub fn show(
         // its sum, mean, least and greatest.
         if !layers.is_empty() {
             ui.separator();
-            crate::widgets::submenu(ui, &tl!("Layer statistic"), |ui| {
+            crate::widgets::submenu(ui, tl!("Layer statistic"), |ui| {
                 for layer in layers {
                     crate::widgets::submenu(ui, &layer.name, |ui| {
                         let mut add = |ui: &mut Ui, what: &str, token: String| {
@@ -176,13 +176,13 @@ pub fn show(
                                 ui.close();
                             }
                         };
-                        add(ui, &tl!("Count"), format!("{{count:{}}}", layer.name));
+                        add(ui, tl!("Count"), format!("{{count:{}}}", layer.name));
                         for field in &layer.fields {
                             crate::widgets::submenu(ui, field, |ui| {
                                 for (code, what) in
                                     [("sum", tl!("Sum")), ("mean", tl!("Mean")), ("min", tl!("Least")), ("max", tl!("Greatest"))]
                                 {
-                                    add(ui, &what, format!("{{{code}:{}:{field}}}", layer.name));
+                                    add(ui, what, format!("{{{code}:{}:{field}}}", layer.name));
                                 }
                             });
                         }
