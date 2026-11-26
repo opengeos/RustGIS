@@ -67,6 +67,20 @@ const ARC_CUBICS: f64 = 200.0;
 /// attribute's value matched costs a step each 64 bytes too, and each node walked back past to a
 /// sibling one. Icons take thousands of steps.
 pub(super) const CSS_STEPS: u64 = 4_000_000;
+/// The most that reading an SVG's style sheets and `style` attributes may come to, in units of a
+/// declaration scanned a byte ([`style_units`]): simplecss reads each declaration's value to an
+/// end that fails (`consume_term`) and works out where that was by scanning the text from its
+/// start, so a sheet costs its declarations times its length, and is read twice (here and by usvg).
+/// Measured: 10,000 rules of 199 KB 0.64 s, 40,000 of 829 KB 10.5 s, one rule of 20,000
+/// declarations 1.4 s, and 40 million units 46 ms to read whole, so ~1.2 ns a unit: at most ~20
+/// ms. Icons come to a few million.
+pub(super) const STYLE_UNITS: u64 = 16_000_000;
+/// The most that reading an SVG's tags may come to, in pairs of attributes of one element
+/// ([`attribute_pairs`]): roxmltree checks each attribute of an element against those before it
+/// for a duplicate, so an element's cost is the square of its attributes, and nothing else
+/// limits them. Measured: 2,000 attributes on one element 2.7 ms, some 0.7 ns a pair, so at most
+/// ~11 ms (4,000 attributes). Elements have a dozen.
+pub(super) const ATTRIBUTE_PAIRS: u64 = 16_000_000;
 /// The most XML nodes (elements, text, comments) read before giving up, a bound on reading the
 /// text itself: [`ELEMENTS`] and the text and spaces between them.
 pub(super) const XML_NODES: u32 = 4 * ELEMENTS as u32;
@@ -86,6 +100,10 @@ const STOPS_PER_UNIT: u64 = 16;
 /// run ([`Refusal::PastRun`]) when below [`CSS_STEPS`]; `matched` is set to the steps it took,
 /// refused or not, which its length doesn't bound, for the run to be charged them.
 pub(super) fn read(text: &str, cap: u64, matched: &mut u64) -> Result<usvg::Tree, Refusal> {
+    // Before roxmltree checks each attribute of a tag against those before it.
+    if attribute_pairs(text) > ATTRIBUTE_PAIRS {
+        return Err(Refusal::TooMuch);
+    }
     let xml = roxmltree::ParsingOptions { allow_dtd: true, nodes_limit: XML_NODES, ..Default::default() };
     let doc = roxmltree::Document::parse_with_options(text, xml).map_err(|e| match e {
         roxmltree::Error::NodesLimitReached => Refusal::TooNested,
@@ -100,6 +118,10 @@ pub(super) fn read(text: &str, cap: u64, matched: &mut u64) -> Result<usvg::Tree
     let sized = viewport(&doc).is_some();
     if doc.descendants().any(|n| unknown_radius(n, sized)) {
         return Err(Refusal::UnknownRadius);
+    }
+    // Before simplecss reads the sheets and `style` attributes, here and in usvg.
+    if style_units(&doc) > STYLE_UNITS {
+        return Err(Refusal::TooMuch);
     }
     with_sheet(&doc, |sheet| {
         let (_, by_sheet) = elements(&doc, sheet, cap, matched)?;
@@ -320,6 +342,34 @@ impl simplecss::Element for Stepped<'_, '_> {
     fn pseudo_class_matches(&self, class: simplecss::PseudoClass) -> bool {
         self.step() && matches!(class, simplecss::PseudoClass::FirstChild) && self.prev_sibling_element().is_none()
     }
+}
+
+/// What reading `doc`'s style sheets and `style` attributes comes to, in [`STYLE_UNITS`]: each one's
+/// declarations (the `;` and `}` that end them, more than they are, never fewer) times its length,
+/// all added up.
+fn style_units(doc: &roxmltree::Document) -> u64 {
+    let declarations = |text: &str| text.bytes().filter(|b| matches!(b, b';' | b'}')).count() as u64;
+    let mut units = 0u64;
+    for n in doc.descendants() {
+        if n.has_tag_name("style") {
+            let sheet = sheet_of(n);
+            units = units.saturating_add(declarations(&sheet).saturating_mul(sheet.len() as u64));
+        }
+        if let Some(style) = n.attribute("style") {
+            units = units.saturating_add((declarations(style) + 1).saturating_mul(style.len() as u64));
+        }
+    }
+    units
+}
+
+/// What reading `text`'s tags comes to, in [`ATTRIBUTE_PAIRS`]: the square of the `=` in each piece
+/// of it between `<`s, added up. A `<` isn't in a tag's attributes in XML that reads (roxmltree
+/// stops at it before it checks them), so each tag is one piece, and an attribute is one `=` of it,
+/// perhaps more (in a value or in the text after the tag): more than it is, never fewer.
+fn attribute_pairs(text: &str) -> u64 {
+    text.split('<')
+        .map(|piece| piece.bytes().filter(|b| *b == b'=').count() as u64)
+        .fold(0u64, |pairs, n| pairs.saturating_add(n.saturating_mul(n)))
 }
 
 /// `f` of `doc`'s style sheets, read once as usvg reads them (`resolve_css`), every `<style>`'s
@@ -1360,6 +1410,64 @@ mod tests {
         let deep = format!("{}<rect width=\"1\" height=\"1\"/>{}", "<g>".repeat(40), "</g>".repeat(40));
         assert!(read(&svg(&format!("<style>g rect {{ fill: red }}</style>{deep}"))).is_ok());
         assert_eq!(read(&svg(&format!("<style>x g g g g g g rect {{ fill: red }}</style>{deep}"))).err(), Some(Refusal::TooMuch));
+    }
+
+    /// A style sheet or a `style` attribute is read within a bound before simplecss reads it,
+    /// whose cost is the square of its declarations (#2800).
+    #[test]
+    fn style_text_is_read_within_its_bound() {
+        let rules = |n: usize| (0..n).map(|i| format!(".c{i} {{ fill: red }}")).collect::<String>();
+        let declarations = |n: usize| "fill: red; ".repeat(n);
+        // 40,000 rules (829 KB) took 10 s to read: refused, and never matched.
+        let mut matched = 0;
+        let sheet = svg(&format!("<style>{}</style><rect width=\"1\" height=\"1\"/>", rules(40_000)));
+        assert_eq!(super::read(&sheet, CSS_STEPS, &mut matched).err(), Some(Refusal::TooMuch));
+        assert_eq!(matched, 0, "refused before its rules were matched");
+        // One `style` attribute of 20,000 declarations, as long a time.
+        let one = svg(&format!(r#"<rect width="1" height="1" style="{}"/>"#, declarations(20_000)));
+        assert_eq!(read(&one).err(), Some(Refusal::TooMuch));
+        // The bound is on all of them together: each of these costs little.
+        let many = svg(&(0..3000).map(|_| format!(r#"<rect width="1" height="1" style="{}"/>"#, declarations(100))).collect::<String>());
+        assert_eq!(read(&many).err(), Some(Refusal::TooMuch));
+        // An icon's own: 200 rules, a few declarations a `style`, a comment as long as can be.
+        assert!(read(&svg(&format!("<style>{}</style><rect width=\"1\" height=\"1\"/>", rules(200)))).is_ok());
+        assert!(read(&svg(&format!(r#"<rect width="1" height="1" style="{}"/>"#, declarations(10)))).is_ok());
+        let comment = format!("<style>/*{}*/ rect {{ fill: red }}</style><rect width=\"1\" height=\"1\"/>", "x".repeat(400_000));
+        assert!(read(&svg(&comment)).is_ok(), "a comment's bytes aren't declarations");
+        // The edge: the most rules that are under it, and one more.
+        let units = |n: usize| style_units(&roxmltree::Document::parse(&svg(&format!("<style>{}</style>", rules(n)))).unwrap());
+        let edge = (1..).find(|n| units(*n) > STYLE_UNITS).unwrap();
+        let rect = r#"<rect width="1" height="1"/>"#;
+        assert!(read(&svg(&format!("<style>{}</style>{rect}", rules(edge - 1)))).is_ok());
+        assert_eq!(read(&svg(&format!("<style>{}</style>{rect}", rules(edge)))).err(), Some(Refusal::TooMuch));
+    }
+
+    /// An element's attributes are read within a bound before roxmltree reads them, which checks
+    /// each of its attributes against all those before it (#2800).
+    #[test]
+    fn an_elements_attributes_are_read_within_their_bound() {
+        let attributes = |n: usize| (0..n).map(|i| format!(r#" a{i}="1""#)).collect::<String>();
+        assert_eq!(read(&svg(&format!(r#"<rect width="1" height="1"{}/>"#, attributes(100_000)))).err(), Some(Refusal::TooMuch));
+        // A dozen on each of thousands, and a few dozen on one, are an icon's.
+        let rects = (0..9000).map(|_| r#"<rect width="1" height="1" x="1" y="1" fill="red"/>"#).collect::<String>();
+        assert!(read(&svg(&rects)).is_ok());
+        assert!(read(&svg(&format!(r#"<rect width="1" height="1"{}/>"#, attributes(40)))).is_ok());
+        // The `=` of the text between tags counts too, which only ever makes it count more.
+        assert!(read(&svg(&format!("<desc>{}</desc>", "a=b ".repeat(1000)))).is_ok());
+        assert_eq!(read(&svg(&format!("<desc>{}</desc>", "a=b ".repeat(5000)))).err(), Some(Refusal::TooMuch));
+        // The bound is on the tags: a `<` in a value isn't XML that reads.
+        assert_eq!(read(&svg(&format!(r#"<rect width="1" height="1" a="<"{}/>"#, attributes(100)))).err(), Some(Refusal::NotSvg));
+    }
+
+    /// usvg takes from a `style` attribute only the presentation properties, which a radius isn't:
+    /// one set there is not read, so there is nothing to look at in it (guards an update of usvg).
+    #[test]
+    fn a_radius_in_a_style_is_not_one_usvg_reads() {
+        let tree = read(&svg(r#"<circle cx="50" cy="50" r="5" style="r: 1e38"/>"#)).unwrap();
+        let width = tree.root().abs_bounding_box().map_or(0.0, |b| b.width());
+        assert!((width - 10.0).abs() < 0.1, "{width}");
+        let sheet = read(&svg(r#"<style>circle { r: 1e38 }</style><circle cx="50" cy="50" r="5"/>"#)).unwrap();
+        assert!((sheet.root().abs_bounding_box().map_or(0.0, |b| b.width()) - 10.0).abs() < 0.1);
     }
 
     /// Matching stops once the steps taken for all the elements matched so far pass
