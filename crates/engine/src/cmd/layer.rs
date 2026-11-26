@@ -2802,19 +2802,18 @@ pub(crate) fn add_layers(s: &mut Session, p: &Value, file_name: &str, bytes: &[u
     let picked = ps(p, "layer").is_some_and(|l| !l.trim().is_empty());
     let overlays = if kml && !picked && within { ground_overlays(s, file_name, bytes, local_file) } else { Vec::new() };
     // A layer picked leaves the document's ground overlays (pictures, not layers) out: said.
-    if kml
-        && picked
-        && within
-        && let Ok((found, undrawn, over_budget)) = rustgis_data::kml::ground_overlays(file_name, bytes)
-        && found.len() + undrawn + over_budget > 0
-    {
-        s.notify(
-            format!(
-                "{file_name}: {} ground overlays (pictures) aren't added with a layer picked; add the file without \"layer\" to draw them",
-                found.len() + undrawn + over_budget
+    if kml && picked && within {
+        match rustgis_data::kml::ground_overlays(file_name, bytes) {
+            Ok((found, undrawn, over_budget)) if found.len() + undrawn + over_budget > 0 => s.notify(
+                format!(
+                    "{file_name}: {} ground overlays (pictures) aren't added with a layer picked; add the file without \"layer\" to draw them",
+                    found.len() + undrawn + over_budget
+                ),
+                false,
             ),
-            false,
-        );
+            Ok(_) => {}
+            Err(e) => s.notify(format!("{file_name}: its ground overlays (pictures) couldn't be read, so none is added: {e}"), false),
+        }
     }
     // A DXF drawing: its coordinate system (it never says) and one of its own layers.
     let dxf = rustgis_data::dxf::is_dxf_name(file_name);
@@ -3006,7 +3005,11 @@ fn add_reads(
 fn ground_overlays(s: &mut Session, file_name: &str, bytes: &[u8], local_file: bool) -> Vec<(String, rustgis_data::raster::Raster)> {
     match rustgis_data::kml::ground_overlays(file_name, bytes) {
         Ok(overlays) => overlays_drawn(s, file_name, overlays, local_file),
-        Err(_) => Vec::new(),
+        // Overlays that can't even be listed (a KMZ entry too large to expand) are said.
+        Err(e) => {
+            s.notify(format!("{file_name}: its ground overlays (pictures) couldn't be read, so none is added: {e}"), false);
+            Vec::new()
+        }
     }
 }
 
