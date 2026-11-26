@@ -990,6 +990,8 @@ fn geometry_part_fits(g: &flatgeobuf::Geometry<'_>, kind: GeometryKind, depth: u
                 last = end;
             }
         }
+        // Read from its own xy alone: parts it carries are never looked at.
+        return true;
     }
     // A multi-polygon's parts are read as polygons whatever they say; the rest by their own type.
     g.parts().is_none_or(|parts| {
@@ -1334,6 +1336,21 @@ mod geometry_fits_tests {
         };
         assert!(odd_own(GeometryKind::MultiPolygon));
         assert!(!odd_own(GeometryKind::Polygon));
+        // A polygon's parts are never read, so a broken one doesn't refuse it.
+        let polygon_with_broken_part = fits(
+            |fbb| {
+                let xy = fbb.create_vector(&[1.0, 2.0, 3.0]);
+                let part = Geometry::create(fbb, &GeometryArgs { xy: Some(xy), type_: GeometryKind::Point, ..Default::default() });
+                let parts = fbb.create_vector(&[part]);
+                let xy = fbb.create_vector(&[0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 0.0]);
+                Geometry::create(
+                    fbb,
+                    &GeometryArgs { xy: Some(xy), parts: Some(parts), type_: GeometryKind::Polygon, ..Default::default() },
+                )
+            },
+            GeometryKind::Polygon,
+        );
+        assert!(polygon_with_broken_part);
     }
 }
 
