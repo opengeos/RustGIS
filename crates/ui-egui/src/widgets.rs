@@ -81,23 +81,19 @@ pub(crate) fn reorder_drag(ui: &Ui, resp: &Response, reorder: bool) -> bool {
     }
     let armed = egui::Id::NULL.with("reorder_long_press");
     let ctx = ui.ctx();
+    // The row and when its press began: a later press never matches, so an arm left behind by a
+    // row that was not drawn when the finger lifted is dead.
+    let press = (resp.id, ui.input(|i| i.pointer.press_start_time()));
     if resp.long_touched() {
-        ctx.data_mut(|d| d.insert_temp(armed, resp.id));
+        ctx.data_mut(|d| d.insert_temp(armed, press));
         return false;
     }
-    if ctx.data(|d| d.get_temp::<egui::Id>(armed)) != Some(resp.id) {
+    if ctx.data(|d| d.get_temp::<(egui::Id, Option<f64>)>(armed)) != Some(press) {
         return false;
     }
-    let (down, moved) = ui.input(|i| {
-        let moved = i.pointer.press_origin().zip(i.pointer.latest_pos()).is_some_and(|(a, b)| (b - a).length() > 8.0);
-        (i.pointer.primary_down(), moved)
-    });
-    if !down {
-        ctx.data_mut(|d| d.remove::<egui::Id>(armed));
-        return false;
-    }
+    let moved = ui.input(|i| i.pointer.press_origin().zip(i.pointer.latest_pos()).is_some_and(|(a, b)| (b - a).length() > 8.0));
     if moved {
-        ctx.data_mut(|d| d.remove::<egui::Id>(armed));
+        ctx.data_mut(|d| d.remove::<(egui::Id, Option<f64>)>(armed));
         egui::Popup::close_all(ctx);
     }
     moved
@@ -1034,6 +1030,50 @@ pub fn picked_colour(hsva: egui::ecolor::Hsva, before: egui::ecolor::Hsva, old: 
 #[cfg(test)]
 mod tests {
     use egui_kittest::kittest::Queryable;
+
+    /// #2958: a long press whose row is gone when the finger lifts arms no later press, even when
+    /// the row comes back under a finger already down.
+    #[test]
+    fn a_long_press_arms_only_its_own_press() {
+        use egui::{Event, Modifiers, PointerButton, TouchDeviceId, TouchId, TouchPhase};
+        // Whether the row is drawn, and how many drags it started.
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(200.0, 200.0)).build_ui_state(
+            |ui, (shown, drags): &mut (bool, usize)| {
+                if *shown {
+                    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(200.0, 100.0));
+                    let resp = ui.interact(rect, egui::Id::unique("row"), super::reorder_sense(ui, true));
+                    *drags += usize::from(super::reorder_drag(ui, &resp, true));
+                }
+            },
+            (true, 0),
+        );
+        let touch = |phase, pos| Event::Touch { device_id: TouchDeviceId(1), id: TouchId(1), phase, pos, force: None };
+        let button = |pos, pressed| Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+        let at = egui::pos2(50.0, 50.0);
+        let press = |h: &mut egui_kittest::Harness<'_, (bool, usize)>| {
+            h.event(Event::PointerMoved(at));
+            h.event(touch(TouchPhase::Start, at));
+            h.event(button(at, true));
+            h.step();
+        };
+        h.step();
+        press(&mut h);
+        for _ in 0..6 {
+            h.step();
+        }
+        h.state_mut().0 = false;
+        h.event(touch(TouchPhase::End, at));
+        h.event(button(at, false));
+        h.event(Event::PointerGone);
+        h.step();
+        press(&mut h);
+        h.state_mut().0 = true;
+        let moved = at + egui::vec2(0.0, 40.0);
+        h.event(touch(TouchPhase::Move, moved));
+        h.event(Event::PointerMoved(moved));
+        h.step();
+        assert_eq!(h.state().1, 0);
+    }
 
     /// Opens a colour button's picker and says whether it offers additive blending.
     fn offers_additive(button: fn(&mut egui::Ui, &mut egui::Color32)) -> bool {
