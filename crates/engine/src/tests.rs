@@ -12906,19 +12906,34 @@ fn fnv_bytes(b: &[u8]) -> u64 {
 }
 
 /// What [`legend_notices_and_publications_are_as_before`] heard and laid out before legends had a
-/// fit or more than three columns; in the built-in face.
+/// fit or more than three columns, in the built-in face: what each of its legends was told, in
+/// turn.
 #[cfg(not(target_arch = "wasm32"))]
-const PINNED_LEGEND_NOTICES: u64 = 0xd5f4_a138_dbbc_c84f;
+const PINNED_LEGEND_NOTICES: [u64; 6] = [
+    0x214b_b413_045f_6d4e, // 1: two columns, too narrow and too short
+    0x7daa_504e_46ff_6418, // 2: one column, too narrow
+    0x98c3_7e4b_aff1_2feb, // 3: text of 20 points
+    0x66ee_667f_12a6_c320, // 4: three columns that fit, then too short
+    0x744f_5513_44ff_865e, // 5: no-data rows, what the frame draws
+    0x7010_ddb2_f99e_6f4a, // 6: three columns, too narrow only
+];
+/// The answer and the layout of each of its publications, in turn.
 #[cfg(not(target_arch = "wasm32"))]
-const PINNED_PUBLICATIONS: u64 = 0x5588_2d64_179a_9eea;
+const PINNED_PUBLICATIONS: [u64; 3] = [
+    0x975c_564c_cd22_6e09, // the default: two columns
+    0xd042_13d6_dfca_489f, // a panel: one column
+    0xb6ba_991c_c801_6290, // a thesis's half page: three columns
+];
 
 /// What main says about a legend's fit in its box, word for word, as added and when made 12 mm
-/// tall, and how `layout.publication` lays out the sample, its answer and its layout (the legend,
-/// its column count and box included) for a legend in one, two and three columns, before legends
-/// had a fit or more than three columns; in the built-in face, in a process of its own.
+/// tall, case by case, and how `layout.publication` lays out the sample, its answer and its layout
+/// (the legend, its column count and box included), for a legend in two, one and three columns,
+/// before legends had a fit or more than three columns; in the built-in face, in a process of its
+/// own.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn legend_notices_and_publications_are_as_before() {
+    use rustgis_map::layout::ElementKind;
     if std::env::var_os("RUSTGIS_LEGEND_NOTICE_PIN_CHILD").is_none() {
         let output = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", "tests::legend_notices_and_publications_are_as_before", "--nocapture"])
@@ -12930,10 +12945,24 @@ fn legend_notices_and_publications_are_as_before() {
         assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"), "the test didn't run in the child process");
         return;
     }
+    // Each hash that isn't its pinned one, named, with both values and all of them to pin.
+    let mismatches = |what: &str, got: &[(String, u64)], pinned: &[u64]| {
+        let mut wrong: Vec<String> = got
+            .iter()
+            .zip(pinned)
+            .filter(|((_, g), p)| g != *p)
+            .map(|((name, g), p)| format!("{what} {name}: got {g:#018x}, pinned {p:#018x}"))
+            .collect();
+        if got.len() != pinned.len() || !wrong.is_empty() {
+            let all: Vec<String> = got.iter().map(|(name, g)| format!("{g:#018x}, // {name}")).collect();
+            wrong.push(format!("{what}s, {} of {} pinned, all:\n{}", got.len(), pinned.len(), all.join("\n")));
+        }
+        wrong
+    };
     let mut s = world();
     s.run("layout.new", &json!({"name": "Notices", "page": "a4", "orientation": "landscape"})).unwrap();
-    let mut said = String::new();
-    for p in [
+    let mut said = Vec::new();
+    for (i, p) in [
         // Too narrow and too short in two columns.
         json!({"kind": "legend", "columns": 2, "allClasses": true, "w": 30, "h": 20}),
         // One column, too narrow.
@@ -12942,26 +12971,41 @@ fn legend_notices_and_publications_are_as_before() {
         // Fits as added: said only once it is made 12 mm tall.
         json!({"kind": "legend", "columns": 3, "allClasses": true, "w": 200, "h": 150}),
         json!({"kind": "legend", "showNoData": true, "w": 40, "h": 10}),
-    ] {
+        // Too narrow only, in three columns, as added.
+        json!({"kind": "legend", "columns": 3, "allClasses": true, "w": 20, "h": 150}),
+    ]
+    .into_iter()
+    .enumerate()
+    {
         let mark = s.notice_mark();
         let id = s.run("layout.addElement", &p).unwrap()["element"].clone();
         let added: Vec<_> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
         let mark = s.notice_mark();
         s.run("layout.update", &json!({"element": id, "h": 12})).unwrap();
         let updated: Vec<_> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
-        said.push_str(&format!("{p}: {added:?} {updated:?}\n"));
+        if i == 5 {
+            assert!(added.len() == 1 && added.iter().all(|n| n.contains("close up")), "{added:?}");
+        }
+        said.push((format!("case {} {p}", i + 1), fnv_bytes(format!("{p}: {added:?} {updated:?}\n").as_bytes())));
     }
-    assert!(said.contains("its last rows are left out") && said.contains("close up"), "{said}");
-    let mut laid = String::new();
-    // The sample's publications lay their legend in two columns (the default), one (a panel) and
-    // three (a thesis's half page).
+    let mut laid = Vec::new();
+    let mut columns = Vec::new();
     for p in [json!({}), json!({"style": "panel"}), json!({"profile": "thesis-half"})] {
         let mut s = world();
         let r = s.run("layout.publication", &p).unwrap();
-        laid.push_str(&format!("{r}\n{}\n", serde_json::to_string(s.project.layouts.last().unwrap()).unwrap()));
+        let layout = s.project.layouts.last().unwrap();
+        columns.extend(layout.elements.iter().find_map(|e| match &e.kind {
+            ElementKind::Legend { columns, .. } => Some(*columns),
+            _ => None,
+        }));
+        laid.push((format!("publication {p}"), fnv_bytes(format!("{r}\n{}\n", serde_json::to_string(layout).unwrap()).as_bytes())));
     }
-    let (n, p) = (fnv_bytes(said.as_bytes()), fnv_bytes(laid.as_bytes()));
-    assert_eq!((n, p), (PINNED_LEGEND_NOTICES, PINNED_PUBLICATIONS), "{n:#x} {p:#x}\n{said}\n{laid}");
+    // The sample's publications lay their legend in two columns (the default), one (a panel) and
+    // three (a thesis's half page).
+    assert_eq!(columns, [2, 1, 3]);
+    let mut wrong = mismatches("notice", &said, &PINNED_LEGEND_NOTICES);
+    wrong.extend(mismatches("publication", &laid, &PINNED_PUBLICATIONS));
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
 /// A publication's scale bar box is measured from every setting its bar has (#1379), as the

@@ -5339,7 +5339,8 @@ fn legend_pin_map() -> Map {
 /// columns, short; 12, no title, what the frame draws, `<all other values>` left out; 13, a layer
 /// labelled, one excluded, in an ink of its own; 14, no-data rows, in two columns; 15, a box across
 /// the page's right edge, its title's ink leaving the page; 16, a box shorter than its title; 17,
-/// every layer excluded, nothing to list, in two columns.
+/// every layer excluded, nothing to list, in two columns; 18, what the frame draws with no-data
+/// rows asked for (which only a legend of every class adds), in two columns.
 #[cfg(all(test, not(target_arch = "wasm32")))]
 pub(crate) fn legend_pin_pages() -> Vec<(Layout, Vec<Map>)> {
     let (roomy, short, narrow) = ((10.0, 10.0, 200.0, 130.0), (10.0, 10.0, 200.0, 25.0), (10.0, 10.0, 30.0, 130.0));
@@ -5408,7 +5409,33 @@ pub(crate) fn legend_pin_pages() -> Vec<(Layout, Vec<Map>)> {
             *exclude = ["Parks", "Sites", "Roads", "Zones", "Counts"].map(String::from).to_vec();
         }
     }));
+    pages.push(page(roomy, 2, &|k| {
+        if let ElementKind::Legend { all_classes, show_no_data, .. } = k {
+            (*all_classes, *show_no_data) = (false, true);
+        }
+    }));
     pages
+}
+
+/// Each of `got`'s hashes that isn't its `pinned` one, named for its page (and resolution), with
+/// both values, and the whole of `got` to pin when the change is meant; one more line when the
+/// counts differ. `what` names the output compared.
+#[cfg(all(test, not(target_arch = "wasm32")))]
+pub(crate) fn pin_mismatches(what: &str, got: &[(String, u64)], pinned: &[u64]) -> Vec<String> {
+    let mut wrong: Vec<String> = got
+        .iter()
+        .zip(pinned)
+        .filter(|((_, g), p)| g != *p)
+        .map(|((name, g), p)| format!("{what} of {name}: got {g:#018x}, pinned {p:#018x}"))
+        .collect();
+    if got.len() != pinned.len() {
+        wrong.push(format!("{what}: {} hashes, {} pinned", got.len(), pinned.len()));
+    }
+    if !wrong.is_empty() {
+        let all: Vec<String> = got.iter().map(|(name, g)| format!("{g:#018x}, // {name}")).collect();
+        wrong.push(format!("{what}, all:\n{}", all.join("\n")));
+    }
+    wrong
 }
 
 #[expect(clippy::disallowed_methods, reason = "a thread the system refuses fails the test, as it should")]
@@ -10337,18 +10364,64 @@ Elaboração: RustGIS",
         assert_eq!((fnv(&drawn), losses), (PINNED_TEXT_PIXELS, PINNED_TEXT_LOSSES), "{:#x} {:#x}", fnv(&drawn), losses);
     }
 
-    /// How [`legends_draw_as_before`]'s pages drew and measured before legends had a fit, layer
-    /// names to leave off or more than three columns; in the built-in face.
+    /// How [`legends_draw_as_before`]'s pages drew before legends had a fit, layer names to leave
+    /// off or more than three columns, in the built-in face: each page of
+    /// [`crate::layout::legend_pin_pages`] at 96 dpi, the first three at 300 dpi after it.
     #[cfg(not(target_arch = "wasm32"))]
-    const PINNED_LEGEND_PIXELS: u64 = 0xe2d0_6046_d9cc_09b8;
+    const PINNED_LEGEND_PIXELS: [u64; 21] = [
+        0xfdc3_d550_3af3_da82, // 1: one column, roomy, 96 dpi
+        0xfa9a_c1b3_ef86_ded0, // 1: 300 dpi
+        0x9def_85e9_f2bf_79ce, // 2: two columns, roomy, 96 dpi
+        0xeb46_544e_ed74_f8e3, // 2: 300 dpi
+        0x5875_a607_ce55_8e8b, // 3: three columns, roomy, 96 dpi
+        0x1e6a_1390_09e4_a43a, // 3: 300 dpi
+        0x860a_f6db_8d10_a01a, // 4: one column, short
+        0x5dcb_a1db_07b2_9160, // 5: two columns, short
+        0x0235_53e1_a2df_0855, // 6: three columns, short
+        0xfdc3_d550_3af3_da82, // 7: one column, narrow (page 1's: one column has none to close up)
+        0x0e5a_0092_f5eb_407b, // 8: two columns, narrow
+        0xc34e_9a2b_2000_de11, // 9: three columns, narrow
+        0x6011_fd0f_a03d_920e, // 10: 14 pt, two columns
+        0xbb8d_03ca_f40c_1d9d, // 11: 5 pt, three columns, short
+        0x6867_5d22_3f63_43e8, // 12: no title, what the frame draws, other left out
+        0x4f28_090b_e840_a63d, // 13: labelled, excluded, ink
+        0xdfab_ac0a_fef8_0764, // 14: no-data rows, two columns
+        0xb7b0_2d21_13c9_ff7a, // 15: across the right edge
+        0x122e_6c5c_24ac_2eb1, // 16: shorter than its title
+        0x122e_6c5c_24ac_2eb1, // 17: nothing to list (page 16's: its title alone)
+        0x895d_688f_af95_5420, // 18: what the frame draws, no-data asked
+    ];
+    /// How each of those pages measured: what [`text_losses`] found at each resolution it was
+    /// drawn at, and its rows' sizes in one to three columns (alike on pages that differ only in
+    /// their box).
     #[cfg(not(target_arch = "wasm32"))]
-    const PINNED_LEGEND_MEASURES: u64 = 0xf386_abad_68f6_f240;
+    const PINNED_LEGEND_MEASURES: [u64; 18] = [
+        0x698b_5830_84be_65fe, // 1: one column, roomy
+        0x698b_5830_84be_65fe, // 2: two columns, roomy
+        0x698b_5830_84be_65fe, // 3: three columns, roomy
+        0xbf3a_eef4_592a_7206, // 4: one column, short
+        0xbf3a_eef4_592a_7206, // 5: two columns, short
+        0xbf3a_eef4_592a_7206, // 6: three columns, short
+        0xbf3a_eef4_592a_7206, // 7: one column, narrow
+        0xbf3a_eef4_592a_7206, // 8: two columns, narrow
+        0xbf3a_eef4_592a_7206, // 9: three columns, narrow
+        0x4e3b_8653_1ac5_6e1d, // 10: 14 pt, two columns
+        0x5e46_780d_cd4a_87c4, // 11: 5 pt, three columns, short
+        0xab16_62c7_8d9c_398a, // 12: no title, what the frame draws, other left out
+        0xbdc6_2076_84cc_97c7, // 13: labelled, excluded, ink
+        0x0de9_b39c_7273_61da, // 14: no-data rows, two columns
+        0x6de4_4bc0_7e82_51cc, // 15: across the right edge
+        0xbf3a_eef4_592a_7206, // 16: shorter than its title
+        0x7249_b531_f330_3a30, // 17: nothing to list
+        0x18ef_3e69_73a3_50c9, // 18: what the frame draws, no-data asked
+    ];
 
     /// A legend with none of the fitting settings draws, and is measured for its size in one to
-    /// three columns and for its title's ink, exactly as main did: every page at 96 dpi, and the
-    /// first three (one, two and three columns in a box that holds them) at 300 dpi too, which
-    /// holds the scaling of rows, swatches and gaps with the resolution. In a process of its own,
-    /// told to use the built-in face before any text.
+    /// three columns and for its title's ink, exactly as main did, page by page: every page at 96
+    /// dpi, and the first three (one, two and three columns in a box that holds them) at 300 dpi
+    /// too, which holds the scaling of rows, swatches and gaps with the resolution. Its size is
+    /// measured at the scale its hidden frame draws the map at, as the commands measure it. In a
+    /// process of its own, told to use the built-in face before any text.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn legends_draw_as_before() {
@@ -10364,26 +10437,47 @@ Elaboração: RustGIS",
             return;
         }
         let info = PageInfo::default();
-        let (mut drawn, mut measured) = (Vec::new(), String::new());
+        let (mut drawn, mut measured) = (Vec::new(), Vec::new());
         for (i, (l, mut maps)) in crate::layout::legend_pin_pages().into_iter().enumerate() {
-            for dpi in if i < 3 { &[96.0, 300.0][..] } else { &[96.0][..] } {
-                drawn.push(render(&l, &mut maps, *dpi, &info).unwrap());
-                measured.push_str(&format!("{:?}\n", text_losses(&l, &maps, *dpi, &info)));
+            let page = i + 1;
+            let mut said = String::new();
+            for dpi in if page <= 3 { &[96.0, 300.0][..] } else { &[96.0][..] } {
+                let pm = render(&l, &mut maps, *dpi, &info).unwrap();
+                drawn.push((format!("page {page} at {dpi} dpi"), fnv(std::slice::from_ref(&pm))));
+                let losses = format!("{:?}", text_losses(&l, &maps, *dpi, &info));
+                // The two pages that test the title's ink: across the page's right edge it is
+                // said to leave the page; in a box shorter than itself, main says nothing.
+                if *dpi == 96.0 && page == 15 {
+                    assert!(losses.contains("off_page: true") && !losses.contains("below_box: true"), "page 15: {losses}");
+                }
+                if *dpi == 96.0 && page == 16 {
+                    assert_eq!(losses, "[]", "page 16");
+                }
+                said.push_str(&losses);
+                said.push('\n');
             }
+            let Some(ElementKind::MapFrame { map, center, scale, .. }) = l.elements.first().map(|e| &e.kind) else { panic!("a frame") };
+            let scale = frame_render_scale(&maps[map_index(&maps, map).unwrap()], *center, *scale);
             let Some(ElementKind::Legend { all_classes, hide_other, show_no_data, exclude, labels, text_size, .. }) =
                 l.elements.last().map(|e| &e.kind)
             else {
                 panic!("a legend page")
             };
-            let sizes =
-                legend_sizes_with_no_data_mm(&mut maps[0], 1e6, *all_classes, *hide_other, (*show_no_data, *text_size), (exclude, labels));
+            let sizes = legend_sizes_with_no_data_mm(
+                &mut maps[0],
+                scale,
+                *all_classes,
+                *hide_other,
+                (*show_no_data, *text_size),
+                (exclude, labels),
+            );
             // The first three only: these are the column counts main measures.
-            measured.push_str(&format!("{:?}\n", sizes.map(|s| [s[0], s[1], s[2]])));
+            said.push_str(&format!("{:?}\n", sizes.map(|s| [s[0], s[1], s[2]])));
+            measured.push((format!("page {page}"), fnv_bytes(said.as_bytes())));
         }
-        // The pages exercise the title's check.
-        assert!(measured.contains("off_page: true"), "{measured}");
-        let measures = fnv_bytes(measured.as_bytes());
-        assert_eq!((fnv(&drawn), measures), (PINNED_LEGEND_PIXELS, PINNED_LEGEND_MEASURES), "{:#x} {:#x}", fnv(&drawn), measures);
+        let mut wrong = crate::layout::pin_mismatches("drawing", &drawn, &PINNED_LEGEND_PIXELS);
+        wrong.extend(crate::layout::pin_mismatches("measures", &measured, &PINNED_LEGEND_MEASURES));
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
     }
 
     /// How [`scale_bars_without_details_draw_as_before`]'s bars drew before scale bars had details,
