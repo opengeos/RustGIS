@@ -891,8 +891,8 @@ fn services(settings: bool, secrets: Option<Arc<dyn SecretStore>>) -> rustgis_ui
     let mut services = rustgis_ui_egui::Services { secrets, ..Default::default() };
     if settings {
         // Read once and kept, as the desktop keeps its snapshot: the Assistant's settings ask for
-        // one every frame they are up. A save that works updates the copy kept; one that fails
-        // may still have replaced the file, so the copy is read again.
+        // one every frame they are up. A save, which may have merged with, set aside or (failing)
+        // still replaced the file, has it read again at the next ask.
         let kept: Arc<Mutex<Option<serde_json::Map<String, serde_json::Value>>>> = Arc::default();
         let read = kept.clone();
         services.load_pref = Some(Box::new(move |key: &str| {
@@ -901,15 +901,7 @@ fn services(settings: bool, secrets: Option<Arc<dyn SecretStore>>) -> rustgis_ui
         }));
         services.save_pref = Some(Box::new(move |key: &str, value: &str| {
             let result = rustgis_engine::prefs::write(key, value);
-            let mut kept = kept.lock().unwrap_or_else(|e| e.into_inner());
-            match (&result, kept.as_mut()) {
-                (Ok(_), Some(settings)) => {
-                    settings.insert(key.to_string(), serde_json::Value::String(value.to_string()));
-                }
-                (Err(_), _) => *kept = None,
-                (Ok(_), None) => {}
-            }
-            drop(kept);
+            *kept.lock().unwrap_or_else(|e| e.into_inner()) = None;
             settings_saved(result);
         }));
     }
