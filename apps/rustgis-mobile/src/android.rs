@@ -32,8 +32,8 @@ impl shell::Phone for Phone {
         Some(5000)
     }
 
-    fn copy_text(&self, text: &str) {
-        Phone::copy_text(self, text);
+    fn copy_text(&self, text: &str) -> Result<(), String> {
+        Phone::copy_text(self, text)
     }
 }
 

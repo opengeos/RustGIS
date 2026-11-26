@@ -486,7 +486,8 @@ public class MainActivity extends NativeActivity {
                 entry.show();
             } catch (RuntimeException e) {
                 entry = null;
-                add("text-closed\t" + id + "\t" + oneField(e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()));
+                String why = e.getMessage();
+                add("text-closed\t" + id + "\t" + oneField(why == null || why.isEmpty() ? e.getClass().getSimpleName() : why));
                 answered();
             }
         });

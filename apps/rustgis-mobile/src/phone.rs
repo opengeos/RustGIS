@@ -106,16 +106,14 @@ impl Phone {
         self.java(|env, activity| env.call_method(activity, jni_str!("picking"), jni_sig!(() -> boolean), &[])?.z()).unwrap_or(false)
     }
 
-    /// Puts `text` on the system's clipboard. A refusal is logged: the window's own clipboard
-    /// still has it.
-    pub fn copy_text(&self, text: &str) {
-        let asked = self.java(|env, activity| {
+    /// Puts `text` on the system's clipboard. An error says why Android couldn't be asked (the
+    /// window's own clipboard still has the text); a refusal of Android's is reported later, as
+    /// `copy-failed`.
+    pub fn copy_text(&self, text: &str) -> Result<(), String> {
+        self.java(|env, activity| {
             let text = env.new_string(text)?;
             env.call_method(activity, jni_str!("copyText"), jni_sig!((text: JString) -> void), &[JValue::Object(&text)])?.v()
-        });
-        if let Err(e) = asked {
-            log::warn!("{e}");
-        }
+        })
     }
 
     /// Whether something asked for is still to be reported: the window keeps asking while it is.
