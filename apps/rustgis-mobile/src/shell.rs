@@ -1022,6 +1022,13 @@ mod tests {
     use serde_json::{Value, json};
     use std::cell::Cell;
 
+    /// Held by a test that queues settings notices and by one that runs the window's events,
+    /// which say and empty them: the tests run in parallel.
+    fn settings_notices_held() -> std::sync::MutexGuard<'static, ()> {
+        static HELD: Mutex<()> = Mutex::new(());
+        HELD.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     /// A phone that is busy once asked for a file, and reports the events put in it.
     #[derive(Default)]
     struct FakePhone(Cell<bool>, RefCell<Vec<Event>>);
@@ -1081,6 +1088,7 @@ mod tests {
         let (clears, mark) = (cache::clears(), app.session.notice_mark());
         let phone = Rc::new(FakePhone::default());
         phone.1.borrow_mut().extend([Event::LowMemory, Event::LowMemory]);
+        let _held = settings_notices_held();
         let mut window = App {
             app,
             pushed: Vec::new(),
@@ -1127,6 +1135,7 @@ mod tests {
     /// and again after one works; a file set aside is said where it went.
     #[test]
     fn a_failed_settings_save_is_said_once_until_one_works() {
+        let _held = settings_notices_held();
         settings_notices().clear();
         settings_saved(Err("no room".into()));
         settings_saved(Err("no room".into()));
