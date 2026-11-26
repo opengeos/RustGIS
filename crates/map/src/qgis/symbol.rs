@@ -957,7 +957,14 @@ pub(super) fn read_images(root: Node, dir: &str, read: &mut ReadImage, report: &
         } else if super::is_relative(&path) && dir.is_empty() {
             Err("whose image file is relative to a folder the import wasn't given")
         } else {
-            Ok(Some(super::source::absolute(&path, dir)))
+            let joined = super::source::absolute(&path, dir);
+            // `.//host/share` from a project at a drive's root (`/`) is `//host/share` once joined; a project
+            // that is itself on a share reads its own images.
+            if network_share(&joined) && !network_share(dir) {
+                Err("whose image is on a network share, which RustGIS doesn't open")
+            } else {
+                Ok(Some(joined))
+            }
         };
         if let Ok(Some(path)) = &source
             && let Some(got) = files.get(path)

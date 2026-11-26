@@ -1514,6 +1514,32 @@ fn raster_image_markers_read_a_file_address_as_the_file_it_names() {
         report.notes.iter().map(|n| n.text.as_str()).collect::<Vec<_>>(),
         ["raster image markers whose image is a relative file name with `://` in it, which RustGIS doesn't read, drawn as circles"]
     );
+    // A relative name that starts with a separator isn't joined to a project at a drive's root into a share
+    // (`.//host/share` from `/` is `//host/share`), though a project that is itself on a share reads its own.
+    for (file, dir, shared) in [
+        ("file:.//host/share/a.png", "/", true),
+        ("file:.//host/share/a.png", "\\", true),
+        (".//host/share/a.png", "/", true),
+        ("file:./a.png", "/", false),
+        ("file:./a.png", "//server/proj", false),
+    ] {
+        asked.borrow_mut().clear();
+        let mut report = Report::default();
+        let s = super::read_style(&marker_qml("1", &raster_marker(file, "")), "Pins", dir, &mut read, &mut report).unwrap();
+        let Some(Renderer::Single(sym)) = &s.renderer else { panic!("{file}") };
+        if shared {
+            assert_eq!(sym.marker, Marker::Circle, "{file} from {dir}");
+            assert!(asked.borrow().is_empty(), "{file} from {dir}: {:?}", asked.borrow());
+            assert_eq!(
+                report.notes.iter().map(|n| n.text.as_str()).collect::<Vec<_>>(),
+                ["raster image markers whose image is on a network share, which RustGIS doesn't open, drawn as circles"],
+                "{file} from {dir}"
+            );
+        } else {
+            assert_eq!(sym.marker, Marker::Picture(crate::symbology::Picture::new("QUJD")), "{file} from {dir}");
+            assert_eq!(asked.borrow().len(), 1, "{file} from {dir}");
+        }
+    }
 }
 
 /// A raster image marker whose image a field or an expression gives has no image of its own to
