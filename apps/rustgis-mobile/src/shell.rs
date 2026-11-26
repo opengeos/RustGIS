@@ -1016,6 +1016,7 @@ mod tests {
             keeping: false,
             keyboard: None,
             typing: None,
+            back: false,
             bars_light: None,
             phone: Some(phone),
             inbox: Inbox::default(),
