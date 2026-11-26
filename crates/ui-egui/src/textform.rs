@@ -160,13 +160,14 @@ pub fn section<R>(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui) -> R) -> O
 pub const LABEL_W: f32 = 96.0;
 
 /// The form, its fields told apart by `id` (an element, a dialog). `tokens` are the dynamic text
-/// lists the text expands where it is shown, each a section of the Dynamic Text menu; `layers` are
-/// the layers whose figures it can show, a section of their own (none for a text graphic).
+/// lists the text expands where it is shown, each a section of the Dynamic Text menu; `layers`
+/// gives the layers whose figures it can show, a section of their own (none for a text graphic),
+/// and is asked only while the menu is open.
 pub fn show(
     ui: &mut Ui,
     id: impl std::hash::Hash + std::fmt::Debug,
     tokens: &[&[(&str, &str)]],
-    layers: &[StatLayer],
+    layers: impl FnOnce() -> Vec<StatLayer>,
     f: Fields<'_>,
 ) -> Settled {
     let id = egui::Id::unique(id);
@@ -202,7 +203,7 @@ pub fn show(
                 }
             }
         }
-        stat_menu(ui, layers, |token| {
+        stat_menu(ui, &layers(), |token| {
             f.text.push_str(&token);
             out.text = true;
         });
@@ -506,7 +507,7 @@ mod tests {
                     ui,
                     "form",
                     &[rustgis_engine::map::graphics::TOKENS, rustgis_engine::map::layout::PAGE_TOKENS],
-                    &f.layers,
+                    || f.layers.clone(),
                     Fields {
                         text: &mut f.text,
                         size: &mut size,
@@ -602,7 +603,7 @@ mod tests {
             ],
         ));
         map.add_dataset(layer("Bad {name}", vec![("x", FieldType::Double)]));
-        map.layers.last_mut().unwrap_or_else(|| panic!("a layer")).name = "cities".into();
+        map.layers.iter_mut().find(|l| l.name == "Under").unwrap_or_else(|| panic!("a layer")).name = "cities".into();
         let mut other = Map::new("Other");
         other.add_dataset(layer("Rivers", vec![("km", FieldType::Double)]));
         let mut layout = Layout::new("L", 100.0, 100.0);
