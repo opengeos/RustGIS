@@ -4034,7 +4034,8 @@ fn add_element(s: &mut Session, p: &Value) -> CmdResult {
         }
         "text" | "dynamicText" => {
             let default = if kind == "text" { "Text" } else { "{map} · {scale} · {date}" };
-            let text = super::within("text", "a text element's text", ps(p, "text").unwrap_or(default), 5000)?;
+            let text =
+                super::within("text", "a text element's text", ps(p, "text").unwrap_or(default), rustgis_map::layout::MAX_TEXT_CHARS)?;
             let fonts = rustgis_map::graphics::FONT_SIZE;
             let size = f(p, "size").unwrap_or(12.0).clamp(*fonts.start(), *fonts.end());
             let (italic, align, letter_spacing) = text_style(p, false, TextAlign::Left, 0.0)?;
@@ -5469,7 +5470,8 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
     }
     // A name, text or title over its limit is refused, not cut.
     let new_name = super::name_given(p, "an element's name", 200)?;
-    let new_text = ps(p, "text").map(|t| super::within("text", "a text element's text", t, 5000)).transpose()?;
+    let new_text =
+        ps(p, "text").map(|t| super::within("text", "a text element's text", t, rustgis_map::layout::MAX_TEXT_CHARS)).transpose()?;
     let new_title = ps(p, "title").map(|t| super::within("title", "a legend's, colorbar's or chart's title", t, 200)).transpose()?;
     let li = index(s, p)?;
     // What a publication's scale bar box was measured from, before this change.
