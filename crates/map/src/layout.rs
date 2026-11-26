@@ -2462,7 +2462,8 @@ fn scan_stat_tokens(text: &str, gaps: bool) -> Vec<StatToken<'_>> {
             StatKind::Count => (rest, None),
             _ => match rest.rsplit_once(':') {
                 Some((layer, field)) if !field.is_empty() => (layer, Some(field)),
-                // No field at all: only a notice reads it.
+                // No field, or an empty one: only a notice reads it.
+                Some((layer, _)) if gaps => (layer, None),
                 None if gaps => (rest, None),
                 _ => continue,
             },
@@ -3516,6 +3517,7 @@ mod tests {
                 ("{sum:A:b}", StatKind::Sum, "A", Some("b")),
                 ("{count:C}", StatKind::Count, "C", None),
                 ("{mean:Zone: north}", StatKind::Mean, "Zone", Some(" north")),
+                ("{min:A:}", StatKind::Min, "A", None),
             ]
         );
         assert_eq!(stat_tokens("{sum:A} {sum:A:b}").len(), 1, "a figure without its field is no token");
