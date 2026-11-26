@@ -1371,6 +1371,31 @@ mod geometry_fits_tests {
         assert!(!with_ends(GeometryKind::MultiLineString, &[3, 2]));
         assert!(with_ends(GeometryKind::Polygon, &[2, 4]));
     }
+
+    /// Collections nested past 32 levels are refused before the reader recurses into them; 32 are
+    /// followed (#3006).
+    #[test]
+    fn collections_nest_no_deeper_than_the_limit() {
+        let nested = |levels: usize| {
+            fits(
+                |fbb| {
+                    let xy = fbb.create_vector(&[1.0, 2.0]);
+                    let mut g = Geometry::create(fbb, &GeometryArgs { xy: Some(xy), type_: GeometryKind::Point, ..Default::default() });
+                    for _ in 0..levels {
+                        let parts = fbb.create_vector(&[g]);
+                        g = Geometry::create(
+                            fbb,
+                            &GeometryArgs { parts: Some(parts), type_: GeometryKind::GeometryCollection, ..Default::default() },
+                        );
+                    }
+                    g
+                },
+                GeometryKind::GeometryCollection,
+            )
+        };
+        assert!(nested(32));
+        assert!(!nested(33));
+    }
 }
 
 #[cfg(test)]
