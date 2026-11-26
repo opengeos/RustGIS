@@ -213,10 +213,12 @@ pub fn chrome(app: &mut RustGisApp, ui: &mut Ui) {
     }
     egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |ui| {
         let above = ui.available_rect_before_wrap();
+        // ModelBuilder, when it is up in the map's place, takes its own taps.
+        let map = !app.mb.shown();
         app.map_view(ui);
         // With a sheet up, a tap on the map above it lowers the sheet and does nothing to the
         // map. It senses taps alone, so a drag or a pinch moves the map as ever.
-        if shown != Sheet::None {
+        if shown != Sheet::None && map {
             let pinched = pinched(ui);
             if ui.interact(above, egui::Id::unique("touch_dismiss"), Sense::click()).clicked() && !pinched {
                 set_sheet(ui.ctx(), Sheet::None);
@@ -2430,8 +2432,11 @@ mod tests {
         let chip = held.find("ModelBuilder: Model").unwrap().center();
         held.touch(&[chip]);
         assert!(held.app.mb.shown());
+        // With the sheet still up, Back to the map takes the first tap.
+        assert_eq!(sheet(&held.ctx), Sheet::Layers);
         let back = held.find("Back to the map").unwrap();
         held.touch(&[back.center()]);
+        assert!(!held.app.mb.shown(), "one tap goes back to the map");
         // Opened over a layout, it still goes back to the map.
         run(&mut held.app, "layout.new", json!({"name": "Sheet A"}));
         run(&mut held.app, "ui.modelBuilder", json!({}));
