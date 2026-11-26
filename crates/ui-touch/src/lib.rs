@@ -524,7 +524,9 @@ fn views(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         .collect();
     views.extend(project.layouts.iter().enumerate().map(|(i, l)| (l.name.clone(), View::Layout, !covered && layout == Some(i))));
     if app.mb.open {
-        let name = rustgis_ui_egui::i18n::fmt("ModelBuilder: {name}", &[("name", app.mb.name.trim())]);
+        // As the desktop's tab names it.
+        let model = if app.mb.name.trim().is_empty() { tl!("Untitled model").to_string() } else { app.mb.name.trim().to_string() };
+        let name = rustgis_ui_egui::i18n::fmt("ModelBuilder: {name}", &[("name", &model)]);
         views.push((name, View::Model, covered));
     }
     egui::ScrollArea::horizontal().id_salt("touch_views").show(ui, |ui| {
@@ -537,10 +539,11 @@ fn views(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                     continue;
                 }
                 // As the desktop's tab row does: the view chosen comes out from under ModelBuilder,
-                // and ModelBuilder's chip brings its model back as it was left.
-                app.mb.active = matches!(view, View::Model);
+                // and ModelBuilder's chip brings its model back as it was left, over the view now
+                // in sight (`ui.modelBuilder` with no name).
+                app.mb.active = false;
                 match view {
-                    View::Model => {}
+                    View::Model => run(app, "ui.modelBuilder", Value::Null),
                     View::Layout => run(app, "layout.activate", json!({"name": name})),
                     View::Map => {
                         if app.session.active_layout.is_some() {
@@ -2420,6 +2423,14 @@ mod tests {
         held.touch(&[back.center()]);
         assert_eq!(held.app.session.active_layout, None);
         assert!(held.find("France").is_some());
+        // The layout it was opened over is gone, and the chip still brings it back to stay.
+        held.raise(Sheet::Layers, "Layers");
+        let chip = held.find("ModelBuilder: Model").unwrap().center();
+        held.touch(&[chip]);
+        held.frame(Vec::new());
+        held.frame(Vec::new());
+        assert!(held.app.mb.shown());
+        assert_eq!(held.find("France"), None, "the model is in view, not the map");
     }
 
     #[test]
