@@ -2318,7 +2318,9 @@ fn put_cells<T: Sync, const N: usize>(
     })
 }
 
-/// [`write`] (or with `every`, [`write_all`]).
+/// [`write`] (or with `every`, [`write_all`]). Whether a single 8-bit band's cells are all bytes
+/// is one look over the band, on several threads, with no look at Cancel inside it: Cancel is
+/// looked at after it, and between strips as they are written.
 fn encode(r: &Raster, band: usize, every: bool) -> Result<Vec<u8>> {
     use super::cogwrite::{Sample, Strips, few_classes, geo_entries};
     // A scan's place is only where it was laid on the view: not coordinates to write into a file.
@@ -2483,8 +2485,6 @@ fn encode(r: &Raster, band: usize, every: bool) -> Result<Vec<u8>> {
         // An 8-bit band is written as bytes when every value is a whole byte and an empty cell is
         // only where no-data can mark it (as the multiband samples above); otherwise as floats.
         // A whole number from 0 to 255 is the one value a byte holds that converts back to itself.
-        // The look over the band is one pass on several threads with no look at Cancel inside it:
-        // looked at after it.
         let byte = |v: &f32| if r.is_valid(*v) { f32::from(*v as u8) == *v } else { r.nodata.is_some() };
         let all_bytes =
             || super::on_runs(&b.data, super::threads_for(b.data.len()), |_, run| run.iter().all(byte)).into_iter().all(|fits| fits);
@@ -2933,14 +2933,21 @@ mod tests {
         // A band long enough to be looked at on several threads: one fraction in its last run
         // keeps it floats.
         let n = 4 * super::super::PARALLEL_VALUES;
-        let long = |last: f32| {
+        let cells = |last: f32| {
             let mut cells: Vec<f32> = (0..n).map(|i| (i % 256) as f32).collect();
             cells[n - 2] = last;
-            let r = Raster::new("g", n as u32, 1, vec![cells], gt, Crs::LonLat, Some(0.0), ColorHint::Gray, "UInt8").unwrap();
+            cells
+        };
+        let long = |last: f32| {
+            let r = Raster::new("g", n as u32, 1, vec![cells(last)], gt, Crs::LonLat, Some(0.0), ColorHint::Gray, "UInt8").unwrap();
             read(std::io::Cursor::new(write(&r, 0).unwrap()), "back").unwrap()
         };
+        // Every cell reads back where it was, so the strips made on several threads are in order.
         let back = long(7.0);
-        assert_eq!((back.data_type.as_str(), back.value(0, n as i64 - 2, 0)), ("UInt8", Some(7.0)));
+        assert_eq!(back.data_type, "UInt8");
+        let written = cells(7.0);
+        let wrong = written.iter().enumerate().find(|&(i, &v)| back.value(0, i as i64, 0) != Some(v).filter(|v| *v != 0.0));
+        assert!(wrong.is_none(), "{wrong:?}");
         assert_eq!(long(7.5).data_type, "Float32");
     }
 
