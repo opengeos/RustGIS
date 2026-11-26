@@ -816,6 +816,12 @@ fn fill(
     let (mut layout, mut extent, mut redo) = (None, Extent::EMPTY, None);
     let mut boxes = Vec::new();
     let fed = feed(&mut |features| {
+        // An empty run (a chunk a definition query emptied) says nothing about the rows to come:
+        // the table, its page size and whether it holds multipoints wait for the first run with
+        // rows. Without any, the end of the feed makes it.
+        if layout.is_none() && features.is_empty() {
+            return Ok(());
+        }
         if layout.is_none() {
             let multi = multi_points.unwrap_or_else(|| features.iter().any(|f| matches!(f.geometry, Some(crate::Geometry::MultiPoint(_)))));
             layout = Some(make(multi, mixed, features)?);
