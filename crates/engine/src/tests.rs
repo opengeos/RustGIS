@@ -40185,15 +40185,25 @@ fn a_publications_text_with_a_statistic_is_wrapped_by_the_page() {
     assert!(wrap, "its figure is as wide as its data makes it, so the page wraps it");
 }
 
-/// A publication measures a text as it is drawn (#2853): a layer statistic token narrower than a
-/// typical figure is measured as one, as `{scale}` and `{date}` are; a longer one, and any other
-/// text, as it is written.
+/// A publication measures its texts as the page draws them (#2853): a layer statistic by the figure it
+/// will show, as `{map}` is by the map's name, so the box is the one a text with that figure written
+/// out gets, whatever the token's length.
 #[test]
-fn a_statistic_token_is_measured_as_wide_as_its_figure() {
-    use crate::cmd::layout::like_figures;
-    assert_eq!(like_figures("{count:A} of {sum:Ab:f}"), "1,234,567,890.12 of 1,234,567,890.12");
-    assert_eq!(like_figures("{max:Cities of Spain:population} {min:A:f}"), "{max:Cities of Spain:population} 1,234,567,890.12");
-    assert_eq!(like_figures("Plain {scale} {foo} text"), "Plain {scale} {foo} text");
+fn a_publication_measures_a_statistic_as_its_figure() {
+    let mut s = world();
+    let extent = json!([-46.8, -11.6, -38.5, -2.2]);
+    let token = "{count:Countries}";
+    let figure = crate::render::layout::statistic_figures(s.map(), false, &[token]).remove(0).1;
+    let height = |s: &mut Session, title: &str| {
+        s.run("layout.publication", &json!({"profile": "a4-portrait", "extent": extent, "title": title, "style": "banner"})).unwrap();
+        let li = s.active_layout.unwrap();
+        s.project.layouts[li].elements.iter().find(|e| e.name == "Title").map(|e| e.h).unwrap()
+    };
+    // A line of many figures, so what each is measured as decides how many lines the title takes.
+    let words = "population of the countries ";
+    let with_token = height(&mut s, &format!("{}{token} total", format!("{words}{token} ").repeat(6)));
+    let literal = height(&mut s, &format!("{}{figure} total", format!("{words}{figure} ").repeat(6)));
+    assert_eq!(with_token, literal, "a token is measured as the {figure} it draws");
 }
 
 /// A layer renamed to a longer name must not take a text past the characters a text holds

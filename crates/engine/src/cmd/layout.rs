@@ -562,24 +562,6 @@ fn projected_extent(s: &Session, e: &Extent) -> Extent {
     ext
 }
 
-/// The width a layer statistic (#2853) is measured at in a publication, a typical figure.
-const LIKE_FIGURE: &str = "1,234,567,890.12";
-
-/// `t` with each layer statistic token a typical figure wide where the token as written is
-/// narrower: the layout fills a token in only when it draws, so a short one (`{sum:Ab:f}`) can
-/// draw a figure wider than itself, and the text is measured at the wider of the two.
-pub(crate) fn like_figures(t: &str) -> String {
-    let mut out = t.to_string();
-    let mut done: Vec<&str> = Vec::new();
-    for token in rustgis_map::layout::stat_tokens(t) {
-        if token.token.len() < LIKE_FIGURE.len() && !done.contains(&token.token) {
-            done.push(token.token);
-            out = out.replace(token.token, LIKE_FIGURE);
-        }
-    }
-    out
-}
-
 /// `t` in capitals, its `{tokens}` as they are: the layout fills a token (`{date}`) when it draws
 /// only in its own case. A token is a closed `{name}` of letters and digits, or a layer statistic
 /// (`{count:Cities}`, #2853); a lone brace is text.
@@ -1390,12 +1372,22 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
     // Text is measured as it is drawn: bold as bold, and the tokens the layout fills only when it
     // draws (`{date}`, `{scale}`…) as wide as a typical value of theirs.
     let (map_name, crs) = (s.map().name.clone(), s.map().projection.label());
+    // A layer statistic (#2853) by the figure it shows now, as `{map}` is by the map's name: the
+    // layers are in the project, so the box is sized for what is drawn, not for the token written.
+    let figures = {
+        let texts: Vec<&str> = [&title, &subtitle, &note, &author]
+            .into_iter()
+            .filter_map(|t| t.as_deref())
+            .chain(sources.iter().chain(&reference).chain(&headings).map(String::as_str))
+            .collect();
+        crate::render::layout::statistic_figures(s.map(), comma, &texts)
+    };
     let drawn = move |t: &str| {
         // Most text has no token: measured as it is.
         if !t.contains('{') {
             return t.to_string();
         }
-        let t = like_figures(t);
+        let t = figures.iter().fold(t.to_string(), |t, (token, figure)| t.replace(token.as_str(), figure));
         [
             ("{date}", "0000-00-00"),
             ("{time}", "00:00"),

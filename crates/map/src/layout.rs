@@ -3502,8 +3502,6 @@ mod tests {
         assert_eq!(rename_stat_layers("{count:B} {sum:B:A} A", to_z), None);
     }
 
-    /// A text's statistic tokens (#2853): each kind, a layer named with a colon, and braces that
-    /// aren't one left alone.
     /// The tokens a notice reads also include the figure kinds written without their field, which
     /// are no tokens to draw or to require a capability for (#2853).
     #[test]
@@ -3523,6 +3521,8 @@ mod tests {
         assert_eq!(stat_tokens("{sum:A} {sum:A:b}").len(), 1, "a figure without its field is no token");
     }
 
+    /// A text's statistic tokens (#2853): each kind, a layer named with a colon, and braces that
+    /// aren't one left alone.
     #[test]
     fn statistic_tokens_are_read_from_a_text() {
         fn read(t: &str) -> Vec<(&str, StatKind, &str, Option<&str>)> {

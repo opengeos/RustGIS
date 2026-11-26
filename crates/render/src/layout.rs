@@ -1235,6 +1235,24 @@ fn statistics(t: &str, comma: bool, map: Option<&Map>) -> String {
     out
 }
 
+/// The layer statistics of `texts` (#2853) as the page draws them from `map`, as (token, figure)
+/// pairs for the tokens that have a figure, each token once: what a publication measures its texts
+/// with, so a box is sized for the figures it will show, not for the tokens written.
+pub fn statistic_figures(map: &Map, comma: bool, texts: &[&str]) -> Vec<(String, String)> {
+    let mut pairs: Vec<(String, String)> = Vec::new();
+    for text in texts {
+        let tokens = distinct_stat_tokens(text, false);
+        for (s, figure) in tokens.iter().zip(figures_of(map, &tokens)) {
+            if let Some((_, Ok(v))) = figure
+                && !pairs.iter().any(|(token, _)| token == s.token)
+            {
+                pairs.push((s.token.to_string(), decimal(rustgis_map::layout::chart_value_text(v, None), comma)));
+            }
+        }
+    }
+    pairs
+}
+
 /// The statistic tokens of `text`, each once, in the order they come; with `gaps`, the figures
 /// written without their field too.
 fn distinct_stat_tokens(text: &str, gaps: bool) -> Vec<rustgis_map::layout::StatToken<'_>> {
