@@ -4700,6 +4700,29 @@ fn flatgeobuf_a_point_without_its_coordinate_skips_the_feature() {
     assert_eq!((rows, streamed.skipped), (2, 1));
 }
 
+/// A feature skipped for its geometry doesn't decide a column's date type either: its time of day
+/// would otherwise make an all-date column text (#3006).
+#[test]
+fn flatgeobuf_dates_skip_features_with_unreadable_geometry() {
+    let mut ds = Dataset::new("dates", GeometryType::Point, vec![Field::new("day", FieldType::Date)]);
+    ds.push(Some(Geometry::Point(Coord::new(1.0, 0.0))), vec![Value::parse("2001-01-01", FieldType::Date)]);
+    ds.push(Some(Geometry::Point(Coord::new(1234.5, 0.0))), vec![Value::parse("2002-02-02", FieldType::Date)]);
+    let mut bytes = fgb::write(&ds).unwrap();
+    // Its day made a time of day, the same length, which would make the column text.
+    let day = bytes.windows(10).position(|w| w == b"2002-02-02").unwrap();
+    bytes[day..day + 10].copy_from_slice(b"10:30:00.5");
+    // The second point's xy vector (its length, 2, then x) made empty.
+    let mut needle = 2u32.to_le_bytes().to_vec();
+    needle.extend_from_slice(&1234.5f64.to_le_bytes());
+    let at = bytes.windows(needle.len()).position(|w| w == needle.as_slice()).unwrap();
+    bytes[at..at + 4].copy_from_slice(&0u32.to_le_bytes());
+    let source = open_bytes("dates.fgb", bytes, None).unwrap();
+    assert_eq!(source.info().fields[0].ty, FieldType::Date);
+    let read = source.read(&Request::all()).unwrap();
+    assert_eq!((read.features.len(), read.skipped), (1, 1));
+    assert_eq!(read.features[0].attrs[0].to_string(), "2001-01-01");
+}
+
 /// A readable size prefix can contain invalid UTF-8 properties. Classification ignores
 /// that row just as whole and streamed reads do, and the read reports the skipped feature.
 #[test]

@@ -322,9 +322,9 @@ impl FgbSource {
                 unread_dates: Vec::new(),
                 rounded_dates: Vec::new(),
             };
-            // Reads skip a feature with unreadable properties and report it in Batch::skipped.
-            // Such a feature must not influence the inferred date type either.
-            if !properties_fit(feature, &self.kinds) || feature.process_properties(&mut props).is_err() {
+            // Reads skip a feature with unreadable properties or geometry and report it in
+            // Batch::skipped. Such a feature must not influence the inferred date type either.
+            if !geometry_fits(feature) || !properties_fit(feature, &self.kinds) || feature.process_properties(&mut props).is_err() {
                 continue;
             }
             for &k in columns {
@@ -929,12 +929,13 @@ fn wkb_of(feature: &flatgeobuf::FgbFeature) -> Option<Vec<u8>> {
     feature.to_wkb(CoordDimensions::xy()).ok()
 }
 
-/// Whether a feature's geometry holds the coordinates its ends say, in it and in each of its parts:
-/// an even number of `xy` values, ring or line ends that never go back and stay within them, and a
-/// whole coordinate where a point is read. flatgeobuf 6.0.1 indexes `xy` by those ends as the file
-/// gives them, and a point at 0 and 1, and panics past the end or on an end before the last one,
-/// which the browser can't catch. A feature that fails this is skipped as unreadable, as one whose
-/// geometry the reader refuses. Found by fuzzing `read_layers` (#3006).
+/// Whether a feature's geometry holds what flatgeobuf 6.0.1 reads from it, in it and in each of its
+/// parts: an even number of `xy` values, ring or line ends that never go back and stay within them,
+/// and at least one coordinate where a point may be read. The reader indexes `xy` by the ends the
+/// file gives, and reads a point's first coordinate whatever `xy` holds; past the end, or on an end
+/// before the one before it, it panics, which the browser can't catch. A feature that fails this
+/// is skipped as unreadable, as one whose geometry the reader refuses. Found by fuzzing
+/// `read_layers` (#3006).
 fn geometry_fits(feature: &flatgeobuf::FgbFeature) -> bool {
     // The file's header, which the reader may take over the geometry's own type, isn't reachable
     // from a feature: the geometry is held to a point's needs. One with no coordinate is empty,
