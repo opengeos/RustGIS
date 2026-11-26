@@ -3419,8 +3419,6 @@ mod tests {
     use super::*;
     use crate::symbology::MAX_DASH_STEP;
 
-    /// A text's statistic tokens (#2853): each kind, a layer named with a colon, and braces that
-    /// aren't one left alone.
     /// A layer renamed is renamed in the tokens that name it, whatever their statistic or field, and
     /// a text none of them names is left as it is (#2853).
     #[test]
@@ -3433,6 +3431,8 @@ mod tests {
         assert_eq!(rename_stat_layers("{count:B} {sum:B:A} A", to_z), None);
     }
 
+    /// A text's statistic tokens (#2853): each kind, a layer named with a colon, and braces that
+    /// aren't one left alone.
     #[test]
     fn statistic_tokens_are_read_from_a_text() {
         fn read(t: &str) -> Vec<(&str, StatKind, &str, Option<&str>)> {

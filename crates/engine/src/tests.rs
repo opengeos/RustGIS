@@ -40074,7 +40074,7 @@ fn renaming_a_layer_renames_it_in_layout_text_statistics() {
     let li = s.active_layout.unwrap();
     let said = |s: &Session, id: u32| match &s.project.layouts[li].element(id).unwrap().kind {
         rustgis_map::layout::ElementKind::Text { text, .. } => text.clone(),
-        _ => unreachable!("a text"),
+        _ => panic!("a text"),
     };
     // A count's layer is all that follows its colon, so `Countries:pop_est` is another layer's name.
     assert_eq!(said(&s, first), "{count:Nations} in {sum:Nations:pop_est}; {count:Rivers} {scale} {count:Countries:pop_est}");

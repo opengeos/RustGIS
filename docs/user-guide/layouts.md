@@ -491,8 +491,8 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
   definition query, take the map of the layout's first map frame (in a series, the whole layer, not
   the page's part of it), and are written as a chart writes its values: thousands apart, up to two
   decimals with the zeros at the end dropped, and the decimal comma when the layout uses one.
-  Renaming the layer renames it in these tokens, as it does for a chart's or table's layer; deleting
-  it leaves them as written. A layer read in place covers what is loaded, as a chart does, and a
+  Renaming the layer renames it in these tokens, as it does for a chart's or table's layer (in the
+  layouts whose first map frame shows its map); deleting it leaves them as written. A layer read in place covers what is loaded, as a chart does, and a
   warning says so. A token with no figure (no such layer or field, a field with no numbers, a raster
   layer) stays as written, and a warning names what is missing. Both warnings come when the text is
   added or changed, or its layout is made or imported, or when another map frame becomes the first
