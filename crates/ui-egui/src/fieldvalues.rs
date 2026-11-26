@@ -278,7 +278,8 @@ pub(crate) fn insert(text: &mut String, field: &str, value: &str, ds: &Dataset, 
     let goes_on = next == query::Follows::Operator;
     let mut missing = match after.starts_with(',') || goes_on {
         true => 0,
-        false => opened(&head).0.saturating_sub(opened(after).1),
+        // What follows that can't be read is kept as it is, its brackets not guessed at.
+        false => query::brackets(after).map_or(0, |(_, closed)| opened(&head).0.saturating_sub(closed)),
     };
     let mut second_end = !goes_on && !starts_with_word(after, "and");
     loop {
@@ -510,6 +511,10 @@ mod tests {
             insert(&mut text, "pop_est", "10", &ds, Some(at)).unwrap();
             assert_eq!(text, expected, "{clause}");
         }
+        // What follows doesn't read (`#`): its bracket is kept, and none added.
+        let mut text = "(continent = ) AND name = 'x' #".to_string();
+        insert(&mut text, "continent", "'Asia'", &ds, Some(13)).unwrap();
+        assert_eq!(text, "(continent = 'Asia') AND name = 'x' #");
     }
 
     /// The note under the buttons is put in display form once, as a whole: a field named in
