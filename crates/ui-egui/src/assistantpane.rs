@@ -305,7 +305,10 @@ fn key_storage_note(app: &RustGisApp, provider: &str) -> String {
                     SecretError::Unavailable(_) => tl!("The system keychain is unavailable."),
                     _ => tl!("The system keychain could not complete the request."),
                 });
-                if *reading {
+                // With no store here (a phone without one), nothing was ever saved to be read.
+                if *reading && app.services.secrets.is_none() {
+                    notes.push(tl!("A key entered now will be kept for this session only."));
+                } else if *reading {
                     notes.push(tl!("A saved key could not be read. A key entered now will be kept for this session only."));
                 } else if *deleting {
                     notes.push(tl!("RustGIS could not confirm that any previously saved key was deleted from the system keychain."));
@@ -1045,6 +1048,17 @@ pub(crate) mod tests {
         legacy.assistant.keys.edit("custom", &cfg.key);
         save_config(&mut legacy, &cfg, &egui::Context::default());
         assert_eq!(prefs.lock().unwrap().get("assistant_key_custom").map(String::as_str), Some(""));
+    }
+
+    /// Remember kept on where there is no store at all: no saved key is said to be unreadable.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn remember_with_no_store_says_no_key_was_lost() {
+        let (mut app, _) = keys_app(None, None);
+        settle_keys(&mut app);
+        let note = key_storage_note(&app, "custom");
+        assert!(note.contains("unavailable") && note.contains("for this session only"), "{note}");
+        assert!(!note.contains("could not be read"), "{note}");
     }
 
     /// A failed new-key write leaves the key in the session and never echoes backend payloads.
