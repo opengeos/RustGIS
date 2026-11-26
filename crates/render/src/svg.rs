@@ -693,20 +693,22 @@ mod tests {
         }
     }
 
-    /// A text's block in SVG sits, is spaced and is cased as the page draws it, and a block taller than
-    /// its box keeps its first lines, as on the page.
+    /// A text's block in SVG sits, is spaced and is cased as the page draws it, turned about the
+    /// same centre, its cased words escaped; a block taller than its box keeps its first lines, as
+    /// on the page; and a setting that is not a value writes the plain text, nothing not a number.
     #[test]
     fn a_text_block_is_written_where_the_page_draws_it() {
         use rustgis_map::layout::{TextCase, TextVAlign};
-        let page = |text: &str, h: f64, v: TextVAlign, ls: f64, c: TextCase| {
+        let turned = |text: &str, h: f64, v: TextVAlign, ls: f64, c: TextCase, turn: f64| {
             let mut l = Layout::new("SVG", 100.0, 80.0);
             let mut kind = ElementKind::text(text, 10.0, rustgis_map::Rgba::rgb(0, 0, 0), false);
-            if let ElementKind::Text { valign, line_spacing, case, .. } = &mut kind {
-                (*valign, *line_spacing, *case) = (v, ls, c);
+            if let ElementKind::Text { valign, line_spacing, case, rotation, .. } = &mut kind {
+                (*valign, *line_spacing, *case, *rotation) = (v, ls, c, turn);
             }
             l.add("Text", (30.0, 10.0, 30.0, h), kind);
             layout_svg(&l, &mut [], 72.0, &PageInfo::default()).unwrap().0
         };
+        let page = |text: &str, h: f64, v: TextVAlign, ls: f64, c: TextCase| turned(text, h, v, ls, c, 0.0);
         let spans = |svg: &str| -> Vec<(f64, String)> {
             svg.split("<tspan ")
                 .skip(1)
@@ -725,16 +727,43 @@ mod tests {
         let from_top = spans(&page(tall, 9.0, TextVAlign::Top, 1.0, TextCase::None));
         assert!(!from_top.is_empty(), "two lines fit");
         assert_eq!(spans(&page(tall, 9.0, TextVAlign::Bottom, 1.0, TextCase::None)), from_top, "taller than its box: from the top");
+        // Middle: half the free height above the block, the first line 0.6 em below its top.
+        let middle = spans(&page("one\ntwo\nthree", 60.0, TextVAlign::Middle, 1.5, TextCase::None));
+        let block = em * 1.25 * (1.0 + 2.0 * 1.5);
+        assert!((middle[0].0 - (10.0 + (60.0 - block) / 2.0 + em * 0.6)).abs() < 0.01, "{middle:?}");
+        // Turned, the block moves down its box as upright, the turn about the box's centre.
+        let bottom = page("one\ntwo\nthree", 60.0, TextVAlign::Bottom, 1.5, TextCase::None);
+        let turned_top = turned("one\ntwo\nthree", 60.0, TextVAlign::Top, 1.5, TextCase::None, 90.0);
+        let turned_bottom = turned("one\ntwo\nthree", 60.0, TextVAlign::Bottom, 1.5, TextCase::None, 90.0);
+        for svg in [&turned_top, &turned_bottom] {
+            assert!(svg.contains(r#"transform="rotate(90 45 40)""#), "{svg}");
+        }
+        assert_eq!(spans(&turned_bottom), spans(&bottom), "the same lines as upright");
+        let (top_first, bottom_first) = (spans(&turned_top)[0].0, spans(&turned_bottom)[0].0);
+        assert!((bottom_first - top_first - (60.0 - block)).abs() < 0.01, "down by the free height: {top_first} {bottom_first}");
+        // Its cased words are escaped as any text's.
+        let amp = page("a & b < c", 60.0, TextVAlign::Top, 1.0, TextCase::Upper);
+        assert!(amp.contains(">A &amp; B &lt; C</text>"), "{amp}");
+        // Not a value: the plain text, with nothing not a number written.
+        let plain = page("one\ntwo\nthree", 60.0, TextVAlign::Top, 1.0, TextCase::None);
+        for odd in [
+            page("one\ntwo\nthree", 60.0, TextVAlign::Invalid, f64::NAN, TextCase::Invalid),
+            page("one\ntwo\nthree", 60.0, TextVAlign::Top, f64::INFINITY, TextCase::None),
+        ] {
+            assert_eq!(odd, plain);
+            assert!(!odd.contains("NaN") && !odd.contains("inf"), "{odd}");
+        }
     }
 
     /// The vector PDF records the block as the page draws it: a block's PDF differs from the plain
-    /// text's, and the plain one is still main's (`plain_texts_export_as_before`).
+    /// text's, an upper-case text's is the same as one typed in capitals, and the plain one is still
+    /// main's (`plain_texts_export_as_before`).
     #[test]
     fn a_text_block_reaches_the_pdf() {
         use rustgis_map::layout::{TextCase, TextVAlign};
-        let pdf = |v: TextVAlign, ls: f64, c: TextCase| {
+        let pdf_of = |text: &str, v: TextVAlign, ls: f64, c: TextCase| {
             let mut l = Layout::new("PDF", 100.0, 80.0);
-            let mut kind = ElementKind::text("one\ntwo\nthree", 10.0, rustgis_map::Rgba::rgb(0, 0, 0), false);
+            let mut kind = ElementKind::text(text, 10.0, rustgis_map::Rgba::rgb(0, 0, 0), false);
             if let ElementKind::Text { valign, line_spacing, case, .. } = &mut kind {
                 (*valign, *line_spacing, *case) = (v, ls, c);
             }
@@ -742,6 +771,7 @@ mod tests {
             let (drawing, _) = crate::layout::render_drawing(&l, &mut [], 150.0, &PageInfo::default()).unwrap();
             crate::pdf::write(&[crate::pdf::Page::drawing(drawing, l.width, l.height)], "Block")
         };
+        let pdf = |v: TextVAlign, ls: f64, c: TextCase| pdf_of("one\ntwo\nthree", v, ls, c);
         let plain = pdf(TextVAlign::Top, 1.0, TextCase::None);
         let block = pdf(TextVAlign::Bottom, 1.5, TextCase::Upper);
         assert!(plain.starts_with(b"%PDF") && block.starts_with(b"%PDF"), "both write");
@@ -752,6 +782,8 @@ mod tests {
         {
             assert_ne!(pdf(v, ls, c), plain, "{v:?} {ls} {c:?}");
         }
+        let typed = pdf_of("ONE\nTWO\nTHREE", TextVAlign::Top, 1.0, TextCase::None);
+        assert!(pdf(TextVAlign::Top, 1.0, TextCase::Upper) == typed, "upper case records the capitals as typed");
     }
 
     /// An element's background (#2257) is a `<rect>` of its own under the element, its box grown
