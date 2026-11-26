@@ -57,6 +57,12 @@ pub trait Phone: Platform {
     fn take_return(&self) -> bool {
         false
     }
+
+    /// Puts `text`, copied in the window, on the system's clipboard too, where other apps can
+    /// paste it. The default does nothing: the window's own clipboard keeps it (iOS).
+    fn copy_text(&self, text: &str) {
+        let _ = text;
+    }
 }
 
 /// What a service couldn't do, kept until the next frame says it in the window (a service has
@@ -253,6 +259,20 @@ impl<P: Phone> App<P> {
                     self.app.position = None;
                 }
                 Event::LowMemory => self.app.release_memory(),
+                // The Capture form takes it (`rustgis_ui_touch`).
+                Event::Typed(typed) => {
+                    if let rustgis_engine::platform::Typed::Closed { failed: Some(error), .. } = &typed {
+                        self.app.session.notify(i18n::fmt("The text box couldn't be opened: {error}", &[("error", error)]), true);
+                    }
+                    self.app.typed.push(typed);
+                }
+                Event::CopyFailed(error) => self.app.session.notify(
+                    i18n::fmt(
+                        "The text copied wasn't put on the system's clipboard, so other apps can't paste it: {error}",
+                        &[("error", &error)],
+                    ),
+                    true,
+                ),
                 Event::Failed(text) => self.app.session.notify(text, true),
             }
         }
@@ -607,6 +627,11 @@ fn use_picker<P: Phone + 'static>(
         photographing.borrow_mut().photo_asked();
         Ok(())
     }));
+    // Where the phone has text fields of its own, the touch interface's fields open one.
+    if phone.enters_text() {
+        let typist = phone.clone();
+        app.services.enter_text = Some(Box::new(move |entry| typist.enter_text(entry)));
+    }
 }
 
 impl<P: Phone> eframe::App for App<P> {
@@ -636,6 +661,21 @@ impl<P: Phone> eframe::App for App<P> {
         }
         ui.painter().rect_filled(ctx.viewport_rect(), 0.0, tokens.pane);
         ui.scope_builder(egui::UiBuilder::new().max_rect(ctx.content_rect()), |ui| self.app.ui(ui));
+        // Text copied in the window goes on the system's clipboard as well, for other apps.
+        if let Some(phone) = &self.phone {
+            let copied: Vec<String> = ctx.output(|o| {
+                o.commands
+                    .iter()
+                    .filter_map(|c| match c {
+                        egui::OutputCommand::CopyText(text) => Some(text.clone()),
+                        _ => None,
+                    })
+                    .collect()
+            });
+            for text in copied {
+                phone.copy_text(&text);
+            }
+        }
         // A second picker asked for while one was up was refused: what the front end kept for
         // the first is put back, so its file is read as it was asked for.
         if self.refused_picker.replace(false)

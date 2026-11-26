@@ -1289,6 +1289,8 @@ fn services(inbox: Inbox, font_inbox: Inbox, notes: Notes, ctx: egui::Context, e
         take_photo: None,
         // A text field's Paste: the page reads the clipboard (Firefox and Safari show a Paste
         // button to confirm, Chrome asks once); only over HTTPS, where the browser offers it.
+        // The browser gives egui's own fields its typing: no text field of its own is needed.
+        enter_text: None,
         read_clipboard: clipboard().map(|clipboard| -> Box<dyn Fn(Slot<Result<String, String>>)> {
             Box::new(move |slot| {
                 let (clipboard, ctx) = (clipboard.clone(), clipboard_ctx.clone());
