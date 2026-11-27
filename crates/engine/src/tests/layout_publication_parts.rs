@@ -175,6 +175,7 @@ fn a_publication_part_given_wrong_is_refused_and_nothing_is_made() {
         (json!({"grid": {"style": "wavy"}}), "unknown grid style"),
         (json!({"grid": {"foo": 1}}), "grid takes no \"foo\""),
         (json!({"grid": {"stepp": null}}), "grid takes no \"stepp\""),
+        (json!({"grid": {"off": true}}), "grid takes no \"off\""),
         (json!({"grid": 5}), "grid is \"none\""),
         (json!({"grid": true}), "grid is \"none\""),
         (json!({"scaleBar": {"units": "parsecs"}}), "unknown units"),

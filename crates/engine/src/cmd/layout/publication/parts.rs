@@ -3,25 +3,6 @@
 
 use super::*;
 
-/// A frame grid's options, as `layout.addElement` takes them.
-const GRID_KEYS: &[&str] = &[
-    "type",
-    "crs",
-    "step",
-    "short",
-    "mgrs",
-    "color",
-    "width",
-    "labels",
-    "labelSize",
-    "style",
-    "tickLength",
-    "format",
-    "hemisphere",
-    "edges",
-    "labelOrientation",
-];
-
 /// A north arrow's: when it is drawn, and its look as `layout.update` takes it.
 const NORTH_ARROW_KEYS: &[&str] = &["show", "style", "fill", "outline"];
 
@@ -53,7 +34,10 @@ fn part<T>(p: &Value, key: &str, keys: &[&str], default: T, set: impl FnOnce(&Va
 /// no step keeps the default's, which the reference text says.
 pub(super) fn publication_grid(p: &Value, default: Grid) -> Result<Option<Grid>, String> {
     let step = default.step;
-    part(p, "grid", GRID_KEYS, default, |o, base| {
+    // A frame grid's options as `layout.addElement` takes them, without the keys that say which
+    // element and frame it is, and `off`, which `"none"` says here.
+    let keys: Vec<&str> = ADD_GRID_KEYS.iter().copied().filter(|k| !["layout", "kind", "frame", "off"].contains(k)).collect();
+    part(p, "grid", &keys, default, |o, base| {
         let mut grid = grid_params(o, base)?;
         if grid.kind == GridKind::Graticule && grid.step <= 0.0 {
             grid.step = step;
