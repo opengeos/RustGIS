@@ -86,6 +86,30 @@ pub fn layout_png(s: &mut Session, li: usize, dpi: f64, region: Option<[f64; 4]>
     img.encode_png().map_err(|e| e.to_string())
 }
 
+/// Adds to `said` the notices of each chart `layout`'s current page draws ([`chart_notices`]),
+/// each with the chart's name and id before it, one already there not again.
+fn gather_chart_notices(layout: &Layout, maps: &[Map], said: &mut Vec<String>) {
+    for e in layout.elements.iter().filter(|e| e.visible) {
+        for note in chart_notices(layout, maps, e.id, false) {
+            let note = format!("\"{}\" ({}): {note}", crate::project::short_name(&e.name), e.id);
+            if !said.contains(&note) {
+                said.push(note);
+            }
+        }
+    }
+}
+
+/// Says the charts' notices an export gathered: the first ten, and how many more.
+fn say_chart_notices(s: &mut Session, said: Vec<String>) {
+    let more = said.len().saturating_sub(10);
+    for note in said.into_iter().take(10) {
+        s.warn(note);
+    }
+    if more > 0 {
+        s.warn(format!("and {more} more chart notice{}", if more == 1 { "" } else { "s" }));
+    }
+}
+
 /// The section lines an export doesn't draw, each with the pages it is missing from.
 type SectionGaps = BTreeMap<rustgis_render::layout::SectionGap, usize>;
 
@@ -146,6 +170,7 @@ pub(in crate::cmd::layout) fn layout_bytes_inner(
     let (mut left_out, mut by_corners): (Vec<(usize, u32, String, &'static str)>, Vec<(usize, u32, String)>) = (Vec::new(), Vec::new());
     let mut clipped = BTreeMap::new();
     let mut gaps = SectionGaps::new();
+    let mut charts = Vec::new();
     let render_pages = || -> Result<(Vec<rustgis_render::pdf::Page>, Option<Vec<u8>>), String> {
         let mut out = Vec::new();
         let mut png = None;
@@ -171,6 +196,7 @@ pub(in crate::cmd::layout) fn layout_bytes_inner(
             for gap in rustgis_render::layout::sections_not_drawn(layout, &s.project.maps) {
                 *gaps.entry(gap).or_default() += 1;
             }
+            gather_chart_notices(layout, &s.project.maps, &mut charts);
             // Each page is kept as vectors (its pictures compressed) as soon as it's drawn, within
             // a memory budget.
             if pdf {
@@ -232,6 +258,7 @@ pub(in crate::cmd::layout) fn layout_bytes_inner(
         s.warn(note);
     }
     say_unfitted_legends(s, &unfitted);
+    say_chart_notices(s, charts);
     pictured_notices(s, &frames_pictured, &pages_pictured);
     georeference_notices(s, &left_out, &by_corners, pages.len());
     if !pdf {
@@ -455,6 +482,8 @@ pub(in crate::cmd::layout) fn layout_svg(s: &mut Session, li: usize, dpi: f64) -
     let clipped = rustgis_render::layout::clipped_text(layout, &s.project.maps, dpi, &info);
     let note = rustgis_render::layout::clipped_text_notice(layout, &clipped);
     let gaps = rustgis_render::layout::sections_not_drawn(layout, &s.project.maps).into_iter().map(|g| (g, 1)).collect();
+    let mut charts = Vec::new();
+    gather_chart_notices(layout, &s.project.maps, &mut charts);
     let (drawn, unfitted) =
         rustgis_render::layout::unfitted_legends(|| rustgis_render::svg::layout_svg(layout, &mut s.project.maps, dpi, &info));
     let (text, pictured) = drawn?;
@@ -462,6 +491,7 @@ pub(in crate::cmd::layout) fn layout_svg(s: &mut Session, li: usize, dpi: f64) -
         s.warn(note);
     }
     say_unfitted_legends(s, &unfitted);
+    say_chart_notices(s, charts);
     pictured_notices(s, &pictured, &[]);
     Ok(text)
 }

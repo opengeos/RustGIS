@@ -411,44 +411,51 @@ pub(in crate::cmd::layout) fn chart_update(
     Ok(Some((o, Some(to.name.clone()), said)))
 }
 
-/// What a chart leaves out of what it is told to draw (an existing loss made said): the bars
-/// past its limit, and the features with no number in its field; coloured by classes, the bars
-/// that keep its bar colour, their features having several, and stacked, the values of its key
-/// gathered in its Other or keeping their palette colour. It reads each feature of the
-/// chart's layer once, on the command's thread, as drawing the chart does on every draw of the
-/// page: run only when a chart is added, told what to draw or coloured by classes, not when it
-/// is moved; resized or restyled, a stacked chart reads it for [`say_chart_crowded`] alone.
+/// Says [`chart_notices`] of the chart `id` of layout `li`: what it leaves out of what it is told
+/// to draw (an existing loss made said) and whether its box is too small for it. It reads each
+/// feature of the chart's layer once, on the command's thread, as drawing the chart does on every
+/// draw of the page: run when a chart is added, told what to draw or coloured by classes, and by
+/// an export; resized or restyled, [`say_chart_crowded`] says the last alone.
 pub(in crate::cmd::layout) fn say_chart_losses(s: &mut Session, li: usize, id: u32) {
     say_chart(s, li, id, false);
 }
 
-/// [`say_chart_losses`]' warning of a chart whose title and key leave its bars no room, alone.
+/// [`say_chart_losses`]' warning of a chart whose box is too small for it, alone.
 pub(in crate::cmd::layout) fn say_chart_crowded(s: &mut Session, li: usize, id: u32) {
     say_chart(s, li, id, true);
 }
 
 /// [`say_chart_losses`], or `crowded_only` [`say_chart_crowded`].
-pub(in crate::cmd::layout) fn say_chart(s: &mut Session, li: usize, id: u32, crowded_only: bool) {
-    let said = {
-        let Some(l) = s.project.layouts.get(li) else { return };
-        let Some(e) = l.element(id) else { return };
-        let ElementKind::Chart { frame, layer, field, .. } = &e.kind else { return };
-        // Only a stacked chart can be crowded, so for that alone an unstacked one reads nothing.
-        if crowded_only && e.kind.chart_stack().is_none() {
-            return;
-        }
-        // Read as the page draws it: at the frame's scale and on the series page shown.
-        let Some((m, env)) = rustgis_render::layout::frame_page_env(l, &s.project.maps, *frame) else { return };
-        let Some(data) = m.layer_by_name(layer).and_then(|fl| e.kind.chart_data_of(fl, &env)) else { return };
-        let mut said = if crowded_only { Vec::new() } else { chart_losses(&e.kind, &data, layer, field) };
-        if rustgis_render::layout::chart_crowded(&data, &e.kind.chart_look().unwrap_or_default(), e.w, e.h) {
-            said.push("the chart's title and key leave its bars no room: it draws as a placeholder until its box is taller".to_string());
-        }
-        said
-    };
-    for w in said {
+fn say_chart(s: &mut Session, li: usize, id: u32, crowded_only: bool) {
+    let Some(l) = s.project.layouts.get(li) else { return };
+    for w in chart_notices(l, &s.project.maps, id, crowded_only) {
         s.warn(w);
     }
+}
+
+/// The notices of the chart `id` as `layout`'s current page draws it, at its frame's scale and on
+/// the series page shown; `crowded_only`, that its box is too small for it alone. None of an
+/// element that isn't a chart, or whose frame or layer is gone.
+pub(in crate::cmd::layout) fn chart_notices(layout: &Layout, maps: &[Map], id: u32, crowded_only: bool) -> Vec<String> {
+    use rustgis_render::layout::Crowded;
+    let Some(e) = layout.element(id) else { return Vec::new() };
+    let ElementKind::Chart { frame, layer, field, .. } = &e.kind else { return Vec::new() };
+    let Some((m, env)) = rustgis_render::layout::frame_page_env(layout, maps, *frame) else { return Vec::new() };
+    let Some(data) = m.layer_by_name(layer).and_then(|fl| e.kind.chart_data_of(fl, &env)) else { return Vec::new() };
+    let mut said = if crowded_only { Vec::new() } else { chart_losses(&e.kind, &data, layer, field) };
+    if let Some(why) = rustgis_render::layout::chart_crowded(&data, &e.kind.chart_look().unwrap_or_default(), e.w, e.h) {
+        said.push(
+            match why {
+                Crowded::Head => "the chart's title and key leave its bars no room: it draws as a placeholder until its box is taller",
+                Crowded::Columns => {
+                    "the chart's labels and values leave its columns no height: it draws as a placeholder until its box is taller"
+                }
+                Crowded::Thin => "the chart is too small for its bars: some draw under 1 pt until its box is larger",
+            }
+            .to_string(),
+        );
+    }
+    said
 }
 
 /// What [`say_chart_losses`] says of the chart `kind` of `layer` and `field`, drawing `data`.
