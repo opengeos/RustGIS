@@ -375,14 +375,15 @@ fn gather(ds: &Dataset, t: &Target) -> Result<Done, String> {
                     t.layer, n.inexact, f.name
                 ),
             ));
-        } else if !whole && n.big > 0 && n.sum_rounded() {
-            // Each is held exactly, but their sum with the decimals isn't (5 + 0.5 + 2^54): rounded,
-            // and checked against the exact sum, so a sum that comes out exact says nothing.
+        } else if !whole && n.sum_rounded() {
+            // A sum past 2^53 with a fraction (5 + 0.5 + 2^54, or decimals alone): a decimal holds
+            // no fraction there, so it is rounded by half a unit or more. Checked against the exact
+            // sum, so one that comes out exact, or rounds only as decimals do, says nothing.
             notices.push(Note::loss(
                 LossCode::ChangedRounded,
                 format!(
-                    "{}: the sum and mean of '{}' are rounded, because its {} whole number(s) past 2^53 are added with decimals",
-                    t.layer, f.name, n.big
+                    "{}: the sum and mean of '{}' are rounded by half a unit or more, as a decimal number holds no fraction past 2^53",
+                    t.layer, f.name
                 ),
             ));
         }

@@ -160,6 +160,12 @@ fn whole_numbers_added_with_decimals_past_2_53_say_how_many_are_rounded() {
     let mark = s.notice_mark();
     stats(&mut s, json!({"layer": "w", "field": "x"}));
     assert!(s.notices_since(mark).is_empty(), "{:?}", s.notices_since(mark));
+    // Decimals alone past 2^53 round it the same way, and say so.
+    let mut s = layer_of("w", fields.clone(), vec![vec![V::Float((1_i64 << 54) as f64)], vec![V::Float(0.5)]]);
+    let mark = s.notice_mark();
+    stats(&mut s, json!({"layer": "w", "field": "x"}));
+    let said: Vec<_> = s.notices_since(mark).iter().map(|n| n.loss()).collect();
+    assert_eq!(said, [Some(rustgis_data::loss::LossCode::ChangedRounded)]);
     // So is the exact sum given where the running one overflows.
     let huge = || vec![V::Float(f64::MAX), V::Float(f64::MAX), V::Float(-f64::MAX), V::Float(-f64::MAX), V::Int(1 << 54)];
     let mut rows: Vec<Vec<V>> = huge().into_iter().map(|v| vec![v]).collect();
