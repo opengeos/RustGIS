@@ -53275,6 +53275,10 @@ fn the_rows_of_a_box_of_a_grib_record_are_asked_for_alone() {
         let e = s.run("layer.addUrl", &json!({"url": url, "bytes": [88, 4971], "bbox": bbox, "cellSize": more})).unwrap_err();
         assert!(e.contains(said), "{bbox}: {e}");
     }
+    // Keys the rows of a box don't read are refused, never left out unsaid.
+    let asked = json!({"url": url, "bytes": [88, 4971], "bbox": [10.6, 56.7, 12.4, 59.3], "crs": "EPSG:4674", "layer": "2"});
+    let e = s.run("layer.addUrl", &asked).unwrap_err();
+    assert!(e.contains("the rows of a box (\"bbox\" with \"bytes\") don't read layer, crs: leave it out"), "{e}");
     assert_eq!(count(), before);
     // A box outside the record, known from its headers.
     let e = s.run("layer.addUrl", &json!({"url": url, "bytes": [88, 4971], "bbox": [10, 70, 12, 80]})).unwrap_err();

@@ -5674,6 +5674,12 @@ fn add_url_rows(s: &mut Session, p: &Value, url: &str, public: bool) -> CmdResul
     use crate::render::rustgis_tiles::cache;
     use rustgis_data::raster::grib;
     let Some(range) = range_asked(p, url, true)? else { return Err("\"bbox\" with \"bytes\" needs the range".into()) };
+    // The keys of other kinds of address, which a window doesn't read either ([`window_checks`]).
+    let unread: Vec<&str> =
+        WINDOW_UNREAD.iter().copied().filter(|k| p.get(*k).is_some_and(|v| !v.is_null() && v.as_bool() != Some(false))).collect();
+    if !unread.is_empty() {
+        return Err(format!("{url}: the rows of a box (\"bbox\" with \"bytes\") don't read {}: leave it out", unread.join(", ")));
+    }
     let side = |i: usize| p.get("bbox").and_then(|b| b.get(i)).and_then(Value::as_f64);
     if side(0).zip(side(2)).is_some_and(|(west, east)| west > east) {
         return Err("\"bbox\": a box across the antimeridian (west greater than east) isn't read from a GRIB record yet: give one box on each side of it".into());

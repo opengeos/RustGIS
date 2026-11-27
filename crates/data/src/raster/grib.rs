@@ -778,13 +778,18 @@ fn to_raster(fields: Vec<Field>, name: &str) -> Result<Raster> {
         r.rounded = rounded;
     }
     if past > 0 {
-        let (what, has) = if past == 1 { ("1 value".to_string(), "has") } else { (format!("{past} values"), "have") };
-        r.lost.push(crate::loss::Note::loss(
-            crate::loss::LossCode::DroppedValue,
-            format!("{what} past the range of 32-bit floats (±3.4 × 10^38) {has} no value"),
-        ));
+        r.lost.push(past_note(past));
     }
     Ok(r)
+}
+
+/// What says values past `f32`'s range, in every notice about them.
+const PAST: &str = "past the range of 32-bit floats (±3.4 × 10^38)";
+
+/// The notice of `past` values past `f32`'s range, which have no value.
+fn past_note(past: u64) -> crate::loss::Note {
+    let (what, has) = if past == 1 { ("1 value".to_string(), "has") } else { (format!("{past} values"), "have") };
+    crate::loss::Note::loss(crate::loss::LossCode::DroppedValue, format!("{what} {PAST} {has} no value"))
 }
 
 /// Octets `o..o + n` (0-based offset `o`) of `b`, unsigned, big-endian; 0 past the end.

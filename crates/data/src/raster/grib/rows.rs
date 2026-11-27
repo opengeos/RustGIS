@@ -11,8 +11,8 @@
 //! would take another request.
 
 use super::{
-    Field, Grid, MAX_BITS, Packing, SCAN_ALTERNATE, SCAN_J_CONSECUTIVE, Skip, bad, be, date, grib1_grid, grib1_name, grib2_grid,
-    grib2_packing, grib2_product, ibm, signed, to_raster, unpack_from,
+    Field, Grid, MAX_BITS, PAST, Packing, SCAN_ALTERNATE, SCAN_J_CONSECUTIVE, Skip, bad, be, date, grib1_grid, grib1_name, grib2_grid,
+    grib2_packing, grib2_product, ibm, past_note, signed, to_raster, unpack_from,
 };
 use crate::Result;
 use crate::raster::{GeoTransform, Raster, Uncounted, max_samples};
@@ -217,7 +217,7 @@ impl Rows {
             unpack_from(run, self.skip, (points, self.bits), self.scale, None, at, Uncounted::new(None, None)).map_err(|s| bad(why(s)))?;
         let mut r = to_raster(vec![Field { name: self.name.clone(), grid: self.grid, values, rounded, past }], name)?;
         r.lost.extend(self.full.notes());
-        cut_rows(r, self.full.north() + self.full.dy / 2.0, (self.row0, self.full.nj), self.bbox)
+        cut_rows(r, self.full.north() + self.full.dy / 2.0, (self.row0, self.full.nj), self.bbox, true)
     }
 }
 
@@ -225,11 +225,14 @@ impl Rows {
 /// what [`Rows::read`] gives of it. An error for a box outside it.
 pub fn cut(r: Raster, bbox: [f64; 4]) -> Result<Raster> {
     let (top, rows) = (r.transform.origin_y, r.height as usize);
-    cut_rows(r, top, (0, rows), bbox)
+    cut_rows(r, top, (0, rows), bbox, false)
 }
 
-/// [`cut`] of `r`, rows `row0..` of a grid of `of` rows whose north edge is at `top`.
-fn cut_rows(r: Raster, top: f64, (row0, of): (usize, usize), bbox: [f64; 4]) -> Result<Raster> {
+/// [`cut`] of `r`, rows `row0..` of a grid of `of` rows whose north edge is at `top`. `unmasked`:
+/// whether `r` is of simple packing without a bitmap ([`Rows::read`]'s), where a cell without a
+/// value is one past `f32`'s range, so those are counted over the cells kept; else a count made
+/// over the whole record is said as the record's, without the number.
+fn cut_rows(r: Raster, top: f64, (row0, of): (usize, usize), bbox: [f64; 4], unmasked: bool) -> Result<Raster> {
     let (t, w, h) = (r.transform, r.width as usize, r.height as usize);
     let dy = -t.pixel_height;
     let columns = span(t.origin_x, t.pixel_width, w, bbox[0], bbox[2]);
@@ -276,6 +279,16 @@ fn cut_rows(r: Raster, top: f64, (row0, of): (usize, usize), bbox: [f64; 4]) -> 
         out.rounded_some = r.rounded.iter().map(|n| *n > 0).collect();
     }
     out.lost = r.lost;
+    if out.lost.iter().any(|n| n.as_str().contains(PAST)) {
+        out.lost.retain(|n| !n.as_str().contains(PAST));
+        let past = out.bands.iter().flat_map(|b| &b.data).filter(|v| v.is_nan()).count();
+        if !unmasked {
+            let said = format!("values {PAST} in the whole record have no value: any among the box's cells are empty");
+            out.lost.push(crate::loss::Note::loss(crate::loss::LossCode::DroppedValue, said));
+        } else if past > 0 {
+            out.lost.push(past_note(past as u64));
+        }
+    }
     // A box that reaches more than a cell past the grid (a global grid's edges fall within one of
     // the world's): the layer is smaller than the box, and says so.
     let (east, south) = (t.origin_x + w as f64 * t.pixel_width, top - of as f64 * dy);

@@ -1617,8 +1617,42 @@ fn a_box_outside_the_record_is_refused_by_name() {
     let e = rows.read(&file[rows.run.0 as usize..=rows.run.1 as usize], "t").err().unwrap().to_string();
     assert!(e.contains("the box (100, 56, 110, 58) is outside the record's grid (9.5, 54.5, 14.5, 60.5)"), "{e}");
     assert!(cut(read_bytes(&file, "t").unwrap(), [100.0, 56.0, 110.0, 58.0]).is_err());
-    // Fewer octets than the rows take.
-    assert!(rows.read(&file[rows.run.0 as usize..rows.run.1 as usize], "t").is_err());
+    // Fewer octets than the rows of a box inside the grid take.
+    let Plan::Rows(rows) = plan(&file, file.len() as u64, [10.0, 56.0, 12.0, 58.0]).unwrap() else { panic!("read whole") };
+    assert!(rows.read(&file[rows.run.0 as usize..=rows.run.1 as usize], "t").is_ok());
+    let e = rows.read(&file[rows.run.0 as usize..rows.run.1 as usize], "t").err().unwrap().to_string();
+    assert!(e.contains("a data section shorter than its values"), "{e}");
+}
+
+/// Values past `f32`'s range are counted over the box's cells when its rows are read alone, not
+/// over every cell of the rows read; a record read whole says they are the whole record's.
+#[test]
+fn values_past_f32_are_counted_in_the_box() {
+    const BOX: [f64; 4] = [10.6, 56.7, 12.4, 59.3];
+    let past = |r: &Raster| r.lost.texts().filter(|t| t.contains("past the range of 32-bit floats")).map(String::from).collect::<Vec<_>>();
+    let rows_of = |file: &[u8]| {
+        let Plan::Rows(rows) = plan(file, file.len() as u64, BOX).unwrap() else { panic!("read whole") };
+        rows.read(&file[rows.run.0 as usize..=rows.run.1 as usize], "t").unwrap()
+    };
+    // E = 130: a packed 1 is past the range. Row 1, column 0: in the rows read, outside the box.
+    let mut x = vec![0u32; 30];
+    x[5] = 1;
+    let mut g = G1::new(5, 6, x.clone());
+    g.e = 130;
+    let r = rows_of(&g.bytes());
+    assert!(past(&r).is_empty() && r.bands[0].data.iter().all(|v| *v == 0.0), "{:?}", r.lost);
+    // Read whole and cut, the count would be the record's: said as the record's, without one.
+    let whole = cut(read_bytes(&g.bytes(), "t").unwrap(), BOX).unwrap();
+    let said =
+        "values past the range of 32-bit floats (±3.4 × 10^38) in the whole record have no value: any among the box's cells are empty";
+    assert_eq!(past(&whole), vec![said.to_string()]);
+    // Row 1, column 1 too: one of the two is in the box.
+    x[6] = 1;
+    let mut g = G1::new(5, 6, x);
+    g.e = 130;
+    let r = rows_of(&g.bytes());
+    assert_eq!(past(&r), vec!["1 value past the range of 32-bit floats (±3.4 × 10^38) has no value".to_string()]);
+    assert!(r.bands[0].data[0].is_nan());
 }
 
 #[test]
