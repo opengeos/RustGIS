@@ -115,6 +115,9 @@ fn first_keyed_provider_is_the_first_key_provider_and_never_a_sign_in() {
     // Opper comes after Requesty, so its key never takes the place of another provider's either.
     assert_eq!(first_keyed(keyed(&["opper", "requesty"])), Some("requesty"));
     assert_eq!(first_keyed(keyed(&["opper"])), Some("opper"));
+    // LLMTR comes last, for the same reason.
+    assert_eq!(first_keyed(keyed(&["llmtr", "opper"])), Some("opper"));
+    assert_eq!(first_keyed(keyed(&["llmtr"])), Some("llmtr"));
     assert_eq!(first_keyed(keyed(&[])), None);
 }
 
@@ -1022,6 +1025,17 @@ fn opper_lists_its_models_with_a_bearer_key() {
     assert_eq!(p.key_env, &["OPPER_API_KEY"]);
     let req = models_request(&cfg("opper"));
     assert_eq!(req.url, "https://api.opper.ai/v3/compat/models");
+    assert!(req.headers.iter().any(|(k, v)| k == "Authorization" && v == "Bearer k"));
+}
+
+#[test]
+fn llmtr_lists_its_models_with_a_bearer_key() {
+    let p = preset("llmtr").expect("LLMTR preset");
+    assert_eq!((p.api, p.keyless, p.login), (Api::OpenAi, false, false));
+    assert_eq!(p.key_env, &["LLMTR_API_KEY"]);
+    assert_eq!(p.model, "qwen/qwen3.8-flash");
+    let req = models_request(&cfg("llmtr"));
+    assert_eq!(req.url, "https://llmtr.com/v1/models");
     assert!(req.headers.iter().any(|(k, v)| k == "Authorization" && v == "Bearer k"));
 }
 
