@@ -504,8 +504,9 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
   in a presentation's map pages of it); a text that a longer name would take past the characters a
   text holds, or that a name with a brace (which a token can't hold) would break, keeps the old
   name, and the rename says so; deleting it leaves them as written, and when layout elements still
-  name it (a text's tokens, or a chart's, table's or colorbar's layer), says how many. A layer
-  read in place covers what is loaded, as a chart does, and a warning says so. A token with no
+  name it (a text's tokens, or a chart's, table's or colorbar's layer), says how many. It also
+  says how many map series (by their index layer) and presentation map page titles (by their
+  tokens) name it. A layer read in place covers what is loaded, as a chart does, and a warning says so. A token with no
   figure (no such layer or field, a field with no numbers, a raster layer, or a sum, mean, least
   or greatest written without its field) stays as written, and a warning names what is missing.
   Both warnings come when the text is added or changed, or its layout is made or imported, or when
