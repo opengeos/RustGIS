@@ -175,11 +175,11 @@ impl Draft {
         if self.no_author {
             p["author"] = json!("");
         }
-        let sources = lines(&self.sources);
+        let sources: Vec<&str> = lines(&self.sources).collect();
         if !sources.is_empty() {
             p["sources"] = json!(sources);
         }
-        let reference = lines(&self.reference);
+        let reference: Vec<&str> = lines(&self.reference).collect();
         if self.no_reference || !reference.is_empty() {
             p["reference"] = json!(if self.no_reference { Vec::new() } else { reference });
         }
@@ -262,8 +262,8 @@ impl Draft {
 }
 
 /// A box's lines as the command takes a list: trimmed, the empty ones left out.
-fn lines(text: &str) -> Vec<&str> {
-    text.lines().map(str::trim).filter(|l| !l.is_empty()).collect()
+fn lines(text: &str) -> impl Iterator<Item = &str> {
+    text.lines().map(str::trim).filter(|l| !l.is_empty())
 }
 
 /// The menu that adds a layer figure of the active map (the one the sheet shows), listed as the

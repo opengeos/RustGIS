@@ -26,8 +26,8 @@ pub struct StatLayer {
 }
 
 impl StatLayer {
-    /// The layers a text of `layout` can show figures of: those of the map its first frame shows
-    /// (as the page reads them).
+    /// The layers a text of `layout` can show figures of: those [`Self::of_map`] lists for the map
+    /// its first frame shows (as the page reads them).
     pub fn of(layout: &rustgis_engine::map::layout::Layout, maps: &[rustgis_engine::map::Map]) -> Vec<StatLayer> {
         use rustgis_engine::map::layout::ElementKind;
         let Some(ElementKind::MapFrame { map, .. }) = layout.first_frame().and_then(|f| layout.element(f)).map(|e| &e.kind) else {

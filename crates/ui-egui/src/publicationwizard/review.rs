@@ -26,7 +26,7 @@ pub(super) fn review_step(ui: &mut egui::Ui, d: &Draft) {
         row(tl!("Title"), or_none(&d.title));
         row(tl!("Subtitle"), or_none(&d.subtitle));
         row(tl!("Note"), or_none(&d.note));
-        let sources = lines(&d.sources).join("\n");
+        let sources = lines(&d.sources).collect::<Vec<_>>().join("\n");
         row(tl!("Sources"), or_none(&sources));
         let heading = |i: usize, or: &str| {
             let given = d.headings[i].trim();
@@ -35,7 +35,7 @@ pub(super) fn review_step(ui: &mut egui::Ui, d: &Draft) {
         if !sources.is_empty() {
             row(tl!("Sources heading"), heading(0, PUBLICATION_HEADINGS[0]));
         }
-        let typed = lines(&d.reference).join("\n");
+        let typed = lines(&d.reference).collect::<Vec<_>>().join("\n");
         if d.no_reference {
             row(tl!("Reference"), none.to_string());
         } else {

@@ -35,7 +35,7 @@ fn list(ui: &mut egui::Ui, d: &mut Draft, label: &str, field: Field, hint: &str,
     let r = ui.add_enabled(on, edit).labelled_by(caption.id);
     d.edited(&r, field);
     ui.end_row();
-    if on && lines(d.field_mut(field)).len() > MAX_LINES {
+    if on && lines(d.field_mut(field)).count() > MAX_LINES {
         ui.label("");
         let note = i18n::fmt("At most {limit} lines.", &[("limit", &MAX_LINES.to_string())]);
         ui.label(egui::RichText::new(note).small().weak());
