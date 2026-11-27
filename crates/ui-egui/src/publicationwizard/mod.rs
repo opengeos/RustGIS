@@ -669,8 +669,8 @@ mod tests {
     }
 
     /// A sheet goes through the eight steps; a figure goes from its size to its map, its placement
-    /// and the review, the steps it takes nothing from skipped both ways. Back is off on the first step; Next becomes
-    /// Create on the last.
+    /// and the review, the steps it takes nothing from skipped both ways. Back is off on the first
+    /// step; Next becomes Create on the last.
     #[test]
     fn a_sheet_takes_every_step_and_a_figure_skips_what_it_doesnt_draw() {
         let mut app = app();
