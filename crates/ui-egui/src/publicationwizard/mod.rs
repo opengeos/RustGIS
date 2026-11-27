@@ -255,7 +255,8 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
             // down.
             let size = egui::vec2(84.0, 28.0);
             let spacing = ui.spacing().item_spacing.y;
-            // The buttons, and the separator above them with its spacing.
+            // The buttons, and the separator above them (6 points, egui's default) with the
+            // spacing on both sides of it.
             let footer = size.y + 6.0 + 2.0 * spacing;
             let body = egui::vec2(ui.available_width(), (ui.available_height() - footer).max(0.0));
             ui.allocate_ui_with_layout(body, egui::Layout::left_to_right(egui::Align::Min), |ui| {
@@ -584,7 +585,7 @@ mod tests {
         }
     }
 
-    /// It opens about 600 by 440 points, and can't be dragged smaller than about 420 by 360;
+    /// It opens about 600 by 460 points, and can't be dragged smaller than about 420 by 360;
     /// Next stays inside it.
     #[test]
     fn the_window_opens_at_its_size_and_keeps_a_smallest_one() {
@@ -692,6 +693,23 @@ mod tests {
         assert!(text.right() <= 320.0, "{text:?} runs off a screen 320 wide");
         assert_eq!(listed(&h).0, Vec::<&str>::new(), "the list is hidden");
         assert!(h.query_by_label("Step 2 of 5: Style").is_some(), "the heading still says the step");
+    }
+
+    /// A screen that narrows while the wizard is open (a phone turned, a browser resized) keeps
+    /// it on the screen.
+    #[test]
+    fn a_screen_narrowed_while_open_keeps_the_wizard_on_it() {
+        let mut app = app();
+        open(&mut app);
+        app.dialogs.publication.as_mut().unwrap().step = Step::Style;
+        let mut h = harness(app);
+        h.set_size(vec2(320.0, 900.0));
+        h.run_steps(6);
+        let next = h.get_by_role_and_label(Role::Button, "Next").rect();
+        assert!(next.left() >= 0.0 && next.right() <= 320.0, "Next at {next:?} on a screen 320 wide");
+        let (_, about) = crate::ribbon::publication_style("panel").unwrap();
+        let text = h.get_by_label(about).rect();
+        assert!(text.right() <= 320.0, "{text:?} runs off a screen 320 wide");
     }
 
     /// Cancel closes the wizard with nothing made, and the next opening starts over.
