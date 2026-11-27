@@ -172,17 +172,18 @@ impl Field {
     }
 
     /// After any write of the text (typed, pasted or filled from a selection): cut to what the field
-    /// takes, keeping how many characters that left out. Given back, for a notice, as the field
-    /// goes from fitting to cut and whenever a write leaves out more than one character (a paste);
-    /// not for each key typed while it stays over.
+    /// takes, keeping how many characters that left out: a paste's own count, one more for each key
+    /// typed while the field stays over, none once a write fits. Given back, for a notice, as the
+    /// field goes from fitting to cut and for each paste; not for those keys.
     fn written(&mut self, dropped: usize) -> Option<usize> {
         let before = self.left_out;
-        self.left_out = dropped;
+        let mut now = dropped;
         if let Some((end, _)) = self.text.char_indices().nth(FIELD_MAX) {
-            self.left_out += self.text.get(end..).map_or(0, |rest| rest.chars().count());
+            now += self.text.get(end..).map_or(0, |rest| rest.chars().count());
             self.text.truncate(end);
         }
-        (self.left_out > 1 || (before == 0 && self.left_out == 1)).then_some(self.left_out)
+        self.left_out = if now == 1 { before + 1 } else { now };
+        (now > 1 || (now == 1 && before == 0)).then_some(self.left_out)
     }
 }
 
@@ -812,7 +813,7 @@ mod tests {
         field.text.push_str("ab");
         assert_eq!((field.written(0), field.text.chars().count()), (Some(2), FIELD_MAX));
         field.text.push('c');
-        assert_eq!((field.written(0), field.left_out), (None, 1), "a key typed while over: the note counts, Messages was told");
+        assert_eq!((field.written(0), field.left_out), (None, 3), "a key typed while over adds to the note, Messages was told");
         field.text.pop();
         assert_eq!((field.written(0), field.left_out), (None, 0), "a change that fits takes the note away");
         // The pop left room for one: two more are over again by one.
