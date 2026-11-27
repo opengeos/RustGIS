@@ -36,6 +36,12 @@ fn sample() -> Session {
     s
 }
 
+/// Answers the approval waiting, as the user was shown it ([`Agent::asking`]).
+fn answer(a: &mut Agent, allow: bool, always: bool, s: &mut Session) -> Step {
+    let asked = a.asking().expect("an approval is waiting");
+    a.decide(&asked, allow, always, s).expect("the approval shown is the one waiting")
+}
+
 /// Deterministic provider defaults with a synthetic key and private routing enabled.
 fn cfg(provider: &str) -> Config {
     let p = preset(provider).unwrap_or(&PRESETS[0]);
@@ -235,7 +241,7 @@ fn file_access_needs_approval() {
     assert_eq!(step, Step::Confirm);
     let (what, why, _) = a.pending(&s).unwrap_or_default();
     assert!(what.starts_with("share.exportMap") && why.contains("files"), "{what} / {why}");
-    let Step::Send(req) = a.decide(false, false, &mut s) else { panic!("expected a request") };
+    let Step::Send(req) = answer(&mut a, false, false, &mut s) else { panic!("expected a request") };
     assert!(!path.exists());
     let b = body(&req);
     let tool_msg = b["messages"].as_array().and_then(|m| m.iter().find(|m| m["role"] == "tool").cloned()).unwrap_or(Value::Null);
@@ -251,10 +257,10 @@ fn connection_management_requires_fresh_approval_but_can_run_in_app() {
     assert_eq!(a.receive(a.generation(), ok(call("first", "run_command", args.clone())), &mut s), Step::Confirm);
     assert!(s.connections.find("Approved connection").is_none());
     assert!(!a.pending(&s).unwrap().2, "reserved commands cannot be allowed for the whole conversation");
-    assert!(matches!(a.decide(true, true, &mut s), Step::Send(_)));
+    assert!(matches!(answer(&mut a, true, true, &mut s), Step::Send(_)));
     assert_eq!(s.connections.find("Approved connection").unwrap().kind, "s3");
     assert_eq!(a.receive(a.generation(), ok(call("again", "run_command", args)), &mut s), Step::Confirm);
-    assert!(matches!(a.decide(false, false, &mut s), Step::Send(_)));
+    assert!(matches!(answer(&mut a, false, false, &mut s), Step::Send(_)));
     assert_eq!(s.connections.connections.len(), 1, "declining a repeat must leave the approved connection unchanged");
 }
 
@@ -305,12 +311,12 @@ fn connection_commands_require_fresh_approval_before_login_or_scripts() {
             assert!(s3::connection(&name).is_none(), "a pending call must not log in");
             assert_eq!(s.map().name, map_name, "a script's earlier lines must wait too");
             assert!(!a.pending(&s).unwrap().2, "connection operations cannot be allowed for the whole conversation");
-            assert!(matches!(a.decide(false, false, &mut s), Step::Send(_)));
+            assert!(matches!(answer(&mut a, false, false, &mut s), Step::Send(_)));
             assert!(s3::connection(&name).is_none(), "a declined call must not log in");
             assert_eq!(s.map().name, map_name, "declining must leave every script line unexecuted");
 
             assert_eq!(a.receive(a.generation(), ok(call("allowed", tool, args.clone())), &mut s), Step::Confirm);
-            assert!(matches!(a.decide(true, true, &mut s), Step::Send(_)));
+            assert!(matches!(answer(&mut a, true, true, &mut s), Step::Send(_)));
             assert!(s3::connection(&name).is_some(), "a once-approved call must execute");
             if scripted {
                 assert_eq!(s.map().name, "Approved map");
@@ -322,7 +328,7 @@ fn connection_commands_require_fresh_approval_before_login_or_scripts() {
                 "asking to remember an approval must not bypass the next confirmation"
             );
             assert!(s3::connection(&name).is_none());
-            assert!(matches!(a.decide(false, false, &mut s), Step::Send(_)));
+            assert!(matches!(answer(&mut a, false, false, &mut s), Step::Send(_)));
             assert!(s3::connection(&name).is_none(), "declining a repeat must leave it disconnected");
         }
     }
@@ -355,10 +361,10 @@ fn remembered_database_forget_requires_fresh_direct_and_script_approval() {
         assert!(!a.pending(&s).unwrap().2);
         assert!(store.load("connection/c1").unwrap().is_some());
         assert_eq!(s.map().name, name);
-        a.decide(false, false, &mut s);
+        answer(&mut a, false, false, &mut s);
         assert!(store.load("connection/c1").unwrap().is_some());
         assert_eq!(a.receive(a.generation(), ok(call("allow", tool, args.clone())), &mut s), Step::Confirm);
-        let sent = a.decide(true, true, &mut s);
+        let sent = answer(&mut a, true, true, &mut s);
         assert!(matches!(sent, Step::Send(_)));
         assert!(!format!("{sent:?}").contains("forgotten-sentinel"));
         assert_eq!(store.load("connection/c1").unwrap(), None);
@@ -1087,14 +1093,14 @@ fn always_allow_is_per_command_and_never_for_reserved_actions() {
     assert!(a.pending(&s).is_some_and(|p| p.2));
     // Allowing the export for the conversation allows that file only: the next export (another
     // file) asks again, and so do the tiles.
-    assert_eq!(a.decide(true, true, &mut s), Step::Confirm);
+    assert_eq!(answer(&mut a, true, true, &mut s), Step::Confirm);
     assert!(a.pending(&s).is_some_and(|p| p.0.starts_with("share.exportLayer") && p.2));
-    assert_eq!(a.decide(false, false, &mut s), Step::Confirm);
+    assert_eq!(answer(&mut a, false, false, &mut s), Step::Confirm);
     assert!(a.pending(&s).is_some_and(|p| p.0.starts_with("map.addTiles")));
-    assert_eq!(a.decide(false, false, &mut s), Step::Confirm);
+    assert_eq!(answer(&mut a, false, false, &mut s), Step::Confirm);
     // Replacing the project is never allowed for good.
     assert!(a.pending(&s).is_some_and(|p| p.0.starts_with("project.new") && !p.2));
-    let _ = a.decide(false, false, &mut s);
+    let _ = answer(&mut a, false, false, &mut s);
     for n in [1, 2] {
         let _ = std::fs::remove_file(dir.join(format!("rustgis-assistant-test-{n}.geojson")));
     }
@@ -1116,7 +1122,7 @@ fn calls_after_one_turning_the_assistant_off_are_not_run() {
     assert_eq!(a.receive(a.generation(), ok(reply), &mut s), Step::Confirm);
     assert!(a.pending(&s).is_some_and(|p| p.0.starts_with("extension.disable")));
     // Nothing left to ask about or run: the results go back.
-    assert!(matches!(a.decide(true, false, &mut s), Step::Send(_)));
+    assert!(matches!(answer(&mut a, true, false, &mut s), Step::Send(_)));
     assert!(!s.extensions().is_on("assistant"));
     let after = s.map().center_lonlat();
     assert!((after.x - before.x).abs() < 1e-9 && (after.y - before.y).abs() < 1e-9, "the map moved to {after:?}");
@@ -3528,7 +3534,7 @@ fn a_subagents_approvals_and_stops_reach_the_user() {
     let (what, _, _) = a.pending(&s).expect("an approval");
     assert!(what.starts_with("Subagent: share.exportMap"), "{what}");
     // Declined: the subagent hears so and goes on.
-    assert!(matches!(a.decide(false, false, &mut s), Step::Send(_)));
+    assert!(matches!(answer(&mut a, false, false, &mut s), Step::Send(_)));
     assert!(a.transcript.iter().any(|e| matches!(e, Entry::Tool { result, .. } if result == "Declined")));
     // Stopping stops both; the delegate call gets a result, so the next request is well formed.
     a.stop();
@@ -3536,6 +3542,58 @@ fn a_subagents_approvals_and_stops_reach_the_user() {
     let Step::Send(next) = a.ask("never mind", &s) else { panic!("expected a request") };
     let messages = body(&next)["messages"].as_array().cloned().unwrap_or_default();
     assert!(messages.iter().any(|m| m["role"] == "tool" && m["tool_call_id"] == "id-delegate"));
+}
+
+/// An answer to an approval that is no longer the one waiting (a second tap, a card drawn before
+/// the run moved on) does nothing: not the next call of the same id in the next reply, not a
+/// subagent's call after the one shown, nothing after a stop.
+#[test]
+fn an_answer_to_an_approval_no_longer_waiting_is_refused() {
+    let mut s = sample();
+    let mut a = Agent::new(cfg("openai"), &s);
+    assert!(a.asking().is_none());
+    assert!(matches!(a.ask("export twice", &s), Step::Send(_)));
+    let never = |n: u32| std::env::temp_dir().join(format!("rustgis-assistant-stale-{}-{n}.png", std::process::id()));
+    let export = |n: u32| call("c0", "run_command", json!({"command": "share.exportMap", "params": {"path": never(n)}}));
+    assert_eq!(a.receive(a.generation(), ok(export(1)), &mut s), Step::Confirm);
+    let first = a.asking().expect("an approval");
+    assert!(matches!(a.decide(&first, false, false, &mut s), Some(Step::Send(_))));
+    // The next reply's call has the same id: the first card's answer isn't its.
+    assert_eq!(a.receive(a.generation(), ok(export(2)), &mut s), Step::Confirm);
+    let entries = a.transcript.len();
+    assert_eq!(a.decide(&first, true, true, &mut s), None);
+    assert_eq!(a.transcript.len(), entries);
+    assert!(a.pending(&s).is_some_and(|p| p.0.contains(&never(2).display().to_string())));
+    let second = a.asking().expect("an approval");
+    assert_ne!(second, first);
+    // Stopped, nothing waits: the card shown before the stop answers nothing.
+    a.stop();
+    assert_eq!(a.decide(&second, true, false, &mut s), None);
+    // A subagent's: one of its calls answered, the card for it doesn't answer the next.
+    assert!(matches!(a.ask("delegate it", &s), Step::Send(_)));
+    assert!(matches!(a.receive(a.generation(), ok(calls("delegate", json!({"task": "Export twice"}))), &mut s), Step::Send(_)));
+    assert_eq!(a.receive(a.generation(), ok(export(3)), &mut s), Step::Confirm);
+    let child = a.asking().expect("the subagent's approval");
+    assert!(matches!(a.decide(&child, false, false, &mut s), Some(Step::Send(_))));
+    assert_eq!(a.receive(a.generation(), ok(export(4)), &mut s), Step::Confirm);
+    assert_eq!(a.decide(&child, true, false, &mut s), None);
+    assert!(a.pending(&s).is_some_and(|p| p.0.starts_with("Subagent: share.exportMap") && p.0.contains(&never(4).display().to_string())));
+    assert!(matches!(answer(&mut a, false, false, &mut s), Step::Send(_)));
+    assert!((1..=4).all(|n| !never(n).exists()), "nothing was exported");
+    // Two calls of one id in one reply: the card for the first doesn't answer the second.
+    a.stop();
+    assert!(matches!(a.ask("export both", &s), Step::Send(_)));
+    let args = |n: u32| json!({"command": "share.exportMap", "params": {"path": never(n)}}).to_string();
+    let twice = json!({"choices": [{"message": {"role": "assistant", "content": null, "tool_calls": [
+        {"id": "same", "type": "function", "function": {"name": "run_command", "arguments": args(5)}},
+        {"id": "same", "type": "function", "function": {"name": "run_command", "arguments": args(6)}}
+    ]}, "finish_reason": "tool_calls"}]});
+    assert_eq!(a.receive(a.generation(), ok(twice), &mut s), Step::Confirm);
+    let first = a.asking().expect("an approval");
+    assert_eq!(a.decide(&first, false, false, &mut s), Some(Step::Confirm));
+    assert_eq!(a.decide(&first, true, false, &mut s), None);
+    assert!(a.pending(&s).is_some_and(|p| p.0.contains(&never(6).display().to_string())));
+    assert!(matches!(answer(&mut a, false, false, &mut s), Step::Send(_)));
 }
 
 #[test]
@@ -3962,7 +4020,7 @@ fn a_subagents_declined_approval_returns_to_the_main_assistant() {
     ));
     let export = calls("run_command", json!({"command": "share.exportMap", "params": {"path": "map.png"}}));
     assert_eq!(a.receive(a.generation(), ok(export), &mut s), Step::Confirm);
-    assert!(matches!(a.decide(false, false, &mut s), Step::Send(_)));
+    assert!(matches!(answer(&mut a, false, false, &mut s), Step::Send(_)));
     assert!(matches!(a.receive(a.generation(), ok(say("Couldn't export.")), &mut s), Step::Send(_)));
     assert_eq!(a.receive(a.generation(), ok(say("Done.")), &mut s), Step::Done);
     assert!(!a.busy());
@@ -4289,12 +4347,12 @@ fn local_delegation_waits_for_rustgis_approval() {
     let (what, _, always) = a.pending(&s).unwrap();
     assert!(!always);
     assert!(what.contains("npx -y @agentclientprotocol/claude-agent-acp@"), "the card names the package npx may run: {what}");
-    assert!(matches!(a.decide(false, false, &mut s), Step::Send(_)));
+    assert!(matches!(answer(&mut a, false, false, &mut s), Step::Send(_)));
     assert!(a.take_delegations().is_empty());
     let _ = a.receive(a.generation(), ok(say("declined")), &mut s);
     let _ = a.ask("try again", &s);
     assert_eq!(a.receive(a.generation(), ok(call()), &mut s), Step::Confirm);
-    assert!(matches!(a.decide(true, false, &mut s), Step::Send(_)));
+    assert!(matches!(answer(&mut a, true, false, &mut s), Step::Send(_)));
     assert_eq!(a.take_delegations().len(), 1);
 }
 
@@ -4887,7 +4945,7 @@ fn permission_policy_real_plugin_approval_and_changed_first_card() {
             a.ask("select", &s);
             assert_eq!(a.receive(a.generation(), ok(call("real", name, args.clone())), &mut s), Step::Confirm);
             assert!(!a.pending(&s).unwrap().2, "every plugin run asks separately");
-            a.decide(true, true, &mut s);
+            answer(&mut a, true, true, &mut s);
             assert_eq!(s.map().layer_by_name("Cities").unwrap().selection, [0, 2]);
             if !s.map().layer_by_name("Cities").unwrap().selection.is_empty() {
                 s.run("select.clear", &json!({"layer":"Cities"})).unwrap();
@@ -4906,7 +4964,7 @@ fn permission_policy_real_plugin_approval_and_changed_first_card() {
     let first = a.pending(&s).unwrap();
     assert!(first.0.contains("plugin:assistant-policy-real/f"));
     s.run("layer.select", &json!({"layer":"Countries"})).unwrap();
-    a.decide(true, false, &mut s);
+    answer(&mut a, true, false, &mut s);
     assert!(s.map().layer_by_name("No stale rename").is_none());
     assert!(a.transcript.iter().any(|e| matches!(e,Entry::Tool{error:true,result,..} if result.contains("changed"))));
     // The actual first shown item card also retains its original executable content.
@@ -4921,7 +4979,7 @@ fn permission_policy_real_plugin_approval_and_changed_first_card() {
     assert!(a.pending(&s).unwrap().0.contains("Shown item"));
     let map = s.map().clone();
     s.run("task.addStep", &json!({"task":"Shown item","title":"Changed content","command":"map.zoomIn","params":{}})).unwrap();
-    a.decide(true, false, &mut s);
+    answer(&mut a, true, false, &mut s);
     assert_eq!(s.map().name, map.name);
     assert_eq!(s.map().camera, map.camera);
     assert_eq!(s.map().layer_by_name("Cities").unwrap().visible, map.layer_by_name("Cities").unwrap().visible);
@@ -4971,7 +5029,7 @@ fn permission_policy_pending_effective_share_and_nested_sql() {
     let shown = a.pending(&s).unwrap().0;
     assert!(shown.contains("Cities") && shown.contains(&path.display().to_string()), "{shown}");
     assert!(a.pending_review().unwrap().defaults.is_none());
-    a.decide(false, false, &mut s);
+    answer(&mut a, false, false, &mut s);
     let params = json!({"sql":"FROM t","database":"/data/x.duckdb", "password":"RGSYNTH_direct_review_secret",
         "metadata":{"script":format!("layer.addUrl {}", json!({"url":"https://example.invalid/data?token=RGSYNTH_url_review_secret","token":"RGSYNTH_nested_review_secret"}))}});
     let script = format!("layer.addSql {params}");
@@ -4995,7 +5053,7 @@ fn permission_policy_pending_effective_share_and_nested_sql() {
             assert!(!what.contains("RGSYNTH_"), "secrets cannot become consent display data");
             assert!(!what.contains("structured content omitted"), "{what}");
         }
-        a.decide(false, false, &mut s);
+        answer(&mut a, false, false, &mut s);
     }
 }
 

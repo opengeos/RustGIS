@@ -634,36 +634,31 @@ fn composer(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, busy: bool, ctx: &egu
     #[cfg(not(target_arch = "wasm32"))]
     crate::agentthreads::list(app, ui, t);
     // An action waiting for approval comes first.
-    if let Some(Approval { what, why, can_always, review }) = assistant::pending(app) {
+    if let Some(approval) = assistant::pending(app) {
+        let Approval { what, why, can_always, asked, .. } = &approval;
         egui::Frame::NONE.fill(t.amber.gamma_multiply(0.15)).corner_radius(6).inner_margin(8).stroke(egui::Stroke::new(1.0, t.amber)).show(
             ui,
             |ui| {
                 ui.label(RichText::new(tl!("Allow this action?")).font(semibold(12.5)));
-                egui::ScrollArea::vertical().max_height(280.0).id_salt(("assistant_approval", &what, &why)).show(ui, |ui| {
-                    if let Some(review) = &review {
-                        crate::approvalcard::show(ui, &app.session.registry, review);
-                    } else {
-                        // Legacy requests have no structured review: keep all their context visible.
-                        ui.label(
-                            RichText::new(crate::i18n::fmt("The assistant wants to run this, and {why}:", &[("why", tl_raw!(&why))]))
-                                .small(),
-                        );
-                        ui.add(egui::Label::new(RichText::new(&what).monospace().small()).wrap());
-                    }
+                egui::ScrollArea::vertical().max_height(280.0).id_salt(("assistant_approval", what, why)).show(ui, |ui| {
+                    approval_details(ui, app, &approval);
                 });
                 // Plugin commands, scripts and replacing the project are asked about every time.
-                if can_always {
+                if *can_always {
                     ui.checkbox(&mut app.assistant.always, tl!("Allow such actions for this conversation"));
                 } else {
                     app.assistant.always = false;
                 }
-                ui.horizontal(|ui| {
-                    let allow = crate::widgets::primary_button(ui, tl!("Allow"), true, vec2(70.0, 26.0)).clicked();
-                    let deny = ui.button(tl!("Decline")).clicked();
-                    if allow || deny {
-                        let always = app.assistant.always;
-                        assistant::decide(app, allow, always, ctx);
-                    }
+                // The buttons are this approval's own: a click begun on another's isn't one on them.
+                ui.push_id(("assistant_approval_buttons", asked), |ui| {
+                    ui.horizontal(|ui| {
+                        let allow = crate::widgets::primary_button(ui, tl!("Allow"), true, vec2(70.0, 26.0)).clicked();
+                        let deny = ui.button(tl!("Decline")).clicked();
+                        if allow || deny {
+                            let always = app.assistant.always;
+                            assistant::decide(app, asked, allow, always, ctx);
+                        }
+                    });
                 });
             },
         );
@@ -746,6 +741,30 @@ fn composer(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, busy: bool, ctx: &egu
         send(app, text, ctx);
         ui.memory_mut(|m| m.request_focus(id));
     }
+}
+
+/// What an approval is about, as the card asking for it shows it: the engine's structured card,
+/// or the action in words with why it is asked about.
+pub fn approval_details(ui: &mut Ui, app: &RustGisApp, approval: &Approval) {
+    if let Some(review) = &approval.review {
+        crate::approvalcard::show(ui, &app.session.registry, review);
+    } else {
+        // Legacy requests have no structured review: keep all their context visible.
+        ui.label(
+            RichText::new(crate::i18n::fmt("The assistant wants to run this, and {why}:", &[("why", tl_raw!(&approval.why))])).small(),
+        );
+        ui.add(egui::Label::new(RichText::new(&approval.what).monospace().small()).wrap());
+    }
+}
+
+/// A reply of the assistant's, its Markdown laid out (headings, lists, quotes, code, tables as text).
+pub fn reply(ui: &mut Ui, text: &str, t: &Tokens) {
+    markdown(ui, text, t);
+}
+
+/// An error of the assistant's: what went wrong, a way out where there is one, and its diagnostics.
+pub fn error(ui: &mut Ui, e: &rustgis_assistant::Error, t: &Tokens) {
+    show_error(ui, e, t);
 }
 
 fn transcript(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, ctx: &egui::Context) {
@@ -1134,6 +1153,35 @@ pub(crate) mod tests {
         }
     }
 
+    /// A command's message that is the Assistant's first use waits for the saved key by itself: it
+    /// doesn't go into the message being written, and goes alone once the key is read.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_commands_first_message_waits_for_the_saved_key_apart() {
+        use rustgis_engine::data::secrets::{MemorySecrets, Secret, SecretStore};
+        let store = std::sync::Arc::new(MemorySecrets::new());
+        store.save("assistant/custom", &Secret::new("synthetic-stored")).unwrap();
+        let (mut app, _) = keys_app(None, Some(store));
+        // As at start-up: nothing loaded until the command asks.
+        app.assistant.agent = None;
+        app.assistant.loaded = false;
+        app.assistant.keys = Default::default();
+        app.services.http = Some(Box::new(|_, _| {}));
+        app.assistant.input = "a draft".into();
+        app.run("ui.pane.assistant", serde_json::json!({"ask": "Zoom to Tokyo"})).unwrap();
+        let ctx = egui::Context::default();
+        poll(&mut app, &ctx);
+        assert!(key_loading(&app), "the saved key is being read");
+        assert!(app.assistant.waiting_to_send() && !app.assistant.sending_when_ready());
+        assert_eq!(app.assistant.input, "a draft");
+        settle_keys(&mut app);
+        poll(&mut app, &ctx);
+        assert!(!app.assistant.waiting_to_send());
+        assert_eq!(app.assistant.input, "a draft");
+        let agent = app.assistant.agent.as_ref().unwrap();
+        assert!(matches!(agent.transcript.first(), Some(Entry::User(t)) if t == "Zoom to Tokyo"), "{:?}", agent.transcript);
+    }
+
     /// Requests wait for the saved key instead of sending with a temporary empty/environment value.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
@@ -1149,7 +1197,8 @@ pub(crate) mod tests {
         send(&mut app, "hello".into(), &ctx);
         assert!(app.assistant.catalog_pending && app.assistant.models_slot.is_none());
         assert!(app.assistant.inflight.is_none());
-        assert_eq!(app.assistant.queued.as_deref(), Some("hello"));
+        assert!(app.assistant.sending_when_ready());
+        assert_eq!(app.assistant.input, "hello", "the box shows the message waiting");
         settle_keys(&mut app);
         assert!(!key_loading(&app));
         assert_eq!(app.assistant.agent.as_ref().unwrap().config.key, "synthetic-stored");
@@ -1457,7 +1506,7 @@ pub(crate) mod tests {
         assert!(!agent.busy());
         let kept = agent.transcript.len();
         assert!(kept > 0);
-        assert!(app.assistant.inflight.is_none() && app.assistant.queued.is_none());
+        assert!(app.assistant.inflight.is_none() && app.assistant.asked.is_empty());
         assert_eq!(app.assistant.input, "Label the cities");
         assert!(app.ui.right_open.is_empty());
         let notices = said(&app);
@@ -1538,7 +1587,7 @@ pub(crate) mod tests {
         send(&mut app, "second thoughts".into(), &ctx);
         assert_eq!(app.session.notices.iter().filter(|n| n.text.contains(BUSY)).count(), 1);
         assert_eq!(app.assistant.input, "second thoughts");
-        assert!(app.assistant.queued.is_none());
+        assert!(!app.assistant.sending_when_ready());
         let agent = app.assistant.agent.as_ref().unwrap();
         assert_eq!(agent.transcript.len(), entries);
         assert!(app.assistant.history.iter().all(|h| h != "second thoughts"));
@@ -1569,45 +1618,39 @@ pub(crate) mod tests {
         }
     }
 
-    /// Signing out puts a waiting message back into the box: as the draft, or above newer typing.
+    /// Signing out sends nothing still waiting: the message stays in the box, and one a command
+    /// asked for goes into it, above what was being written.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    fn signing_out_returns_a_waiting_message_to_the_box() {
+    fn signing_out_leaves_a_waiting_message_in_the_box() {
         let mut app = RustGisApp::with_sample();
         let mut cfg = Config::from_env("custom");
-        for (draft, kept) in [("typed since", "waited\ntyped since"), ("", "waited"), ("waited", "waited")] {
-            app.assistant.queued = Some("waited".into());
-            app.assistant.input = draft.into();
-            assistant::forget_sign_in(&mut app, &mut cfg);
-            assert!(app.assistant.queued.is_none());
-            assert_eq!(app.assistant.input, kept);
-        }
+        app.assistant.input = "waited".into();
+        app.assistant.send_when_ready = true;
+        app.assistant.asked.push("asked".into());
+        assistant::forget_sign_in(&mut app, &mut cfg);
+        assert!(!app.assistant.sending_when_ready() && app.assistant.asked.is_empty());
+        assert_eq!(app.assistant.input, "asked\nwaited");
     }
 
-    /// A new conversation doesn't send a message still waiting into the next one: it goes back to
-    /// the box (a suggestion's too, which never was the draft).
+    /// A new conversation, or a peer's project replacing this one, sends nothing still waiting
+    /// into it: the message stays in the box. A command's message, asked for before, goes there too.
     #[test]
-    fn new_conversation_returns_a_waiting_message_to_the_box() {
+    fn a_message_waiting_is_kept_in_the_box_and_not_sent_into_what_follows() {
         let mut app = RustGisApp::with_sample();
         app.assistant.agent = Some(Agent::new(Config::from_env("custom"), &app.session));
-        for draft in ["from before", ""] {
-            app.assistant.queued = Some("from before".into());
-            app.assistant.input = draft.into();
-            assistant::new_conversation(&mut app);
-            assert!(app.assistant.queued.is_none());
+        for replace in [assistant::new_conversation as fn(&mut RustGisApp), assistant::peer_replaced] {
+            app.assistant.input = "from before".into();
+            app.assistant.send_when_ready = true;
+            replace(&mut app);
+            assert!(!app.assistant.sending_when_ready());
             assert_eq!(app.assistant.input, "from before");
+            app.assistant.input.clear();
+            app.run("ui.pane.assistant", serde_json::json!({"ask": "from a command"})).unwrap();
+            replace(&mut app);
+            assert!(app.assistant.asked.is_empty());
+            assert_eq!(app.assistant.input, "from a command");
         }
-        // A command's message doesn't push one still waiting out: that one goes to the box.
-        app.assistant.queued = Some("waiting".into());
-        app.assistant.input.clear();
-        app.run("ui.pane.assistant", serde_json::json!({"ask": "from a command"})).unwrap();
-        assert_eq!((app.assistant.queued.as_deref(), app.assistant.input.as_str()), (Some("from a command"), "waiting"));
-        // Nor into a peer's project that replaces this one.
-        app.assistant.queued = Some("a suggestion".into());
-        app.assistant.input.clear();
-        assistant::peer_replaced(&mut app);
-        assert!(app.assistant.queued.is_none());
-        assert_eq!(app.assistant.input, "a suggestion");
     }
 
     /// Real pending reviews keep their reach visible while exact requests wait under Details.
@@ -2005,7 +2048,8 @@ pub(crate) mod tests {
         app.assistant.models_slot = Some(late.clone());
         app.assistant.models = vec!["first-model".into()];
         // A message typed while the check was under way, and a catalog request it deferred.
-        app.assistant.queued = Some("synthetic question".into());
+        app.assistant.input = "synthetic question".into();
+        app.assistant.send_when_ready = true;
         app.assistant.catalog_pending = true;
         finish(&mut app, Some(first.binding()), None);
         assert!(app.assistant.agent.as_ref().unwrap().config.key.is_empty());
@@ -2018,8 +2062,8 @@ pub(crate) mod tests {
         }));
         poll(&mut app, &ctx);
         assert!(app.assistant.models.is_empty() && app.assistant.catalog.is_empty());
-        // Neither goes out after the sign-out; the message is back in the input box.
-        assert!(app.assistant.queued.is_none() && !app.assistant.catalog_pending);
+        // Neither goes out after the sign-out; the message stays in the input box.
+        assert!(!app.assistant.sending_when_ready() && !app.assistant.catalog_pending);
         assert!(app.assistant.inflight.is_none() && app.assistant.models_slot.is_none());
         assert_eq!(app.assistant.input, "synthetic question");
         // Taking the selected account: another one stops work for the first and drops its catalog.

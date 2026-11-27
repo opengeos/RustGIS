@@ -93,6 +93,19 @@ pub const INTERNAL_ERROR: &str = "RustGIS ran into an internal error while handl
 const PICTURES_AS_NAMES: &str =
     "This model doesn't read images: the pictures go to it as their names only. Pick a model that reads images to show them.";
 
+/// An approval as the user was shown it ([`Agent::asking`]): the conversation, the run, the reply and the call it
+/// is about (its place in the reply as well as its id, which a reply may repeat), and the
+/// subagent's own when the call waiting is a subagent's.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Asking {
+    conversation: u64,
+    generation: u64,
+    reply: u64,
+    place: usize,
+    call: String,
+    child: Option<Box<Asking>>,
+}
+
 pub struct Agent {
     pub config: Config,
     turns: Vec<Turn>,
@@ -103,6 +116,9 @@ pub struct Agent {
     last_context: String,
     /// Goes up when a run is stopped or cleared: responses to older requests are dropped.
     generation: u64,
+    /// The replies whose calls were queued so far: with the generation, it names the reply a
+    /// call waiting for approval came in ([`Asking`]), as call ids repeat from reply to reply.
+    replies: u64,
     /// Exact operations approved for the rest of this conversation and project generation.
     always: Vec<Remembered>,
     pending_policy: Option<Pending>,
@@ -204,6 +220,7 @@ impl Agent {
             steps: 0,
             last_context: String::new(),
             generation: 0,
+            replies: 0,
             always: Vec::new(),
             pending_policy: None,
             conversation: CONVERSATIONS.fetch_add(1, Ordering::Relaxed),
@@ -421,6 +438,27 @@ impl Agent {
             return child.pending_review();
         }
         self.pending_policy.as_ref().map(|p| p.review())
+    }
+
+    /// Which call [`Agent::pending`] is about, for [`Agent::decide`] to answer that one only: an
+    /// answer given to an approval no longer waiting (a second tap, a card drawn frames before)
+    /// is refused.
+    pub fn asking(&self) -> Option<Asking> {
+        let State::Calls(q, done) = &self.state else { return None };
+        let call = q.front()?;
+        let child = match &self.child {
+            Some(child) => Some(Box::new(child.asking()?)),
+            None if self.local_delegation(call) || self.pending_policy.is_some() => None,
+            None => return None,
+        };
+        Some(Asking {
+            conversation: self.conversation,
+            generation: self.generation,
+            reply: self.replies,
+            place: done.len(),
+            call: call.id.clone(),
+            child,
+        })
     }
 
     fn scope(&self) -> Scope {
@@ -888,6 +926,7 @@ impl Agent {
             self.state = State::Idle;
             return Step::Done;
         }
+        self.replies = self.replies.wrapping_add(1);
         self.state = State::Calls(calls.into(), Vec::new());
         self.drain(s)
     }
@@ -1126,10 +1165,14 @@ impl Agent {
         }
     }
 
-    /// The user's answer about [`Agent::pending`]; `always` approves calls like it for the rest of
-    /// the conversation.
-    pub fn decide(&mut self, allow: bool, always: bool, s: &mut Session) -> Step {
-        self.guard(|a| a.decide_unguarded(allow, always, s))
+    /// The user's answer about the approval they were shown, `asked` ([`Agent::asking`]); `always`
+    /// approves calls like it for the rest of the conversation. `None`, and nothing done, when
+    /// that approval is no longer the one waiting: answered already, stopped, or another call's.
+    pub fn decide(&mut self, asked: &Asking, allow: bool, always: bool, s: &mut Session) -> Option<Step> {
+        if self.asking().as_ref() != Some(asked) {
+            return None;
+        }
+        Some(self.guard(|a| a.decide_unguarded(allow, always, s)))
     }
 
     fn decide_unguarded(&mut self, allow: bool, always: bool, s: &mut Session) -> Step {
@@ -1137,7 +1180,8 @@ impl Agent {
             return Step::Done;
         }
         if let Some(child) = self.child.as_mut() {
-            let step = child.decide(allow, always, s);
+            // The child's own approval was checked with this one's ([`Agent::asking`]).
+            let step = child.decide_unguarded(allow, always, s);
             return self.after_child(step, s);
         }
         if allow
@@ -1411,7 +1455,10 @@ pub fn run_blocking_with<E: Into<crate::Error>>(
             }
             Step::Confirm => {
                 let allow = agent.pending(s).is_some_and(|(what, why, access)| confirm(&what, &why, access));
-                agent.decide(allow, false, s)
+                match agent.asking() {
+                    Some(asked) => agent.decide(&asked, allow, false, s).unwrap_or(Step::Done),
+                    None => Step::Done,
+                }
             }
             Step::Retry(after) => {
                 std::thread::sleep(after);

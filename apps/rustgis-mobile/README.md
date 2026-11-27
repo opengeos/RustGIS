@@ -94,8 +94,13 @@ Rust calls Java and never the other way: each frame the app collects what happen
 
 ## The touch interface
 
-A phone starts in the touch interface: the map, a bar of four large buttons under it (Layers, Add
-Data, Capture, More) and sheets that rise over the map. The Layers sheet switches between the
+A phone starts in the touch interface: the map, with a Layers button at its top-right corner, a bar
+of large buttons under it (Add Data, Capture, the AI Assistant once a provider is set up, More) and
+sheets that rise over the map. Until then, **Set Up the Assistant** in the More sheet is the only
+trace of the Assistant, and with its extension off there is none; its sheet types into Android's
+own text field and stands full or half up, with a strip and Stop while it works
+([AI Assistant › On a phone](../../docs/user-guide/assistant.md#on-a-phone)). `LAYERS_ON_THE_MAP`
+in `crates/ui-touch/src/lib.rs` puts Layers back on the bar (five buttons). The Layers sheet switches between the
 project's maps and layouts when it has more than one, shows and hides layers, zooms to one and
 makes one the active layer; the More sheet has Full Extent, undo and redo, the project, the
 position, and **Use the Desktop Interface**, which brings back the ribbon and panes; **Touch

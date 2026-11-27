@@ -5595,10 +5595,8 @@ impl RustGisApp {
             "ui.pane.assistant" => match p.get("ask").and_then(Value::as_str).map(str::trim).filter(|t| !t.is_empty()) {
                 Some(text) => {
                     self.ui.open_right(RightPane::Assistant);
-                    // A message still waiting isn't lost to this one: it goes back to the box.
-                    assistant::unqueue(&mut self.assistant);
-                    self.assistant.queued = Some(text.to_string());
-                    self.assistant.queued_from_box = false;
+                    // Sent on the next frame, as a suggestion is.
+                    self.assistant.asked.push(text.to_string());
                 }
                 None => toggle_right(&mut self.ui, RightPane::Assistant),
             },
@@ -10686,7 +10684,8 @@ mod peer_output_tests {
         app.session.project.maps[0].layers[0].dataset.source = Some("https://h.invalid/?token=RGSYNTH_4".into());
         let (text, _) = app.session.project.saved_text(None).unwrap();
         app.session.run("task.new", &json!({"name":"prior","steps":[]})).unwrap();
-        app.assistant.queued = Some("old project action".into());
+        app.assistant.input = "old project action".into();
+        app.assistant.send_when_ready = true;
         app.ui.web_file = Some("prior.rgis".into());
         let generation = app.session.opened;
         app.ui.cog_probes.push((
@@ -10715,7 +10714,7 @@ mod peer_output_tests {
             "a clean peer replacement does not replay a retired read"
         );
         assert!(app.session.project.tasks.is_empty());
-        assert!(app.ui.web_file.is_none() && app.assistant.queued.is_none());
+        assert!(app.ui.web_file.is_none() && !app.assistant.sending_when_ready());
         assert!(!serde_json::to_string(&app.session.project).unwrap().contains("RGSYNTH_4"));
 
         // Both replacement paths retire ready answers and reads still waiting for their document.
