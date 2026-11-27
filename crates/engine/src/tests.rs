@@ -12793,6 +12793,25 @@ fn layout_legends_take_a_fit_and_layer_names() {
     assert!(err.contains("only legends and scale bars take fit"), "{err}");
     let err = s.run("layout.addElement", &json!({"kind": "northArrow", "showLayerNames": false})).unwrap_err().to_string();
     assert!(err.contains("only legends take showLayerNames"), "{err}");
+    // Given beside a key the element does take, the refused one still changes nothing, the valid
+    // one included: no element moved or added, no undo step.
+    let (layout, depth) = (s.project.layouts[0].clone(), s.undo_depth());
+    for (refused, said) in [
+        (json!({"fit": "adjustSize"}), "only legends and scale bars take fit"),
+        (json!({"showLayerNames": false}), "only legends take showLayerNames"),
+    ] {
+        let mut update = refused.clone();
+        update["element"] = json!(title);
+        update["x"] = json!(42);
+        let err = s.run("layout.update", &update).unwrap_err().to_string();
+        assert!(err.contains(said), "{update}: {err}");
+        let mut added = refused.clone();
+        added["kind"] = json!("text");
+        added["x"] = json!(42);
+        let err = s.run("layout.addElement", &added).unwrap_err().to_string();
+        assert!(err.contains(said), "{added}: {err}");
+        assert_eq!((&s.project.layouts[0], s.undo_depth()), (&layout, depth), "{refused}");
+    }
     // Added: the legend takes them; a bad one adds nothing.
     let count = s.project.layouts[0].elements.len();
     let id = s.run("layout.addElement", &json!({"kind": "legend", "fit": "adjustColumns", "showLayerNames": false, "columns": 4})).unwrap()
@@ -12946,6 +12965,23 @@ fn a_fit_that_cannot_make_a_legend_fit_says_so() {
         .unwrap();
         assert_eq!(legend_said(&s, mark), [expected], "{fit} in {w} mm");
     }
+    // Set to three columns in a box narrower than three at 9 points, and as tall as three: no
+    // count of columns from three up fits across, so it stays in three, too wide, and says so.
+    let (w, h) = (two(&big), big[2].1 + 5.0);
+    assert!(big[2].0 > w && big[2].1 < h, "{big:?}");
+    let mark = s.notice_mark();
+    s.run(
+        "layout.addElement",
+        &json!({"kind": "legend", "allClasses": true, "title": "", "columns": 3, "fit": "adjustColumns", "x": 10, "y": 10, "w": w, "h": h}),
+    )
+    .unwrap();
+    assert_eq!(
+        legend_said(&s, mark),
+        [
+            "the legend's columns are wider than its box even in 3 columns: they close up, long labels run into the next, and the last column's past the box"
+        ],
+        "in {w} × {h} mm"
+    );
 }
 
 /// A hand-edited project whose legend has a fit or layer-names value of the wrong kind or not a
