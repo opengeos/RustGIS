@@ -404,17 +404,21 @@ pub(super) fn first_ink(layout: &Layout, e: &Element) -> rustgis_engine::map::Rg
 /// Whether `e` is a map or a picture covering a page point (mm): what lies under it there doesn't
 /// show, and it has no one colour of its own. A map covers its shape, a picture its image as drawn,
 /// fitted and centred in its box (transparent pixels counted as covering), or the whole box where
-/// its size can't be read and a placeholder is drawn.
+/// it doesn't decode and a placeholder is drawn. Only a picture whose box holds the point is
+/// decoded.
 fn hides(e: &Element, (x, y): (f64, f64)) -> bool {
     // The point in the box's unit square, and from the box's centre in millimetres.
     let (u, v) = ((x - e.x) / e.w, (y - e.y) / e.h);
     let (dx, dy) = (x - e.x - e.w / 2.0, y - e.y - e.h / 2.0);
     let in_box = (0.0..=1.0).contains(&u) && (0.0..=1.0).contains(&v);
     match &e.kind {
-        ElementKind::Picture { image } => rustgis_engine::render::picture_size(image).map_or(in_box, |(iw, ih)| {
-            let s = (e.w / f64::from(iw)).min(e.h / f64::from(ih));
-            dx.abs() <= f64::from(iw) * s / 2.0 && dy.abs() <= f64::from(ih) * s / 2.0
-        }),
+        ElementKind::Picture { image } => {
+            in_box
+                && rustgis_engine::render::picture_drawn_size(image).is_none_or(|(iw, ih)| {
+                    let s = (e.w / f64::from(iw)).min(e.h / f64::from(ih));
+                    dx.abs() <= f64::from(iw) * s / 2.0 && dy.abs() <= f64::from(ih) * s / 2.0
+                })
+        }
         ElementKind::MapFrame { shape, .. } => match shape {
             FrameShape::Rectangle => in_box,
             FrameShape::Circle => dx.hypot(dy) <= e.w.min(e.h) / 2.0,

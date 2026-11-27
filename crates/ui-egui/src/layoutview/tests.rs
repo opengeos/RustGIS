@@ -168,24 +168,30 @@ fn ink_reads_no_map_or_picture() {
     assert_eq!(boxed(Box::new(picture((60.0, 60.0, 20.0, 20.0)))), PAGE, "a picture elsewhere");
     // An image 4 by 1 pixels, drawn fitted and centred in its box: over (30, 30) in a box 60 mm
     // tall, and leaving it bare in one 100 mm tall.
-    let wide = |h: f64| {
+    let image = |h: f64, data: &'static str| {
         move |l: &mut Layout| {
-            let image = "iVBORw0KGgoAAAANSUhEUgAAAAQAAAABCAIAAAB2XpiaAAAAC0lEQVR4nGP4jwQATb8L9davaZUAAAAASUVORK5CYII=";
-            l.add("Picture", (0.0, 0.0, 100.0, h), ElementKind::Picture { image: image.into() });
+            l.add("Picture", (0.0, 0.0, 100.0, h), ElementKind::Picture { image: data.into() });
         }
     };
-    assert_eq!(boxed(Box::new(wide(60.0))), INK, "hidden by the image");
-    assert_eq!(boxed(Box::new(wide(100.0))), PAGE, "beside the image, in its box");
+    let wide = "iVBORw0KGgoAAAANSUhEUgAAAAQAAAABCAIAAAB2XpiaAAAAC0lEQVR4nGP4jwQATb8L9davaZUAAAAASUVORK5CYII=";
+    assert_eq!(boxed(Box::new(image(60.0, wide))), INK, "hidden by the image");
+    assert_eq!(boxed(Box::new(image(100.0, wide))), PAGE, "beside the image, in its box");
+    // The same size declared over data that doesn't decode: its placeholder covers the box.
+    let broken = "iVBORw0KGgoAAAANSUhEUgAAAAQAAAABCAIAAAB2XpiaAAAACElEQVRub3QgemxpYlVpEfcAAAAASUVORK5CYII=";
+    assert_eq!(boxed(Box::new(image(100.0, broken))), INK, "hidden by a placeholder");
     // The centre (30, 30) is in this box, near its corner: outside its circle and its ellipse.
     let corner = (28.0, 28.0, 60.0, 60.0);
     assert_eq!(boxed(Box::new(map(corner, FrameShape::Circle))), PAGE, "outside the circle");
     assert_eq!(boxed(Box::new(map(corner, FrameShape::Ellipse))), PAGE, "outside the ellipse");
     assert_eq!(boxed(Box::new(map(full, FrameShape::Circle))), INK, "inside the circle");
+    assert_eq!(boxed(Box::new(map(full, FrameShape::Ellipse))), INK, "inside the ellipse");
     // A circle is round in a wide box too: 100 by 40 mm about (52, 30), its circle spans x 32 to 72.
     assert_eq!(boxed(Box::new(map((2.0, 10.0, 100.0, 40.0), FrameShape::Circle))), PAGE, "beside the circle");
     let triangle = |side: f64| FrameShape::Polygon(vec![(0.0, 0.0), (side, 0.0), (0.0, side)]);
     assert_eq!(boxed(Box::new(map(full, triangle(1.0)))), INK, "inside the polygon");
     assert_eq!(boxed(Box::new(map(full, triangle(0.4)))), PAGE, "outside the polygon");
+    let reversed = FrameShape::Polygon(vec![(0.0, 0.0), (0.0, 1.0), (1.0, 0.0)]);
+    assert_eq!(boxed(Box::new(map(full, reversed))), INK, "inside a polygon wound the other way");
     let hidden = |l: &mut Layout| {
         map(full, FrameShape::Rectangle)(l);
         l.elements.last_mut().unwrap().visible = false;
