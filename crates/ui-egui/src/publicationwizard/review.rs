@@ -17,7 +17,7 @@ pub(super) fn review_step(ui: &mut egui::Ui, s: &Session, d: &Draft) {
         row(tl!("Map extent"), area_label(s, &d.area));
         row(tl!("Name"), name_label(s, &d.name));
         if d.figure() {
-            row(tl!("Placement"), d.arrangement.label());
+            row(tl!("Placement"), d.arrangement.label(s));
             // The figure note sends a sheet's texts to the caption. Its reference doesn't go there
             // (the figure draws the default one), so it is said here.
             let unused = if d.no_reference {
@@ -38,7 +38,7 @@ pub(super) fn review_step(ui: &mut egui::Ui, s: &Session, d: &Draft) {
         row(tl!("Orientation"), turned.to_string());
         let style = crate::ribbon::publication_style(&d.style).map(|s| s.0.to_string()).unwrap_or_else(|| d.style.clone());
         row(tl!("Style"), style);
-        row(tl!("Placement"), d.arrangement.label());
+        row(tl!("Placement"), d.arrangement.label(s));
         row(tl!("Title"), or_none(&d.title));
         row(tl!("Subtitle"), or_none(&d.subtitle));
         row(tl!("Note"), or_none(&d.note));

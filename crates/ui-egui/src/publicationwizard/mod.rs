@@ -530,7 +530,8 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
         });
     // A layout the command refuses is said (a map with no extent), and the wizard stays.
     if create {
-        match area_extent(&app.session, &d.area) {
+        let held = d.arrangement.held(&app.session).map_err(String::from);
+        match held.and_then(|_| area_extent(&app.session, &d.area)) {
             Ok(extent) => {
                 let mut params = d.params();
                 if let Some(extent) = extent {

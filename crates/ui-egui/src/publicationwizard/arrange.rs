@@ -31,9 +31,10 @@ impl Arrangement {
         matches!(self, Arrangement::Named(_) | Arrangement::Custom(_)).then(|| self.value()).flatten()
     }
 
-    /// Its name, as the review says it.
-    pub(super) fn label(&self) -> String {
+    /// Its name, as the review says it: none for one that no longer holds.
+    pub(super) fn label(&self, s: &Session) -> String {
         match self {
+            _ if self.held(s).is_err() => tl!("(none)").to_string(),
             Arrangement::Best => tl!("Best").to_string(),
             Arrangement::Favourite => tl!("Favourite").to_string(),
             Arrangement::Named(name) => i18n::display(built_in(name).unwrap_or(name)),
@@ -41,13 +42,17 @@ impl Arrangement {
         }
     }
 
-    /// The corners it gives, or `None` for `best`, which the command picks against the map.
-    fn homes(&self, s: &Session) -> Option<Homes> {
+    /// The corners it gives now, `None` for `best`, which the command picks against the map; or
+    /// why it no longer holds (a saved one removed meanwhile): the one check the step, the review
+    /// and Create share.
+    pub(super) fn held(&self, s: &Session) -> Result<Option<Homes>, &'static str> {
         match self {
-            Arrangement::Best => None,
-            Arrangement::Favourite => Some(favourite_homes(s)),
-            Arrangement::Named(name) => parse_arrangement(&json!(name), &s.layout_arrangements).ok(),
-            Arrangement::Custom(homes) => Some(*homes),
+            Arrangement::Best => Ok(None),
+            Arrangement::Favourite => Ok(Some(favourite_homes(s))),
+            Arrangement::Named(name) => parse_arrangement(&json!(name), &s.layout_arrangements)
+                .map(Some)
+                .map_err(|_| tl!("The arrangement picked is no longer saved: pick the placement again.")),
+            Arrangement::Custom(homes) => Ok(Some(*homes)),
         }
     }
 }
@@ -105,12 +110,13 @@ pub(super) fn arrange_step(ui: &mut egui::Ui, s: &Session, d: &mut Draft) {
     });
     let custom = matches!(d.arrangement, Arrangement::Custom(_));
     if ui.radio(custom, tl!("Custom")).clicked() && !custom {
-        d.arrangement = Arrangement::Custom(d.arrangement.homes(s).unwrap_or_else(|| favourite_homes(s)));
+        let from = d.arrangement.held(s).ok().flatten().unwrap_or_else(|| favourite_homes(s));
+        d.arrangement = Arrangement::Custom(from);
     }
     if let Arrangement::Custom(homes) = &mut d.arrangement {
         corner_pickers(ui, homes);
     }
-    if let Some(homes) = d.arrangement.homes(s) {
+    if let Ok(Some(homes)) = d.arrangement.held(s) {
         ui.add_space(4.0);
         egui::Grid::new("publication_wizard_corners").num_columns(2).spacing(egui::vec2(24.0, 6.0)).show(ui, |ui| {
             for (corner, name) in corner_labels().into_iter().enumerate() {
@@ -130,7 +136,8 @@ pub(super) fn arrange_step(ui: &mut egui::Ui, s: &Session, d: &mut Draft) {
         ui.label(egui::RichText::new(note).small().weak());
     }
     ui.add_space(4.0);
-    ui.add_enabled_ui(d.arrangement.as_favourite().is_some(), |ui| {
+    let favourable = d.arrangement.held(s).is_ok() && d.arrangement.as_favourite().is_some();
+    ui.add_enabled_ui(favourable, |ui| {
         ui.checkbox(&mut d.make_favourite, tl!("Make this my favourite"))
             .on_hover_text(tl!("Create also keeps it with the app's preferences as the favourite arrangement."));
     });
@@ -381,5 +388,40 @@ mod tests {
             let h = creating(Arrangement::Named("legendTop".into()), |d| d.size = size.into());
             assert!(h.query_by_label("Legend top").is_some(), "{size}");
         }
+    }
+
+    /// A saved arrangement removed after it was picked is none in the step, the review and Create,
+    /// each by the same check: nothing marked or ticked, and nothing made.
+    #[test]
+    fn a_saved_arrangement_removed_after_it_was_picked_holds_nowhere() {
+        let gone = || Arrangement::Named("Gone".into());
+        let h = placement(|app| app.dialogs.publication.as_mut().unwrap().arrangement = gone());
+        assert!(h.get_by_role_and_label(Role::CheckBox, "Make this my favourite").accesskit_node().is_disabled());
+        let mut h = creating(gone(), |_| {});
+        assert!(h.query_by_label("Gone").is_none(), "the review doesn't name it");
+        let before = h.state().session.project.layouts.len();
+        let said = h.state().session.notices.len();
+        click(&mut h, "Create");
+        assert_eq!(h.state().session.project.layouts.len(), before, "nothing made");
+        assert!(h.state().session.notices[said..].iter().any(|n| n.text.contains("pick the placement again")), "said");
+    }
+
+    /// The longest names saved, one of them the favourite, don't take the step off a narrow screen.
+    #[test]
+    fn long_saved_names_stay_on_a_narrow_screen() {
+        let mut app = app();
+        open(&mut app);
+        let name = "W".repeat(40);
+        let corners = rustgis_engine::cmd::layout::corners_of(ARRANGEMENTS[1].1);
+        app.session.layout_arrangements.insert(name.clone(), corners);
+        app.session.layout_favourite = json!(name);
+        app.dialogs.publication.as_mut().unwrap().step = Step::Placement;
+        let h = harness_sized(app, egui::vec2(320.0, 900.0));
+        for label in [name.clone(), format!("Favourite: {name}")] {
+            let rect = h.get_by_role_and_label(Role::RadioButton, &label).rect();
+            assert!(rect.right() <= 320.0, "{label} at {rect:?} on a screen 320 wide");
+        }
+        let next = h.get_by_role_and_label(Role::Button, "Next").rect();
+        assert!(next.right() <= 320.0, "Next at {next:?} on a screen 320 wide");
     }
 }
