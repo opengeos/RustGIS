@@ -5348,8 +5348,9 @@ fn add_url_as_given(s: &mut Session, p: &Value) -> CmdResult {
     }
     #[cfg(target_arch = "wasm32")]
     byte_range(p, url)?;
-    // A window of a cloud-optimised GeoTIFF, read as a raster (opengeos/RustGIS#1204).
-    let window = p.get("bbox").is_some_and(|v| !v.is_null());
+    // A window of a cloud-optimised GeoTIFF, read as a raster (opengeos/RustGIS#1204). A `false`
+    // box is no box, as with a range ([`asks_rows`]).
+    let window = p.get("bbox").is_some_and(|v| !v.is_null() && v.as_bool() != Some(false));
     if !window && p.get("cellSize").is_some_and(|v| !v.is_null()) {
         return Err(format!("{url}: \"cellSize\" goes with \"bbox\": give a box, or leave it out"));
     }

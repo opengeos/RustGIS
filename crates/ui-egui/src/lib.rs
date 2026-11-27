@@ -3873,11 +3873,16 @@ impl RustGisApp {
                     o.extend(window);
                 }
                 // The rows of a box of a GRIB record (#3055): the range marked on the address is
-                // its `"bytes"` again.
+                // its `"bytes"` again, and an address whose name doesn't say GRIB is one by
+                // `"format"`, as it was asked.
                 let marked = o.get("url").and_then(Value::as_str).map(rustgis_engine::render::rustgis_tiles::cache::split_range);
                 if let Some((url, Some((first, last)))) = marked.map(|(u, r)| (u.to_string(), r)) {
+                    let named = rustgis_engine::data::raster::grib::is_grib_name(url.split(['?', '#']).next().unwrap_or(&url));
                     o.insert("url".into(), json!(url));
                     o.insert("bytes".into(), json!([first, last]));
+                    if !named {
+                        o.insert("format".into(), json!("grib"));
+                    }
                 }
             }
             finished = again;
@@ -6248,10 +6253,9 @@ impl RustGisApp {
             // A window of a cloud-optimised GeoTIFF is read off the frame (below), with no
             // probe: it is refused unless it is one. In the browser the command refuses it.
             // With a range, the rows of the box of a GRIB record are read off the frame the same
-            // way (#3055), the range marked on the address; a `false` box is no box there.
-            let window = cfg!(not(target_arch = "wasm32"))
-                && p.get("bbox").is_some_and(|v| !v.is_null())
-                && (range.is_none() || rustgis_engine::cmd::layer::asks_rows(p));
+            // way (#3055), the range marked on the address. A `false` box is no box, as the
+            // command reads it.
+            let window = cfg!(not(target_arch = "wasm32")) && p.get("bbox").is_some_and(|v| !v.is_null() && v.as_bool() != Some(false));
             if !window && url.to_ascii_lowercase().split(['?', '#']).next().is_some_and(|u| u.ends_with(".pmtiles")) {
                 let before = self.session.sources.generation;
                 let result = if let Some(id) = claim {
@@ -8922,6 +8926,13 @@ mod record_tests {
         app.record_step("layer.addDownload", &p, None);
         let steps = app.ws.recording.as_ref().unwrap();
         assert_eq!(steps[1].params, json!({"url": url, "bytes": [88, 4971], "name": "Rain", "bbox": [-51, -23, -39, -14]}));
+        // An address whose name doesn't say GRIB keeps "format", without which its range is refused.
+        let unnamed = "https://example.com/record?id=2";
+        let p = json!({"id": 3, "url": rustgis_engine::cmd::layer::ranged_address(unnamed, (0, 87)), "window": {"bbox": [10, 59, 11, 60]}});
+        app.record_step("layer.addDownload", &p, None);
+        let step = &app.ws.recording.as_ref().unwrap()[2].params;
+        assert_eq!(step, &json!({"url": unnamed, "bytes": [0, 87], "format": "grib", "bbox": [10, 59, 11, 60]}));
+        assert_eq!(rustgis_engine::cmd::layer::byte_range(step, unnamed), Ok(Some((0, 87))), "replayed, the range is read");
     }
 
     /// `ui.addUrl` with `"bbox"`: a slow server doesn't hold the
@@ -9088,11 +9099,16 @@ mod record_tests {
         assert!(app.ui.window_reads.is_empty() && app.downloads_under_way().is_empty());
         let said = |n: &rustgis_engine::Notice| n.text.contains("PREC.grb") && n.text.contains("cancelled") && !n.error;
         assert!(app.session.notices.iter().any(said), "{:?}", app.session.notices);
+        // The server answers after all: the read's thread ends (its turn comes free once it has
+        // landed whatever it read, or given up), and only then is nothing added looked for.
         slow.open.store(true, Ordering::Relaxed);
-        for _ in 0..25 {
-            app.poll_data_downloads();
-            std::thread::sleep(std::time::Duration::from_millis(20)); // test-wait: settling after releasing the cancelled read
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while crate::WINDOW_TURN.try_lock().is_err() {
+            assert!(std::time::Instant::now() < deadline, "the cancelled read never ended");
+            std::thread::sleep(std::time::Duration::from_millis(20)); // test-wait: polling for the cancelled read's thread to end
         }
+        app.poll_data_downloads();
+        assert!(app.ui.window_reads.is_empty() && app.downloads_under_way().is_empty());
         assert!(app.session.map().layer_by_name("Rows").is_none());
     }
 
