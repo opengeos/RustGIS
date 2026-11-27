@@ -3683,6 +3683,24 @@ mod tests {
         }
     }
 
+    /// What a huge paste into a field leaves out is counted whole, with what the field already held
+    /// (#2996).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_huge_paste_into_a_find_field_is_counted_whole() {
+        use egui::{Event, Key, Modifiers};
+        use egui_kittest::kittest::Queryable;
+        let mut h = find_harness("a");
+        h.key_press_modifiers(Modifiers::COMMAND, Key::F);
+        h.run();
+        h.event(Event::Text("a".repeat(150)));
+        h.run();
+        h.event(Event::Paste("b".repeat(300_000)));
+        h.run();
+        // 150 held and 300,000 pasted, 200 kept.
+        h.get_by_label("The Find field takes 200 characters: 299950 left out");
+    }
+
     /// The pane with `script` in it, its fonts installed first (the icons draw letters), and the
     /// focus in the box.
     #[cfg(not(target_arch = "wasm32"))]

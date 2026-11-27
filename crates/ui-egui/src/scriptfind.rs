@@ -150,15 +150,36 @@ struct Field {
 }
 
 impl Field {
+    /// Before the field `id` is drawn: what is pasted or typed into it is cut to the most it could
+    /// take, so a huge clipboard is never laid out in it. How many characters that dropped, for
+    /// [`Self::written`].
+    fn cut_incoming(ui: &egui::Ui, id: egui::Id) -> usize {
+        if !ui.memory(|m| m.has_focus(id)) {
+            return 0;
+        }
+        ui.input_mut(|i| {
+            let mut dropped = 0;
+            for event in &mut i.events {
+                if let egui::Event::Paste(text) | egui::Event::Text(text) = event
+                    && let Some((end, _)) = text.char_indices().nth(FIELD_MAX)
+                {
+                    dropped += text.get(end..).map_or(0, |rest| rest.chars().count());
+                    text.truncate(end);
+                }
+            }
+            dropped
+        })
+    }
+
     /// After any write of the text (typed, pasted or filled from a selection): cut to what the field
     /// takes, keeping how many characters that left out. Given back, for a notice, as the field
     /// goes from fitting to cut and whenever a write leaves out more than one character (a paste);
     /// not for each key typed while it stays over.
-    fn written(&mut self) -> Option<usize> {
+    fn written(&mut self, dropped: usize) -> Option<usize> {
         let before = self.left_out;
-        self.left_out = 0;
+        self.left_out = dropped;
         if let Some((end, _)) = self.text.char_indices().nth(FIELD_MAX) {
-            self.left_out = self.text.get(end..).map_or(0, |rest| rest.chars().count());
+            self.left_out += self.text.get(end..).map_or(0, |rest| rest.chars().count());
             self.text.truncate(end);
         }
         (self.left_out > 1 || (before == 0 && self.left_out == 1)).then_some(self.left_out)
@@ -387,7 +408,7 @@ pub fn keys(ui: &egui::Ui, box_id: egui::Id, script: &str, bar: &mut Bar) {
             // The same query keeps what it left out of a longer one.
             if word && bar.query.text != picked {
                 bar.query.text = picked;
-                bar.query.written();
+                bar.query.written(0);
             }
             bar.anchor = a;
         }
@@ -537,6 +558,7 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
             }
             ui.vertical(|ui| {
                 ui.horizontal_wrapped(|ui| {
+                    let dropped = Field::cut_incoming(ui, query_id);
                     let query = ui.add(
                         egui::TextEdit::singleline(&mut bar.query.text)
                             .id(query_id)
@@ -559,7 +581,7 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
                     }
                     if query.changed() {
                         (bar.scroll, edited) = (true, true);
-                        said.extend(bar.query.written().map(|n| left_out(Which::Find, n)));
+                        said.extend(bar.query.written(dropped).map(|n| left_out(Which::Find, n)));
                     }
                     let shift = ui.input(|i| i.modifiers.shift);
                     if query.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
@@ -591,6 +613,7 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
                 });
                 if bar.replace_open {
                     ui.horizontal_wrapped(|ui| {
+                        let dropped = Field::cut_incoming(ui, replace_id);
                         let replace = ui.add(
                             egui::TextEdit::singleline(&mut bar.replace.text)
                                 .id(replace_id)
@@ -602,7 +625,7 @@ pub fn show(ui: &mut egui::Ui, box_id: egui::Id, script: &mut String, running: b
                         ui.add_space(COUNT_WIDTH + GAP);
                         if replace.changed() {
                             edited = true;
-                            said.extend(bar.replace.written().map(|n| left_out(Which::Replace, n)));
+                            said.extend(bar.replace.written(dropped).map(|n| left_out(Which::Replace, n)));
                         }
                         let can = !running && bar.current().is_some();
                         let wait = tl!("Wait for the run to finish").to_string();
@@ -785,19 +808,40 @@ mod tests {
     #[test]
     fn a_field_cuts_what_it_cannot_take_and_says_it_once() {
         let mut field = Field { text: "é".repeat(FIELD_MAX), ..Field::default() };
-        assert_eq!((field.written(), field.left_out), (None, 0), "what fits says nothing");
+        assert_eq!((field.written(0), field.left_out), (None, 0), "what fits says nothing");
         field.text.push_str("ab");
-        assert_eq!((field.written(), field.text.chars().count()), (Some(2), FIELD_MAX));
+        assert_eq!((field.written(0), field.text.chars().count()), (Some(2), FIELD_MAX));
         field.text.push('c');
-        assert_eq!((field.written(), field.left_out), (None, 1), "a key typed while over: the note counts, Messages was told");
+        assert_eq!((field.written(0), field.left_out), (None, 1), "a key typed while over: the note counts, Messages was told");
         field.text.pop();
-        assert_eq!((field.written(), field.left_out), (None, 0), "a change that fits takes the note away");
+        assert_eq!((field.written(0), field.left_out), (None, 0), "a change that fits takes the note away");
         // The pop left room for one: two more are over again by one.
         field.text.push_str("cd");
-        assert_eq!(field.written(), Some(1), "cut again after fitting: said again");
+        assert_eq!(field.written(0), Some(1), "cut again after fitting: said again");
         // Another long paste over a field already cut leaves out more than a keystroke does.
         field.text.push_str(&"x".repeat(30));
-        assert_eq!(field.written(), Some(30), "a paste's cut is said, whatever was cut before");
+        assert_eq!(field.written(0), Some(30), "a paste's cut is said, whatever was cut before");
+    }
+
+    /// A paste bound for a focused field is cut before the field sees it, so none of the rest is
+    /// ever laid out; one bound elsewhere is left whole.
+    #[test]
+    fn a_paste_is_cut_before_the_field_takes_it() {
+        let (ctx, id) = (egui::Context::default(), egui::Id::unique("field"));
+        for focused in [true, false] {
+            let input = egui::RawInput { events: vec![egui::Event::Paste("é".repeat(1000))], ..Default::default() };
+            let mut got = None;
+            let mut frame = ctx.run_ui(input, |ui| {
+                ui.memory_mut(|m| if focused { m.request_focus(id) } else { m.surrender_focus(id) });
+                let dropped = Field::cut_incoming(ui, id);
+                let kept =
+                    ui.input(|i| i.events.iter().find_map(|e| if let egui::Event::Paste(t) = e { Some(t.chars().count()) } else { None }));
+                got = Some((dropped, kept));
+            });
+            // Nothing is painted here: the font textures are let go.
+            frame.textures_delta.clear();
+            assert_eq!(got, Some(if focused { (800, Some(FIELD_MAX)) } else { (0, Some(1000)) }), "focused: {focused}");
+        }
     }
 
     #[test]

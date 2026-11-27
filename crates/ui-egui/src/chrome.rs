@@ -851,8 +851,8 @@ pub fn shortcuts(app: &mut RustGisApp, ctx: &egui::Context) {
     crate::modelbuilder::shortcuts(app, ctx);
     // The search box (or a table cell, or the Script pane's find bar) had the focus until egui
     // took it away on Escape: that Escape clears the box (leaves the cell as it was, closes the
-    // bar), not the tool. An open list (a
-    // clause's Functions) keeps the same keys as a box, those without Ctrl (⌘): Escape closes it.
+    // bar), not the tool. An open list (a clause's Functions) keeps the same keys as a box, those
+    // without Ctrl (⌘): Escape closes it.
     let pass = ctx.cumulative_pass_nr();
     let typing = ctx.egui_wants_keyboard_input()
         || crate::completion::menu_is_open(ctx)
