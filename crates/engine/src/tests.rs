@@ -49888,7 +49888,7 @@ fn raster_projection_failures_are_reported_for_zonal_statistics_and_clipping() {
     let mut s = world();
     let gt = GeoTransform { origin_x: 500_000.0, origin_y: 4_500_000.0, pixel_width: 1_000.0, pixel_height: -1_000.0 };
     let mut raster = Raster::new("utm", 10, 10, vec![vec![7.0; 100]], gt, Crs::Epsg(32617), None, ColorHint::Gray, "Float32").unwrap();
-    // What reading the raster left out is left out of its clip too, and said with its code.
+    // What reading the raster left out, said when it was read, isn't said again of its clip.
     raster.lost.push(rustgis_data::loss::Note::loss(rustgis_data::loss::LossCode::DroppedValue, "3 values past the range were left out"));
     let ring: Vec<_> = [(1.0, 1.0), (9.0, 1.0), (9.0, 9.0), (1.0, 9.0)]
         .into_iter()
@@ -49916,13 +49916,10 @@ fn raster_projection_failures_are_reported_for_zonal_statistics_and_clipping() {
     let mark = s.notice_mark();
     let clip = s.run("raster.process", &json!({"layer": "utm", "operation": "clip", "polygon": "parts", "name": "clipped"})).unwrap();
     assert!(clip["messages"].to_string().contains("skipped 1 polygon part(s)"), "{clip}");
-    // The same failures are said as notices with their codes, and the raster's own loss is carried on.
+    // The same failures are said as notices with their codes; the raster's own loss isn't repeated.
     let said: Vec<_> = s.notices_since(mark).iter().map(|n| (n.loss(), n.text.clone())).collect();
     assert!(said.iter().any(|(code, t)| *code == Some(LossCode::DroppedGeometry) && t.contains("skipped 1 polygon part(s)")), "{said:?}");
-    assert!(
-        said.iter().any(|(code, t)| *code == Some(LossCode::DroppedValue) && t == "clipped: 3 values past the range were left out"),
-        "{said:?}"
-    );
+    assert!(!said.iter().any(|(_, t)| t.contains("3 values past the range")), "{said:?}");
     // Features with no polygon to clip by are skipped, counted and said as dropped features.
     let mut mixed = Dataset::new("mixed", GeometryType::Polygon, vec![]);
     mixed.push(Some(Geometry::Polygon(vec![vec![small.clone()]])), vec![]);

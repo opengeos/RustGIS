@@ -2718,9 +2718,8 @@ fn clip_window(
     }
     // Some of the values rounded when the file was read may be in the window: how many isn't known.
     out.keep_rounded_mark(r);
-    // What reading the input left out (a colour table, metadata) is left out of the clip too: said,
-    // with its code, as the clip is added.
-    out.lost = r.lost.clone();
+    // What reading the input left out was said, with its code, when the input was read: a clip,
+    // like a resample or a pixel edit, doesn't say it again.
     Ok(out)
 }
 

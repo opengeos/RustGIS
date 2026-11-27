@@ -395,7 +395,15 @@ pub fn external_start(s: &mut Session, tool: &str, params: &Value) -> Result<Ext
             return Err(format!("no GeoLibre tool '{tool}'"));
         }
         let params = params.clone();
-        let job = preparing(&continuation, || pin.prepare_suite(&map_inputs(s, Some(spec), &params, Tiled::ByPath)?, &params))?;
+        let (job, said, lost) = preparing(&continuation, || {
+            let inputs = map_inputs(s, Some(spec), &params, Tiled::ByPath)?;
+            Ok((pin.prepare_suite(&inputs, &params)?, inputs.messages.clone(), inputs.losses.clone()))
+        })?;
+        // What reading its inputs approximated or lost, said now, as a plugin tool's are.
+        if !said.is_empty() {
+            s.notify(format!("{}: {}", spec.name, said.join("; ")), false);
+        }
+        say_input_losses(s, spec.name, lost);
         s.next_pending = s.next_pending.wrapping_add(1);
         let id = s.next_pending;
         let run = ExternalRun {
