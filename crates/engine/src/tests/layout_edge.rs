@@ -357,8 +357,8 @@ fn headline_figures_never_squeeze_the_map_away() {
                 assert_figures(l, 1, profile);
             })
             .unwrap_or_else(|e| assert!(e.contains("no room"), "{profile}: {e}"));
-        let e = edge(&mut s, json!({"profile": profile, "figures": [{"value": long.repeat(1)}]})).unwrap_err();
-        assert!(e.contains("no room"), "{profile}: {e}");
+        let e = edge(&mut s, json!({"profile": profile, "figures": [{"value": long}]})).unwrap_err();
+        assert!(e.contains("no room") && e.contains("figures"), "{profile}: {e}");
     }
 }
 

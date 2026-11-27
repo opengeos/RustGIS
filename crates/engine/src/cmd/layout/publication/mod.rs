@@ -393,7 +393,12 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
                 // The map's frame between `top` and `bottom`, at least 40 mm tall (on A4).
                 let room = |top: f64, bottom: f64| {
                     if bottom - top < 40.0 * k {
-                        Err("the texts leave the map no room: shorten the footer, the note or the subtitle".to_string())
+                        let texts = if headlines.is_empty() {
+                            "the footer, the note or the subtitle"
+                        } else {
+                            "the footer, the note, the subtitle or the figures"
+                        };
+                        Err(format!("the texts leave the map no room: shorten {texts}"))
                     } else {
                         Ok(bottom - top)
                     }
@@ -565,7 +570,8 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
                     Style::Edge => {
                         // A kicker, the title and the subtitle at the top left; the map from one side
                         // of the page to the other; the headline figures; under a thin rule, the
-                        // footer with no boxes. On a dark paper (the rule a presentation's blank page uses) the texts are light.
+                        // footer with no boxes. On a dark paper (the rule a presentation's blank
+                        // page uses) the texts are light.
                         let dark = page_colour
                             .is_some_and(|c| 0.299 * f64::from(c.r()) + 0.587 * f64::from(c.g()) + 0.114 * f64::from(c.b()) < 140.0);
                         let (ink, soft) = if dark { (Rgba::rgb(0xF2, 0xEE, 0xE6), Rgba::rgb(0xCF, 0xC6, 0xB8)) } else { (ink, soft) };
