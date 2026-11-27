@@ -4129,6 +4129,11 @@ fn navigation(app: &mut RustGisApp, ui: &mut Ui, p: &egui::Painter, rect: Rect, 
 }
 
 fn scale_bar(app: &RustGisApp, p: &egui::Painter, rect: Rect, t: &Tokens) {
+    // A map too short for both, such as the strip above a phone's full-height sheet, keeps the
+    // north arrow: the bar would sit on it.
+    if rect.height() < SCALE_BAR_MIN_HEIGHT {
+        return;
+    }
     let m_per_pt = app.session.map().ground_res();
     let d = crate::measure_units::scale_distance(m_per_pt * 130.0, app.ui.measurement_imperial);
     if d <= 0.0 {
@@ -4153,6 +4158,10 @@ fn scale_bar(app: &RustGisApp, p: &egui::Painter, rect: Rect, t: &Tokens) {
         t.text,
     );
 }
+
+/// The shortest map with room for the north arrow (top left, to 51 points down) and the scale
+/// bar (its 42 points at the bottom left) apart.
+const SCALE_BAR_MIN_HEIGHT: f32 = 100.0;
 
 fn north_arrow_rect(rect: Rect) -> Rect {
     Rect::from_center_size(pos2(rect.min.x + 30.0, rect.min.y + 34.0), vec2(34.0, 34.0))
