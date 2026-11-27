@@ -55,6 +55,11 @@ impl Field {
             Field::Sources | Field::Reference | Field::Heading(_) => Step::Sources,
         }
     }
+
+    /// Where [`Draft::targets`] keeps its step's last field.
+    fn slot(self) -> usize {
+        usize::from(self.step() == Step::Sources)
+    }
 }
 
 /// How a sheet is turned: `Auto` leaves it to `layout.publication` (the way the map comes out larger).
@@ -88,8 +93,9 @@ pub struct Draft {
     /// The headings of the sources, the reference and an editorial sheet's column; one left empty
     /// is left to the command.
     pub headings: [String; 3],
-    /// The text field last edited, which a layer statistic is added to.
-    target: Option<Field>,
+    /// The field last edited on the texts step and on the sources step, which a layer statistic
+    /// added there goes to ([`Field::slot`]).
+    targets: [Option<Field>; 2],
     /// The field the last statistic didn't fit in, said until its step's text changes.
     refused: Option<Field>,
     /// The style's colour, or `None` for the style's own.
@@ -118,7 +124,7 @@ impl Draft {
             reference: String::new(),
             no_reference: false,
             headings: Default::default(),
-            target: None,
+            targets: [None; 2],
             refused: None,
             accent: None,
             picked: None,
@@ -234,7 +240,7 @@ impl Draft {
     /// Notes `field` as the one last edited while it has the focus.
     fn edited(&mut self, r: &egui::Response, field: Field) {
         if r.has_focus() {
-            self.target = Some(field);
+            self.targets[field.slot()] = Some(field);
         }
         if r.changed() {
             self.refused = None;
@@ -250,7 +256,7 @@ impl Draft {
             Field::Heading(2) => self.editorial(),
             _ => true,
         };
-        let field = self.target.filter(|&f| f.step() == own.step() && on(f)).unwrap_or(own);
+        let field = self.targets[own.slot()].filter(|&f| on(f)).unwrap_or(own);
         let text = self.field_mut(field);
         if text.chars().count() + token.chars().count() > MAX_PUBLICATION_TEXT {
             self.refused = Some(field);

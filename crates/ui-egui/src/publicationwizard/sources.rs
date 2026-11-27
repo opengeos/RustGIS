@@ -197,6 +197,24 @@ mod tests {
         assert!(wizard(&h).note.is_empty());
     }
 
+    /// Each step keeps its own: a field edited on the sources step leaves the texts' last one.
+    #[test]
+    fn each_step_keeps_the_field_last_edited_on_it() {
+        let mut h = at(Step::Texts, |_| {});
+        h.get_by_label("Subtitle").focus();
+        h.run_steps(2);
+        click(&mut h, "Next");
+        h.get_by_label("Sources heading").focus();
+        h.run_steps(2);
+        click(&mut h, "Back");
+        let token = insert_count(&mut h);
+        assert_eq!(wizard(&h).subtitle, token);
+        assert!(wizard(&h).note.is_empty());
+        click(&mut h, "Next");
+        insert_count(&mut h);
+        assert_eq!(wizard(&h).headings[0], token);
+    }
+
     /// With nothing edited on the step it goes to the note, or to the sources on their step, a
     /// field edited on another step left alone.
     #[test]
@@ -204,7 +222,7 @@ mod tests {
         let mut h = at(Step::Texts, |_| {});
         let token = insert_count(&mut h);
         assert_eq!(wizard(&h).note, token);
-        let mut h = at(Step::Sources, |d| d.target = Some(Field::Subtitle));
+        let mut h = at(Step::Sources, |d| d.targets[0] = Some(Field::Subtitle));
         let token = insert_count(&mut h);
         assert_eq!(wizard(&h).sources, token);
         assert!(wizard(&h).subtitle.is_empty());
@@ -213,7 +231,7 @@ mod tests {
     /// A statistic put in the title is a title typed: a map opened afterwards doesn't replace it.
     #[test]
     fn a_statistic_in_the_title_keeps_the_title() {
-        let mut h = at(Step::Texts, |d| d.target = Some(Field::Title));
+        let mut h = at(Step::Texts, |d| d.targets[0] = Some(Field::Title));
         insert_count(&mut h);
         assert!(wizard(&h).title_typed);
     }
@@ -223,7 +241,7 @@ mod tests {
     fn a_statistic_past_the_limit_isnt_added_and_its_said() {
         let full = "x".repeat(MAX_PUBLICATION_TEXT - 3);
         // A one-line field: a box this full of text would push the menu out of the step's view.
-        let mut h = at(Step::Sources, |d| (d.headings[0], d.target) = (full.clone(), Some(Field::Heading(0))));
+        let mut h = at(Step::Sources, |d| (d.headings[0], d.targets[1]) = (full.clone(), Some(Field::Heading(0))));
         let limit = format!("Each field takes at most {MAX_PUBLICATION_TEXT} characters.");
         assert!(h.query_by_label(&limit).is_none());
         insert_count(&mut h);
