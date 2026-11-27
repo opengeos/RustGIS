@@ -94,7 +94,7 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
     The colorbar's title is the raster's name: the legend's box widens for it, up to its cap (45% of
     the frame's width, or the side column's), and a longer name wraps there, the box taller by its lines.
     `"colorbar": "none"` leaves it out, and the legend's box is sized for the legend alone: hiding
-    the colorbar afterwards would leave its room empty in the box. The legend takes the fewest columns, up to three,
+    the colorbar afterwards would leave its room empty in the box. The publication lays its legend in the fewest columns, up to three (a legend takes up to six, below),
     that fit the largest rectangle the map leaves free; when none fits, a long one is laid in more
     when that shows more of it, or as much while covering at least a quarter less of what the map
     draws (the answer's `legendColumns`); in a side column it stays in one. Polygon layers with no
