@@ -258,13 +258,24 @@ const search = async (name) => {
 // take seconds to handle the key) it shows its own panel to choose them in, as a user then does.
 const PANEL = "#rfd-overlay:not(.hidden) #rfd-input";
 const pick = async (what, trigger, files) => {
+  // Watched only while picking: no wait is left behind when the panel takes the files.
   let chooser = null;
-  event("Page.fileChooserOpened", `file chooser from ${what}`).then((c) => (chooser = c), () => {});
+  const seen = ({ method, params }) => {
+    if (method === "Page.fileChooserOpened") chooser = params;
+  };
+  listeners.add(seen);
+  try {
+    await choose(what, trigger, files, () => chooser);
+  } finally {
+    listeners.delete(seen);
+  }
+};
+const choose = async (what, trigger, files, chooser) => {
   await trigger();
   const deadline = Date.now() + LIMIT_MS;
   for (;;) {
-    if (chooser) {
-      await send("DOM.setFileInputFiles", { files, backendNodeId: chooser.backendNodeId }, session);
+    if (chooser()) {
+      await send("DOM.setFileInputFiles", { files, backendNodeId: chooser().backendNodeId }, session);
       return;
     }
     if (await js(`!!document.querySelector(${JSON.stringify(PANEL)})`)) {
@@ -364,7 +375,9 @@ try {
   const ids = table.features.map((f) => value(f.attrs[0]));
   if (JSON.stringify(ids) !== JSON.stringify(["00101", "00102", "00104"])) failures.push(`the table's parcel ids lost their zeros: ${ids}`);
   const parcelLayer = added.project.maps[0].layers.find((l) => l.name === "parcels");
-  if (parcelLayer?.dataset?.features?.length !== 12) failures.push(`parcels has ${parcelLayer?.dataset?.features?.length} features, not 12`);
+  const parcelIds = (parcelLayer?.dataset?.features ?? []).map((f) => value(f.attrs[0]));
+  const wantIds = [...Array(12).keys()].map(id);
+  if (JSON.stringify(parcelIds) !== JSON.stringify(wantIds)) failures.push(`the parcels layer's ids aren't ${wantIds[0]}…${wantIds[11]}: ${parcelIds}`);
 
   // Move Down moves the active layer: the last one added, zoning, on top (the shell reads picked
   // files in order). These commands run in the frame that takes the key, so one save shows each.
