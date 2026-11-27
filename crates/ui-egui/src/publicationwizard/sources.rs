@@ -145,9 +145,10 @@ mod tests {
         assert_eq!(d.params()["headings"], json!([PUBLICATION_HEADINGS[0], PUBLICATION_HEADINGS[1], "Col"]));
     }
 
-    /// A section left out takes no heading with it: not the reference's where there is none.
+    /// A heading typed for a section left out isn't sent: where a later heading follows, the
+    /// command's own goes in its place.
     #[test]
-    fn a_section_left_out_sends_no_heading() {
+    fn a_heading_typed_for_a_section_left_out_isnt_sent() {
         let mut d = draft();
         d.headings = [String::new(), "Ref".into(), String::new()];
         d.no_reference = true;
