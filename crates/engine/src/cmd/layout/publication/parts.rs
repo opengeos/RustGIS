@@ -22,23 +22,6 @@ const GRID_KEYS: &[&str] = &[
     "labelOrientation",
 ];
 
-/// A scale bar's options, as `layout.update` takes them.
-const SCALE_BAR_PART_KEYS: &[&str] = &[
-    "style",
-    "units",
-    "divisions",
-    "color",
-    "fill",
-    "textSize",
-    "decimals",
-    "subdivisions",
-    "divisionsBeforeZero",
-    "labelPosition",
-    "unitLabel",
-    "unitLabelPosition",
-    "fit",
-];
-
 /// A north arrow's: when it is drawn, and its look as `layout.update` takes it.
 const NORTH_ARROW_KEYS: &[&str] = &["show", "style", "fill", "outline"];
 
@@ -86,7 +69,9 @@ pub(super) fn publication_scale_bar(p: &Value, text_pt: f64) -> Result<Option<El
     if let ElementKind::ScaleBar { text_size, .. } = &mut default {
         *text_size = text_pt;
     }
-    part(p, "scaleBar", SCALE_BAR_PART_KEYS, default, |o, base| Ok(restyle(&base, o)?.unwrap_or(base)))
+    // Its options as `layout.update` takes them.
+    let keys: Vec<&str> = SCALE_BAR_LOOK_KEYS.iter().chain(&SCALE_BAR_KEYS).copied().collect();
+    part(p, "scaleBar", &keys, default, |o, base| Ok(restyle(&base, o)?.unwrap_or(base)))
 }
 
 /// When a publication draws its north arrow, and the arrow: `Some(true)` always ("always"),

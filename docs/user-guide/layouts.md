@@ -147,7 +147,8 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
     `{"type": "measured"}`, `{"edges": ["bottom"]}`); the strips inside the frame follow its
     labels, edges and `labelSize`, and without a graticule the default reference text names none
     (a `{grid}` you type reads `—`). `"scaleBar"` takes a scale bar's options
-    (`{"units": "miles", "style": "line"}`), its box growing with a larger `textSize`.
+    (`{"units": "miles", "style": "line"}`), its box growing with a larger `textSize`. A `textSize` or `labelSize` you give is in points
+    as written: unlike the defaults, it isn't scaled with the sheet.
     `"northArrow"` also takes `{"show": "auto"|"always", "style", "fill", "outline"}`.
   - **Legend box**: over the map, the legend's box is left clear where the map shows nothing under
     it but its light plain paper or water: no layer, label, context layer, basemap shape or graticule

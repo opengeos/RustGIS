@@ -183,8 +183,8 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
     let room_side = if labelled.left || labelled.right { LABEL_ROOM_SIDE * strip_scale } else { 0.0 };
     let room_end = if labelled.top || labelled.bottom { LABEL_ROOM_END * strip_scale } else { 0.0 };
     let reference = reference.unwrap_or_else(|| {
-        let datum = if step.is_some() { "Datum: {datum} · Graticule: {grid}" } else { "Datum: {datum}" };
-        vec!["Projection: {projection}".into(), datum.into()]
+        let line = if step.is_some() { "Datum: {datum} · Graticule: {grid}" } else { "Datum: {datum}" };
+        vec!["Projection: {projection}".into(), line.into()]
     });
     let step_said = step.map_or_else(|| "—".to_string(), step_text);
     let fill = |t: &str| t.replace("{projection}", &projection).replace("{datum}", &datum).replace("{grid}", &step_said);
@@ -769,7 +769,7 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
     // edges), on both sides so it stays centred, and its labels cover none of it.
     let (strip_w, strip_h) = (2.0 * room_side, 2.0 * room_end);
     if fw - strip_w < fw / 2.0 || fh - strip_h < fh / 2.0 {
-        warnings.push("the frame is too small to keep its graticule's labels off the map's edges: they may cover them".into());
+        warnings.push("the frame is too small to keep its grid's labels off the map's edges: they may cover them".into());
     }
     let (inner_w, inner_h) = ((fw - strip_w).max(fw / 2.0), (fh - strip_h).max(fh / 2.0));
     let (center, scale) = if whole_globe {
@@ -821,7 +821,7 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
             pitch: 0.0,
         },
     );
-    // Over the map, clear of the graticule's labels (drawn inside the frame along its labelled
+    // Over the map, clear of the grid's labels (drawn inside the frame along its labelled
     // edges): the north arrow, the legend sized to what it lists, the scale bar with the numeric
     // scale under it, and the locator, each on a pale box. Each takes the corner where it covers
     // the least of what the map draws; by default (and when it makes no difference) the locator at
@@ -1045,7 +1045,8 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
         Some(ElementKind::ScaleBar { text_size, .. }) => (text_size / bar_pt).max(1.0),
         _ => 1.0,
     };
-    let (sh, nh) = (if sheet { 8.0 * k } else { 6.0 } * text_growth, pitch(small_pt) + 0.5);
+    let bar_h = if sheet { 8.0 * k } else { 6.0 };
+    let (sh, nh) = (bar_h * text_growth, pitch(small_pt) + 0.5);
     // The scale bar's box at a scale: the size of its bar and labels and of the scale under them,
     // with the padding (#1379). The bar is the one a box 30 % of the frame's width (25 mm at least)
     // would draw, which sets its length and divisions. The box is the narrowest that draws that same

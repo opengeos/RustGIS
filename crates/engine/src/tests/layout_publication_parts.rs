@@ -221,3 +221,20 @@ fn the_publication_parts_fixture_opens_and_keeps_its_requirement() {
     let fixture = crate::Project::from_json(include_str!("../../../../schema/fixtures/layout_publication_parts.rgis")).unwrap();
     assert_eq!(serde_json::to_value(&fixture).unwrap()["requires"], json!(["layout-publication-parts"]));
 }
+
+#[test]
+fn a_publication_scale_bar_too_large_for_the_sheet_says_it_does_not_fit() {
+    let (_, r) = sheet(json!({"scaleBar": {"textSize": 100}}));
+    assert!(r["warnings"].to_string().contains("Scale bar \\\"Scale Bar\\\""), "{}", r["warnings"]);
+}
+
+#[test]
+fn a_publication_grid_says_what_its_typed_coordinate_system_loses() {
+    let mut s = world();
+    // UTM 17N on NAD 27, bound to WGS 84 by an NTv2 grid, which isn't applied.
+    let crs = r#"BOUNDCRS[SOURCECRS[PROJCRS["unknown",BASEGEOGCRS["unknown",DATUM["North American Datum 1927",ELLIPSOID["Clarke 1866",6378206.4,294.978698213898,LENGTHUNIT["metre",1]],ID["EPSG",6267]],PRIMEM["Greenwich",0,ANGLEUNIT["degree",0.0174532925199433],ID["EPSG",8901]]],CONVERSION["UTM zone 17N",METHOD["Transverse Mercator",ID["EPSG",9807]],PARAMETER["Latitude of natural origin",0,ANGLEUNIT["degree",0.0174532925199433],ID["EPSG",8801]],PARAMETER["Longitude of natural origin",-81,ANGLEUNIT["degree",0.0174532925199433],ID["EPSG",8802]],PARAMETER["Scale factor at natural origin",0.9996,SCALEUNIT["unity",1],ID["EPSG",8805]],PARAMETER["False easting",500000,LENGTHUNIT["metre",1],ID["EPSG",8806]],PARAMETER["False northing",0,LENGTHUNIT["metre",1],ID["EPSG",8807]],ID["EPSG",16017]],CS[Cartesian,2],AXIS["(E)",east,ORDER[1],LENGTHUNIT["metre",1,ID["EPSG",9001]]],AXIS["(N)",north,ORDER[2],LENGTHUNIT["metre",1,ID["EPSG",9001]]]]],TARGETCRS[GEOGCRS["WGS 84",DATUM["World Geodetic System 1984",ELLIPSOID["WGS 84",6378137,298.257223563,LENGTHUNIT["metre",1]]],PRIMEM["Greenwich",0,ANGLEUNIT["degree",0.0174532925199433]],CS[ellipsoidal,2],AXIS["latitude",north,ORDER[1],ANGLEUNIT["degree",0.0174532925199433]],AXIS["longitude",east,ORDER[2],ANGLEUNIT["degree",0.0174532925199433]],ID["EPSG",4326]]],ABRIDGEDTRANSFORMATION["unknown to WGS84",METHOD["NTv2",ID["EPSG",9615]],PARAMETERFILE["Latitude and longitude difference file","conus",ID["EPSG",8656]]]]"#;
+    let mark = s.notice_mark();
+    publish(&mut s, json!({"grid": {"type": "measured", "crs": crs}})).unwrap();
+    let said = s.notices_since(mark);
+    assert!(said.iter().any(|n| n.text.starts_with("crs: ")), "{said:?}");
+}
