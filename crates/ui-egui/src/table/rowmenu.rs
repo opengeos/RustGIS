@@ -1,7 +1,8 @@
 //! The menu a right-click on a row of the attribute table opens.
 
 use egui::{Response, Ui};
-use serde_json::{Value, json};
+use rustgis_engine::data::Value;
+use serde_json::json;
 
 use super::ViewKey;
 use crate::RustGisApp;
@@ -89,8 +90,17 @@ fn greyed(ui: &mut Ui, label: &str, why: &str) {
     menu_row(ui, "", label, "", false).on_disabled_hover_text(why);
 }
 
+/// A cell's value as Copy Value copies it: what the table shows, but a number in full, where the
+/// table rounds it to six decimals.
+fn cell_text(value: &Value) -> String {
+    match value {
+        Value::Float(number) => number.to_string(),
+        shown => shown.to_string(),
+    }
+}
+
 /// Copy Value: the text of the cell the menu was opened on, as the table shows it (a picture,
-/// shown as a word, gives its stored value).
+/// shown as a word, gives its stored value; a number is copied in full).
 fn copy_value(app: &mut RustGisApp, ui: &mut Ui, text: String) {
     if menu_row(ui, "", tl!("Copy Value"), "", true).clicked() {
         app.ui.copy_out = Some(text);
@@ -104,7 +114,7 @@ fn table_row(app: &mut RustGisApp, ui: &mut Ui, view: ViewKey, table: u32, row: 
     let cell = app.session.project.table(table).and_then(|t| {
         let feature = t.dataset.features.row(row)?;
         let col = opened_cell(app, view, Some(feature.id()))?;
-        Some(col.map_or_else(|| feature.id().to_string(), |c| feature.value(c).to_string()))
+        Some(col.map_or_else(|| feature.id().to_string(), |c| cell_text(feature.value(c))))
     });
     let Some(text) = cell else {
         ui.close();
@@ -148,7 +158,7 @@ fn read_layer_row(app: &RustGisApp, view: ViewKey, row: usize) -> Option<LayerRo
     let acted: &[usize] = if selected { &l.selection } else { std::slice::from_ref(&row) };
     Some(LayerRow {
         layer,
-        text: col.map_or_else(|| feature.id().to_string(), |c| feature.value(c).to_string()),
+        text: col.map_or_else(|| feature.id().to_string(), |c| cell_text(feature.value(c))),
         selected,
         count: acted.len(),
         shaped: acted.iter().any(|&r| features.geometry(r).is_some()),
@@ -176,7 +186,7 @@ fn select_acted(app: &mut RustGisApp, layer: u32, row: usize) -> bool {
 fn run_on_acted(app: &mut RustGisApp, layer: u32, row: usize, command: &str) {
     if select_acted(app, layer, row) {
         // A refusal is said by `run`.
-        let _ = app.run(command, Value::Null);
+        let _ = app.run(command, serde_json::Value::Null);
     }
 }
 
@@ -205,8 +215,10 @@ fn layer_rows(app: &mut RustGisApp, ui: &mut Ui, view: ViewKey, row: usize) {
     }
     ui.separator();
     // A key is shown only where it does what its row does: with a selection in another layer,
-    // the key takes that one too, and the row doesn't.
-    let key = |app: &RustGisApp, ui: &Ui, command: &str| if at.alone { shortcut_text(ui.ctx(), app, command) } else { String::new() };
+    // the key takes that one too, and the row doesn't; and with this row no longer selected (a
+    // command changed the selection under the open menu), the key takes other rows.
+    let same = at.alone && at.selected;
+    let key = |app: &RustGisApp, ui: &Ui, command: &str| if same { shortcut_text(ui.ctx(), app, command) } else { String::new() };
     let shortcut = key(app, ui, "edit.copy");
     let copy = if several { crate::i18n::fmt("Copy {n} Rows", &args) } else { tl!("Copy").to_string() };
     if menu_row(ui, "", &copy, &shortcut, true).clicked() {
@@ -224,5 +236,20 @@ fn layer_rows(app: &mut RustGisApp, ui: &mut Ui, view: ViewKey, row: usize) {
     if menu_row(ui, "", &delete, &shortcut, why.is_none()).on_disabled_hover_text(why.unwrap_or_default()).clicked() {
         run_on_acted(app, at.layer, row, "edit.delete");
         ui.close();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Copy Value copies a number in full, not rounded to the six decimals the table shows.
+    #[test]
+    fn copy_value_keeps_a_numbers_decimals() {
+        assert_eq!(cell_text(&Value::Float(1.234_567_89)), "1.23456789");
+        assert_eq!(cell_text(&Value::Float(0.000_000_1)), "0.0000001");
+        assert_eq!(cell_text(&Value::Float(42.0)), "42");
+        assert_eq!(cell_text(&Value::Text("Alpha".into())), "Alpha");
+        assert_eq!(cell_text(&Value::Null), "<Null>");
     }
 }

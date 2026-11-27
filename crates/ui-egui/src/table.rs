@@ -1226,6 +1226,24 @@ mod tests {
         h.get_by_label("Copy Value").click();
         h.step();
         assert_eq!(h.state().ui.copy_out.as_deref(), Some("Charlie"));
+        // The Feature ID cell opens the menu too, and its value is the feature's id.
+        let at = egui::pos2(h.get_by_label("Feature ID").rect().center().x, h.get_by_label("Charlie").rect().center().y);
+        h.event(egui::Event::PointerMoved(at));
+        h.step();
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Secondary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            });
+            h.step();
+        }
+        h.run_steps(2);
+        h.get_by_label("Copy Value").click();
+        h.step();
+        let charlie = h.state().session.map().layer(id).unwrap().dataset.features.row(2).unwrap().id();
+        assert_eq!(h.state().ui.copy_out.clone(), Some(charlie.to_string()));
 
         // A row inside a selection keeps it, and the menu acts on it all; the selection in another
         // layer, which Delete would take too, is left behind.
