@@ -207,8 +207,9 @@ fn export_warnings(s: &mut Session, file: &str, all: bool) -> Vec<String> {
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join(file);
     let mark = s.notice_mark();
-    s.run("layout.export", &json!({"path": path, "dpi": 36, "allPages": all})).unwrap();
+    let run = s.run("layout.export", &json!({"path": path, "dpi": 36, "allPages": all}));
     std::fs::remove_dir_all(&dir).unwrap();
+    run.unwrap();
     s.notices_since(mark).iter().map(|n| n.text.clone()).filter(|t| t.contains("index layer")).collect()
 }
 
