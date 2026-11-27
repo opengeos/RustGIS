@@ -16,6 +16,9 @@ pub(super) struct Opened {
     fid: u64,
     /// The cell's field, or None for the Feature ID cell.
     col: Option<usize>,
+    /// The fields the table had, and which standalone table it was ([`schema`]): with another
+    /// set, `col` may be another field, and the menu closes rather than copy its value.
+    fields: u64,
 }
 
 /// A row on screen that was just right-clicked, or whose menu is open.
@@ -30,10 +33,11 @@ pub(super) struct RowAt {
 }
 
 /// Opens or keeps open the menu of a row. A right-click on a row that isn't selected first selects
-/// it alone, as in the layer list; one inside the selection keeps it, and the menu acts on it all.
+/// it alone, as a click on it does (so nothing stays selected in other layers either); one inside
+/// the selection keeps every selection, and the menu acts on this layer's.
 pub(super) fn show(app: &mut RustGisApp, view: ViewKey, at: RowAt) {
     if at.resp.secondary_clicked() {
-        app.table.menu = Some(Opened { view, fid: at.fid, col: at.col });
+        app.table.menu = schema(app, view).map(|fields| Opened { view, fid: at.fid, col: at.col, fields });
         // Once, as the menu opens, and before it is drawn: its rows are judged by the selection.
         if let Some(layer) = layer_id(app, view)
             && app.session.map().layer(layer).is_some_and(|l| !l.selection.contains(&at.row))
@@ -53,10 +57,31 @@ fn layer_id(app: &RustGisApp, view: ViewKey) -> Option<u32> {
     app.session.map().layers.iter().find(|l| l.instance_id() == instance).map(|l| l.id)
 }
 
+/// The names of the fields of the layer or table `view` shows, in order, as one number: it
+/// changes when a field is added, removed, renamed or moved. A standalone table's also changes
+/// when another table takes its place under the same id (a layer's view is already its own).
+fn schema(app: &RustGisApp, view: ViewKey) -> Option<u64> {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let fields = match view {
+        ViewKey::Layer(_) => &app.session.map().layer(layer_id(app, view)?)?.dataset.fields,
+        ViewKey::Table(id) => {
+            let table = app.session.project.table(id)?;
+            table.instance_id().hash(&mut hasher);
+            &table.dataset.fields
+        }
+    };
+    for field in fields {
+        field.name.hash(&mut hasher);
+    }
+    Some(hasher.finish())
+}
+
 /// The field of the cell the open menu was opened on, if row `row` of `view` still holds the
-/// feature it had then (`live`, its id now).
+/// feature it had then (`live`, its id now) and the fields are the ones it had.
 fn opened_cell(app: &RustGisApp, view: ViewKey, live: Option<u64>) -> Option<Option<usize>> {
-    app.table.menu.filter(|m| m.view == view && Some(m.fid) == live).map(|m| m.col)
+    let fields = schema(app, view);
+    app.table.menu.filter(|m| m.view == view && Some(m.fid) == live && Some(m.fields) == fields).map(|m| m.col)
 }
 
 /// A row of the menu that can't be chosen, saying why.
@@ -100,7 +125,8 @@ struct LayerRow {
     /// The text Copy Value copies.
     text: String,
     selected: bool,
-    /// How many rows Zoom To, Copy and Delete act on: the selection's, when the row is in it.
+    /// How many rows Zoom To, Copy and Delete act on: the layer's whole selection, when the row
+    /// is in it, as the toolbar's buttons take it (rows a filter hides among them).
     count: usize,
     /// Whether any of them has a shape to zoom to.
     shaped: bool,

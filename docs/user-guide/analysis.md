@@ -35,9 +35,10 @@ after sorting or filtering. It is not a dataset field: do not use it as a geopro
 Right-click a row for **Zoom To**, **Remove from Selection**, **Copy** (the feature, as
 **Copy** in the ribbon does), **Copy Value** (the text of the cell clicked; a picture gives its
 stored data) and **Delete** (one step to undo; greyed while editing is off and on a layer read in
-place from its file). A right-click on a row that isn't selected selects it alone first. One on a
-selected row keeps the selection, and Zoom To, Copy and Delete then act on every selected row of
-the table, as their labels say; choosing one of them clears any selection in other layers.
+place from its file). A right-click on a row that isn't selected selects it alone first, as a click
+on it does. One on a selected row keeps the selection, and Zoom To, Copy and Delete then act on the
+layer's whole selection, as their labels count it and as the table's toolbar does (selected rows a
+filter hides are among them); choosing one of them clears any selection in other layers.
 **Remove from Selection** takes out only the row clicked. In a standalone table only Copy Value
 can be chosen; the other rows are greyed.
 

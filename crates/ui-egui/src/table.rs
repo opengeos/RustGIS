@@ -1204,9 +1204,14 @@ mod tests {
         };
         let selected = |app: &RustGisApp, layer: u32| app.session.map().layer(layer).unwrap().selection.clone();
 
+        // A row that isn't selected is selected alone, as a click on it does: the selection in
+        // another layer goes too.
+        h.state_mut().run("select.rows", json!({"layer": other, "rows": [0]})).unwrap();
+        h.run_steps(2);
         h.get_by_label("Bravo").click_secondary();
         h.run_steps(3);
         assert_eq!(selected(h.state(), id), [1], "the right-click selected the row");
+        assert!(selected(h.state(), other).is_empty(), "as a click does, in every layer");
         for row in ["Zoom To", "Remove from Selection", "Copy Ctrl+C", "Copy Value", "Delete Delete"] {
             assert!(h.query_by_label(row).is_some(), "{row} is in the menu");
         }
@@ -1262,6 +1267,15 @@ mod tests {
         h.state_mut().run("edit.undo", json!({})).unwrap();
         h.run_steps(2);
         assert_eq!(names(h.state(), id), ["Alpha", "Bravo", "Charlie"]);
+
+        // The fields change under an open menu: the cell it was opened on may be another field's
+        // now, so the menu closes rather than copy that one's value.
+        h.get_by_label("Bravo").click_secondary();
+        h.run_steps(3);
+        assert!(h.query_by_label("Copy Value").is_some());
+        h.state_mut().run("edit.addField", json!({"layer": id, "name": "Rank", "type": "long"})).unwrap();
+        h.run_steps(3);
+        assert!(h.query_by_label("Copy Value").is_none(), "the menu closed");
 
         h.state_mut().run("edit.enable", json!({"on": false})).unwrap();
         h.run_steps(2);
