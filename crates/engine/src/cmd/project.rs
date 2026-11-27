@@ -1231,7 +1231,7 @@ mod conversion_loss_tests {
             ("A".into(), Notes::from(vec!["the same note", "only A's"])),
             ("B".into(), Notes::from(vec!["the same note"])),
         ]);
-        assert_eq!(texts(&notices), ["2 layers: the same note; first: A", "A: only A's"]);
+        assert_eq!(texts(&notices), ["A: only A's", "2 layers: the same note; first: A"]);
     }
 
     /// The acceptance test of #2371: rewording or translating a note changes how many notices are

@@ -1071,7 +1071,7 @@ impl SourceLayer {
         }
         let mut new =
             SourceLayer { shapefile_crs: self.shapefile_crs, limit: self.limit, byte_budget: self.byte_budget, ..Default::default() };
-        use rustgis_data::loss::{Counted, Finder, LossCode, Note, Tally};
+        use rustgis_data::loss::{Counted, Finder, Note, Tally};
         let mut conversion_notes = rustgis_data::loss::Notes::new();
         let declared_empty;
         let conversion_zm_dropped;
@@ -1120,7 +1120,7 @@ impl SourceLayer {
                 if out.skipped > 0 {
                     // A row is a feature: one without geometry isn't added, and its values go with it.
                     conversion_notes.push(Note::tallied(
-                        Some(LossCode::DroppedFeature),
+                        Some(rustgis_data::loss::LossCode::DroppedFeature),
                         Tally::new(Finder::Duckdb, Counted::RowsWithoutGeometry, Some(out.skipped)),
                     ));
                 }
@@ -1131,11 +1131,8 @@ impl SourceLayer {
                 let part = out.parts.first().ok_or_else(|| format!("{path}: the table returns no {}", d.family.label()))?;
                 if part.zm_dropped > 0 {
                     conversion_notes.push(
-                        Note::loss(LossCode::DroppedZm, rustgis_data::zm_note(Some(part.zm_dropped))).with_tally(Tally::new(
-                            Finder::Duckdb,
-                            Counted::ZmDropped,
-                            Some(part.zm_dropped),
-                        )),
+                        Note::loss(rustgis_data::loss::LossCode::DroppedZm, rustgis_data::zm_note(Some(part.zm_dropped)))
+                            .with_tally(Tally::new(Finder::Duckdb, Counted::ZmDropped, Some(part.zm_dropped))),
                     );
                 }
                 declared_empty = part.count == 0;
