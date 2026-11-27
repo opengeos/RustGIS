@@ -1728,13 +1728,19 @@ impl SeriesRun {
             let text = src.crs.as_deref().ok_or("the store doesn't say its coordinate system; give \"crs\" (such as EPSG:3035)")?;
             // Read as `parse_crs` reads it, its note said with the series'.
             let crs = Crs::parse(text)?;
+            // Plain, as the raster read says it (`crs_lost`): it can join a formula chosen for
+            // compatibility with a shift not applied, so its count isn't one of losses only.
             if let Some(note) = raster::wkt::typed_crs_note(text, crs) {
-                notes.push(Note::loss(LossCode::ApproximatedDatum, format!("crs: {note}")));
+                notes.push(Note::plain(format!("crs: {note}")));
             }
             crs
         };
-        if let Some((_, Some(note))) = given {
-            notes.push(Note::loss(LossCode::ApproximatedDatum, format!("{var}: {note}")));
+        // Said only of the system the series reads in: a longitude/latitude grid declared in a
+        // projected system reads in WGS 84, which the note above says.
+        if let Some((c, Some(note))) = given
+            && (!lonlat || c.is_geographic())
+        {
+            notes.push(Note::plain(format!("{var}: {note}")));
         }
         let m = crs
             .transformer()?
