@@ -968,8 +968,9 @@ pub fn shortcuts(app: &mut RustGisApp, ctx: &egui::Context) {
             // once: `consume_key` takes Shift and Alt with it, and a held key's repeats.
             let press = crate::inuse::press(app, Key::Backspace, None);
             let key_pane = press.map_or(pane, |press| press.pane);
-            let layers = key_pane == Pane::Layers;
-            if (element || layers) && i.consume_key(Modifiers::NONE, Key::Backspace) && (press.is_some() || !layers) {
+            // In the layer list only that press counts; for a layout's element, a repeat does too.
+            let takes = if key_pane == Pane::Layers { press.is_some() } else { element };
+            if takes && i.consume_key(Modifiers::NONE, Key::Backspace) {
                 let (id, params) = ("edit.delete".to_string(), Value::Null);
                 if press.is_some_and(|press| press.after_click) {
                     late.push(Late { id, params, pane: key_pane, chord: None });

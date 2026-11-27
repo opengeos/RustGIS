@@ -611,7 +611,8 @@ pub fn shortcuts(app: &mut RustGisApp, ctx: &egui::Context) {
         undo = i.consume_shortcut(&egui::KeyboardShortcut::new(cmd, egui::Key::Z));
         redo = i.consume_shortcut(&egui::KeyboardShortcut::new(cmd | egui::Modifiers::SHIFT, egui::Key::Z))
             || i.consume_shortcut(&egui::KeyboardShortcut::new(cmd, egui::Key::Y));
-        if app.mb.selected.is_some() || app.mb.selected_edge.is_some() {
+        // Nothing is deleted while a mouse button is down, as with the app's own Delete.
+        if (app.mb.selected.is_some() || app.mb.selected_edge.is_some()) && !crate::inuse::down(app) {
             del =
                 [egui::Key::Delete, egui::Key::Backspace].into_iter().any(|key| !layers(key) && i.consume_key(egui::Modifiers::NONE, key));
         }

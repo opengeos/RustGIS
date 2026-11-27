@@ -110,12 +110,15 @@ pub fn follow(app: &mut RustGisApp, ctx: &egui::Context) {
         in_use.pane = Pane::default();
     }
     // A pane closed (by a key or a command, with no press elsewhere) is no longer in use, and
-    // isn't again when it is opened. Nor is one pressed where it was drawn as it closed.
-    let open = |pane: Pane| match pane {
-        // Not behind the File menu's backstage either, which a command can open with no press.
-        Pane::Layers => !app.ui.backstage && app.ui.left == Some(LeftPane::Contents),
-        Pane::Table => app.session.table_layer.is_some() || app.session.table_standalone.is_some(),
-        _ => true,
+    // isn't again when it is opened. Nor is one pressed where it was drawn as it closed. And no
+    // pane is drawn behind the File menu's backstage, which a command can open with no press.
+    let open = |pane: Pane| {
+        !app.ui.backstage
+            && match pane {
+                Pane::Layers => app.ui.left == Some(LeftPane::Contents),
+                Pane::Table => app.session.table_layer.is_some() || app.session.table_standalone.is_some(),
+                _ => true,
+            }
     };
     if !open(in_use.pane) {
         in_use.pane = Pane::Other;
@@ -612,6 +615,15 @@ mod tests {
         h.state_mut().run("ui.backstage", json!({"open": true})).unwrap();
         h.run_steps(2);
         assert_eq!(pane(h.state()), Pane::Other, "the layer list is behind the backstage");
+        h.state_mut().run("ui.backstage", json!({"open": false})).unwrap();
+        h.run_steps(2);
+        // So are the tabs: F2 must not rename the map behind it.
+        let tabs = rect(&h, Pane::Tabs);
+        press(&mut h, tabs.left_center() + vec2(40.0, 0.0));
+        assert_eq!(pane(h.state()), Pane::Tabs);
+        h.state_mut().run("ui.backstage", json!({"open": true})).unwrap();
+        h.run_steps(2);
+        assert_eq!(pane(h.state()), Pane::Other, "the tabs are behind the backstage");
         h.state_mut().run("ui.backstage", json!({"open": false})).unwrap();
         h.run_steps(2);
         list(&mut h);
