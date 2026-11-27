@@ -155,35 +155,43 @@ pub(crate) fn reset_to(s: &mut Session, p: Project) {
 struct ConversionLoss {
     layers: usize,
     first: String,
-    /// The first layer's note, said as it is when no other layer says the same.
+    /// The first layer's note, said as it is when no other note joins it.
     note: rustgis_data::loss::Note,
     /// The notes' total, or `None` once any count is unknown or the total too large to hold; for
     /// notes without a tally, unused.
     total: Option<u64>,
+    /// Whether the first layer gave several notes of this kind (GDAL's integer overflows, one
+    /// per value), so its note alone doesn't say its count.
+    merged: bool,
+    /// The code the group says: any of its notes' (a definite count is coded where an unknown
+    /// one of the same kind isn't, and the group still holds that loss).
+    loss: Option<rustgis_data::loss::LossCode>,
 }
 
 impl ConversionLoss {
-    fn new(first: &str, note: rustgis_data::loss::Note) -> Self {
-        let total = note.tally.as_ref().and_then(|t| t.count);
-        Self { layers: 1, first: first.into(), note, total }
+    fn new(first: &str, note: rustgis_data::loss::Note, total: Option<u64>, merged: bool) -> Self {
+        let loss = note.loss;
+        Self { layers: 1, first: first.into(), note, total, merged, loss }
     }
 
-    fn add(&mut self, note: &rustgis_data::loss::Note) {
+    fn add(&mut self, amount: Option<u64>, loss: Option<rustgis_data::loss::LossCode>) {
         self.layers += 1;
-        let amount = note.tally.as_ref().and_then(|t| t.count);
+        self.loss = self.loss.or(loss);
         self.total = self.total.zip(amount).and_then(|(total, amount)| total.checked_add(amount));
     }
 
-    /// What is said: the first layer's note for one layer; for several, the tally's words with the
-    /// total, or, for notes that count nothing, the note they all said.
+    /// What is said: the first layer's note for one layer; for several, or for one whose notes of
+    /// the kind were joined, the tally's words with the total, or, for notes that count nothing,
+    /// the note they all said.
     fn notice(self) -> rustgis_data::loss::Note {
-        let Self { layers, first, note, total } = self;
-        if layers == 1 {
+        let Self { layers, first, note, total, merged, loss } = self;
+        if layers == 1 && !merged {
             return note.prefixed(&first);
         }
         let tally = note.tally.map(|tally| Box::new(rustgis_data::loss::Tally { count: total, ..*tally }));
         let text = tally.as_deref().map_or(note.text, rustgis_data::loss::Tally::text);
-        rustgis_data::loss::Note { text: format!("{layers} layers: {text}; first: {first}"), loss: note.loss, tally }
+        let text = if layers == 1 { format!("{first}: {text}") } else { format!("{layers} layers: {text}; first: {first}") };
+        rustgis_data::loss::Note { text, loss, tally }
     }
 }
 
@@ -228,18 +236,34 @@ fn conversion_notices(layers: Vec<(String, rustgis_data::loss::Notes)>) -> Vec<r
     type Key = (Option<(Finder, Counted)>, Option<String>, Option<&'static str>);
     let mut losses = std::collections::BTreeMap::<Key, ConversionLoss>::new();
     for (name, notes) in layers {
-        let mut seen = std::collections::BTreeSet::new();
+        // A layer's notes of one kind are added up first, so the layer joins its kind once.
+        let mut mine = std::collections::BTreeMap::<Key, (rustgis_data::loss::Note, Option<u64>, bool)>::new();
         for note in notes {
+            // A tallied note by what it counts alone: a known count and an unknown one of the
+            // same kind are one loss, its total unknown.
             let key: Key = match &note.tally {
-                Some(t) => (Some((t.by, t.counted.clone())), None, note.loss.map(|c| c.spec().id)),
+                Some(t) => (Some((t.by, t.counted.clone())), None, None),
                 None => (None, Some(note.text.clone()), note.loss.map(|c| c.spec().id)),
             };
-            if seen.insert(key.clone()) {
-                match losses.get_mut(&key) {
-                    Some(loss) => loss.add(&note),
-                    None => {
-                        losses.insert(key, ConversionLoss::new(&name, note));
-                    }
+            let amount = note.tally.as_ref().and_then(|t| t.count);
+            match mine.get_mut(&key) {
+                // The same words, said twice, are one note.
+                Some(_) if key.1.is_some() => {}
+                Some((first, total, merged)) => {
+                    *total = total.zip(amount).and_then(|(total, amount)| total.checked_add(amount));
+                    *merged = true;
+                    first.loss = first.loss.or(note.loss);
+                }
+                None => {
+                    mine.insert(key, (note, amount, false));
+                }
+            }
+        }
+        for (key, (note, amount, merged)) in mine {
+            match losses.get_mut(&key) {
+                Some(loss) => loss.add(amount, note.loss),
+                None => {
+                    losses.insert(key, ConversionLoss::new(&name, note, amount, merged));
                 }
             }
         }
@@ -1191,22 +1215,22 @@ mod conversion_loss_tests {
     #[test]
     fn grouped_counts_sum_and_a_single_layer_keeps_its_note() {
         let unread = |n| Note::tallied(None, Tally::new(Finder::Rustgis, Counted::UnreadableRows, Some(n)));
-        let mut loss = ConversionLoss::new("First", unread(3));
-        loss.add(&unread(4));
+        let mut loss = ConversionLoss::new("First", unread(3), Some(3), false);
+        loss.add(Some(4), None);
         assert_eq!(loss.notice().text, "2 layers: 7 rows could not be read while checking the replacement; first: First");
 
-        let mut loss = ConversionLoss::new("First", other(Some(3)));
-        loss.add(&other(Some(4)));
+        let mut loss = ConversionLoss::new("First", other(Some(3)), Some(3), false);
+        loss.add(Some(4), Some(LossCode::DroppedFeature));
         let notice = loss.notice();
         assert_eq!(notice.text, "2 layers: GDAL: 7 features of another geometry type were left out; first: First");
         assert_eq!(notice.loss, Some(LossCode::DroppedFeature));
         assert_eq!(
-            ConversionLoss::new("First", other(Some(3))).notice().text,
+            ConversionLoss::new("First", other(Some(3)), Some(3), false).notice().text,
             "First: GDAL: 3 features of another geometry type were left out"
         );
 
-        let mut loss = ConversionLoss::new("First", zm("a", 3));
-        loss.add(&zm("b", 5));
+        let mut loss = ConversionLoss::new("First", zm("a", 3), Some(3), false);
+        loss.add(Some(5), Some(LossCode::DroppedZm));
         assert_eq!(
             loss.notice().text,
             "2 layers: GDAL: 8 source feature(s) had Z or M coordinates; conversion keeps only XY coordinates; first: First"
@@ -1214,15 +1238,18 @@ mod conversion_loss_tests {
     }
 
     #[test]
-    fn grouped_conversion_losses_keep_unknown_totals_in_either_order() {
-        for notes in [[other(Some(3)), other(None)], [other(None), other(Some(3))]] {
-            let [a, b] = notes;
-            let mut loss = ConversionLoss::new("First", a);
-            loss.add(&b);
+    fn a_known_and_an_unknown_count_of_one_kind_are_one_notice_in_either_order() {
+        for counts in [[Some(3), None], [None, Some(3)]] {
+            let notices = conversion_notices(vec![
+                ("First".into(), Notes::from(vec![other(counts[0])])),
+                ("Second".into(), Notes::from(vec![other(counts[1])])),
+            ]);
             assert_eq!(
-                loss.notice().text,
-                "2 layers: GDAL: an unknown number of features of another geometry type may have been left out; first: First"
+                texts(&notices),
+                ["2 layers: GDAL: an unknown number of features of another geometry type may have been left out; first: First"]
             );
+            // The known count's loss is still in the group, so it keeps its code.
+            assert_eq!(notices[0].loss, Some(LossCode::DroppedFeature));
         }
     }
 
@@ -1233,6 +1260,21 @@ mod conversion_loss_tests {
             ("B".into(), Notes::from(vec!["the same note"])),
         ]);
         assert_eq!(texts(&notices), ["A: only A's", "2 layers: the same note; first: A"]);
+    }
+
+    #[test]
+    fn a_layers_notes_of_one_kind_add_up_before_it_joins_the_others() {
+        let overflow = |line: &str, n| {
+            Note::plain(format!("GDAL: {line} ({n} occurrence(s))")).with_tally(Tally::new(Finder::Gdal, Counted::IntegerOverflow, Some(n)))
+        };
+        let a = || Notes::from(vec![overflow("Integer overflow on 3000000000", 2), overflow("Integer overflow on 4000000000", 3)]);
+        assert_eq!(texts(&conversion_notices(vec![("A".into(), a())])), ["A: GDAL: 5 integer overflow warning(s)"]);
+        let notices =
+            conversion_notices(vec![("A".into(), a()), ("B".into(), Notes::from(vec![overflow("Integer overflow on 5000000000", 4)]))]);
+        assert_eq!(texts(&notices), ["2 layers: GDAL: 9 integer overflow warning(s); first: A"]);
+        // One line alone is said in GDAL's words.
+        let one = conversion_notices(vec![("B".into(), Notes::from(vec![overflow("Integer overflow on 5000000000", 4)]))]);
+        assert_eq!(texts(&one), ["B: GDAL: Integer overflow on 5000000000 (4 occurrence(s))"]);
     }
 
     /// The acceptance test of #2371: rewording or translating a note changes how many notices are

@@ -1066,12 +1066,12 @@ impl SourceLayer {
 
     /// Opens a replacement with fresh handles, windows, caches and selection.
     pub fn relinked(&self, path: &str, table: Option<&str>) -> Result<SourceLayer, String> {
+        use rustgis_data::loss::{Counted, Finder, Note, Tally};
         if self.embedded.is_some() || self.postgis.is_some() || self.mysql.is_some() || self.sqlserver.is_some() {
             return Err("the layer reads a database or data kept in the project: there's no file to repair".into());
         }
         let mut new =
             SourceLayer { shapefile_crs: self.shapefile_crs, limit: self.limit, byte_budget: self.byte_budget, ..Default::default() };
-        use rustgis_data::loss::{Counted, Finder, Note, Tally};
         let mut conversion_notes = rustgis_data::loss::Notes::new();
         let declared_empty;
         let conversion_zm_dropped;
