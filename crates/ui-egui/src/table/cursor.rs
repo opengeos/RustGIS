@@ -16,8 +16,10 @@ use crate::theme::Tokens;
 /// taken theirs, and not while text is being typed, so nothing drawn later in the frame takes
 /// these too. [`super::show`] acts on them.
 pub(crate) fn take_keys(app: &mut RustGisApp, ctx: &Context) {
-    // An open menu is over the table: no cell moves or opens under it.
-    if crate::inuse::pane(app) != Pane::Table || egui::Popup::is_any_open(ctx) {
+    // An open menu is over the table: no cell moves or opens under it. And a widget that has the
+    // keyboard (a toolbar button reached with Tab) keeps the keys: Enter presses it, and the
+    // arrows move the focus on.
+    if crate::inuse::pane(app) != Pane::Table || egui::Popup::is_any_open(ctx) || ctx.memory(|m| m.focused()).is_some() {
         return;
     }
     // A dialog that is up has Enter for itself.

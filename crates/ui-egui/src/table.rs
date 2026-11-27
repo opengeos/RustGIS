@@ -1495,6 +1495,19 @@ mod tests {
             assert_eq!(current(&h), at(want.0, want.1), "after {pressed:?}");
             assert_eq!(selected(&h), [1], "the selection stays");
         }
+        // A widget that has the keyboard (reached with Tab) keeps the keys: the cell stays. A
+        // click on a cell takes the keyboard back for the table.
+        key(&mut h, egui::Key::Tab);
+        assert!(h.ctx.memory(|m| m.focused()).is_some(), "Tab gave a widget the keyboard");
+        key(&mut h, ArrowDown);
+        assert_eq!(current(&h), at("Alpha", "Feature ID"), "the arrows are the focused widget's");
+        h.get_by_label("Bravo").click();
+        h.run_steps(3);
+        assert_eq!(current(&h), at("Bravo", "Name"));
+        key(&mut h, ArrowUp);
+        key(&mut h, ArrowLeft);
+        assert_eq!(current(&h), at("Alpha", "Feature ID"), "the arrows are the table's again");
+        assert_eq!(selected(&h), [1]);
         // Two presses in one frame move twice.
         h.input_mut().events.extend([ArrowDown, ArrowDown].map(|key| egui::Event::Key {
             key,
