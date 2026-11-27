@@ -275,6 +275,49 @@ mod tests {
         }
     }
 
+    /// A [`Buffer`] that notes the largest piece offered to it.
+    struct Pieces<'a> {
+        to: Buffer<'a>,
+        largest: usize,
+    }
+
+    impl Write for Pieces<'_> {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.largest = self.largest.max(bytes.len());
+            self.to.write(bytes)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// One feature whose geometry text alone passes the limit: KML, GPX and WKT hand it over a
+    /// piece at a time, so it is refused at the limit without ever being made whole.
+    #[test]
+    fn one_large_geometry_stops_at_the_limit_without_its_text_made_whole() {
+        const MAX: usize = 10_000;
+        let points: Vec<crate::Coord> = (0..20_000).map(|i| crate::Coord::new(f64::from(i % 360) - 180.0, 1.5)).collect();
+        for g in [Geometry::MultiPoint(points.clone()), Geometry::Line(vec![points.clone()]), Geometry::Polygon(vec![vec![points]])] {
+            let mut ds = Dataset::new("Coast", GeometryType::Polyline, vec![]);
+            ds.push(Some(g), vec![]);
+            for format in ["kml", "gpx", "wkt"] {
+                let limit = Limit::new(MAX);
+                let mut out = Pieces { to: limit.buffer(), largest: 0 };
+                let made = match format {
+                    "kml" => crate::interop::write_kml(&ds, None, &mut out),
+                    "gpx" => crate::interop::write_gpx(&ds, None, &mut out),
+                    _ => crate::interop::write_wkt_csv(&ds, &mut out),
+                };
+                // No fixed text of these documents is as long as this.
+                assert!(out.largest < 200, "{format}: a piece of {} bytes", out.largest);
+                assert!(out.to.file.capacity() <= MAX, "{format}: {} bytes held", out.to.file.capacity());
+                let e = limit.whole(made).unwrap_err().to_string();
+                assert!(limit.passed() && e.contains("passes the 10000 bytes"), "{format}: {e}");
+            }
+        }
+    }
+
     /// A GeoTIFF and a cloud-optimised one stop at the limit, and under it are unchanged.
     #[test]
     fn a_geotiff_download_stops_at_the_limit() {
