@@ -236,5 +236,5 @@ fn an_export_that_never_wrote_the_series_says_nothing_of_its_index_layer() {
     // The layer back, the series is whole again.
     s.run("edit.undo", &Value::Null).unwrap();
     assert!(s.map().layer_by_name("Countries").is_some());
-    assert_eq!(export_warnings(&mut s, "series.pdf", false), Vec::<String>::new());
+    assert_eq!(export_warnings(&mut s, "series.pdf", true), Vec::<String>::new());
 }
