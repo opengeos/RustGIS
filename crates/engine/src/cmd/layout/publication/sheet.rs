@@ -52,11 +52,24 @@ pub const PUBLICATION_STYLES: &[(&str, &str)] = &[
     ("editorial", "Editorial"),
     ("modular", "Modular"),
     ("poster", "Poster"),
+    ("edge", "Edge"),
 ];
 
 /// The credit line `layout.publication` writes when `"author"` isn't given (`{date}` is filled
 /// with today's date when the layout is drawn).
 pub const PUBLICATION_DEFAULT_CREDIT: &str = "Made with RustGIS · {date}";
+
+/// The headings of a publication's sources and cartographic reference when `"headings"` doesn't
+/// give them.
+pub const PUBLICATION_HEADINGS: [&str; 2] = ["Sources", "Cartographic reference"];
+
+/// The cartographic reference's lines when `"reference"` isn't given, on a sheet with a graticule
+/// (`{projection}`, `{datum}` and `{grid}` are filled with the sheet's). Without one the command
+/// writes the datum alone in place of the second.
+pub const PUBLICATION_DEFAULT_REFERENCE: [&str; 2] = ["Projection: {projection}", "Datum: {datum} · Graticule: {grid}"];
+
+/// The most texts a publication layout takes in one list, such as its sources.
+pub const MAX_PUBLICATION_LINES: usize = 50;
 
 /// The longest text a publication layout takes in one field, in characters.
 pub const MAX_PUBLICATION_TEXT: usize = 2000;
@@ -85,6 +98,9 @@ pub(in crate::cmd::layout) enum Style {
     /// The page in the accent colour: the title and subtitle in light text across the top, the
     /// map in a light card, the footer in darker blocks.
     Poster,
+    /// The map from one side of the page to the other, on a paper of its own colour: a kicker and
+    /// the title over it, the footer unboxed under a thin rule.
+    Edge,
 }
 
 impl Style {
@@ -96,6 +112,7 @@ impl Style {
             "editorial" => Some(Style::Editorial),
             "modular" => Some(Style::Modular),
             "poster" => Some(Style::Poster),
+            "edge" => Some(Style::Edge),
             _ => None,
         }
     }
@@ -108,10 +125,12 @@ impl Style {
             Style::Editorial => "editorial",
             Style::Modular => "modular",
             Style::Poster => "poster",
+            Style::Edge => "edge",
         }
     }
 
-    /// The accent colour when none is given: a deep blue, green or brown (a poster's page).
+    /// The accent colour when none is given: a deep blue, green or brown (a poster's page), or an
+    /// edge sheet's brick red, the same on a light paper and on a dark one.
     pub(in crate::cmd::layout) fn accent(self) -> Rgba {
         match self {
             Style::Classic => Rgba::rgb(0x2B, 0x26, 0x20),
@@ -120,6 +139,7 @@ impl Style {
             Style::Editorial => Rgba::rgb(0x1F, 0x2D, 0x4D),
             Style::Modular => Rgba::rgb(0x2F, 0x6B, 0x4F),
             Style::Poster => Rgba::rgb(0x3A, 0x26, 0x18),
+            Style::Edge => Rgba::rgb(0xB4, 0x43, 0x2E),
         }
     }
 

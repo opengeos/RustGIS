@@ -59,7 +59,9 @@ pub(in crate::cmd::layout) fn landscape_suits(aspect: f64, short: f64, long: f64
     let k = short / 210.0;
     let map_w = |w: f64, h: f64| {
         let texts = if style == Style::Panel { 50.0 } else { 100.0 } * k;
-        let (iw, ih) = (w - 30.0 * k, h - texts);
+        // An edge sheet's map takes the page's whole width.
+        let sides = if style == Style::Edge { 0.0 } else { 30.0 * k };
+        let (iw, ih) = (w - sides, h - texts);
         let fw = if matches!(style, Style::Panel | Style::Editorial | Style::Modular) { 0.68 * iw } else { iw };
         let (fw, fh) = (fw - 2.0 * LABEL_ROOM_SIDE * k, ih - 2.0 * LABEL_ROOM_END * k);
         fw.min(fh / aspect.max(1e-6))
@@ -135,7 +137,7 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
         None => Style::Classic,
         Some(raw) => Style::parse(raw).ok_or_else(|| {
             let x = raw.trim();
-            format!("style is \"classic\", \"banner\", \"panel\", \"editorial\", \"modular\" or \"poster\", not \"{x}\"")
+            format!("style is \"classic\", \"banner\", \"panel\", \"editorial\", \"modular\", \"poster\" or \"edge\", not \"{x}\"")
         })?,
     };
     let accent = color(p, "accent", style.accent())?;
@@ -144,6 +146,14 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
     if accent.a() != 255 {
         return Err("accent is an opaque colour as #RRGGBB".into());
     }
+    // Only an edge sheet draws these: given to another, they are refused rather than left out.
+    let edge = sheet && style == Style::Edge;
+    if let Some(k) = ["paper", "kicker"].into_iter().find(|k| !edge && p.get(*k).is_some_and(|v| !v.is_null())) {
+        return Err(format!("{k} is for a sheet with \"style\": \"edge\""));
+    }
+    // White is the page's own colour, kept as none, as `layout.page` keeps it.
+    let page_colour = crate::cmd::opaque_color(p, "paper")?.flatten().filter(|c| *c != Rgba::rgb(0xFF, 0xFF, 0xFF));
+    let kicker = one("kicker")?;
     // Where the coverage grid the placement searches is written as an image (#1379).
     let coverage_path = match p.get("coverage") {
         None | Some(Value::Null) => None,
@@ -183,8 +193,9 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
     let room_side = if labelled.left || labelled.right { LABEL_ROOM_SIDE * strip_scale } else { 0.0 };
     let room_end = if labelled.top || labelled.bottom { LABEL_ROOM_END * strip_scale } else { 0.0 };
     let reference = reference.unwrap_or_else(|| {
-        let line = if step.is_some() { "Datum: {datum} · Graticule: {grid}" } else { "Datum: {datum}" };
-        vec!["Projection: {projection}".into(), line.into()]
+        let [projection_line, datum_and_grid] = PUBLICATION_DEFAULT_REFERENCE;
+        let line = if step.is_some() { datum_and_grid } else { "Datum: {datum}" };
+        vec![projection_line.into(), line.into()]
     });
     let step_said = step.map_or_else(|| "—".to_string(), step_text);
     let fill = |t: &str| t.replace("{projection}", &projection).replace("{datum}", &datum).replace("{grid}", &step_said);
@@ -194,7 +205,7 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
     // A layer statistic (#2853) by the figure it shows now, as `{map}` is by the map's name: the
     // layers are in the project, so the box is sized for what is drawn, not for the token written.
     let figures = {
-        let texts: Vec<&str> = [&title, &subtitle, &note, &author]
+        let texts: Vec<&str> = [&kicker, &title, &subtitle, &note, &author]
             .into_iter()
             .filter_map(|t| t.as_deref())
             .chain(sources.iter().chain(&reference).chain(&headings).map(String::as_str))
@@ -266,7 +277,7 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
     // lines in `body_pt`, `tw` wide. Each one's elements keep their names (`Sources`, `Reference`)
     // whatever its heading reads, the heading filled and wrapped like the rest.
     let sections = |tw: f64, head_pt: f64, body_pt: f64| -> Vec<(&'static str, Broken, Broken)> {
-        [("Sources", heading(0, "Sources"), &sources), ("Reference", heading(1, "Cartographic reference"), &reference)]
+        [("Sources", heading(0, PUBLICATION_HEADINGS[0]), &sources), ("Reference", heading(1, PUBLICATION_HEADINGS[1]), &reference)]
             .into_iter()
             .filter(|(.., texts)| !texts.is_empty())
             .map(|(name, head, texts)| {
@@ -309,8 +320,9 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
                 let (m, pad) = (10.0 * k, 5.0 * k);
                 let (x0, iw) = (m + pad, page_w - 2.0 * (m + pad));
                 let (title_pt, sub_pt, head_pt, body_pt, small_pt) = (18.0 * k, 10.5 * k, 7.5 * k, 7.0 * k, 6.5 * k);
-                // A neatline round the sheet, but on a poster's coloured page or a page of cards.
-                if !style.cards() {
+                // A neatline round the sheet, but on a poster's coloured page, a page of cards or a
+                // sheet whose map runs to its edges.
+                if !style.cards() && !edge {
                     page_wide.push(("Frame".into(), (m, m, page_w - 2.0 * m, page_full - 2.0 * m), pub_box(clear, ink, 0.8), true));
                 }
                 // The footer, from the bottom up across the sheet: authorship, the note (unless the style
@@ -340,8 +352,10 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
                     if !boxes_here {
                         return foot;
                     }
-                    // The columns side by side (one alone takes the width).
-                    let (gap, inner) = (4.0 * k, 2.5 * k);
+                    // The columns side by side (one alone takes the width). A look with neither fill
+                    // nor outline has no box, which would only be in the way of clicks.
+                    let boxed = look.fill.a() > 0 || look.outline.a() > 0;
+                    let (gap, inner) = (4.0 * k, if boxed { 2.5 * k } else { 0.0 });
                     let n = [!sources.is_empty(), !reference.is_empty()].iter().filter(|x| **x).count().max(1) as f64;
                     let cw = (iw - gap * (n - 1.0)) / n;
                     let tw = cw - 2.0 * inner;
@@ -354,11 +368,13 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
                         foot -= bh + 2.0 * k;
                         for (i, (name, head, lines)) in columns.into_iter().enumerate() {
                             let bx = x0 + i as f64 * (cw + gap);
-                            around.push((
-                                format!("{name} Box"),
-                                (bx, foot, cw, bh),
-                                pub_card(look.fill, look.outline, look.width, look.radius),
-                            ));
+                            if boxed {
+                                around.push((
+                                    format!("{name} Box"),
+                                    (bx, foot, cw, bh),
+                                    pub_card(look.fill, look.outline, look.width, look.radius),
+                                ));
+                            }
                             let tx = bx + inner;
                             around.push((
                                 format!("{name} Heading"),
@@ -544,6 +560,65 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
                         let frame = (x0 + card_pad, y + card_pad, mw - 2.0 * card_pad, h - 2.0 * card_pad);
                         let column = Column { x: cx + card_pad, y: y + card_pad, w: cw - 2.0 * card_pad, h: h - 2.0 * card_pad };
                         (page_w, page_h, frame, Some(column))
+                    }
+                    Style::Edge => {
+                        // A kicker, the title and the subtitle at the top left; the map from one side
+                        // of the page to the other; under a thin rule, the footer with no boxes. On a
+                        // dark paper (the rule a presentation's blank page uses) the texts are light.
+                        let dark = page_colour
+                            .is_some_and(|c| 0.299 * f64::from(c.r()) + 0.587 * f64::from(c.g()) + 0.114 * f64::from(c.b()) < 140.0);
+                        let (ink, soft) = if dark { (Rgba::rgb(0xF2, 0xEE, 0xE6), Rgba::rgb(0xCF, 0xC6, 0xB8)) } else { (ink, soft) };
+                        let mut y = m + pad;
+                        if let Some(t) = &kicker {
+                            let pt = 9.0 * k;
+                            // Letter spacing in points, and the millimetres it adds to each character.
+                            let spacing = 0.18 * pt;
+                            // As the renderer spaces them: 1.33 points of the drawing per point of spacing.
+                            let added = spacing * 1.33 / rustgis_map::layout::PT_PER_MM;
+                            let t = capitals(&fill(t));
+                            let width = |x: &str| {
+                                let x = drawn(x);
+                                crate::render::report::width_mm(&x, pt as f32, true) + x.chars().count() as f64 * added
+                            };
+                            // As `broken`: a text with the map's name or a layer statistic is kept
+                            // whole and wraps as it is drawn.
+                            let live = t.contains("{map}") || !rustgis_map::layout::stat_tokens(&t).is_empty();
+                            let lines = if live {
+                                let lines = crate::render::report::wrap_with(&drawn(&t), iw, width);
+                                Broken { text: t, lines, wrap: true }
+                            } else {
+                                Broken::from(crate::render::report::wrap_with(&t, iw, width))
+                            };
+                            let kh = lines.lines.len() as f64 * pitch(pt) + 1.0 * k;
+                            let mut kind = pub_text(lines, pt, accent, true, TextAlign::Left);
+                            if let ElementKind::Text { letter_spacing, .. } = &mut kind {
+                                *letter_spacing = spacing;
+                            }
+                            around.push(("Kicker".into(), (x0, y, iw, kh), kind));
+                            y += kh;
+                        }
+                        if let Some(t) = &title {
+                            let big = title_pt * 1.3;
+                            let lines = wrap_as(t, iw, big, true);
+                            let th = lines.lines.len() as f64 * pitch(big);
+                            around.push(("Title".into(), (x0, y, iw, th), pub_text(lines, big, ink, true, TextAlign::Left)));
+                            y += th;
+                        }
+                        if let Some(t) = &subtitle {
+                            let lines = wrap(t, iw, sub_pt);
+                            let sh = lines.lines.len() as f64 * pitch(sub_pt);
+                            around.push(("Subtitle".into(), (x0, y, iw, sh), pub_text(lines, sub_pt, soft, false, TextAlign::Left)));
+                            y += sh;
+                        }
+                        let ft = if y > m + pad { y + 4.0 * k } else { y };
+                        let look = Look { head: ink, body: soft, small: soft, fill: clear, outline: clear, width: 0.0, radius: 0.0 };
+                        let rule = footer(&mut around, &look, true, true) - 3.0 * k;
+                        around.push((
+                            "Footer Rule".into(),
+                            (x0, rule, iw, 1.0),
+                            ElementKind::Line { color: soft, width: 0.5, dir: LineDir::Horizontal, head: LineHead::None, dash: None },
+                        ));
+                        (page_w, page_h, (0.0, ft, page_w, room(ft, rule - 3.0 * k)?), None)
                     }
                     Style::Panel => {
                         // The map at the left, as tall as the sheet allows; a pale panel at the right with
@@ -795,7 +870,7 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
     let given = crate::cmd::within("name", "a layout's name", ps(p, "name").unwrap_or("Publication").trim(), crate::cmd::MAX_NAME)?;
     let (name, name_cut) = unique_name(s, "New Publication Layout", "the name given", &given);
     let mut l = Layout::new(name.clone(), w, h);
-    l.decimal_comma = comma;
+    (l.decimal_comma, l.paper) = (comma, page_colour);
     let (over, under): (Vec<_>, Vec<_>) = page_wide.into_iter().partition(|e| e.3);
     for (n, r, kind, _) in under {
         l.add(&n, r, kind);
@@ -816,7 +891,8 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
             extent_color: rustgis_map::layout::INDICATOR_COLOR,
             extent_width: rustgis_map::layout::INDICATOR_WIDTH,
             border_color: rustgis_map::layout::FRAME_BORDER_COLOR,
-            border_width: rustgis_map::layout::FRAME_BORDER_WIDTH,
+            // A map that runs to the page's edges has no border.
+            border_width: if edge { 0.0 } else { rustgis_map::layout::FRAME_BORDER_WIDTH },
             bearing: 0.0,
             pitch: 0.0,
         },
@@ -1013,7 +1089,7 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
         if context_in_legend { Vec::new() } else { legend_context(s.map(), center, scale, (fw, fh)) }
     };
     let mut context = context_at(s, center, scale);
-    let mut sizes = crate::render::layout::legend_sizes_with_no_data_mm(
+    let mut sizes = crate::render::layout::legend_sizes_in_columns_mm::<PUBLICATION_LEGEND_COLUMNS>(
         s.map_mut(),
         render_scale,
         false,
@@ -1201,7 +1277,7 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
     let (locator_side, arrow_size) = (size_of(Surround::Locator).map(|x| x.0), size_of(Surround::Arrow));
     // The fewest columns from `from` up in which the surrounds group in a band around `clip`, with
     // their places; the scale bar's box `scale_bar` is the one at the scale tried.
-    let grouped = |clip: Rect, from: usize, known: &[(f64, f64); MAX_LEGEND_COLUMNS], scale_bar: (f64, f64)| {
+    let grouped = |clip: Rect, from: usize, known: &[(f64, f64); PUBLICATION_LEGEND_COLUMNS], scale_bar: (f64, f64)| {
         (from..known.len()).find_map(|i| {
             bands_around(clip)
                 .iter()
@@ -1244,14 +1320,14 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
             // cut from it: a move is a translation on the page. So the search draws the map once per
             // scale it tries (at most four times), not once per place. Its legend is measured at
             // that scale, once, and those sizes are the ones laid out.
-            type Drawn = (f64, Option<(u32, u32, Vec<bool>)>, Option<[(f64, f64); MAX_LEGEND_COLUMNS]>, Vec<String>);
+            type Drawn = (f64, Option<(u32, u32, Vec<bool>)>, Option<[(f64, f64); PUBLICATION_LEGEND_COLUMNS]>, Vec<String>);
             let mut drawn: Option<Drawn> = None;
             let (mut chosen, mut chosen_context) = (known, context.clone());
             let mut unknown_at: Option<f64> = None;
             // Moved frames drawn on their own (below), by scale and move: a pass with the veil
             // tries the same moves as the one before it.
             // With the legend's context judged there, and its sizes with that context.
-            type Own = ((f64, f64, f64), (u32, u32, Vec<bool>), Vec<String>, [(f64, f64); MAX_LEGEND_COLUMNS]);
+            type Own = ((f64, f64, f64), (u32, u32, Vec<bool>), Vec<String>, [(f64, f64); PUBLICATION_LEGEND_COLUMNS]);
             let mut own_drawn: Vec<Own> = Vec::new();
             // A figure keeps its scale: its size is fixed, and a smaller scale costs it the most.
             for (factor, veil) in passes.into_iter().filter(|(factor, veil)| (!*veil || continuous) && (*factor == 1.0 || sheet)) {
@@ -1295,7 +1371,7 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
                         } else {
                             // A legend that can't be measured there (a source that can't be read
                             // through) leaves that scale untried too, which is said.
-                            let measured = crate::render::layout::legend_sizes_with_no_data_mm(
+                            let measured = crate::render::layout::legend_sizes_in_columns_mm::<PUBLICATION_LEGEND_COLUMNS>(
                                 s.map_mut(),
                                 render_scale,
                                 false,
@@ -1316,7 +1392,7 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
                     drawn = Some((tried, whole_frame, here, here_context));
                 }
                 let Some((_, Some(whole_frame), Some(here), here_context)) = &drawn else { continue };
-                let need = |sizes: &[(f64, f64); MAX_LEGEND_COLUMNS], room: (f64, f64)| {
+                let need = |sizes: &[(f64, f64); PUBLICATION_LEGEND_COLUMNS], room: (f64, f64)| {
                     sizes.iter().position(|size| whole(*size).0 <= room.0 && whole(*size).1 <= room.1)
                 };
                 // Of the places with the fewest columns, the one leaving the extent nearest the
@@ -1333,7 +1409,7 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
                     (u32, u32, Vec<bool>),
                     (f64, f64),
                     Option<Rect>,
-                    [(f64, f64); MAX_LEGEND_COLUMNS],
+                    [(f64, f64); PUBLICATION_LEGEND_COLUMNS],
                     Vec<String>,
                 );
                 let mut fits: Vec<Fit> = Vec::new();
@@ -1388,7 +1464,7 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
                             *here
                         } else {
                             let at_there = crate::render::layout::frame_render_scale(s.map(), there, tried);
-                            let measured = crate::render::layout::legend_sizes_with_no_data_mm(
+                            let measured = crate::render::layout::legend_sizes_in_columns_mm::<PUBLICATION_LEGEND_COLUMNS>(
                                 s.map_mut(),
                                 at_there,
                                 false,
@@ -1785,7 +1861,7 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
         let bar_need = bar.as_deref().map_or(0.0, |title| colorbar_mm(title, iw));
         let bar_fit = colorbar_fit(bar_need, ih, ch + bar_gap, over_map);
         let rows_h = (ih - bar_fit - if bar.is_some() { bar_gap } else { 0.0 }).max(0.0);
-        warnings.extend(legend_fit_warnings(legend_cols, (cw, ch), (iw, rows_h)).into_iter().map(String::from));
+        warnings.extend(legend_fit_warnings(LegendFit::Manual, legend_cols, overflows((cw, ch), (iw, rows_h))));
         let short = bar_need > bar_fit + LEGEND_FIT_MM;
         // In a column the colorbar takes the column's width, as its rows do.
         if let Some(layer) = bar.as_deref().filter(|_| (base_w > iw + LEGEND_FIT_MM && !legend_in_column) || short) {
@@ -1811,6 +1887,8 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
                     labels: Default::default(),
                     color: None,
                     text_size: legend_pt,
+                    fit: LegendFit::Manual,
+                    show_layer_names: LayerNames::Shown,
                 },
             );
         }
@@ -1905,8 +1983,7 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
     // What a scale bar or a grid asked for in other than its default look loses or has to say.
     let asked = |key: &str| p.get(key).is_some_and(Value::is_object);
     if let Some(bar) = bar_id.filter(|_| asked("scaleBar")) {
-        let losses: Vec<_> = text_fit_loss(s, i, bar).into_iter().collect();
-        warnings.extend(rustgis_render::layout::scale_bar_fit_notices(&losses));
+        say_text_fit(s, i, bar, true);
     }
     if let Some(crs) = p.get("grid").and_then(|g| g.get("crs")).and_then(Value::as_str) {
         crate::cmd::say_crs_note(s, crs);

@@ -39,16 +39,19 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
     thesis (160 × 225 or 160 × 110 mm): the map edge to edge with a line of its projection and
     datum under it, at 7 pt. A figure's title and sources belong in its caption, so they are
     left out, and the result says so.
-  - **Step by step**: **Publication Layout Wizard…**, at the end of the same menu, asks for the
-    size (a sheet turned Auto, Portrait or Landscape, or a figure), the style (each beside an
-    outline of where its title, map and footer go, and its column or panel if it has one, with
-    the accent colour picked, or else its own, where the sheet takes it, which Classic's doesn't;
-    a click on the outline picks the style), the texts (title, the active map's name until one is
-    typed; subtitle, note, sources and credit line, or none) and the accent colour, then shows
-    what was picked; **Create** makes the layout as the menu
-    does. A figure goes from its size to the review, as it takes no style, texts or accent. A
-    field left empty is left out (for the credit line, the dated default applies); the title is
-    the exception: empty, it means no title. A layout the command refuses is said, and the wizard
+  - **Step by step**: **Publication Layout Wizard…**, at the end of the same menu, asks for the size
+    (a sheet turned Auto, Portrait or Landscape, or a figure), the style (each beside an outline of
+    where its title, map and footer go, and its column or panel if it has one, with the accent
+    colour picked, or else its own, where the sheet takes it, which Classic's doesn't; a click on
+    the outline picks the style), the texts (title, the active map's name until one is typed;
+    subtitle, note and credit line, or none; an Editorial sheet's column heading), the sources and
+    reference (each one per line, with its heading; the reference can be left out) and the accent
+    colour, then shows what was picked; **Create** makes the layout as the menu does. **Insert
+    Statistic**, on the texts and sources steps, adds a layer figure of the active map to the field
+    the cursor was last in there (the note or the sources, where it was in none). A figure goes from
+    its size to the review, as it takes no style, texts or accent. A field left empty is left out
+    (for the credit line, the reference and the headings, the command's default applies); the title
+    is the exception: empty, it means no title. A layout the command refuses is said, and the wizard
     stays open.
   - **The map**: the `extent` given (or the view) fitted north-up, without tilt, at a round scale,
     two significant figures, rounded up so it still fits within the strips the graticule's labels
@@ -97,8 +100,9 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
     The colorbar's title is the raster's name: the legend's box widens for it, up to its cap (45% of
     the frame's width, or the side column's), and a longer name wraps there, the box taller by its lines.
     `"colorbar": "none"` leaves it out, and the legend's box is sized for the legend alone: hiding
-    the colorbar afterwards would leave its room empty in the box. The legend takes the fewest columns, up to three,
-    that fit the largest rectangle the map leaves free; when none fits, a long one is laid in more
+    the colorbar afterwards would leave its room empty in the box. The publication lays its legend
+    in the fewest columns, up to three (a legend takes up to six, below), that fit the largest
+    rectangle the map leaves free; when none fits, a long one is laid in more
     when that shows more of it, or as much while covering at least a quarter less of what the map
     draws (the answer's `legendColumns`); in a side column it stays in one. Polygon layers with no
     fill and no labels, such as neighbouring borders, don't count as what the map draws here, unless
@@ -199,9 +203,15 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
     corners on a light page: the map in one, the locator and the legend in one each beside it,
     the sources and reference in tinted ones under them; `"poster"` colours the whole page, sets
     the title and subtitle in light text across the top, the map in a light card and the footer
-    in darker blocks with amber headings. `"accent"` (`#RRGGBB`) colours the band, the panel's
-    tint, the headings and rules, and a poster's page (a deep brown, green or blue by default).
-    A figure leaves the style to its caption. In the menu, each sheet opens a list of the six
+    in darker blocks with amber headings; `"edge"` runs the map from one side of the page to the
+    other with no border, a kicker, the title and subtitle over it and the footer with no boxes
+    under a thin rule. An edge sheet also takes `"paper"` (`#RRGGBB`, the page's colour; on a dark
+    one the texts are light) and `"kicker"` (a short line in spaced capitals over the title);
+    other styles and figures refuse both. Its graticule labels sit at the page's side edges, so a
+    printer with no bleed may clip them. `"accent"` (`#RRGGBB`) colours the band, the panel's
+    tint, the headings and rules, a poster's page and an edge sheet's kicker (a deep brown, green
+    or blue by default, a brick red on an edge sheet).
+    A figure leaves the style to its caption. In the menu, each sheet opens a list of the seven
     styles, each saying what it looks like, in its default accent (`"accent"` in the command
     picks another).
   - Every element is an ordinary one, to move or restyle afterwards. The command returns element
@@ -369,15 +379,46 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
     overview, which can miss a rare one the map draws at full resolution; so can the classes of a
     raster under a mask with more than about four million cells, whose masked statistics read a
     sample of them: adding the legend, and `layout.publication`, say so.
-  - **Columns** (`"columns"`, 1 to 3): its rows side by side under its title, as even as they go,
+  - **Columns** (`"columns"`, 1 to 6): its rows side by side under its title, as even as they go,
     each column as wide as its widest row, with its own column of symbols, and a layer's name
     staying with the row under it. The box keeps its size, so widen it for the columns: in a box
     too narrow they close up and long labels run into the next or past the box, and a box too
-    short fills each column in turn and leaves out the last rows.
+    short fills each column in turn and leaves out the last rows (a **Fit**, below, can change
+    that).
     A legend says when its box loses rows or closes its columns up when it is given `"columns"`,
-    `"textSize"` (`null` included), `"showNoData"` or `"labels"`, and, in columns or at a text
-    size of its own, when its box or what it lists changes. A legend in one column at the default
-    size is told so only when given one of those.
+    `"textSize"` (`null` included), `"showNoData"`, `"labels"`, `"fit"` or `"showLayerNames"`, and,
+    in columns, at a text size of its own or with a fit, when its box or what it lists changes. A
+    legend in one column at the default size and with no fit is told so only when given one of
+    those. A manual legend is checked when it is added or changed, as it always has been, not again
+    when the map's layers change later. A legend with a fit is checked then too, and again by every
+    export, which says, in the same words, when its fit no longer makes it fit (a layer added to the
+    map, the frame's scale changed); the drawing itself fits again on every draw, as below.
+  - **Fit** (`"fit"`): what gives way when the rows don't fit the box. **Manual** (`"manual"`, the
+    default) keeps the text's size and the columns and leaves out the last rows, as legends always
+    have. **Shrink the text** (`"adjustSize"`) draws the rows' text a quarter point smaller at a
+    time, down to 4 points, until they fit; **Add columns** (`"adjustColumns"`) adds columns, up to
+    six, until they fit, never more than fit across the box, so columns never run into each other
+    because a column was added; **Add columns, then shrink the text** (`"adjustColumnsAndSize"`)
+    adds columns first. Under a fit, **Text size** is the size the text shrinks from. **Columns**
+    is the fewest columns a fit that adds columns starts at; under **Shrink the text** the rows are
+    laid in exactly the columns set. Both stay settable. The title keeps its size, and point
+    symbols keep the size the map draws them at (a row is never shorter than its symbol), but a web
+    layer's legend picture and the length and height of line and polygon swatches shrink with the
+    text. A fitted legend is drawn just as a manual one of the size and columns it fitted to, in
+    the layout view and every export, and it fits itself again on every draw, so when the map's
+    layers change it follows them. A legend that can't fit even at 4 points or in the most columns
+    its box takes says so, naming what it tried; one that fits says nothing.
+  - **Layer names** (`"showLayerNames"`, on by default): off, the name over each layer's classes,
+    and over a web layer's legend picture, is left off. A layer drawn in one symbol keeps its name
+    beside its swatch, since that is what labels it; classes that carry no label of their own
+    (some raster classes) are then drawn as bare swatches.
+  - **In scripts and files**: scripts set `"fit": "adjustSize"` and `"showLayerNames": false` on
+    `layout.addElement` and `layout.update` (a scale bar's `fit` takes its own values); an unknown
+    fit is refused, and `null` leaves each as it is. Each change is one undo step, and a value set
+    back to its default (`"manual"`, names on) is no longer saved. A project with a legend that has
+    a fit, leaves its layer names off or has more than three columns can't be opened by an older
+    RustGIS, and a layout file (`.rgislayout`) with such a legend lists that in its header, so an
+    older RustGIS refuses it as well.
   - **Text size** (`"textSize"`, 4 to 100 points, 9 by default; a size outside that range is
     refused): the size of its layers' names and classes' labels. Its title, rows, indents and the
     gap between columns follow in proportion, and so do a web layer's legend pictures and the length
