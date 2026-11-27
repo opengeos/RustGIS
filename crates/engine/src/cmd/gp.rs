@@ -1,5 +1,7 @@
 //! Analyze tab: run geoprocessing tools and keep their history.
 
+use std::sync::Arc;
+
 use rustgis_analysis::{Inputs, Output, OutputLayer, RasterInput};
 use rustgis_data::Dataset;
 use rustgis_data::loss::{LossCode, LossMessage};
@@ -3813,7 +3815,8 @@ pub(crate) struct PendingFile {
     pub(crate) continuation: crate::policy::Continuation,
     pub(crate) id: u64,
     pub(crate) file_name: String,
-    pub(crate) bytes: Option<Vec<u8>>,
+    /// Shared with whatever else holds the file (a raster layer its own), until handed over.
+    pub(crate) bytes: Option<Arc<Vec<u8>>>,
     from: Delivery,
 }
 
@@ -3841,7 +3844,7 @@ fn queue_file(s: &mut Session, file_name: String, bytes: Vec<u8>, record: GpReco
     if file_name.is_empty() || file_name.contains(['/', '\\']) {
         return Err("output must be a file name, not a path, in the browser".into());
     }
-    queue(s, file_name, bytes, Delivery::Tool { record: Box::new(record), losses })
+    queue(s, file_name, Arc::new(bytes), Delivery::Tool { record: Box::new(record), losses })
 }
 
 /// Queues an export's file for download under its name (`written_path`). The answer says it is
@@ -3850,10 +3853,18 @@ pub(super) fn queue_export(s: &mut Session, mut wrote: super::exports::Wrote) ->
     let (Some(bytes), Some(file_name)) = (wrote.download.take(), wrote.written_path.clone()) else {
         return Err("this export made no file to download".into());
     };
-    let mut messages = wrote.completion_notes();
-    // Not exported until the download is taken.
+    // Not exported until the download is taken: the claim goes from the pending answer, and what
+    // follows it (what the file leaves out) stays, under the file's name.
     let exported = format!("Exported {file_name}");
-    messages.retain(|message| *message != exported);
+    let messages: Vec<String> = wrote
+        .completion_notes()
+        .into_iter()
+        .filter_map(|message| match message.strip_prefix(&exported) {
+            Some("") => None,
+            Some(note) if note.starts_with([' ', ';']) => Some(format!("{file_name}{note}")),
+            _ => Some(message),
+        })
+        .collect();
     let mut out = queue(s, file_name, bytes, Delivery::Export(Box::new(wrote)))?;
     out["messages"] = json!(messages);
     Ok(out)
@@ -3861,9 +3872,9 @@ pub(super) fn queue_export(s: &mut Session, mut wrote: super::exports::Wrote) ->
 
 /// Holds `bytes` for the front end to offer as the download `file_name` and acknowledge with
 /// `gp.fileDelivered`, within what the queue holds.
-fn queue(s: &mut Session, file_name: String, bytes: Vec<u8>, from: Delivery) -> CmdResult {
-    const MAX_PENDING_BYTES: usize = 256 * 1024 * 1024;
-    let held = s.file_outputs.iter().filter_map(|f| f.bytes.as_ref()).map(Vec::len).sum::<usize>();
+fn queue(s: &mut Session, file_name: String, bytes: Arc<Vec<u8>>, from: Delivery) -> CmdResult {
+    const MAX_PENDING_BYTES: usize = super::exports::MAX_DOWNLOAD_BYTES;
+    let held = s.file_outputs.iter().filter_map(|f| f.bytes.as_ref()).map(|bytes| bytes.len()).sum::<usize>();
     if matches!(from, Delivery::Export(_)) && bytes.len() > MAX_PENDING_BYTES {
         return Err(format!(
             "{file_name}: {} MiB, more than the {} MiB a command can download in the browser; export less (a selection of features, a smaller size or fewer pages), use the Export buttons, or use the desktop app",
@@ -4309,7 +4320,7 @@ mod file_tests {
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].1, "Elevation.pmtiles");
         assert!(files[0].2.starts_with(b"PMTiles\x03"));
-        assert_eq!(files[0].2, expected, "layer and group transparency are both applied");
+        assert_eq!(*files[0].2, expected, "layer and group transparency are both applied");
         assert_eq!(s.map().layers.len(), 1);
         assert!(
             s.run("gp.run", &json!({"tool": "rasterToPmtiles", "params": {"input": "Elevation", "minZoom": 2, "maxZoom": 1}})).is_err()
@@ -4528,7 +4539,7 @@ mod file_tests {
         assert!(s.project.gp_history.is_empty());
         assert!(s.run("gp.fileDelivered", &json!({"id": id})).is_err());
         assert!(s.project.gp_history.is_empty());
-        assert_eq!(s.take_gp_files(), vec![(id, "cities.pmtiles".into(), vec![1, 2, 3])]);
+        assert_eq!(s.take_gp_files(), vec![(id, "cities.pmtiles".into(), std::sync::Arc::new(vec![1, 2, 3]))]);
         assert!(s.take_gp_files().is_empty(), "bytes are handed over once");
         let out = s.run("gp.fileDelivered", &json!({"id": id, "error": "browser rejected download"})).unwrap();
         assert_eq!(out["delivered"], false);

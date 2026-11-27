@@ -12,7 +12,9 @@
 //! file output (`gp.fileDelivered`).
 
 use std::borrow::Cow;
+use std::sync::Arc;
 
+use rustgis_data::Dataset;
 use serde_json::Value;
 
 use crate::{CmdResult, Session};
@@ -32,7 +34,7 @@ pub struct Wrote {
     pub(crate) written_path: Option<String>,
     /// The file's bytes when it is downloaded rather than written ([`place`]): what it says
     /// (`notes`, `then`) is said once the front end has taken the download.
-    pub(crate) download: Option<Vec<u8>>,
+    pub(crate) download: Option<Arc<Vec<u8>>>,
     /// What it does to the session once written, after its notes, and adds to its answer (a
     /// GeoPackage table replaced: the layers reading it read it again).
     pub(crate) then: Option<Then>,
@@ -91,14 +93,33 @@ pub fn runs_in_background(command: &str) -> Option<(&'static str, &'static str)>
 }
 
 /// Puts an export's finished file where it goes: written at `path`, or, when it is downloaded
-/// (`download`, [`Session::downloads_files`]), given back for [`Wrote::download`].
-pub(crate) fn place<'a>(download: bool, path: &str, bytes: impl Into<Cow<'a, [u8]>>) -> Result<Option<Vec<u8>>, String> {
+/// (`download`, [`Session::downloads_files`]), given back for [`Wrote::download`]. The bytes are
+/// never copied: a file a layer holds is shared with the download.
+pub(crate) fn place(download: bool, path: &str, bytes: impl Into<Arc<Vec<u8>>>) -> Result<Option<Arc<Vec<u8>>>, String> {
     let bytes = bytes.into();
     if download {
-        return Ok(Some(bytes.into_owned()));
+        return Ok(Some(bytes));
     }
     rustgis_data::io::write_atomic(std::path::Path::new(path), &bytes).map_err(|e| format!("{path}: {e}"))?;
     Ok(None)
+}
+
+/// The most feature storage a layer read in place may take while its download is made, and the
+/// most a command's download may be. The features and the file are held at once, in the browser's
+/// memory. A fixed figure: the browser can't say what memory it has free, so
+/// `rustgis_data::memory::planned` would give its floor there.
+pub(crate) const MAX_DOWNLOAD_BYTES: usize = 256 << 20;
+
+/// Every feature of layer `l`, read in place, for a file made in memory to be downloaded: refused
+/// past [`MAX_DOWNLOAD_BYTES`] of features, before any is read when the source's count alone says
+/// so. A definition query is applied after the read, so it doesn't make the read smaller.
+pub(super) fn read_for_download(l: &rustgis_map::Layer) -> Result<(Dataset, rustgis_map::Unreadable), String> {
+    let refusal = format!(
+        "{}: the layer needs more than the {} MiB of features the web app reads for a download; zoom in, select the features you need, use Make Layer From Selected Features and export that layer, or use the desktop app",
+        l.name,
+        MAX_DOWNLOAD_BYTES >> 20
+    );
+    l.load_all_counted_up_to(MAX_DOWNLOAD_BYTES as u64, &refusal)
 }
 
 /// Export `command`'s parameters when its file is downloaded: `path` cut to the download's name,

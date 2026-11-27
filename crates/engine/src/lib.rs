@@ -1815,7 +1815,7 @@ impl Session {
     /// Takes tool and export files awaiting download. Metadata stays until `gp.fileDelivered`
     /// acknowledges delivery, so producing bytes alone never records a successful run. Another
     /// caller's queued files stay untouched until their owner or the native host takes them.
-    pub fn take_gp_files(&mut self) -> Vec<(u64, String, Vec<u8>)> {
+    pub fn take_gp_files(&mut self) -> Vec<(u64, String, std::sync::Arc<Vec<u8>>)> {
         let mut live = Vec::new();
         let mut refused: Vec<(String, Vec<String>)> = Vec::new();
         for mut file in std::mem::take(&mut self.file_outputs) {
@@ -2459,6 +2459,8 @@ impl Session {
             },
             _ => res,
         };
+        // Queued for download in a project the command opened, then gave up for the one before.
+        let mut opened_files = Vec::new();
         match (&res, snapshot) {
             // A command that only left a request for the front end (a download in the browser,
             // [`Session::request_url`]) changed nothing: no undo step, nothing to save yet. The
@@ -2540,7 +2542,7 @@ impl Session {
                 // Replaced during the command: what it held beside itself (its undo history, its
                 // trust, its unsaved state) comes back with it.
                 if self.opened != opened {
-                    self.give_back(opened);
+                    opened_files = self.give_back(opened);
                 }
                 if let Some(files) = files {
                     self.file_identity = files.identity;
@@ -2597,9 +2599,10 @@ impl Session {
             self.restore_url_request_checkpoint(requests);
             (self.plugin_retries, self.url_waits) = retry_state;
             // Keep only still-present old identities: drained bytes and terminal refusals stay consumed.
-            let (kept, dropped): (Vec<_>, Vec<_>) =
+            let (kept, mut dropped): (Vec<_>, Vec<_>) =
                 std::mem::take(&mut self.file_outputs).into_iter().partition(|file| file_outputs.contains(&file.id));
             self.file_outputs = kept;
+            dropped.append(&mut opened_files);
             self.say_dropped_exports(&dropped, "as the command that made them failed");
         }
         let quiet = std::mem::take(&mut self.quiet_failure);
@@ -2704,9 +2707,10 @@ impl Session {
     }
 
     /// Gives back what project `opened` held beside itself, when it is restored. Every field is
-    /// named (no `..`): one added to [`PutAside`] and not given back doesn't compile.
-    fn give_back(&mut self, opened: u64) {
-        let Some(a) = self.put_aside.take_if(|a| a.opened == opened) else { return };
+    /// named (no `..`): one added to [`PutAside`] and not given back doesn't compile. Returns the
+    /// files waiting for download that those given back take the place of.
+    fn give_back(&mut self, opened: u64) -> Vec<cmd::gp::PendingFile> {
+        let Some(a) = self.put_aside.take_if(|a| a.opened == opened) else { return Vec::new() };
         let PutAside {
             constructions,
             opened: _,
@@ -2773,7 +2777,7 @@ impl Session {
         self.opened_package = opened_package;
         self.file_identity = file_identity;
         (self.pending, self.plugin_runs, self.plugin_retries, self.url_waits) = (pending, plugin_runs, plugin_retries, url_waits);
-        self.file_outputs = file_outputs;
+        let replaced = std::mem::replace(&mut self.file_outputs, file_outputs);
         (self.downloading, self.downloaded, self.url_requests) = (downloading, downloaded, url_requests);
         self.downloaded_reach = downloaded_reach;
         self.restore_policy_work(policy_work);
@@ -2792,6 +2796,7 @@ impl Session {
         {
             self.sql_results = sql_results;
         }
+        replaced
     }
 
     /// Says what reading raster layers' pixels lost when it wasn't said as each was added (pixels

@@ -86,6 +86,9 @@ the commands finish: `share.exportLayer`, `share.exportTable`, `share.exportMap`
 folder in the path isn't used, and a `.shp` path downloads a `.zip` of the Shapefile's files; a
 notice says each. At most 8 files, 256 MiB in all, can wait to be downloaded, and those of a script
 that then fails, or of a project replaced before they are offered, are dropped with a notice.
+`share.exportLayer` and `data.convert` read a layer read in place whole for such a download, up to
+256 MiB of features; past that, select the features you need and export a layer made from them with
+**Make Layer From Selected Features**, or use the desktop app.
 GeoPackage and FlatGeobuf, a tile layer as a raster, an orbit, a block and publishing to a source
 need the desktop app; for a field package, use **Package for the Field** on the ribbon.
 

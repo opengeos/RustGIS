@@ -787,11 +787,11 @@ fn whole_reads_by_chunk_stay_within_the_memory_budget() {
         let src = open_path(&p, None).unwrap();
         assert!(src.visits_chunks(), "{ext}");
         let once = src.read(&Request::all()).unwrap().features;
-        let (whole, report) = materialize_within(src.as_ref(), MAX_READ_BYTES).unwrap();
+        let (whole, report) = materialize_within(src.as_ref(), MAX_READ_BYTES, None).unwrap();
         assert_eq!(whole.features.to_vec(), once, "{ext}");
         assert_eq!(report.skipped, 0, "{ext}");
         let half = chunk_memory::features_bytes(&once) as u64 / 2;
-        let error = materialize_within(src.as_ref(), half).unwrap_err().to_string();
+        let error = materialize_within(src.as_ref(), half, None).unwrap_err().to_string();
         assert!(error.contains("clip or filter it first"), "{ext}: {error}");
     }
 }

@@ -2704,7 +2704,7 @@ pub(crate) fn convert_work(s: &Session, p: &Value) -> Result<super::exports::Wor
             (notes, result.null_numbers, result.query)
         } else {
             let (mut ds, unreadable) = if layer.is_streamed() {
-                let (ds, unreadable) = layer.load_all_counted()?;
+                let (ds, unreadable) = if download { super::exports::read_for_download(&layer)? } else { layer.load_all_counted()? };
                 (Cow::Owned(ds), unreadable)
             } else {
                 (Cow::Borrowed(&layer.dataset), rustgis_map::Unreadable::default())

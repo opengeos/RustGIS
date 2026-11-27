@@ -178,7 +178,7 @@ pub(in crate::cmd) fn table_work(s: &Session, p: &Value) -> Result<Work, String>
         let mut held = None;
         let (left_out, table, placed) = if download {
             let (bytes, left_out, notes, _) = rustgis_data::io::write_bytes_noted(&ds, &ext, crs, &path).map_err(|e| e.to_string())?;
-            held = Some(bytes);
+            held = Some(std::sync::Arc::new(bytes));
             (left_out, None, notes)
         } else {
             rustgis_data::io::write_path_to(&ds, Path::new(&path), crs, &gpkg).map_err(|e| e.to_string())?

@@ -147,6 +147,8 @@ mod workspacepanes;
 mod worldviewui;
 mod zarrui;
 
+use std::sync::Arc;
+
 use rustgis_engine::cmd::service_added::Removal;
 use rustgis_engine::render::rustgis_tiles::failure::Failure;
 use rustgis_engine::render::rustgis_tiles::{address::Reach, cache};
@@ -494,8 +496,10 @@ pub struct Services {
     /// [`RustGisApp::photos`]. `None` where there is no camera to ask.
     pub take_photo: Option<Box<dyn Fn() -> Result<(), String>>>,
     /// Offers bytes as a download named `file_name`; success means submission to the host's
-    /// download mechanism. Browsers do not expose confirmation that the file was saved.
-    pub download: Option<Box<dyn Fn(&str, Vec<u8>) -> Result<(), String>>>,
+    /// download mechanism. Browsers do not expose confirmation that the file was saved. The bytes
+    /// may be shared with what the session holds (a raster layer's file), so they aren't copied
+    /// to be offered.
+    pub download: Option<Box<dyn Fn(&str, Arc<Vec<u8>>) -> Result<(), String>>>,
     /// Starts saving a project on a phone: written back to the document given (one the project
     /// was opened from or last saved as, with leave to write it), or through the native picker
     /// when there is none. The shell reports the eventual result through
@@ -2787,7 +2791,7 @@ impl RustGisApp {
             }
         };
         let file = format!("{stem}.rgis");
-        if let Err(e) = self.services.download.as_ref().ok_or(tl!("no download service"))?(&file, text.into_bytes()) {
+        if let Err(e) = self.services.download.as_ref().ok_or(tl!("no download service"))?(&file, Arc::new(text.into_bytes())) {
             self.session.project.name = old;
             return Err(e);
         }
@@ -2817,7 +2821,7 @@ impl RustGisApp {
     fn download(&mut self, name: &str, bytes: Vec<u8>) -> bool {
         match &self.services.download {
             Some(d) => {
-                if let Err(e) = d(name, bytes) {
+                if let Err(e) = d(name, Arc::new(bytes)) {
                     self.session.notify(e, true);
                     return false;
                 }
@@ -9839,7 +9843,7 @@ mod download_service_tests {
         let downloaded = file.clone();
         let mut app = RustGisApp::with_sample().with_services(Services {
             download: Some(Box::new(move |_, bytes| {
-                *downloaded.lock().unwrap() = bytes;
+                *downloaded.lock().unwrap() = std::sync::Arc::unwrap_or_clone(bytes);
                 Ok(())
             })),
             ..Default::default()
@@ -9864,7 +9868,7 @@ mod download_service_tests {
         let downloaded = file.clone();
         let mut app = RustGisApp::with_sample().with_services(Services {
             download: Some(Box::new(move |_, bytes| {
-                *downloaded.lock().unwrap() = bytes;
+                *downloaded.lock().unwrap() = std::sync::Arc::unwrap_or_clone(bytes);
                 Ok(())
             })),
             ..Default::default()
@@ -9896,7 +9900,7 @@ mod download_service_tests {
         use rustgis_engine::geom::Coord;
         // A NaN accepted, a NaN refused, and finite numbers only (nothing to say).
         for (accept, first) in [(true, f64::NAN), (false, f64::NAN), (true, 2.5)] {
-            let download: Box<dyn Fn(&str, Vec<u8>) -> Result<(), String>> =
+            let download: Box<dyn Fn(&str, std::sync::Arc<Vec<u8>>) -> Result<(), String>> =
                 if accept { Box::new(|_, _| Ok(())) } else { Box::new(|_, _| Err("browser rejected download".into())) };
             let mut app = RustGisApp::with_sample().with_services(Services { download: Some(download), ..Default::default() });
             let mut ds = Dataset::new("Gauges", GeometryType::Point, vec![Field::new("level", FieldType::Double)]);
@@ -9923,7 +9927,7 @@ mod download_service_tests {
         use rustgis_engine::geom::Coord;
         let changed = |app: &RustGisApp| app.session.notices.iter().filter(|n| n.text.contains("changed to fit a Shapefile")).count();
         let with = |accept: bool| {
-            let download: Box<dyn Fn(&str, Vec<u8>) -> Result<(), String>> =
+            let download: Box<dyn Fn(&str, std::sync::Arc<Vec<u8>>) -> Result<(), String>> =
                 if accept { Box::new(|_, _| Ok(())) } else { Box::new(|_, _| Err("browser rejected download".into())) };
             let mut app = RustGisApp::with_sample().with_services(Services { download: Some(download), ..Default::default() });
             let mut ds = Dataset::new(

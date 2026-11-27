@@ -1,7 +1,11 @@
 //! Exports by command where files are downloaded: the browser has no filesystem to write a path
 //! in, so a script's, the Assistant's or a plugin's export is offered as a download instead.
 
-use rustgis_data::{Dataset, Field, FieldType, Geometry, GeometryType, Value as Cell};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use rustgis_data::source::{Batch, FeatureSource, Request, SourceInfo};
+use rustgis_data::{Dataset, Feature, Field, FieldType, Geometry, GeometryType, Value as Cell};
 use serde_json::{Value, json};
 
 use super::write_notices::Files;
@@ -50,7 +54,7 @@ fn deliver(s: &mut Session, pending: &Value, error: Option<&str>) -> (String, Ve
     let (id, name, bytes) = files.remove(0);
     assert_eq!(pending["download"].as_u64(), Some(id));
     let answer = s.acknowledge_gp_file(id, error);
-    (name, bytes, answer)
+    (name, bytes.to_vec(), answer)
 }
 
 /// Each export command the browser can run downloads the file the desktop writes, under the
@@ -79,9 +83,8 @@ fn a_browser_export_by_path_downloads_the_desktops_file_and_says_the_same() {
         ("report.export", json!({"report": "List", "dpi": 72}), "list.pdf", false),
     ];
     // A new export is listed here, or among those refused.
-    let refused = ["map.exportOrbit", "map.exportBlock", "source.publish", "offline.package"];
     for (command, ..) in crate::cmd::exports::IN_BACKGROUND {
-        assert!(cases.iter().any(|c| c.0 == *command) || refused.contains(command), "{command}");
+        assert!(cases.iter().any(|c| c.0 == *command) || REFUSED.iter().any(|r| r.0 == *command), "{command}");
     }
     for (command, params, file, same_bytes) in cases {
         let files = Files::new();
@@ -176,25 +179,224 @@ fn a_browser_export_says_when_its_download_is_named_otherwise() {
     }
 }
 
+/// What the browser can't write: the command, its path, and what its refusal says to do.
+const REFUSED: &[(&str, &str, &str)] = &[
+    ("share.exportLayer", "z.gpkg", "can't write GeoPackage or FlatGeobuf files; export to .geojson"),
+    ("share.exportLayer", "z.FGB", "can't write GeoPackage or FlatGeobuf files; export to .geojson"),
+    ("share.exportTable", "rows.gpkg", "can't write GeoPackage or FlatGeobuf files; export to .geojson"),
+    ("share.exportLayer", "out/", "this one has none"),
+    ("share.exportMap", "..", "this one has none"),
+    ("offline.package", "site.rgisfield", "use Package for the Field on the ribbon"),
+    ("map.exportOrbit", "spin.gif", "the web app can't export an orbit; open the project in the desktop app"),
+    ("map.exportBlock", "block.glb", "the web app can't export a block; open the project in the desktop app"),
+    ("source.publish", "unused", "publish from the desktop app"),
+];
+
 /// What the browser can't write is refused before anything is made, saying how to export instead.
 #[test]
 fn what_the_browser_cant_write_is_refused_up_front() {
     let files = Files::new();
     let mut s = session(&files, true);
-    for (command, path, why) in [
-        ("share.exportLayer", "z.gpkg", "can't write GeoPackage or FlatGeobuf files; export to .geojson"),
-        ("share.exportLayer", "z.FGB", "can't write GeoPackage or FlatGeobuf files; export to .geojson"),
-        ("share.exportTable", "rows.gpkg", "can't write GeoPackage or FlatGeobuf files; export to .geojson"),
-        ("share.exportLayer", "out/", "this one has none"),
-        ("share.exportMap", "..", "this one has none"),
-        ("offline.package", "site.rgisfield", "use Package for the Field on the ribbon"),
-    ] {
+    // A layer read from a file, which Publish to Source writes back to.
+    let filed = files.path().join("filed.geojson");
+    std::fs::write(&filed, r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"a":1},"geometry":{"type":"Point","coordinates":[1,2]}}]}"#).unwrap();
+    s.run("layer.addData", &json!({"path": filed, "name": "Filed"})).unwrap();
+    for &(command, path, why) in REFUSED {
         let areas = s.project.offline_areas.len();
-        let e = s.run(command, &json!({"layer": "Places", "table": "Totals", "name": "Site", "path": path})).unwrap_err();
+        let layer = if command == "source.publish" { "Filed" } else { "Places" };
+        let params = json!({"layer": layer, "table": "Totals", "name": "Site", "path": path, "frames": 1, "width": 64, "height": 64});
+        let params = if command == "source.publish" { json!({"layer": layer}) } else { params };
+        let e = s.run(command, &params).unwrap_err();
         assert!(e.contains(why), "{command} {path}: {e}");
         assert_eq!(s.project.offline_areas.len(), areas);
         assert!(s.take_gp_files().is_empty());
+        assert!(!std::path::Path::new(path).is_file(), "{command}: no file is written");
     }
+}
+
+/// A raster layer `name` of `bands` bands, and the GeoTIFF of its first one.
+fn raster(name: &str, bands: usize) -> (rustgis_data::raster::Raster, Vec<u8>) {
+    let transform = rustgis_data::raster::GeoTransform { origin_x: 0.0, origin_y: 2.0, pixel_width: 1.0, pixel_height: -1.0 };
+    let r = rustgis_data::raster::Raster::new(
+        name,
+        2,
+        2,
+        vec![vec![1.0, 2.0, 3.0, 4.0]; bands],
+        transform,
+        rustgis_data::raster::Crs::LonLat,
+        None,
+        rustgis_data::raster::ColorHint::Gray,
+        "Float32",
+    )
+    .unwrap();
+    let tif = rustgis_data::raster::geotiff::write(&r, 0).unwrap();
+    (r, tif)
+}
+
+/// A pending export doesn't claim its file is exported, whatever follows that claim in what the
+/// file says; what it leaves out is still in the answer, and the claim is made on delivery.
+#[test]
+fn a_pending_raster_export_says_what_it_leaves_out_but_not_that_it_is_exported() {
+    let files = Files::new();
+    let mut s = session(&files, true);
+    let (r, tif) = raster("Bands", 2);
+    s.map_mut().add_raster("Bands", rustgis_map::RasterLayer::from_bytes(r, "bands.tif", tif));
+    for (layer, file, lossy) in [("Bands", "bands.tif", true), ("Dem", "dem.tif", false)] {
+        let mark = s.notice_mark();
+        let pending = s.run("share.exportRaster", &json!({"layer": layer, "path": file})).unwrap();
+        let messages: Vec<&str> = pending["messages"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+        assert!(!messages.iter().any(|m| m.contains("Exported")), "{messages:?}");
+        if lossy {
+            assert_eq!(messages.len(), 1, "{messages:?}");
+            assert!(messages[0].starts_with("bands.tif; 1 of its 2 bands written"), "{messages:?}");
+        } else {
+            assert_eq!(messages, Vec::<&str>::new());
+        }
+        deliver(&mut s, &pending, None).2.unwrap();
+        let notices = said(&s, mark);
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert!(notices[0].starts_with(&format!("Exported {file}")), "{notices:?}");
+        assert_eq!(notices[0].contains("1 of its 2 bands written"), lossy, "{notices:?}");
+    }
+}
+
+/// A raster a command made is downloaded from the file its layer holds, with no second copy.
+#[test]
+fn a_raster_download_shares_the_layers_file() {
+    let files = Files::new();
+    let mut s = session(&files, true);
+    let (r, tif) = raster("Made", 1);
+    let id = s.map_mut().add_raster("Made", rustgis_map::RasterLayer::from_written(r, "made.tif", tif));
+    let held = s.map().layer(id).unwrap().raster.as_ref().unwrap().written_file().unwrap().clone();
+    s.run("share.exportRaster", &json!({"layer": "Made", "path": "made.tif"})).unwrap();
+    let downloads = s.take_gp_files();
+    assert_eq!(downloads.len(), 1);
+    assert_eq!(downloads[0].2.as_ptr(), held.as_ptr(), "the layer's own bytes are handed over");
+}
+
+/// A source read in place which says it holds `count` features, or gives a row of `text` bytes,
+/// as a large layer does, and notes whether it was read.
+struct Large {
+    info: SourceInfo,
+    inner: Box<dyn FeatureSource>,
+    text: usize,
+    chunks: bool,
+    read: Arc<AtomicBool>,
+}
+
+impl Large {
+    /// The row of `text` bytes: its room is reserved, not filled.
+    fn row(&self) -> Feature {
+        let mut text = String::with_capacity(self.text);
+        text.push('x');
+        Feature { id: 1, geometry: Some(Geometry::Point(rustgis_data::Coord::new(1.0, 2.0))), attrs: vec![Cell::Text(text)] }
+    }
+}
+
+impl FeatureSource for Large {
+    fn info(&self) -> &SourceInfo {
+        &self.info
+    }
+
+    /// The whole source in one read, as one that can't be read a chunk at a time answers.
+    fn read(&self, req: &Request) -> rustgis_data::Result<Batch> {
+        self.read.store(true, Ordering::Relaxed);
+        if self.text == 0 {
+            return self.inner.read(req);
+        }
+        Ok(Batch { features: vec![self.row()], matched: 1, complete: true, ..Batch::default() })
+    }
+
+    fn visits_chunks(&self) -> bool {
+        self.chunks
+    }
+
+    /// The large row as one chunk, else the small file's rows.
+    fn visit_chunks(
+        &self,
+        extent: Option<rustgis_geom::Extent>,
+        bytes: usize,
+        visit: &mut dyn FnMut(Vec<Feature>) -> rustgis_data::Result<()>,
+    ) -> rustgis_data::Result<Batch> {
+        self.read.store(true, Ordering::Relaxed);
+        if self.text == 0 {
+            return self.inner.visit_chunks(extent, bytes, visit);
+        }
+        visit(vec![self.row()])?;
+        Ok(Batch { matched: 1, complete: true, ..Batch::default() })
+    }
+}
+
+/// Adds layer `name`, read in place from a [`Large`] source; gives whether it has been read.
+fn streamed(s: &mut Session, name: &str, count: Option<u64>, text: usize, chunks: bool) -> Arc<AtomicBool> {
+    let mut ds = Dataset::new(name, GeometryType::Point, vec![Field::new("a", FieldType::Text)]);
+    ds.push(Some(Geometry::Point(rustgis_data::Coord::new(1.0, 2.0))), vec![Cell::Text("kept".into())]);
+    let bytes = Arc::new(rustgis_data::source::fgb::write(&ds).unwrap());
+    let inner = rustgis_data::source::open_shared("large.fgb", bytes.clone(), None).unwrap();
+    let mut info = inner.info().clone();
+    info.count = count;
+    let read = Arc::new(AtomicBool::new(false));
+    let source = Large { info, inner, text, chunks, read: read.clone() };
+    let source = rustgis_map::source::SourceLayer::from_bytes("large.fgb", bytes, None, Box::new(source));
+    let mut layer = rustgis_map::Layer::new_streamed(s.map().layers.len() as u32 + 10, source);
+    layer.name = name.into();
+    s.map_mut().layers.push(layer);
+    read
+}
+
+/// A layer read in place too large to hold while its download is made is refused: before any of
+/// it is read when its source says how many features it holds, else as soon as what is read
+/// passes the limit. A small one downloads.
+#[test]
+fn a_browser_export_of_a_large_streamed_layer_is_refused() {
+    let files = Files::new();
+    let mut s = session(&files, true);
+    // Name, count the source says, bytes of its row, read a chunk at a time, read before refusal.
+    let cases = [
+        ("Many", Some(10_000_000), 0, true, false),
+        ("ManyAtOnce", Some(10_000_000), 0, false, false),
+        ("Heavy", None, 300 << 20, true, true),
+        ("HeavyAtOnce", Some(1), 300 << 20, false, true),
+    ];
+    for (layer, count, text, chunks, reads) in cases {
+        for (command, params, file) in [
+            ("share.exportLayer", json!({"layer": layer}), "z.geojson"),
+            ("data.convert", json!({"layer": layer, "format": "csv"}), "z.csv"),
+        ] {
+            let read = streamed(&mut s, layer, count, text, chunks);
+            let e = s.run(command, &to(&params, file)).unwrap_err();
+            assert!(e.contains(layer) && e.contains("more than the 256 MiB"), "{command} {layer}: {e}");
+            assert!(e.contains("Make Layer From Selected Features") && e.contains("desktop app"), "{e}");
+            assert_eq!(read.load(Ordering::Relaxed), reads, "{command} {layer}");
+            assert!(s.take_gp_files().is_empty());
+            s.map_mut().layers.retain(|l| l.name != layer);
+        }
+    }
+    for chunks in [true, false] {
+        let layer = format!("Small{chunks}");
+        streamed(&mut s, &layer, Some(1), 0, chunks);
+        let mark = s.notice_mark();
+        let pending = s.run("share.exportLayer", &json!({"layer": layer, "path": "small.geojson"})).unwrap();
+        let (_, bytes, _) = deliver(&mut s, &pending, None);
+        assert!(String::from_utf8_lossy(&bytes).contains("kept"));
+        assert_eq!(said(&s, mark), ["Exported small.geojson"]);
+    }
+}
+
+/// An export queued in a project a command opened, before that command fails, is said to be
+/// dropped; one that waited in the project given back still waits.
+#[test]
+fn a_failed_commands_export_from_a_project_it_opened_is_said_dropped() {
+    let files = Files::new();
+    let mut s = session(&files, true);
+    s.run("share.exportTable", &json!({"table": "Totals", "path": "totals.csv"})).unwrap();
+    let mark = s.notice_mark();
+    let script = "project.new\nshare.exportMap {\"width\": 64, \"height\": 64, \"path\": \"later.png\"}\nno.suchCommand";
+    s.run("script.run", &json!({"script": script})).unwrap_err();
+    let dropped: Vec<String> = said(&s, mark).into_iter().filter(|n| n.contains("not downloaded")).collect();
+    assert_eq!(dropped, ["1 export(s) not downloaded, as the command that made them failed: later.png"]);
+    let waiting: Vec<String> = s.take_gp_files().into_iter().map(|f| f.1).collect();
+    assert_eq!(waiting, ["totals.csv"]);
 }
 
 /// A download the browser refuses is an error, and nothing says the file was exported.

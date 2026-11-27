@@ -1304,7 +1304,7 @@ pub(crate) fn export_work(s: &Session, p: &Value) -> Result<super::exports::Work
         return Ok(Box::new(move || {
             // One write of bytes the layer holds, with no look at Cancel inside it: looked at before.
             rustgis_data::progress::check().map_err(|e| e.to_string())?;
-            let held = super::exports::place(download, &path, bytes.as_slice())?;
+            let held = super::exports::place(download, &path, bytes)?;
             let wrote = wrote_geotiff(&r, bi, &path, None, "give \"band\" for another")?;
             Ok(super::exports::Wrote { download: held, ..wrote })
         }));
@@ -1318,7 +1318,7 @@ pub(crate) fn export_work(s: &Session, p: &Value) -> Result<super::exports::Work
                 (raster::geotiff::write(&r, bi).map_err(|e| format!("{path}: {e}"))?, None)
             };
             let wrote = wrote_geotiff(&r, bi, &path, cog, "give \"band\" for another")?;
-            Ok(super::exports::Wrote { download: Some(bytes), ..wrote })
+            Ok(super::exports::Wrote { download: Some(Arc::new(bytes)), ..wrote })
         }));
     }
     Ok(Box::new(move || write_geotiff(&r, bi, cog, &path)))

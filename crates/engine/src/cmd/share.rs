@@ -511,7 +511,7 @@ fn geotiff_work(
                 // is in the answer, as Export Raster gives it.
                 let c = if download {
                     let (bytes, c) = rustgis_data::raster::cogwrite::write_with_info(&r, 0).map_err(|e| format!("{path}: {e}"))?;
-                    held = Some(bytes);
+                    held = Some(std::sync::Arc::new(bytes));
                     c
                 } else {
                     rustgis_data::raster::cogwrite::write_file(&r, 0, Path::new(&path)).map_err(|e| format!("{path}: {e}"))?
@@ -727,7 +727,7 @@ fn write_layer(
     let mut held = None;
     use std::borrow::Cow;
     let (mut whole, unreadable) = if l.is_streamed() && chunks.is_none() {
-        let (dataset, unreadable) = l.load_all_counted()?;
+        let (dataset, unreadable) = if download { super::exports::read_for_download(l)? } else { l.load_all_counted()? };
         (Cow::Owned(dataset), unreadable)
     } else {
         (Cow::Borrowed(&l.dataset), rustgis_map::Unreadable::default())
@@ -805,7 +805,7 @@ fn write_layer(
             let (left_out, table, placed, lonlat) = if download {
                 let (bytes, left_out, notes, lonlat) =
                     rustgis_data::io::write_bytes_noted(ds, &ext, crs, path).map_err(|e| e.to_string())?;
-                held = Some(bytes);
+                held = Some(std::sync::Arc::new(bytes));
                 (left_out, None, notes, lonlat)
             } else {
                 rustgis_data::io::write_path_placed(ds, Path::new(&path), crs, &gpkg).map_err(|e| e.to_string())?
