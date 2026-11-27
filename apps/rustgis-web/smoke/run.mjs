@@ -35,6 +35,11 @@ const dist = resolve(opt("dist", join(here, "../../../dist/web")));
 const chrome = opt("chrome", process.env.CHROME || "google-chrome");
 // Each wait gives up after this long; the whole run takes a few seconds on a laptop.
 const LIMIT_MS = Number(opt("limit", "120000"));
+if (!Number.isFinite(LIMIT_MS) || LIMIT_MS <= 0) {
+  console.error("smoke: --limit takes a number of milliseconds");
+  process.exit(2);
+}
+const shot = opt("shot", null);
 if (!existsSync(join(dist, "index.html"))) throw new Error(`${dist}: no index.html; build the app with trunk first`);
 
 const work = mkdtempSync(join(tmpdir(), "rustgis-smoke-"));
@@ -112,16 +117,20 @@ const settle = (id, error) => {
   clearTimeout(call.timer);
   call.fail(error);
 };
+// Once Chrome stops or its pipe breaks, nothing more will answer: every waiting request fails, and
+// so does each new one.
 let closed = false;
+const close = (why) => {
+  closed = true;
+  for (const id of [...calls.keys()]) settle(id, new Error(why));
+};
 const exited = new Promise((ok) =>
   browser.on("exit", (code, signal) => {
-    closed = true;
-    for (const id of [...calls.keys()]) settle(id, new Error(`Chrome stopped (${signal ?? code}) before answering`));
+    close(`Chrome stopped (${signal ?? code}) before answering`);
     ok();
   }),
 );
-// A write to a Chrome that has stopped fails its request (above), not the run.
-browser.stdio[3].on("error", () => {});
+for (const pipe of [browser.stdio[3], browser.stdio[4]]) pipe.on("error", (e) => close(`the pipe to Chrome failed: ${e.message}`));
 browser.stdio[4].on("data", (chunk) => {
   buffer += chunk.toString();
   let end;
@@ -244,9 +253,31 @@ const search = async (name) => {
   await type(name);
   await press("Enter");
 };
-const choose = async (opened, files) => {
-  const chooser = await opened;
-  await send("DOM.setFileInputFiles", { files, backendNodeId: chooser.backendNodeId }, session);
+// Gives `files` to the file picker that `trigger` opens. The app's picker opens the browser's
+// chooser while the key that asked counts as the user's action; past that (a loaded machine can
+// take seconds to handle the key) it shows its own panel to choose them in, as a user then does.
+const PANEL = "#rfd-overlay:not(.hidden) #rfd-input";
+const pick = async (what, trigger, files) => {
+  let chooser = null;
+  event("Page.fileChooserOpened", `file chooser from ${what}`).then((c) => (chooser = c), () => {});
+  await trigger();
+  const deadline = Date.now() + LIMIT_MS;
+  for (;;) {
+    if (chooser) {
+      await send("DOM.setFileInputFiles", { files, backendNodeId: chooser.backendNodeId }, session);
+      return;
+    }
+    if (await js(`!!document.querySelector(${JSON.stringify(PANEL)})`)) {
+      const { root } = await send("DOM.getDocument", {}, session);
+      const { nodeId } = await send("DOM.querySelector", { nodeId: root.nodeId, selector: PANEL }, session);
+      await send("DOM.setFileInputFiles", { files, nodeId }, session);
+      step(`${what}: the files were chosen in the app's own file panel (the browser no longer counted the key as the user's)`);
+      return;
+    }
+    if (crashed) throw new Error(`no file chooser from ${what}: the page stopped with an error`);
+    if (Date.now() > deadline) throw new Error(`no file chooser from ${what} within ${LIMIT_MS / 1000} s`);
+    await frames();
+  }
 };
 
 // Opens the app on a fresh page load and waits until it has started.
@@ -314,18 +345,19 @@ try {
   ({ sessionId: session } = await send("Target.attachToTarget", { targetId, flatten: true }));
   for (const domain of ["Page", "Runtime", "Log"]) await send(`${domain}.enable`, {}, session);
   await send("Page.setInterceptFileChooserDialog", { enabled: true }, session);
-  // Leaving a page with unsaved work asks first; the test says yes.
-  listeners.add(({ method, sessionId }) => {
-    if (method === "Page.javascriptDialogOpening") send("Page.handleJavaScriptDialog", { accept: true }, sessionId);
+  listeners.add(({ method, params, sessionId }) => {
+    if (method !== "Page.javascriptDialogOpening") return;
+    // Leaving with unsaved work asks first, and the test says yes; any other dialog is unexpected.
+    const leaving = params.type === "beforeunload";
+    if (!leaving) failures.push(`unexpected ${params.type} dialog: ${params.message}`);
+    send("Page.handleJavaScriptDialog", { accept: leaving }, sessionId).catch((e) => failures.push(`dialog: ${e.message}`));
   });
 
   step("starting the app");
   await start();
 
   step("Add Data: two layers and a table through the file chooser");
-  const picked = event("Page.fileChooserOpened", "file chooser from Add Data");
-  await search("Add Data");
-  await choose(picked, Object.keys(inputs).map((f) => join(work, f)));
+  await pick("Add Data", () => search("Add Data"), Object.keys(inputs).map((f) => join(work, f)));
   const added = await saveUntil("Add Data", (p) => p.maps?.[0]?.layers?.length === 2 && p.tables?.length === 1);
   const layers = layerNames(added.project);
   const table = added.project.tables[0];
@@ -354,16 +386,13 @@ try {
 
   step("a fresh page opens the saved project, which saves the same");
   await start();
-  const opened = event("Page.fileChooserOpened", "file chooser from Open (Ctrl+O)");
-  await shortcut("o", "Ctrl+O");
-  await choose(opened, [redone.file]);
+  await pick("Open (Ctrl+O)", () => shortcut("o", "Ctrl+O"), [redone.file]);
   const again = await saveUntil("Open", (p) => order(p) === order(redone.project));
   const data = (p) => JSON.stringify([p.maps.map((m) => m.layers.map((l) => [l.name, l.dataset])), p.tables]);
   if (data(again.project) !== data(redone.project)) failures.push("the reopened project's layers or tables differ from the saved ones");
   step(`${saves} saves; layers ${order(again.project)}`);
 } catch (e) {
   failures.push(e.message);
-  const shot = opt("shot", null);
   if (shot && !closed) {
     try {
       const focus = await js(`(() => { const a = document.activeElement; return a ? a.tagName + "#" + a.id : "none" })()`);
