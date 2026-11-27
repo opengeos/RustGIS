@@ -82,9 +82,12 @@ fn corner_labels() -> [&'static str; 4] {
     [tl_raw!("Top left"), tl_raw!("Top right"), tl_raw!("Bottom left"), tl_raw!("Bottom right")]
 }
 
+/// The locator's place in [`Homes`].
+const LOCATOR: usize = 0;
+
 /// The locator and the legend, by their place in [`Homes`]: what a column style keeps in its
 /// column.
-const IN_COLUMN: [usize; 2] = [0, 2];
+const IN_COLUMN: [usize; 2] = [LOCATOR, 2];
 
 /// The surrounds' names, in [`Homes`]'s order.
 fn surround_labels() -> [&'static str; 4] {
@@ -120,10 +123,12 @@ pub(super) fn arrange_step(ui: &mut egui::Ui, s: &Session, d: &mut Draft) {
         let from = d.arrangement.held(s).ok().flatten().unwrap_or_else(|| favourite_homes(s));
         d.arrangement = Arrangement::Custom(from);
     }
-    // The styles with a column keep the locator and legend in it (`cmd/layout/publication`), so
-    // those two take no corner.
-    let column = !d.figure() && publication_style_has_column(&d.style);
-    let cornered = |surround: usize| !(column && IN_COLUMN.contains(&surround));
+    // What `cmd/layout/publication` puts in no corner, whatever the arrangement: the locator and
+    // legend of a style with a column, which sit in it, and a figure's locator, which it doesn't
+    // draw unless asked (the wizard doesn't ask).
+    let figure = d.figure();
+    let column = !figure && publication_style_has_column(&d.style);
+    let cornered = |surround: usize| !(column && IN_COLUMN.contains(&surround) || figure && surround == LOCATOR);
     if let Arrangement::Custom(homes) = &mut d.arrangement {
         corner_pickers(ui, homes, cornered);
     }
@@ -147,8 +152,12 @@ pub(super) fn arrange_step(ui: &mut egui::Ui, s: &Session, d: &mut Draft) {
             }
         });
     }
-    if column {
-        let note = tl!("The locator and legend sit in this style's column: only the north arrow and scale bar take these corners.");
+    let note = if figure {
+        Some(tl!("A figure draws no locator."))
+    } else {
+        column.then(|| tl!("The locator and legend sit in this style's column: only the north arrow and scale bar take these corners."))
+    };
+    if let Some(note) = note {
         ui.label(egui::RichText::new(note).small().weak());
     }
     ui.add_space(4.0);
@@ -464,10 +473,11 @@ mod tests {
         assert!(!said(&h), "unticked");
     }
 
-    /// On a column style the locator and legend have no corner: the grid lists neither and their
-    /// pickers are off; the north arrow and scale bar keep theirs. Elsewhere all four have one.
+    /// A surround with no corner on the sheet isn't listed in the grid and has its picker off: on a
+    /// column style the locator and legend, on a figure (which draws none) the locator. The rest,
+    /// and all four elsewhere, keep theirs; a figure says why.
     #[test]
-    fn column_styles_give_no_corner_to_the_locator_and_legend() {
+    fn surrounds_without_a_corner_are_not_given_one() {
         for (style, size, column) in [
             ("classic", "a4", false),
             ("panel", "a4", true),
@@ -480,7 +490,7 @@ mod tests {
                 (d.style, d.size, d.arrangement) = (style.into(), size.into(), Arrangement::Custom([0, 1, 2, 3]));
             });
             for (surround, corner, free) in [
-                ("Locator", "Top left", !column),
+                ("Locator", "Top left", !column && size == "a4"),
                 ("North arrow", "Top right", true),
                 ("Legend", "Bottom left", !column),
                 ("Scale bar", "Bottom right", true),
@@ -489,6 +499,8 @@ mod tests {
                 let off = h.get_by_role_and_label(Role::ComboBox, surround).accesskit_node().is_disabled();
                 assert_eq!(off, !free, "{style} {size}: {surround}'s picker");
             }
+            let said = h.query_by_label("A figure draws no locator.").is_some();
+            assert_eq!(said, size != "a4", "{style} {size}: the figure's note");
         }
     }
 }
