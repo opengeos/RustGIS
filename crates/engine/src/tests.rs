@@ -18065,7 +18065,7 @@ fn terrain_block_is_read_back_from_a_saved_project() {
     // With the water in its walls (#2317, `terrain_block_water_v2.rgis`), which it requires.
     let saved = Project::from_json(include_str!("../../../schema/fixtures/terrain_block_water_v2.rgis")).unwrap();
     let block = saved.maps[0].view.terrain.as_ref().and_then(|t| t.block.clone()).unwrap();
-    assert_eq!(block.water, Some(rustgis_map::view::BlockWater { depth: Some(8.0), field: Some("prof".into()) }));
+    assert_eq!(block.water, Some(rustgis_map::view::BlockWater { depth: Some(8.0), field: Some("prof".into()), bed: None }));
     let again = serde_json::to_value(&saved).unwrap();
     assert_eq!(again["requires"], json!(["terrain-block", "terrain-water", "terrain-block-water"]));
     // One cut to polygons (`terrain_block_polygon.rgis`), its layer and query kept by name.
@@ -18365,7 +18365,7 @@ fn terrain_block_water_needs_the_terrains_water_and_a_depth() {
     for (water, terrain_water, said) in [
         (json!({}), json!({"layer": lagos}), "needs a depth"),
         (json!({"depth": -1}), json!({"layer": lagos}), "0 to 20000"),
-        (json!({"depth": 5, "bed": "x"}), json!({"layer": lagos}), "has no 'bed'"),
+        (json!({"depth": 5, "floor": "x"}), json!({"layer": lagos}), "has no 'floor'"),
         (json!({"field": "nome"}), json!({"layer": lagos}), "isn't numeric"),
         (json!({"field": "x"}), json!({"layer": lagos}), "has no field 'x'"),
         (json!({"depth": 5}), json!(null), "give the terrain a water layer"),
@@ -18425,6 +18425,63 @@ fn terrain_block_water_needs_the_terrains_water_and_a_depth() {
         let notes: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
         assert!(notes.iter().any(|t| t.contains(field) && t.contains(said)), "{notes:?}");
     }
+}
+
+/// A block's water floor read from a bed raster (#2434): `map.terrain` takes a raster layer over
+/// the block's box, alone or with a depth, refuses anything else before the terrain changes,
+/// saves it as a capability of its own, follows the layer's rename and says its removal.
+#[test]
+fn terrain_block_water_bed_is_a_raster_over_the_block() {
+    use base64::Engine;
+    use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster, geotiff};
+    let mut s = Session::new(Project::default());
+    s.run("layer.addDataBytes", &json!({"fileName": "dem.tif", "data": dem_b64()})).unwrap();
+    let dem = s.map().layers.iter().find(|l| l.is_raster()).map(|l| l.name.clone()).unwrap();
+    // Beds of 150 m: one over the DEM, one 10° east of it.
+    for (name, lon) in [("batimetria.tif", 10.0), ("longe.tif", 20.0)] {
+        let gt = GeoTransform { origin_x: lon, origin_y: 45.04, pixel_width: 0.001, pixel_height: -0.001 };
+        let r = Raster::new("bed", 40, 40, vec![vec![150.0; 1600]], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
+        let data = base64::engine::general_purpose::STANDARD.encode(geotiff::write(&r, 0).unwrap());
+        s.run("layer.addDataBytes", &json!({"fileName": name, "data": data})).unwrap();
+    }
+    let named = |s: &Session, start: &str| s.map().layers.iter().find(|l| l.name.starts_with(start)).map(|l| l.name.clone()).unwrap();
+    let (bed, far) = (named(&s, "batimetria"), named(&s, "longe"));
+    let lake = json!([[[10.01, 45.01], [10.03, 45.01], [10.03, 45.03], [10.01, 45.03], [10.01, 45.01]]]);
+    let lakes = json!({"type": "FeatureCollection", "features": [
+        {"type": "Feature", "properties": {"nome": "a"}, "geometry": {"type": "Polygon", "coordinates": lake}},
+    ]});
+    let data = base64::engine::general_purpose::STANDARD.encode(lakes.to_string().as_bytes());
+    s.run("layer.addDataBytes", &json!({"fileName": "lagos.geojson", "data": data})).unwrap();
+    let lagos = named(&s, "lagos");
+    for (water, said) in [
+        (json!({"depth": 5, "bed": lagos}), "isn't a raster layer"),
+        (json!({"depth": 5, "bed": "nada"}), "no layer 'nada'"),
+        (json!({"depth": 5, "bed": 3}), "a raster layer of the bed's heights"),
+        (json!({"depth": 5, "bed": far}), "doesn't overlap the block's box"),
+    ] {
+        let e = s.run("map.terrain", &json!({"layer": dem, "water": {"layer": lagos}, "block": {"water": water}})).unwrap_err();
+        assert!(e.contains(said), "{water}: {e}");
+        assert!(s.map().view.terrain.is_none(), "{water}: refused whole");
+    }
+    // A bed alone is enough; reported and saved with the project, which requires it.
+    let v = s.run("map.terrain", &json!({"layer": dem, "water": {"layer": lagos}, "block": {"water": {"bed": bed}}})).unwrap();
+    assert_eq!(v["block"]["water"], json!({"bed": bed}));
+    let saved = serde_json::to_value(&s.project).unwrap();
+    assert!(saved["requires"].as_array().unwrap().contains(&json!("terrain-block-water-bed")), "{}", saved["requires"]);
+    // A block kept from before is checked again when set: a bed off its box is refused.
+    let before = s.map().view.terrain.clone();
+    let e = s.run("map.terrain", &json!({"block": {"water": {"bed": far}}})).unwrap_err();
+    assert!(e.contains("doesn't overlap") && e.contains("Terrain stays as it was"), "{e}");
+    assert_eq!(s.map().view.terrain, before);
+    // The bed is kept by name through a rename, and its removal is said.
+    s.run("layer.rename", &json!({"layer": bed, "name": "fundo"})).unwrap();
+    let kept = |s: &Session| s.map().view.terrain.as_ref().and_then(|t| t.block.as_ref()).and_then(|b| b.water.clone()).and_then(|w| w.bed);
+    assert_eq!(kept(&s).as_deref(), Some("fundo"));
+    let mark = s.notice_mark();
+    s.run("layer.remove", &json!({"layer": "fundo"})).unwrap();
+    let notes: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+    assert!(notes.iter().any(|t| t.contains("water bed 'fundo' was removed") && t.contains("show no water")), "{notes:?}");
+    assert_eq!(kept(&s).as_deref(), Some("fundo"));
 }
 
 /// A terrain's water on a layer read a view at a time (#2305), which `map.terrain` refuses: the
@@ -18487,7 +18544,7 @@ fn a_projects_water_fields_its_layer_lost_are_cleared_as_it_opens() {
     crate::cmd::project::reset_to(&mut opened, saved);
     let t = opened.map().view.terrain.clone().unwrap();
     assert!(t.water.as_ref().is_some_and(|w| w.level.is_none()), "{t:?}");
-    assert_eq!(t.block.and_then(|b| b.water), Some(BlockWater { depth: Some(8.0), field: None }));
+    assert_eq!(t.block.and_then(|b| b.water), Some(BlockWater { depth: Some(8.0), field: None, bed: None }));
     assert_eq!(said(&opened, "Map: the terrain's water level field 'nivel' isn't a numeric field of 'lagos'"), 1, "{:?}", opened.notices);
     let depth = "the block's water depth field 'prof' isn't a numeric field of 'lagos', so its walls show all the water 8 m deep";
     assert_eq!(said(&opened, depth), 1, "{:?}", opened.notices);
