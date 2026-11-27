@@ -6,9 +6,8 @@ use rustgis_data::{Dataset, Field, FieldType, Geometry, GeometryType, Value as D
 const COLUMNS: &str = "the chart's labels and values leave its columns no height: it draws as a placeholder until its box is taller";
 const THIN: &str = "the chart is too small for its bars: some draw under 1 pt until its box is larger";
 
-/// A layout "Charts" over a map with the points layer "Shops": `region` (E, N, S), `kind` and
-/// `n`, East's shop of kind city without a number when `unnumbered`.
-fn shops(unnumbered: bool) -> Session {
+/// A layout "Charts" over a map with the points layer "Shops": `region` (E, N, S), `kind` and `n`.
+fn shops() -> Session {
     let mut s = Session::new(sample::world_project());
     let mut ds = Dataset::new(
         "Shops",
@@ -16,8 +15,10 @@ fn shops(unnumbered: bool) -> Session {
         vec![Field::new("region", FieldType::Text), Field::new("kind", FieldType::Text), Field::new("n", FieldType::Double)],
     );
     for (region, kind) in [("E", "city"), ("E", "town"), ("N", "town"), ("S", "town")] {
-        let n = if unnumbered && kind == "city" { Data::Null } else { Data::Float(1.0) };
-        ds.push(Some(Geometry::Point(rustgis_data::Coord::new(0.0, 0.0))), vec![Data::Text(region.into()), Data::Text(kind.into()), n]);
+        ds.push(
+            Some(Geometry::Point(rustgis_data::Coord::new(0.0, 0.0))),
+            vec![Data::Text(region.into()), Data::Text(kind.into()), Data::Float(1.0)],
+        );
     }
     s.map_mut().add_dataset(ds);
     s.run("layout.new", &json!({"name": "Charts"})).unwrap();
@@ -59,7 +60,7 @@ fn of(s: &Session, id: u64, note: &str) -> String {
 
 #[test]
 fn an_export_says_what_each_chart_leaves_out() {
-    let mut s = shops(false);
+    let mut s = shops();
     let id = chart(&mut s, json!({"bars": 2}));
     let want =
         of(&s, id, "the chart draws 2 of 3 bars: 1 left out (\"bars\" draws up to 100, \"other\": true gathers the rest in an Other bar)");
@@ -73,7 +74,7 @@ fn an_export_says_what_each_chart_leaves_out() {
 
 #[test]
 fn an_export_reads_the_layer_as_it_is_now() {
-    let mut s = shops(false);
+    let mut s = shops();
     let id = chart(&mut s, json!({}));
     assert!(exported(&mut s, "png").is_empty(), "nothing lost, nothing said");
     let layer = s.map_mut().layers.iter_mut().find(|l| l.name == "Shops").unwrap();
@@ -87,7 +88,7 @@ fn an_export_reads_the_layer_as_it_is_now() {
 
 #[test]
 fn a_map_series_export_says_a_pages_losses_once() {
-    let mut s = shops(false);
+    let mut s = shops();
     s.run("layout.series", &json!({"layer": "Shops", "nameField": "region"})).unwrap();
     // On page 2 alone, East's city and town take different colours.
     s.map_mut().layers.iter_mut().find(|l| l.name == "Shops").unwrap().symbol_by.fill =
@@ -105,7 +106,7 @@ fn a_map_series_export_says_a_pages_losses_once() {
 
 #[test]
 fn an_export_lists_ten_chart_notices_and_counts_the_rest() {
-    let mut s = shops(false);
+    let mut s = shops();
     for _ in 0..12 {
         chart(&mut s, json!({"bars": 2}));
     }
@@ -116,7 +117,7 @@ fn an_export_lists_ten_chart_notices_and_counts_the_rest() {
 
 #[test]
 fn an_export_says_nothing_of_a_chart_it_does_not_draw() {
-    let mut s = shops(false);
+    let mut s = shops();
     let id = chart(&mut s, json!({"bars": 2}));
     s.run("layout.update", &json!({"element": id, "visible": false})).unwrap();
     assert!(exported(&mut s, "png").is_empty(), "hidden");
@@ -125,9 +126,27 @@ fn an_export_says_nothing_of_a_chart_it_does_not_draw() {
     assert!(exported(&mut s, "png").is_empty(), "its layer is gone");
 }
 
+/// The assistant's view of a layout says what exporting it says, of the charts in the region it
+/// shows alone when it shows one.
+#[test]
+fn a_view_of_the_layout_says_the_notices_of_the_charts_it_shows() {
+    let mut s = shops();
+    let id = chart(&mut s, json!({"bars": 2, "x": 10, "y": 10, "w": 60, "h": 40}));
+    let mut viewed = |region| {
+        let mark = s.notice_mark();
+        crate::cmd::layout::layout_png(&mut s, 0, 36.0, region).unwrap();
+        s.notices_since(mark).iter().map(|n| n.text.clone()).filter(|t| t.contains("chart")).collect::<Vec<_>>()
+    };
+    for region in [None, Some([0.0, 0.0, 40.0, 30.0])] {
+        let said = viewed(region);
+        assert!(said.len() == 1 && said[0].contains(&format!("({id}): the chart draws 2 of 3 bars")), "{region:?}: {said:?}");
+    }
+    assert!(viewed(Some([150.0, 100.0, 40.0, 30.0])).is_empty(), "a region without it");
+}
+
 #[test]
 fn a_chart_of_columns_without_height_says_so() {
-    let mut s = shops(false);
+    let mut s = shops();
     // 10 mm high: its title, a line of labels and one of values leave the columns nothing.
     let small = 10.0;
     let mark = s.notice_mark();
@@ -146,7 +165,7 @@ fn a_chart_of_columns_without_height_says_so() {
 
 #[test]
 fn a_chart_with_bars_under_a_point_says_so() {
-    let mut s = shops(false);
+    let mut s = shops();
     let id = chart(&mut s, json!({"h": 60, "w": 80}));
     assert!(exported(&mut s, "png").is_empty(), "room enough");
     for (key, value) in [("h", 5.0), ("w", 1.0)] {

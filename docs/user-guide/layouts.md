@@ -770,7 +770,7 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
   says so. From a command:
   `layout.update={"element":6,"group":"continent","stack":"income_grp"}`, and `"stack":""` for
   whole bars again; `layout.addElement` takes it too.
-- **What a chart says**: exporting a layout says again what each chart it shows leaves out, and
+- **What a chart says**: exporting a layout (or the Assistant viewing it) says again what each chart it shows leaves out, and
   whether its box is too small for it, read as the exported page draws it, on every page of a map
   series it exports: each notice once, with the chart's name and element number, the first ten
   and how many more there are. A box is too small when columns are left no height by their labels
