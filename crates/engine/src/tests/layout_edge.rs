@@ -112,6 +112,13 @@ fn a_null_paper_is_a_white_page() {
 }
 
 #[test]
+fn a_white_paper_is_stored_as_none_as_layout_page_stores_it() {
+    let mut s = world();
+    edge(&mut s, json!({"paper": "#FFFFFF"})).unwrap();
+    assert_eq!(last(&s).paper, None);
+}
+
+#[test]
 fn a_paper_that_is_no_opaque_colour_is_refused() {
     let mut s = world();
     for paper in [json!("#12"), json!("red"), json!("#0B1B2B80"), json!(5)] {
@@ -151,6 +158,21 @@ fn a_long_kicker_wraps_within_the_page() {
     assert!(kicker.x + kicker.w <= l.width && kicker.y + kicker.h <= title.y + 1e-6);
 }
 
+/// A kicker naming the map is kept as typed and wraps as it is drawn, so it follows a rename.
+#[test]
+fn a_kicker_with_the_map_token_keeps_it_and_wraps_as_drawn() {
+    let mut s = world();
+    s.run("map.rename", &json!({"name": "a very long location map name ".repeat(5)})).unwrap();
+    edge(&mut s, json!({"profile": "a5-portrait", "kicker": "{map}"})).unwrap();
+    let l = last(&s);
+    let (kicker, title) = (named(l, "Kicker"), named(l, "Title"));
+    let ElementKind::Text { text, wrap, .. } = &kicker.kind else { panic!() };
+    assert_eq!((text.as_str(), *wrap), ("{map}", true));
+    // More than one line's height, and clear of the title.
+    assert!(kicker.h > 2.0 * crate::render::layout::line_pitch_mm(9.0 * l.width / 210.0), "{}", kicker.h);
+    assert!(kicker.y + kicker.h <= title.y + 1e-6);
+}
+
 #[test]
 fn a_sheet_with_no_header_starts_its_map_at_the_top_margin() {
     let mut s = world();
@@ -188,6 +210,14 @@ fn a_figure_leaves_the_edge_style_to_its_caption() {
     let mut s = world();
     let r = s.run("layout.publication", &json!({"extent": PIAUI, "profile": "figure-1col", "style": "edge"})).unwrap();
     assert!(r["warnings"].to_string().contains("style \\\"edge\\\""), "{r}");
+}
+
+#[test]
+fn an_edge_sheet_is_one_undo_step() {
+    let mut s = world();
+    edge(&mut s, json!({})).unwrap();
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert!(s.project.layouts.is_empty());
 }
 
 #[test]

@@ -150,7 +150,8 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
     if let Some(k) = ["paper", "kicker"].into_iter().find(|k| !edge && p.get(*k).is_some_and(|v| !v.is_null())) {
         return Err(format!("{k} is for a sheet with \"style\": \"edge\""));
     }
-    let paper = crate::cmd::opaque_color(p, "paper")?.flatten();
+    // White is the page's own colour, kept as none, as `layout.page` keeps it.
+    let paper = crate::cmd::opaque_color(p, "paper")?.flatten().filter(|c| *c != Rgba::rgb(0xFF, 0xFF, 0xFF));
     let kicker = one("kicker")?;
     // Where the coverage grid the placement searches is written as an image (#1379).
     let coverage_path = match p.get("coverage") {
