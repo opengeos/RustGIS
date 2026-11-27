@@ -123,6 +123,8 @@ struct CmdUniforms {
     /// Extrusions: the light's direction (map units, unit length) and how far a shadow falls per
     /// map unit of height (map units), both turned with the view as MapLibre's light is.
     light: [f32; 4],
+    /// A tiled layer mesh's square, from its origin: least x and y, greatest x and y.
+    square: [f32; 4],
 }
 
 impl CmdUniforms {
@@ -142,7 +144,13 @@ impl CmdUniforms {
                 rustgis_engine::map::camera::FAR as f32,
             ],
             light: extrusion_light(cam),
+            square: [0.0; 4],
         }
+    }
+
+    /// With a tiled layer mesh's square.
+    fn in_square(self, square: Option<[f32; 4]>) -> Self {
+        CmdUniforms { square: square.unwrap_or([0.0; 4]), ..self }
     }
 }
 
@@ -239,6 +247,9 @@ pub(crate) const PREMULTIPLIED_BLEND: wgpu::BlendState = wgpu::BlendState {
 /// must match its sample count, so the multisampling happens in our own pass.
 pub(crate) struct GpuMapRenderer {
     mesh_pipeline: wgpu::RenderPipeline,
+    /// A tiled layer mesh, drawn only where its square marked the stencil, and those squares.
+    mesh_in_square_pipeline: wgpu::RenderPipeline,
+    mesh_square_pipeline: wgpu::RenderPipeline,
     point_pipeline: wgpu::RenderPipeline,
     image_pipeline: wgpu::RenderPipeline,
     backdrop_pipeline: wgpu::RenderPipeline,
@@ -512,6 +523,26 @@ impl GpuMapRenderer {
         );
         let mesh_pipeline =
             pipeline("mapgpu_mesh", "vs_mesh", "fs_mesh", &mesh_buffers, &[&cmd_layout], scene_format, samples, flat.clone());
+        let mesh_in_square_pipeline = pipeline(
+            "mapgpu_mesh_in_square",
+            "vs_mesh",
+            "fs_mesh",
+            &mesh_buffers,
+            &[&cmd_layout],
+            scene_format,
+            samples,
+            stencil(inside, 0),
+        );
+        let mesh_square_pipeline = pipeline(
+            "mapgpu_mesh_square",
+            "vs_mesh_square",
+            "fs_tile_square",
+            &[],
+            &[&cmd_layout],
+            scene_format,
+            samples,
+            stencil(mark, 0xff),
+        );
         let point_pipeline =
             pipeline("mapgpu_points", "vs_marker", "fs_marker", &point_buffers, &[&cmd_layout], scene_format, samples, flat.clone());
         let tile_pipeline = pipeline(
@@ -546,6 +577,8 @@ impl GpuMapRenderer {
         let blit_pipeline = pipeline("mapgpu_blit", "vs_blit", "fs_blit", &[], &[&image_layout, &blit_layout], rs.target_format, 1, None);
         GpuMapRenderer {
             mesh_pipeline,
+            mesh_in_square_pipeline,
+            mesh_square_pipeline,
             point_pipeline,
             image_pipeline,
             backdrop_pipeline,
@@ -1123,6 +1156,8 @@ pub(crate) enum SceneDraw {
         bind: wgpu::BindGroup,
         origin: [f64; 2],
         clip: CmdClip,
+        /// A tile's square, which the mesh is drawn inside ([`DrawCmd::Mesh`]).
+        square: Option<[f32; 4]>,
     },
     /// A layer's markers, shared as a mesh's buffers are.
     Points {
@@ -1380,11 +1415,11 @@ impl SceneBuffers {
         for (i, cmd) in scene.cmds.iter().enumerate() {
             let clip = scene.clips.get(i).copied().unwrap_or(CmdClip::ALL);
             match cmd {
-                DrawCmd::Mesh { origin, vertices, indices } => {
+                DrawCmd::Mesh { origin, vertices, indices, square } => {
                     if indices.is_empty() {
                         continue;
                     }
-                    let uniforms = CmdUniforms::new(&camera, size, ppp, *origin, tilt, clip);
+                    let uniforms = CmdUniforms::new(&camera, size, ppp, *origin, tilt, clip).in_square(*square);
                     let uniforms = owned_buffer(
                         device,
                         &wgpu::util::BufferInitDescriptor {
@@ -1409,6 +1444,7 @@ impl SceneBuffers {
                         bind,
                         origin: *origin,
                         clip,
+                        square: *square,
                     });
                 }
                 DrawCmd::Points { origin, instances } => {
@@ -1620,11 +1656,11 @@ impl SceneBuffers {
     pub(crate) fn set_camera(&self, queue: &wgpu::Queue, cam: &Camera) {
         *self.shown.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = *cam;
         for d in &self.draws {
-            let (uniforms, origin, clip) = match d {
-                SceneDraw::Mesh { uniforms, origin, clip, .. }
-                | SceneDraw::Points { uniforms, origin, clip, .. }
+            let (uniforms, origin, clip, square) = match d {
+                SceneDraw::Mesh { uniforms, origin, clip, square, .. } => (uniforms, origin, clip, *square),
+                SceneDraw::Points { uniforms, origin, clip, .. }
                 | SceneDraw::Extrusion { uniforms, origin, clip, .. }
-                | SceneDraw::Tiles { uniforms, origin, clip, .. } => (uniforms, origin, clip),
+                | SceneDraw::Tiles { uniforms, origin, clip, .. } => (uniforms, origin, clip, None),
                 SceneDraw::Backdrop { uniforms, .. } => {
                     if let Some(t) = &self.tilt {
                         let u = BackdropUniforms::new(cam, self.size, self.ppp, self.clear, t);
@@ -1642,7 +1678,7 @@ impl SceneBuffers {
                 }
                 SceneDraw::Image { .. } | SceneDraw::LiveTiles { .. } => continue,
             };
-            let u = CmdUniforms::new(cam, self.size, self.ppp, *origin, self.tilt.as_ref(), *clip);
+            let u = CmdUniforms::new(cam, self.size, self.ppp, *origin, self.tilt.as_ref(), *clip).in_square(square);
             queue.write_buffer(uniforms, 0, bytemuck::bytes_of(&u));
         }
     }
@@ -1667,12 +1703,27 @@ pub(crate) struct SceneCallback {
 fn paint_draws(renderer: &GpuMapRenderer, draws: &[SceneDraw], rp: &mut wgpu::RenderPass<'_>) {
     for d in draws {
         match d {
-            SceneDraw::Mesh { vertices, indices, index_count, bind, .. } => {
+            SceneDraw::Mesh { vertices, indices, index_count, bind, square: None, .. } => {
                 rp.set_pipeline(&renderer.mesh_pipeline);
                 rp.set_bind_group(0, bind, &[]);
                 rp.set_vertex_buffer(0, vertices.slice(..));
                 rp.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
                 rp.draw_indexed(0..*index_count, 0, 0..1);
+            }
+            // A tile's mesh: its square marks the stencil, the mesh draws only there, and the
+            // square clears it again for what comes next.
+            SceneDraw::Mesh { vertices, indices, index_count, bind, square: Some(_), .. } => {
+                rp.set_bind_group(0, bind, &[]);
+                rp.set_pipeline(&renderer.mesh_square_pipeline);
+                rp.set_stencil_reference(1);
+                rp.draw(0..6, 0..1);
+                rp.set_pipeline(&renderer.mesh_in_square_pipeline);
+                rp.set_vertex_buffer(0, vertices.slice(..));
+                rp.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
+                rp.draw_indexed(0..*index_count, 0, 0..1);
+                rp.set_pipeline(&renderer.mesh_square_pipeline);
+                rp.set_stencil_reference(0);
+                rp.draw(0..6, 0..1);
             }
             SceneDraw::Points { instances, count, bind, .. } => {
                 rp.set_pipeline(&renderer.point_pipeline);
@@ -1912,6 +1963,7 @@ mod tests {
                 nv
             ]),
             indices: Arc::new(vec![0u32; ni]),
+            square: None,
         };
         assert!(cmd_fits(&limits, &mesh(4, 6)), "small mesh fits");
         assert!(!cmd_fits(&limits, &mesh(100, 6)), "a vertex buffer over max_buffer_size declines");
@@ -1985,6 +2037,7 @@ mod tests {
                     origin: [0.0, 0.0],
                     vertices: Arc::new(vec![v(0.0, 0.0), v(100.0, 0.0), v(0.0, 100.0)]),
                     indices: Arc::new(vec![0, 1, 2]),
+                    square: None,
                 },
                 DrawCmd::Points {
                     origin: [0.0, 0.0],
@@ -2033,9 +2086,12 @@ mod tests {
                 .cmds
                 .iter()
                 .filter_map(|c| match c {
-                    DrawCmd::Mesh { origin, vertices, indices } => {
-                        Some(DrawCmd::Mesh { origin: *origin, vertices: Arc::new(vertices.to_vec()), indices: Arc::new(indices.to_vec()) })
-                    }
+                    DrawCmd::Mesh { origin, vertices, indices, square } => Some(DrawCmd::Mesh {
+                        origin: *origin,
+                        vertices: Arc::new(vertices.to_vec()),
+                        indices: Arc::new(indices.to_vec()),
+                        square: *square,
+                    }),
                     _ => share(c),
                 })
                 .collect(),
