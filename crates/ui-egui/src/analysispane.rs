@@ -3761,6 +3761,37 @@ mod tests {
         assert_eq!(notices.last().map(|n| n.text.as_str()), Some("The paste would make the script larger than 1 MB: nothing was pasted"));
     }
 
+    /// The box's right-click Paste, whose clipboard comes on a later frame, is limited too: the box
+    /// has the focus when it lands (#3057).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_paste_from_the_boxs_menu_is_limited_too() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::Queryable;
+        let mut app = RustGisApp::with_sample();
+        app.run("ui.pane.script", serde_json::json!({})).unwrap();
+        app.workflow.script = "map.zoomFull".into();
+        let builder = egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).with_max_steps(64);
+        let mut h = builder.build_ui_state(
+            |ui, app: &mut RustGisApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run_steps(4);
+        h.get_by_role(Role::MultilineTextInput).click_secondary();
+        h.run_steps(2);
+        h.get_by_label("Paste Ctrl+V").click();
+        h.run_steps(3);
+        h.event(egui::Event::Paste("a".repeat(crate::SCRIPT_FILE_MAX_BYTES)));
+        h.run_steps(2);
+        assert_eq!(h.state().workflow.script, "map.zoomFull");
+        let said = "The paste would make the script larger than 1 MB: nothing was pasted";
+        assert!(h.state().session.notices.iter().any(|n| n.text == said));
+    }
+
     /// The limit counts bytes, less those of the selection the paste replaces, and the pastes of one
     /// frame together; a script already over it takes a paste that doesn't make it larger (#3057).
     #[cfg(not(target_arch = "wasm32"))]
