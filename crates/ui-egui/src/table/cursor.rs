@@ -70,8 +70,9 @@ impl Shown<'_> {
             Some(i) => Some(tag(&self.ds.fields, i)?),
             None => None,
         };
+        let named = field.as_ref().map_or(0, |(name, _)| self.ds.fields.iter().filter(|f| &f.name == name).count());
         let source = self.ds.features.allocation_key();
-        Some(Current { view: self.view, table_instance: self.table_instance, fid, field, row, at, source })
+        Some(Current { view: self.view, table_instance: self.table_instance, fid, field, named, row, at, source })
     }
 
     /// Where an arrow key puts the current cell: one row or column on, as shown, or None at an
@@ -134,6 +135,9 @@ pub(super) struct Current {
     fid: u64,
     /// None for the Feature ID cell.
     field: Option<(String, usize)>,
+    /// How many fields had its field's name. With another number of them (one of a repeated name
+    /// added or deleted), which of them it was can't be told, and the cell is dropped.
+    named: usize,
     /// The feature's row in the dataset, and its place among the rows shown, when last found.
     /// Looked at first, so the rows are searched only once they or their order have changed.
     row: usize,
@@ -146,8 +150,11 @@ impl Current {
     /// The index of its field: Some(None) for Feature ID, None when the field has gone.
     fn field_index(&self, ds: &Dataset) -> Option<Option<usize>> {
         let Some((name, nth)) = &self.field else { return Some(None) };
-        let mut named = ds.fields.iter().enumerate().filter(|(_, f)| &f.name == name);
-        named.nth(*nth).map(|(i, _)| Some(i))
+        let named = || ds.fields.iter().enumerate().filter(|(_, f)| &f.name == name);
+        if named().count() != self.named {
+            return None;
+        }
+        named().nth(*nth).map(|(i, _)| Some(i))
     }
 
     /// Keeps up with the table as it is now. False, for the cell to be dropped, when the table

@@ -1420,6 +1420,34 @@ mod tests {
         (app, id)
     }
 
+    /// Of two fields of one name, one is deleted: which of them the current cell was in can't be
+    /// told any more, so there is none, rather than one in the field that is left.
+    #[test]
+    fn the_current_cell_goes_when_a_field_of_its_name_does() {
+        use rustgis_engine::data::{FieldType, Geometry, GeometryType};
+        use rustgis_engine::geom::Coord;
+        let mut app = RustGisApp::new(rustgis_engine::Session::new(rustgis_engine::Project::default()));
+        let schema = vec![Field::new("Name", FieldType::Text), Field::new("v", FieldType::Text), Field::new("v", FieldType::Text)];
+        let mut ds = Dataset::new("Twins", GeometryType::Point, schema);
+        ds.push(
+            Some(Geometry::Point(Coord::new(0.0, 0.0))),
+            vec![V::Text("Alpha".into()), V::Text("first".into()), V::Text("second".into())],
+        );
+        let id = app.session.map_mut().add_dataset(ds);
+        app.session.table_layer = Some(id);
+        let mut h = window(app);
+        h.get_by_label("first").click();
+        h.run_steps(3);
+        assert!(h.state().table.current.is_some(), "the click made the cell current");
+        // An unrelated field added leaves it.
+        h.state_mut().run("edit.addField", json!({"layer": id, "name": "Rank", "type": "long"})).unwrap();
+        h.run_steps(3);
+        assert!(h.state().table.current.is_some(), "another field added leaves the current cell");
+        h.state_mut().run("edit.deleteField", json!({"layer": id, "field": "v"})).unwrap();
+        h.run_steps(3);
+        assert!(h.state().table.current.is_none(), "one of the two fields named v has gone");
+    }
+
     /// The current cell as its row's Name and its field's name, "Feature ID" for that column.
     fn current(h: &Window) -> Option<(String, String)> {
         let app = h.state();
