@@ -1017,14 +1017,15 @@ fn behind_a_dialog(app: &RustGisApp, ctx: &egui::Context) -> bool {
         || app.ui.shortcut_editor.capturing()
 }
 
-/// The dialogs and questions that are up, and the project, as one number: it differs once a click
-/// has opened or answered one, or another project has taken this one's place. (egui says a modal
-/// dialog is up only from the frame after it first shows.)
+/// The dialogs and questions that are up, whether the File menu's backstage covers the window, and
+/// the project, as one number: it differs once a click (or a key of the same frame) has opened or
+/// answered one, or another project has taken this one's place. (egui says a modal dialog is up
+/// only from the frame after it first shows.)
 fn dialogs_up(app: &RustGisApp) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     let asked = (app.map.deleting.is_some(), app.mb.asking(), crate::saveprompt::waiting(app));
-    (app.dialogs.open, asked, app.ui.command_search.is_some(), app.session.opened).hash(&mut hasher);
+    (app.dialogs.open, asked, app.ui.command_search.is_some(), app.ui.backstage, app.session.opened).hash(&mut hasher);
     hasher.finish()
 }
 
