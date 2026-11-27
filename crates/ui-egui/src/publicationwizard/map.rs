@@ -6,7 +6,8 @@ use super::*;
 pub enum Area {
     /// The view, left to `layout.publication`.
     View,
-    /// The features a layer shows: the layer's id, in the map named.
+    /// A layer's features, as Zoom To Layer frames them (hidden or not): the layer's id, in the
+    /// map named.
     Layer { map: String, id: u32 },
     /// The selected features of the map named.
     Selection { map: String },
