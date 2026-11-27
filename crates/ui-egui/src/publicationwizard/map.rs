@@ -39,7 +39,7 @@ pub(super) fn map_step(ui: &mut egui::Ui, s: &Session, d: &mut Draft) {
                 _ => None,
             };
             let top = framable().next().map(|l| l.id);
-            if ui.add_enabled(top.is_some(), egui::RadioButton::new(matches!(d.area, Area::Layer { .. }), tl!("Layer"))).clicked()
+            if ui.add_enabled(top.is_some(), egui::RadioButton::new(picked.is_some(), tl!("Layer"))).clicked()
                 && let Some(id) = picked.or(top)
             {
                 d.area = Area::Layer { map: map.name.clone(), id };
@@ -60,7 +60,9 @@ pub(super) fn map_step(ui: &mut egui::Ui, s: &Session, d: &mut Draft) {
         });
         ui.end_row();
         ui.label("");
-        let selection = egui::RadioButton::new(matches!(d.area, Area::Selection { .. }), tl!("Selection"));
+        // A pick made in another map, or before this one was renamed, marks nothing.
+        let selected = matches!(&d.area, Area::Selection { map: name } if *name == map.name);
+        let selection = egui::RadioButton::new(selected, tl!("Selection"));
         if ui
             .add_enabled(map.selection_count() > 0, selection)
             .on_hover_text(tl!("The selected features."))
@@ -86,7 +88,8 @@ pub(super) fn area_label(s: &Session, area: &Area) -> String {
             .iter()
             .find(|l| l.id == *id && s.map().name == *map)
             .map_or_else(|| tl!("(none)").to_string(), |l| i18n::fmt("Layer: {layer}", &[("layer", &l.name)])),
-        Area::Selection { .. } => tl!("Selected features").to_string(),
+        Area::Selection { map } if s.map().name == *map => tl!("Selected features").to_string(),
+        Area::Selection { .. } => tl!("(none)").to_string(),
     }
 }
 
@@ -112,7 +115,7 @@ pub(super) fn area_extent(s: &Session, area: &Area) -> Result<Option<[f64; 4]>, 
     let extent = match area {
         Area::View => return Ok(None),
         Area::Layer { map: name, .. } | Area::Selection { map: name } if *name != map.name => {
-            return Err(tl!("Another map is open since the map extent was picked: pick it again.").to_string());
+            return Err(tl!("The map was switched or renamed since the map extent was picked: pick it again.").to_string());
         }
         Area::Layer { id, .. } => map
             .layers
@@ -176,8 +179,8 @@ mod tests {
         assert!(got.is_some_and(|[w, s, e, n]| w < e && s < n), "one point, framed: {got:?}");
     }
 
-    /// A layer removed, a selection cleared or another map since the area was picked is refused,
-    /// saying so, rather than framing something else.
+    /// A layer removed, a selection cleared or another map (or the same one renamed) since the
+    /// area was picked is refused, saying so, rather than framing something else.
     #[test]
     fn an_area_gone_is_refused() {
         let mut app = app();
@@ -192,7 +195,7 @@ mod tests {
             Err("The layer picked is no longer in the map: pick the map extent again.".to_string())
         );
         app.run("map.new", json!({})).unwrap();
-        let other = Err("Another map is open since the map extent was picked: pick it again.".to_string());
+        let other = Err("The map was switched or renamed since the map extent was picked: pick it again.".to_string());
         assert_eq!(area_extent(&app.session, &layer), other);
         assert_eq!(area_extent(&app.session, &selection), other);
     }
@@ -217,6 +220,29 @@ mod tests {
         h.get_by_role_and_label(Role::RadioButton, "Selection").click();
         h.run_steps(4);
         assert!(matches!(area(&h), Area::Selection { .. }), "{:?}", area(&h));
+    }
+
+    /// A pick made in another map, or before the map was renamed, shows as no pick: neither radio
+    /// marked, the review naming none.
+    #[test]
+    fn a_pick_from_a_renamed_map_shows_as_none() {
+        for layer in [true, false] {
+            let mut app = app();
+            open(&mut app);
+            let map = app.session.map().name.clone();
+            app.run("select.byAttributes", json!({"layer": "Cities", "where": "name = 'Tokyo'"})).unwrap();
+            let id = app.session.map().layers.last().unwrap().id;
+            let area = if layer { Area::Layer { map, id } } else { Area::Selection { map } };
+            app.run("map.rename", json!({"name": "Renamed"})).unwrap();
+            assert_eq!(area_label(&app.session, &area), "(none)", "layer: {layer}");
+            let d = app.dialogs.publication.as_mut().unwrap();
+            (d.area, d.step) = (area, Step::Map);
+            let h = harness(app);
+            for name in ["View", "Layer", "Selection"] {
+                let radio = h.get_by_role_and_label(Role::RadioButton, name);
+                assert_ne!(radio.accesskit_node().toggled(), Some(egui::accesskit::Toggled::True), "{name}, layer: {layer}");
+            }
+        }
     }
 
     /// Create frames the layer picked and names the layout as typed; a figure takes both too.
