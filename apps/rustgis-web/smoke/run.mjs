@@ -6,7 +6,7 @@
 // fails at run time shows (AGENTS.md › Never break wasm).
 //
 //   cd apps/rustgis-web && trunk build --release && cargo xtask web-pwa ../../dist/web
-//   node smoke/run.mjs [--dist ../../dist/web] [--chrome /path/to/chrome] [--limit ms] [--keep]
+//   node smoke/run.mjs [--dist ../../dist/web] [--chrome /path/to/chrome] [--limit ms] [--shot failure.png] [--keep]
 //
 // (CI packages its dev build instead; see the `wasm` job in .github/workflows/ci.yml.)
 //
@@ -100,12 +100,28 @@ browser.on("error", (e) => {
   console.error(`smoke: FAILED: could not start ${chrome}: ${e.message}`);
   process.exit(1);
 });
-const exited = new Promise((ok) => browser.on("exit", ok));
-
 // The DevTools protocol: JSON messages, each ended by a NUL byte, on file descriptors 3 and 4.
 let next = 0, buffer = "";
 const calls = new Map();
 const listeners = new Set();
+// Fails a request still waiting for its answer, so the run reaches its clean-up rather than hang.
+const settle = (id, error) => {
+  const call = calls.get(id);
+  if (!call) return;
+  calls.delete(id);
+  clearTimeout(call.timer);
+  call.fail(error);
+};
+let closed = false;
+const exited = new Promise((ok) =>
+  browser.on("exit", (code, signal) => {
+    closed = true;
+    for (const id of [...calls.keys()]) settle(id, new Error(`Chrome stopped (${signal ?? code}) before answering`));
+    ok();
+  }),
+);
+// A write to a Chrome that has stopped fails its request (above), not the run.
+browser.stdio[3].on("error", () => {});
 browser.stdio[4].on("data", (chunk) => {
   buffer += chunk.toString();
   let end;
@@ -114,16 +130,20 @@ browser.stdio[4].on("data", (chunk) => {
     buffer = buffer.slice(end + 1);
     if (msg.id !== undefined) {
       const call = calls.get(msg.id);
+      if (!call) continue;
       calls.delete(msg.id);
-      if (msg.error) call?.fail(new Error(`${call.method}: ${msg.error.message}`));
-      else call?.ok(msg.result);
+      clearTimeout(call.timer);
+      if (msg.error) call.fail(new Error(`${call.method}: ${msg.error.message}`));
+      else call.ok(msg.result);
     } else for (const l of [...listeners]) l(msg);
   }
 });
 const send = (method, params = {}, sessionId) =>
   new Promise((ok, fail) => {
+    if (closed) return fail(new Error(`${method}: Chrome has stopped`));
     const id = ++next;
-    calls.set(id, { ok, fail, method });
+    const timer = setTimeout(() => settle(id, new Error(`${method}: no answer within ${LIMIT_MS / 1000} s`)), LIMIT_MS);
+    calls.set(id, { ok, fail, method, timer });
     browser.stdio[3].write(JSON.stringify({ id, method, params, sessionId }) + "\0");
   });
 // The next event `method` for which `test` holds, or an error naming `what` after the limit, or
@@ -194,9 +214,33 @@ const type = async (text) => {
   }
   await frames();
 };
+// Waits until `expression` holds in the page, a frame at a time, or fails naming `what`.
+const until = async (expression, what) => {
+  const deadline = Date.now() + LIMIT_MS;
+  while (!(await js(expression))) {
+    if (crashed) throw new Error(`${what}: the page stopped with an error`);
+    if (Date.now() > deadline) throw new Error(`${what} within ${LIMIT_MS / 1000} s`);
+    await frames();
+  }
+};
+// Where the keys go: eframe focuses a hidden <input> while egui edits text (a search box, a file
+// name) and the canvas otherwise, so a key is sent only once the app is ready for it.
+const typing = (what) => until(`document.activeElement?.tagName === "INPUT"`, `no text box took the keys for ${what}`);
+const onCanvas = (what) => until(`document.activeElement?.id === "rustgis_canvas"`, `the app didn't take ${what}`);
+// eframe takes keys only while it counts the canvas as focused, which it checks as it draws a
+// frame or on a focus event it can miss while busy (starting up), so an idle app can drop the
+// next key. Moving the pointer over the map makes it draw, and so check, first.
+let nudges = 0;
+const shortcut = async (key, what) => {
+  await onCanvas(what);
+  await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 800 + (nudges++ % 2), y: 450 }, session);
+  await frames();
+  await press(key, true);
+};
 // Runs a command from Command Search (Ctrl+K), by the name it shows there.
 const search = async (name) => {
-  await press("k", true);
+  await shortcut("k", "Ctrl+K");
+  await typing("Command Search");
   await type(name);
   await press("Enter");
 };
@@ -219,7 +263,7 @@ const start = async () => {
     await frames();
   }
   await js(`document.getElementById("rustgis_canvas").focus(), true`);
-  await frames();
+  await onCanvas("the keyboard after starting");
 };
 
 // Downloads that have finished, by id: a small one can finish before its start is seen.
@@ -227,12 +271,23 @@ const finished = new Set();
 listeners.add(({ method, params }) => {
   if (method === "Browser.downloadProgress" && params.state === "completed") finished.add(params.guid);
 });
-// Saves the project (Ctrl+S, then Save in the Save As dialog) and returns the downloaded file.
+// Saves the project and returns the downloaded file. Ctrl+S asks for a file name the first time
+// (Save As, whose name box takes Enter); a project with a name downloads straight away.
 let saves = 0;
 const save = async () => {
   const begun = event("Browser.downloadWillBegin", "download after Save");
-  await press("s", true);
-  await press("Enter");
+  let started = false;
+  begun.then(() => (started = true), () => {});
+  await shortcut("s", "Ctrl+S");
+  const deadline = Date.now() + LIMIT_MS;
+  while (!started) {
+    if (await js(`document.activeElement?.tagName === "INPUT"`)) {
+      await press("Enter");
+      break;
+    }
+    if (crashed || Date.now() > deadline) break;
+    await frames();
+  }
   const { guid, suggestedFilename } = await begun;
   if (!finished.has(guid)) await event("Browser.downloadProgress", "finished download", (p) => p.guid === guid && p.state === "completed");
   const file = join(downloads, `save-${++saves}-${suggestedFilename.replace(/[^\w.-]/g, "_")}`);
@@ -292,15 +347,15 @@ try {
   };
   await search("Move Down");
   await after("Move Down", want);
-  await press("z", true);
+  await shortcut("z", "Ctrl+Z");
   await after("Undo", layers);
-  await press("y", true);
+  await shortcut("y", "Ctrl+Y");
   const redone = await after("Redo", want);
 
   step("a fresh page opens the saved project, which saves the same");
   await start();
   const opened = event("Page.fileChooserOpened", "file chooser from Open (Ctrl+O)");
-  await press("o", true);
+  await shortcut("o", "Ctrl+O");
   await choose(opened, [redone.file]);
   const again = await saveUntil("Open", (p) => order(p) === order(redone.project));
   const data = (p) => JSON.stringify([p.maps.map((m) => m.layers.map((l) => [l.name, l.dataset])), p.tables]);
@@ -308,6 +363,18 @@ try {
   step(`${saves} saves; layers ${order(again.project)}`);
 } catch (e) {
   failures.push(e.message);
+  const shot = opt("shot", null);
+  if (shot && !closed) {
+    try {
+      const focus = await js(`(() => { const a = document.activeElement; return a ? a.tagName + "#" + a.id : "none" })()`);
+      step(`keyboard focus at the failure: ${focus}`);
+      const { data } = await send("Page.captureScreenshot", { format: "png" }, session);
+      writeFileSync(shot, Buffer.from(data, "base64"));
+      step(`screenshot of the failure: ${shot}`);
+    } catch (why) {
+      step(`no screenshot: ${why.message}`);
+    }
+  }
 } finally {
   browser.kill();
   await exited;

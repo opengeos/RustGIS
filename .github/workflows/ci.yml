@@ -92,6 +92,8 @@ jobs:
       # offline, adds data, runs a command, saves and reopens, failing on any page error or panic
       # (apps/rustgis-web/smoke/run.mjs).
       - name: Run the web app in a browser
+        # About 40 s on a runner; a hang ends here rather than at the job's six hours.
+        timeout-minutes: 10
         run: |
           set -euo pipefail
           # Pinned Trunk release, checksum-verified, as web-deploy.yml installs it.
