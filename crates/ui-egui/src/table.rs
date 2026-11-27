@@ -1238,7 +1238,9 @@ mod tests {
         assert_eq!(selected(h.state(), id), [0, 2]);
         assert_eq!(selected(h.state(), other), [0], "opening the menu changed nothing");
         assert!(h.query_by_label("Zoom To 2 Rows").is_some());
-        h.get_by_label("Copy 2 Rows Ctrl+C").click();
+        // No keys beside Copy and Delete here: the keys would take the other layer's row too.
+        assert!(h.query_by_label("Copy 2 Rows Ctrl+C").is_none() && h.query_by_label("Delete 2 Rows Delete").is_none());
+        h.get_by_label("Copy 2 Rows").click();
         h.run_steps(3);
         let text = h.state().ui.copy_out.clone().unwrap();
         assert!(text.contains("Alpha") && text.contains("Charlie"), "{text}");
@@ -1247,7 +1249,7 @@ mod tests {
         h.run_steps(2);
         h.get_by_label("Charlie").click_secondary();
         h.run_steps(3);
-        h.get_by_label("Delete 2 Rows Delete").click();
+        h.get_by_label("Delete 2 Rows").click();
         h.run_steps(3);
         assert_eq!(names(h.state(), id), ["Bravo"]);
         assert_eq!(names(h.state(), other), ["Elsewhere"], "only this table's rows went");

@@ -130,6 +130,9 @@ struct LayerRow {
     count: usize,
     /// Whether any of them has a shape to zoom to.
     shaped: bool,
+    /// Whether no other layer has a selection: the Copy and Delete keys, which take every
+    /// layer's, then do what the menu's rows do, and the rows show them.
+    alone: bool,
     streamed: bool,
 }
 
@@ -149,6 +152,7 @@ fn read_layer_row(app: &RustGisApp, view: ViewKey, row: usize) -> Option<LayerRo
         selected,
         count: acted.len(),
         shaped: acted.iter().any(|&r| features.geometry(r).is_some()),
+        alone: app.session.map().layers.iter().all(|o| o.id == layer || o.selection.is_empty()),
         streamed: l.is_streamed(),
     })
 }
@@ -200,7 +204,10 @@ fn layer_rows(app: &mut RustGisApp, ui: &mut Ui, view: ViewKey, row: usize) {
         ui.close();
     }
     ui.separator();
-    let shortcut = shortcut_text(ui.ctx(), app, "edit.copy");
+    // A key is shown only where it does what its row does: with a selection in another layer,
+    // the key takes that one too, and the row doesn't.
+    let key = |app: &RustGisApp, ui: &Ui, command: &str| if at.alone { shortcut_text(ui.ctx(), app, command) } else { String::new() };
+    let shortcut = key(app, ui, "edit.copy");
     let copy = if several { crate::i18n::fmt("Copy {n} Rows", &args) } else { tl!("Copy").to_string() };
     if menu_row(ui, "", &copy, &shortcut, true).clicked() {
         run_on_acted(app, at.layer, row, "ui.copy");
@@ -208,7 +215,7 @@ fn layer_rows(app: &mut RustGisApp, ui: &mut Ui, view: ViewKey, row: usize) {
     }
     copy_value(app, ui, at.text);
     ui.separator();
-    let shortcut = shortcut_text(ui.ctx(), app, "edit.delete");
+    let shortcut = key(app, ui, "edit.delete");
     let delete = if several { crate::i18n::fmt("Delete {n} Rows", &args) } else { tl!("Delete").to_string() };
     // Greyed as the ribbon's Delete is, and for a layer whose edits the command refuses.
     let why = why_disabled(app, "edit.delete").map(|why| tl!(why)).or_else(|| {
