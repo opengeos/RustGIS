@@ -58,7 +58,7 @@ fn file_dir(p: &Value) -> Option<String> {
     })
 }
 
-/// The most bytes of base64 of raster marker images one import reads: what a run keeps
+/// The most bytes of base64 of raster and SVG marker images one import reads: what a run keeps
 /// (`MAX_PICTURES_BYTES`), counting those that turn out not to draw too, so a project naming many
 /// files that aren't images reads no more than one of images (in tests, a few small images').
 const MARKER_READ_BYTES: usize = if cfg!(test) { 1 << 10 } else { rustgis_map::symbology::MAX_PICTURES_BYTES };
