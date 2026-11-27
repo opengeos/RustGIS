@@ -2107,6 +2107,8 @@ pub(crate) struct ImportAhead {
     /// The saved connections when the copy was made: the ones it made are made again here only
     /// while these are as they were.
     connections: Vec<crate::connections::Connection>,
+    /// Keeps the logins opened for it pending ([`crate::service_logins::borrow_for`]).
+    held: std::sync::Arc<()>,
 }
 
 /// What an import on a copy made: its map, its tables, the layer it left active, the saved
@@ -2134,24 +2136,31 @@ pub(crate) struct ImportOpened {
     dir: Option<String>,
     base: String,
     logins: crate::service_logins::SessionLogins,
+    held: std::sync::Arc<()>,
 }
 
 /// Opens, for an import about to run on a copy ([`import_ahead`]), the login of each web address
 /// the project's layers name, as a request to it would open it (a saved login read, a choice of
 /// connection asked for): before the read records the session's accounts, which an import that
-/// opened one later would find changed when it lands. Reads the project's file (at most
-/// [`MAX_FILE`] bytes) and parses its XML on the thread that asks, for the addresses (its markers'
-/// images are read on the copy). `None` for a project that doesn't read: the import, run here,
-/// says why.
+/// opened one later would find changed when it lands. `None` for a project that doesn't read: the
+/// import, run here, says why.
+///
+/// It runs on the thread that asks, the window's in the desktop app, without progress or Cancel:
+/// it reads the project's file (at most [`MAX_FILE`] bytes, a `.qgz` unzipped) and parses its XML
+/// (within [`MAX_XML`]), one read and one parse, for the addresses its layers name. It must run
+/// before the command is approved, which the window does before any thread of the read's starts:
+/// approval records the session's logins, and a login opened later, on the read's thread, would
+/// make the import refused as it lands. It sends no request and reads no layer: its markers'
+/// images, its layers and its services are read on the copy, with progress and Cancel.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn open_import_logins(s: &mut Session, p: &Value) -> Option<ImportOpened> {
     let text = qgis_text(p).ok()?;
     let dir = ps(p, "dir").filter(|d| !d.trim().is_empty()).map(str::to_string).or_else(|| file_dir(p));
     let mut no_images = |_: &str| Err("not read yet");
     let project = qgis::read_project(&text, dir.as_deref().unwrap_or_default(), &mut no_images, &mut Report::default()).ok()?;
-    let logins = crate::service_logins::borrow_for(s, project.layers.iter().filter_map(|l| web_address(&l.source)));
+    let (logins, held) = crate::service_logins::borrow_for(s, project.layers.iter().filter_map(|l| web_address(&l.source)));
     let base = map_name(&project).to_string();
-    Some(ImportOpened { params: p.clone(), text, dir, base, logins })
+    Some(ImportOpened { params: p.clone(), text, dir, base, logins, held })
 }
 
 /// What an imported project's map is named for: its title, or "QGIS project".
@@ -2171,7 +2180,7 @@ fn map_name(project: &qgis::Project) -> &str {
 pub(crate) fn import_ahead(s: &mut Session, p: &Value, native: bool) -> Option<super::reads::ReadWork> {
     // Opened for this very request before its accounts were recorded ([`open_import_logins`]).
     let opened = s.import_opened.take().filter(|o| native && o.params == *p)?;
-    let ImportOpened { text, dir, logins, base, .. } = opened;
+    let ImportOpened { text, dir, logins, base, held, .. } = opened;
     // The copy reads the text already read, from the same folder.
     let mut q = json!({"text": text});
     if let Some(dir) = dir {
@@ -2228,7 +2237,7 @@ pub(crate) fn import_ahead(s: &mut Session, p: &Value, native: bool) -> Option<s
             Ok(Imported { map, base: base.clone(), tables: added, active_layer: copy.active_layer, style_view, made, answer })
         });
         let losses = std::mem::take(&mut copy.loss_notices);
-        ImportAhead { result, notices: std::mem::take(&mut copy.notices), losses, connections: before }
+        ImportAhead { result, notices: std::mem::take(&mut copy.notices), losses, connections: before, held }
     }))
 }
 
@@ -2271,10 +2280,26 @@ fn land_import(s: &mut Session, ahead: ImportAhead) -> CmdResult {
     if s.connections.connections != ahead.connections && !imported.made.is_empty() {
         return Err("the saved connections changed while the QGIS project was read: import it again".into());
     }
+    // Each tried first on a copy of the saved connections, so that none is saved unless all are,
+    // with the names the import gave them.
+    let changed = || "the saved connections changed while the QGIS project was read: import it again".to_string();
+    let mut trial = s.connections.clone();
     for (kind, address, name) in &imported.made {
-        let made = s.run_part("connection.new", &json!({"kind": kind, "address": address}))?;
-        if made.get("name").and_then(Value::as_str) != Some(name.as_str()) {
-            return Err("the saved connections changed while the QGIS project was read: import it again".into());
+        let c = crate::connections::Connection { kind: kind.clone(), address: address.clone(), ..Default::default() };
+        if trial.add(c, false)?.0.name != *name {
+            return Err(changed());
+        }
+    }
+    let saved = s.connections.clone();
+    for (kind, address, name) in &imported.made {
+        let made = match s.run_part("connection.new", &json!({"kind": kind, "address": address})) {
+            Ok(made) if made.get("name").and_then(Value::as_str) == Some(name.as_str()) => Ok(()),
+            Ok(_) => Err(changed()),
+            Err(e) => Err(e),
+        };
+        if let Err(e) = made {
+            s.connections = saved;
+            return Err(e);
         }
     }
     say(s, ahead.losses, ahead.notices);
@@ -2297,6 +2322,8 @@ fn land_import(s: &mut Session, ahead: ImportAhead) -> CmdResult {
     if imported.style_view.is_some() {
         s.style_view = imported.style_view;
     }
+    // The logins opened for it are this session's now: they rebind the layers already using them.
+    crate::service_logins::release_held(s, &ahead.held);
     let mut answer = imported.answer;
     answer["map"] = json!(name);
     Ok(answer)

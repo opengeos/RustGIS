@@ -256,3 +256,201 @@ fn a_borrowing_copy_opens_no_login_of_its_own() {
     assert_eq!(crate::service_logins::request(&mut copy, None, &url).unwrap_err(), "why");
     assert!(!crate::service_logins::logged_in(&copy, &c));
 }
+
+/// A session with a saved login for a WFS at `base`, not open this session, and a tile layer of
+/// its connection: the connection's id and the tile's address.
+fn saved_login_with_a_tile(s: &mut Session, base: &str) -> (String, String) {
+    s.database_logins.set_store(Some(std::sync::Arc::new(rustgis_data::secrets::MemorySecrets::new())));
+    let made = s.run(
+        "connection.new",
+        &json!({"kind": "wfs", "name": "Roads", "address": format!("{base}/wfs"), "auth": "query", "keyName": "key"}),
+    );
+    let id = made.unwrap()["id"].as_str().unwrap().to_string();
+    s.run("connection.login", &json!({"id": id, "apiKey": "RGSYNTH_held_key", "allowInsecure": true, "remember": true})).unwrap();
+    let c = s.connections.connections.iter().find(|c| c.id == id).unwrap().clone();
+    crate::service_logins::deactivate(s, &c, None);
+    s.database_logins.clear_session_password(&id);
+    let mut t = rustgis_map::TileLayer::new("Tiles", rustgis_map::TileKind::Raster, format!("{base}/tiles/{{z}}/{{x}}/{{y}}.png"));
+    t.connection.clone_from(&id);
+    s.map_mut().tiles.push(t);
+    let url = s.map().tiles[0].url.clone();
+    (id, url)
+}
+
+/// A saved login opened for an import leaves the layers and tiles already using its connection as
+/// they are while the import runs (#3120): they take it when the import lands.
+#[test]
+fn a_login_opened_for_an_import_rebinds_its_tiles_only_as_it_lands() {
+    let dir = Folder::new("held");
+    let server = roads_server();
+    let path = project(&dir, &server.base);
+    let p = json!({"path": path.display().to_string()});
+    let mut s = Session::new(Project::default());
+    let (id, before) = saved_login_with_a_tile(&mut s, &server.base);
+    let c = s.connections.connections.iter().find(|c| c.id == id).unwrap().clone();
+    let read = crate::cmd::reads::read_ahead(&mut s, "project.importQgis", &p).unwrap();
+    assert!(crate::service_logins::logged_in(&s, &c), "opened before it starts");
+    assert_eq!(s.map().tiles[0].url, before, "the tile waits for the import");
+    let done = read.run(&Control::new()).unwrap();
+    s.reclaim_rooms();
+    assert!(crate::service_logins::logged_in(&s, &c), "kept while the import still holds it");
+    crate::cmd::reads::read_land(&mut s, done).unwrap();
+    let tile = &s.project.maps[0].tiles[0];
+    assert_ne!(tile.url, before, "rebound as it landed");
+    assert_eq!(crate::render::rustgis_tiles::logins::inner(&tile.url), before);
+    s.reclaim_rooms();
+    assert!(crate::service_logins::logged_in(&s, &c), "the session's now");
+}
+
+/// An import that never lands (cancelled, refused) ends again the login opened for it, and leaves
+/// the tiles of its connection as they were: it leaves nothing behind (#3120).
+#[test]
+fn a_login_opened_for_an_import_that_never_lands_ends_again() {
+    let dir = Folder::new("unheld");
+    let server = roads_server();
+    let path = project(&dir, &server.base);
+    let p = json!({"path": path.display().to_string()});
+    let mut s = Session::new(Project::default());
+    let (id, before) = saved_login_with_a_tile(&mut s, &server.base);
+    let c = s.connections.connections.iter().find(|c| c.id == id).unwrap().clone();
+    let read = crate::cmd::reads::read_ahead(&mut s, "project.importQgis", &p).unwrap();
+    assert!(crate::service_logins::logged_in(&s, &c));
+    drop(read);
+    s.reclaim_rooms();
+    assert!(!crate::service_logins::logged_in(&s, &c), "ended again");
+    assert!(s.database_logins.session_password(&id).is_none());
+    assert_eq!(s.map().tiles[0].url, before);
+    // Cancelled while it reads: the same.
+    let control = Control::new();
+    control.cancel();
+    let read = crate::cmd::reads::read_ahead(&mut s, "project.importQgis", &p).unwrap();
+    assert!(read.run(&control).is_err());
+    s.reclaim_rooms();
+    assert!(!crate::service_logins::logged_in(&s, &c));
+    assert_eq!(s.map().tiles[0].url, before);
+    // And it opens again for the next import, which lands.
+    import_ahead(&mut s, &p, &Control::new()).unwrap();
+    assert!(crate::service_logins::logged_in(&s, &c));
+}
+
+/// An import let go before it is prepared (its request refused) holds no login: the one opened
+/// for it ends again, and a read prepared holds none past its start.
+#[test]
+fn an_import_let_go_before_it_starts_holds_no_login() {
+    let dir = Folder::new("refused");
+    let server = roads_server();
+    let path = project(&dir, &server.base);
+    let p = json!({"path": path.display().to_string()});
+    let mut s = Session::new(Project::default());
+    let (id, before) = saved_login_with_a_tile(&mut s, &server.base);
+    let c = s.connections.connections.iter().find(|c| c.id == id).unwrap().clone();
+    s.import_opened = crate::cmd::qgis::open_import_logins(&mut s, &p);
+    assert!(s.import_opened.is_some() && crate::service_logins::logged_in(&s, &c));
+    // As `capture_read` lets it go on every way out.
+    s.import_opened = None;
+    s.reclaim_rooms();
+    assert!(!crate::service_logins::logged_in(&s, &c));
+    assert_eq!(s.map().tiles[0].url, before);
+    let read = crate::cmd::reads::read_ahead(&mut s, "project.importQgis", &p).unwrap();
+    assert!(s.import_opened.is_none(), "taken by the read");
+    drop(read);
+}
+
+/// Saved connections an import made are made here only all together: one that can't be leaves
+/// none saved and adds no map (#3120).
+#[test]
+fn an_import_whose_connections_cant_all_be_saved_saves_none() {
+    let dir = Folder::new("connections");
+    let server = roads_server();
+    let path = project(&dir, &server.base);
+    let p = json!({"path": path.display().to_string()});
+    let mut s = Session::new(Project::default());
+    let read = crate::cmd::reads::read_ahead(&mut s, "project.importQgis", &p).unwrap();
+    let done = read.run(&Control::new()).unwrap();
+    // Connections from a newer RustGIS, kept whole: none can be added.
+    let newer = r#"{"version": 2, "next": 4, "connections": []}"#;
+    s.connections = crate::connections::Connections::from_json(newer);
+    let maps = s.project.maps.len();
+    assert!(crate::cmd::reads::read_land(&mut s, done).is_err());
+    assert_eq!(s.project.maps.len(), maps);
+    assert_eq!(s.connections.to_json(), newer);
+}
+
+/// A login opened for an import that something else here uses meanwhile is this session's from
+/// then on: its tiles take it then, and it stays open whether the import lands or not.
+#[test]
+fn a_login_opened_for_an_import_and_used_meanwhile_stays_open() {
+    let dir = Folder::new("adopted");
+    let server = roads_server();
+    let path = project(&dir, &server.base);
+    let p = json!({"path": path.display().to_string()});
+    let mut s = Session::new(Project::default());
+    let (id, before) = saved_login_with_a_tile(&mut s, &server.base);
+    let c = s.connections.connections.iter().find(|c| c.id == id).unwrap().clone();
+    let read = crate::cmd::reads::read_ahead(&mut s, "project.importQgis", &p).unwrap();
+    crate::service_logins::request(&mut s, None, &format!("{}/wfs", server.base)).unwrap();
+    assert_ne!(s.map().tiles[0].url, before, "taken as it is used here");
+    drop(read);
+    s.reclaim_rooms();
+    assert!(crate::service_logins::logged_in(&s, &c));
+}
+
+/// A login opened for one import and borrowed by a second stays open while the second runs, when
+/// the first is cancelled; it ends only when neither lands.
+#[test]
+fn a_login_two_imports_hold_stays_open_while_one_runs() {
+    let dir = Folder::new("two");
+    let server = roads_server();
+    let path = project(&dir, &server.base);
+    let p = json!({"path": path.display().to_string()});
+    let mut s = Session::new(Project::default());
+    let (id, _) = saved_login_with_a_tile(&mut s, &server.base);
+    let c = s.connections.connections.iter().find(|c| c.id == id).unwrap().clone();
+    let first = crate::cmd::reads::read_ahead(&mut s, "project.importQgis", &p).unwrap();
+    let second = crate::cmd::reads::read_ahead(&mut s, "project.importQgis", &p).unwrap();
+    drop(first);
+    s.reclaim_rooms();
+    assert!(crate::service_logins::logged_in(&s, &c), "the second still holds it");
+    drop(second);
+    s.reclaim_rooms();
+    assert!(!crate::service_logins::logged_in(&s, &c));
+}
+
+/// A login the user opens while an import holds it is the user's: the import's end leaves it open,
+/// with the session password they gave.
+#[test]
+fn a_login_the_user_opens_while_an_import_holds_it_stays_open() {
+    let dir = Folder::new("user");
+    let server = roads_server();
+    let path = project(&dir, &server.base);
+    let p = json!({"path": path.display().to_string()});
+    let mut s = Session::new(Project::default());
+    let (id, before) = saved_login_with_a_tile(&mut s, &server.base);
+    let c = s.connections.connections.iter().find(|c| c.id == id).unwrap().clone();
+    let read = crate::cmd::reads::read_ahead(&mut s, "project.importQgis", &p).unwrap();
+    s.run("connection.login", &json!({"id": id, "apiKey": "RGSYNTH_typed_key", "allowInsecure": true})).unwrap();
+    assert_ne!(s.map().tiles[0].url, before, "rebound by the user's login");
+    drop(read);
+    s.reclaim_rooms();
+    assert!(crate::service_logins::logged_in(&s, &c));
+    assert!(s.database_logins.session_password(&id).is_some());
+}
+
+/// The import makes a map of its own: another map made and shown while it reads leaves it to land
+/// (#3120), as the user's own import.
+#[test]
+fn an_import_on_a_copy_lands_whichever_map_is_shown() {
+    let dir = Folder::new("shown");
+    let server = roads_server();
+    let path = project(&dir, &server.base);
+    let p = json!({"path": path.display().to_string()});
+    let mut s = Session::new(Project::default());
+    let read = crate::cmd::reads::read_ahead(&mut s, "project.importQgis", &p).unwrap();
+    let done = read.run(&Control::new()).unwrap();
+    s.run("map.new", &json!({"name": "Other"})).unwrap();
+    assert_eq!(s.map().name, "Other");
+    let answer = crate::cmd::reads::read_land(&mut s, done).unwrap();
+    assert_eq!(answer["map"], "Ahead");
+    assert_eq!(s.map().name, "Ahead");
+    assert_eq!(s.project.maps.len(), 3);
+}

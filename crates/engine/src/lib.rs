@@ -2325,9 +2325,15 @@ impl Session {
     /// failed to start, or their worker failed): only the session still holds it. It goes back
     /// while nothing else changed the project since, newest set aside first so the oldest ends
     /// in front, and is freed and said otherwise. Run before each command run by itself, and by
-    /// the desktop as its background jobs end, so Undo sees it.
+    /// the desktop as its background jobs end, so Undo sees it. Logins opened for an import that
+    /// ended without landing end again here too ([`service_logins::reclaim_held`]).
     pub fn reclaim_rooms(&mut self) {
-        if self.depth > 0 || self.rooms.is_empty() {
+        if self.depth > 0 {
+            return;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        service_logins::reclaim_held(self);
+        if self.rooms.is_empty() {
             return;
         }
         let (ended, running): (Vec<_>, Vec<_>) =

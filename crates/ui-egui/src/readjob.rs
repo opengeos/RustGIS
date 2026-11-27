@@ -467,7 +467,8 @@ fn placed(app: &RustGisApp, asked: &Asked) -> Result<Value, Gone> {
     if app.session.opened != asked.opened {
         return Err(Gone::Project);
     }
-    if app.session.map().instance_id() != asked.map {
+    // A project's import makes a map of its own: it needs none of the maps open to stay active.
+    if asked.command != "project.importQgis" && app.session.map().instance_id() != asked.map {
         return Err(Gone::Map);
     }
     if let Some((i, original)) = &asked.archive
@@ -543,6 +544,7 @@ fn start(app: &mut RustGisApp, mut asked: Asked, p: Value) -> Result<Value, Stri
             asked.command,
             "map.reloadTiles"
                 | "map.repairTiles"
+                | "project.importQgis"
                 | "service.add"
                 | "service.layers"
                 | "script.run"
@@ -1744,6 +1746,59 @@ mod tests {
         assert!(app.session.map().layer_by_name("Towns").is_some());
         assert_eq!(said(&app), 1, "said once, when it lands");
         app.run("edit.undo", Value::Null).unwrap();
+        assert_eq!(app.session.project.maps.len(), maps);
+    }
+
+    /// A project written for the import tests below, with one GeoJSON layer.
+    fn towns_project(dir: &std::path::Path) -> Value {
+        let towns = json!({"type": "FeatureCollection", "features": [
+            {"type": "Feature", "properties": {"name": "A"}, "geometry": {"type": "Point", "coordinates": [8.5, 47.4]}}]});
+        std::fs::write(dir.join("towns.geojson"), towns.to_string()).unwrap();
+        let path = dir.join("towns.qgs");
+        std::fs::write(
+            &path,
+            r#"<qgis version="4.2.3"><title>Towns</title><layer-tree-group><layer-tree-layer id="Towns" checked="Qt::Checked"/>
+            </layer-tree-group><projectlayers>
+            <maplayer type="vector"><id>Towns</id><datasource>./towns.geojson</datasource><layername>Towns</layername><provider>ogr</provider></maplayer>
+            </projectlayers></qgis>"#,
+        )
+        .unwrap();
+        json!({"path": path.display().to_string()})
+    }
+
+    /// A project's import makes a map of its own (#3120): another map made active while it reads,
+    /// or the map an import before it made, leaves it to land.
+    #[test]
+    fn a_qgis_import_lands_whichever_map_is_active() {
+        let dir = tempfile::tempdir().unwrap();
+        let params = towns_project(dir.path());
+        let mut app = RustGisApp::new(rustgis_engine::Session::new(rustgis_engine::Project::default()));
+        app.run("map.new", json!({"name": "Other"})).unwrap();
+        app.session.project.active_map = 0;
+        let maps = app.session.project.maps.len();
+        app.reads_off_frame = true;
+        assert_eq!(app.run_by_user("project.importQgis", params.clone()).unwrap()["started"], "Import QGIS Project");
+        // The second waits behind the first, whose map is active when it starts.
+        app.run_by_user("project.importQgis", params).unwrap();
+        app.session.project.active_map = 1;
+        landed(&mut app, 60);
+        let names: Vec<_> = app.session.project.maps.iter().map(|m| m.name.as_str()).collect();
+        let said: Vec<_> = app.session.notices.iter().map(|n| n.text.as_str()).collect();
+        assert_eq!(names[maps..], ["Towns", "Towns2"], "{names:?} {said:?}");
+        assert!(!app.session.notices.iter().any(|n| n.text.contains("was left")), "{:?}", app.session.notices);
+    }
+
+    /// A QGIS import whose thread the system refuses is refused with it, not run on the window.
+    #[test]
+    fn a_qgis_import_whose_thread_wont_start_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let params = towns_project(dir.path());
+        let mut app = RustGisApp::new(rustgis_engine::Session::new(rustgis_engine::Project::default()));
+        let maps = app.session.project.maps.len();
+        app.reads_off_frame = true;
+        app.reads.fail_spawn = true;
+        let error = app.run_by_user("project.importQgis", params).unwrap_err();
+        assert!(error.contains("worker could not start"), "{error}");
         assert_eq!(app.session.project.maps.len(), maps);
     }
 
