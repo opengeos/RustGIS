@@ -40,9 +40,12 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
     datum under it, at 7 pt. A figure's title and sources belong in its caption, so they are
     left out, and the result says so.
   - **Step by step**: **Publication Layout Wizard…**, at the end of the same menu, asks for the
-    size (a sheet turned Auto, Portrait or Landscape, or a figure), the style, the texts (title,
-    the active map's name until one is typed; subtitle, note, sources and credit line, or none)
-    and the accent colour, then shows what was picked; **Create** makes the layout as the menu
+    size (a sheet turned Auto, Portrait or Landscape, or a figure), the style (each beside an
+    outline of where its title, map and footer go, and its column or panel if it has one, with
+    the accent colour picked, or else its own, where the sheet takes it, which Classic's doesn't;
+    a click on the outline picks the style), the texts (title, the active map's name until one is
+    typed; subtitle, note, sources and credit line, or none) and the accent colour, then shows
+    what was picked; **Create** makes the layout as the menu
     does. A figure goes from its size to the review, as it takes no style, texts or accent. A
     field left empty is left out (for the credit line, the dated default applies); the title is
     the exception: empty, it means no title. A layout the command refuses is said, and the wizard
@@ -142,6 +145,16 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
     centred as near it as fits, and a warning says where. With an `extent`, a sheet on the globe
     is laid out as on a flat map. In any frame on the globe, the light space around the globe is
     room for the surrounds, as the blank page is.
+  - **Grid, scale bar and north arrow**: `"grid"`, `"scaleBar"` and `"northArrow"` each take
+    `"none"` to leave that part out, or an object with its options, and a key the part doesn't
+    read is refused. `"grid"` takes a frame grid's options (`{"step": 5}`,
+    `{"type": "measured"}`, `{"edges": ["bottom"]}`; a graticule takes no `crs`, `short` or `mgrs`,
+    and a measured grid no `format` or `hemisphere`); the strips inside the frame follow its
+    labels, edges and `labelSize`, and without a graticule the default reference text names none
+    (a `{grid}` you type reads `—`). `"scaleBar"` takes a scale bar's options
+    (`{"units": "miles", "style": "line"}`), its box growing with a larger `textSize`. A `textSize` or `labelSize` you give is in points
+    as written: unlike the defaults, it isn't scaled with the sheet.
+    `"northArrow"` also takes `{"show": "auto"|"always", "style", "fill", "outline"}`.
   - **Legend box**: over the map, the legend's box is left clear where the map shows nothing under
     it but its light plain paper or water: no layer, label, context layer, basemap shape or graticule
     line, no web tiles, and no veil. Dark basemaps keep a white backing so the dark legend text
@@ -536,10 +549,12 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
   in a presentation's map pages of it); a text that a longer name would take past the characters a
   text holds, or that a name with a brace (which a token can't hold) would break, keeps the old
   name, and the rename says so; deleting it leaves them as written, and when layout elements still
-  name it (a text's tokens, or a chart's, table's or colorbar's layer), says how many. A layer
-  read in place covers what is loaded, as a chart does, and a warning says so. A token with no
-  figure (no such layer or field, a field with no numbers, a raster layer, or a sum, mean, least
-  or greatest written without its field) stays as written, and a warning names what is missing.
+  name it (a text's tokens, or a chart's, table's or colorbar's layer), says how many. It also says
+  how many map series (by their index layer) and presentation map page titles (by their tokens)
+  name it. A layer read in place covers what is loaded, as a chart does, and a warning says so. A
+  token with no figure (no such layer or field, a field with no numbers, a raster layer, or a sum,
+  mean, least or greatest written without its field) stays as written, and a warning names what is
+  missing.
   Both warnings come when the text is added or changed, or its layout is made or imported, or when
   another map frame becomes the first (it is given another map, the one before it is deleted or
   drawn over it, or its map is deleted), not when the page is exported. A presentation map page's
@@ -618,7 +633,8 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
   **Delete** (or **Backspace**, the delete key on a
   Mac) deletes the selected element, and **Ctrl+D** (**⌘D** on a Mac) duplicates it: the copy is
   placed 5 mm down and to the right, on top, and selected. The **arrow keys** nudge it 1 mm, or
-  10 mm with **Shift**, and keep it moving while held; a run of nudges is one step to undo.
+  10 mm with **Shift**, and keep it moving while held; a run of nudges is one step to undo. After
+  a click or a scroll in the attribute table, the arrows move between its cells instead.
   **Right-click** an element to select it and open a menu of Duplicate, Delete, the four Arrange
   steps and, on a map frame, **Zoom Frame** (the map view's extent, as a double-click does).
 - **Arrange**: elements later in the layout are drawn over earlier ones, and a click picks the one
@@ -840,7 +856,8 @@ The locator outlines the main frame's changing extent as the series turns its pa
 **Export Layout** writes all pages to PDF by default, but only the **first 500** when there are
 more, with a warning. Split longer books' index data into layers of at most 500 features.
 `layout.export` with `"allPages":false` writes only the current PDF page; PNG and SVG always
-write the current page.
+write the current page. When the index layer is no longer in the series frame's map (it was
+removed, say), the PDF holds only the current page, and the export says so.
 
 ### Mark the page's own feature
 
