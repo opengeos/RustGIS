@@ -590,6 +590,8 @@ enum Tok {
     QuotedIdent(String),
     Str(String),
     Num(f64),
+    /// A whole-number literal (digits only) that an `i64` holds: exact, never via a float.
+    Int(i64),
     /// A comparison operator.
     Op(String),
     Arith(Arith),
@@ -777,7 +779,7 @@ fn lex_first(s: &str, tolerant: bool, most: usize) -> Result<Lexed, String> {
                     }
                 }
                 let t: String = cs.get(st..i).map(|s| s.iter().collect()).unwrap_or_default();
-                out.push(Tok::Num(t.parse().map_err(|_| format!("bad number '{t}'"))?));
+                out.push(number_token(&t)?);
             }
             '@' | '$' => {
                 i += 1;
@@ -796,6 +798,27 @@ fn lex_first(s: &str, tolerant: bool, most: usize) -> Result<Lexed, String> {
         }
     }
     Ok(Lexed { toks: out, spans, open })
+}
+
+/// The token of a number literal, refusing one that can't be held exactly rather than rounding it.
+/// A literal of digits only is an exact `i64`, or refused past `i64::MAX`. Any other literal is a
+/// decimal (`f64`), refused only when it would lose its whole-number digits: it has 16 or more
+/// of them and a decimal doesn't hold its digits (`9007199254740993.0`). One that merely has no
+/// exact binary form (`0.1`) or many fraction digits (`0.12345678901234567891`) is read as the
+/// nearest decimal, as every number written in decimal is.
+fn number_token(t: &str) -> Result<Tok, String> {
+    if t.bytes().all(|b| b.is_ascii_digit()) {
+        return t.parse::<i64>().map(Tok::Int).map_err(|_| {
+            format!("the whole number {t} is too large to hold exactly (the most is {}); write it as a decimal, such as 1e19", i64::MAX)
+        });
+    }
+    let n: f64 = t.parse().map_err(|_| format!("bad number '{t}'"))?;
+    let mantissa = t.split(['e', 'E']).next().unwrap_or_default();
+    let whole = mantissa.split('.').next().unwrap_or_default().trim_start_matches('0');
+    if whole.len() >= 16 && n.is_finite() && Value::Text(t.to_string()).rounds_as_double() {
+        return Err(format!("the number {t} has more digits than a decimal number holds exactly, so it would be rounded"));
+    }
+    Ok(Tok::Num(n))
 }
 
 /// A number literal: whole numbers are integers.
@@ -1089,9 +1112,10 @@ impl Parser<'_> {
     /// `1 IN (1 IN (…))` meets the limit.
     fn item(&mut self) -> Result<Expr, String> {
         let sign = usize::from(matches!(self.toks.get(self.pos), Some(Tok::Arith(Arith::Add | Arith::Sub))));
-        let single =
-            matches!(self.toks.get(self.pos + sign), Some(Tok::Num(_) | Tok::Str(_) | Tok::Ident(_) | Tok::QuotedIdent(_) | Tok::Var(_)))
-                && matches!(self.toks.get(self.pos + sign + 1), Some(Tok::Comma | Tok::RParen));
+        let single = matches!(
+            self.toks.get(self.pos + sign),
+            Some(Tok::Num(_) | Tok::Int(_) | Tok::Str(_) | Tok::Ident(_) | Tok::QuotedIdent(_) | Tok::Var(_))
+        ) && matches!(self.toks.get(self.pos + sign + 1), Some(Tok::Comma | Tok::RParen));
         if single {
             return self.unary();
         }
@@ -1225,7 +1249,7 @@ impl Parser<'_> {
         };
         self.pos += 1;
         // A sign before a number is part of the literal and nests nothing.
-        let nests = !matches!(self.toks.get(self.pos), Some(Tok::Num(_)));
+        let nests = !matches!(self.toks.get(self.pos), Some(Tok::Num(_) | Tok::Int(_)));
         if nests {
             self.deeper()?;
         }
@@ -1299,6 +1323,7 @@ impl Parser<'_> {
             // A number too large to represent (`1e999`) would be infinity, which nothing reads.
             Some(Tok::Num(n)) if n.is_finite() => Ok(Expr::Lit(num(n))),
             Some(Tok::Num(_)) => Err("the number is too large".into()),
+            Some(Tok::Int(i)) => Ok(Expr::Lit(Value::Int(i))),
             Some(Tok::Str(s)) => Ok(Expr::Lit(Value::Text(s))),
             Some(Tok::QuotedIdent(s)) => self.field(&s),
             Some(Tok::Var(v)) => match VARS.iter().find(|s| s.names.iter().any(|n| n.eq_ignore_ascii_case(&v))).map(|s| s.var) {
@@ -1441,6 +1466,7 @@ fn show(t: Option<&Tok>) -> String {
         Some(Tok::QuotedIdent(s)) => format!("\"{s}\""),
         Some(Tok::Str(s)) => format!("'{s}'"),
         Some(Tok::Num(n)) => n.to_string(),
+        Some(Tok::Int(i)) => i.to_string(),
         Some(Tok::Op(o)) => format!("'{o}'"),
         Some(Tok::Arith(a)) => format!(
             "'{}'",

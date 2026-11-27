@@ -4095,6 +4095,68 @@ fn geopackage_writes_fine_date_time_text_as_a_date_time() {
     assert_eq!(stored, "2026-03-05T14:30:00.123Z");
 }
 
+/// Text or a blob another program left in a GeoPackage number column, and a whole number past 2^53
+/// in a decimal column, read as empty or rounded and said, on the desktop and in the browser; a
+/// clean file says nothing.
+#[test]
+fn geopackage_values_that_dont_fit_a_number_field_are_said() {
+    let workspace = tempfile::tempdir().unwrap();
+    let path = workspace.path().join("t.gpkg");
+    let mut t = Dataset::new("t", GeometryType::Point, vec![Field::new("pop", FieldType::Integer), Field::new("area", FieldType::Double)]);
+    for (p, a) in [(1, 1.5), (2, 2.5), (3, 3.5), (4, 4.5)] {
+        t.push(Some(Geometry::Point(Coord::new(1.0, 2.0))), vec![Value::Int(p), Value::Float(a)]);
+    }
+    crate::io::write_path(&t, &path).unwrap();
+    let read = || {
+        let desktop = open_path(&path, None).unwrap();
+        let browser = gpkg_mem::GpkgMemSource::open_shared(Shared(Arc::new(std::fs::read(&path).unwrap())), None).unwrap();
+        [desktop.as_ref(), &browser as &dyn FeatureSource].map(|src| {
+            let (ds, report) = materialize(src).unwrap();
+            let values: Vec<Vec<Value>> = ds.features.iter().map(|f| f.attrs.clone()).collect();
+            let said: Vec<_> = report.messages.iter().map(|n| (n.text.clone(), n.loss)).collect();
+            (values, said)
+        })
+    };
+    for (_, said) in read() {
+        assert_eq!(said, []);
+    }
+    let c = rusqlite::Connection::open(&path).unwrap();
+    // The spatial index's triggers call functions only SpatiaLite has; the geometry stays.
+    let triggers: Vec<String> = c
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'trigger'")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(|n| n.unwrap())
+        .collect();
+    for t in triggers {
+        c.execute(&format!("DROP TRIGGER \"{t}\""), []).unwrap();
+    }
+    // NUMERIC reads as a decimal field and keeps a whole number as one.
+    c.execute("ALTER TABLE t ADD COLUMN big NUMERIC", []).unwrap();
+    c.execute("UPDATE t SET big = 9007199254740993 WHERE fid = 1", []).unwrap();
+    c.execute("UPDATE t SET big = 5 WHERE fid = 2", []).unwrap();
+    c.execute("UPDATE t SET pop = 'n/a', area = 'n/a' WHERE fid = 2", []).unwrap();
+    c.execute("UPDATE t SET pop = x'00ff', area = x'00' WHERE fid = 3", []).unwrap();
+    c.execute("UPDATE t SET pop = '', area = '<Null>' WHERE fid = 4", []).unwrap();
+    drop(c);
+    for (values, said) in read() {
+        assert_eq!(values[0], [Value::Int(1), Value::Float(1.5), Value::Float(9_007_199_254_740_992.0)]);
+        assert_eq!(values[1], [Value::Null, Value::Null, Value::Float(5.0)]);
+        assert_eq!(values[2], [Value::Null, Value::Null, Value::Null]);
+        assert_eq!(values[3], [Value::Null, Value::Null, Value::Null]);
+        let dropped = Some(crate::loss::LossCode::DroppedValue);
+        let rounded = Some(crate::loss::LossCode::ChangedRounded);
+        assert_eq!(
+            said,
+            [
+                ("t: 4 values aren't numbers and were read as empty, in 'pop', 'area'".to_string(), dropped),
+                ("t: 1 whole number was rounded to the nearest decimal number, as a decimal field doesn't keep more than 15 or 16 digits, in 'big'".to_string(), rounded),
+            ]
+        );
+    }
+}
+
 /// Text another program left in a GeoPackage yes/no column reads as yes or no when it is a yes/no
 /// word; other text reads as empty, and is said, on the desktop and in the browser.
 #[test]

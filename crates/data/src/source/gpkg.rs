@@ -1573,8 +1573,9 @@ fn to_millisecond(t: crate::date::DateTime) -> crate::date::DateTime {
 }
 
 /// An attribute value of a field's type, for the field `k`. One a date field can't hold is null,
-/// and counted in `unread` ([`Batch::unread_dates`]); with `rounded`, a date-time with digits past
-/// the microsecond is rounded and counted there ([`Batch::rounded_dates`]), else it isn't a date.
+/// and counted in `unread` ([`Batch::unread_dates`]): text that isn't a number in a number field,
+/// a blob. With `rounded`, a date-time with digits past the microsecond, or a whole number past 2^53
+/// in a Double field, is rounded and counted there ([`Batch::rounded_dates`]), else the date-time isn't a date.
 fn value(v: ValueRef<'_>, ty: FieldType, unread: &mut Vec<usize>, rounded: Option<&mut Vec<usize>>, k: usize) -> Value {
     match (v, ty) {
         (ValueRef::Null, _) => Value::Null,
@@ -1583,14 +1584,18 @@ fn value(v: ValueRef<'_>, ty: FieldType, unread: &mut Vec<usize>, rounded: Optio
             super::gpkg_blob::temporal(text.as_deref(), ty, unread, rounded, k)
         }
         (ValueRef::Integer(i), FieldType::Boolean) => Value::Bool(i != 0),
-        (ValueRef::Integer(i), FieldType::Double) => Value::Float(i as f64),
+        (ValueRef::Integer(i), FieldType::Double) => super::int_as_double(i, rounded, k),
         (ValueRef::Integer(i), _) => Value::Int(i),
         (ValueRef::Real(f), FieldType::Integer) if f.fract() == 0.0 && f.abs() < 9e15 => Value::Int(f as i64),
         (ValueRef::Real(f), _) => Value::Float(f),
         (ValueRef::Text(t), FieldType::Text) => Value::Text(String::from_utf8_lossy(t).into_owned()),
         (ValueRef::Text(t), FieldType::Boolean) => super::yes_no_text(&String::from_utf8_lossy(t), unread, k),
-        (ValueRef::Text(t), ty) => Value::parse_source(&String::from_utf8_lossy(t), ty),
-        (ValueRef::Blob(_), _) => Value::Null,
+        (ValueRef::Text(t), ty) => super::number_text(&String::from_utf8_lossy(t), ty, unread, k),
+        // A blob isn't a value an attribute column holds.
+        (ValueRef::Blob(_), _) => {
+            super::unread_date(unread, k);
+            Value::Null
+        }
     }
 }
 

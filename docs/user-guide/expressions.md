@@ -79,7 +79,7 @@ operator: write `a < b AND b < c`, not `a < b < c`.
 
 | Write | Meaning |
 | --- | --- |
-| `42`, `3.5`, `1e6`, `.5` | Numbers; whole numbers are integers |
+| `42`, `3.5`, `1e6`, `.5` | Numbers; whole numbers are integers, exact up to 9223372036854775807. A number that would be rounded (a whole number past that, or `9007199254740993.0`) is refused, not rounded |
 | `'text'`, `'it''s'` | Text in single quotes; two quotes stand for one |
 | `TRUE`, `FALSE`, `NULL` | Booleans and the missing value |
 | `pop_est`, `"Pop Est"`, `!Pop Est!` | A field, by name, ignoring letter case; quote a name with spaces, punctuation or the name of a keyword (`"OR"`, `"null"`) |

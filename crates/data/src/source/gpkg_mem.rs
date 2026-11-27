@@ -320,23 +320,28 @@ impl GpkgMemSource {
 }
 
 /// An attribute value of a field's type, for the field `k`. One a date field can't hold is null,
-/// and counted in `unread` ([`Batch::unread_dates`]); a date-time with digits past the microsecond
-/// is rounded and counted in `rounded` ([`Batch::rounded_dates`]).
+/// and counted in `unread` ([`Batch::unread_dates`]): text that isn't a number in a number field,
+/// a blob. A date-time with digits past the microsecond, or a whole number past 2^53 in a Double
+/// field, is rounded and counted in `rounded` ([`Batch::rounded_dates`]).
 fn value(v: &Val, ty: FieldType, unread: &mut Vec<usize>, rounded: &mut Vec<usize>, k: usize) -> Value {
     match (v, ty) {
         (Val::Null, _) => Value::Null,
         (v, FieldType::Date | FieldType::DateTime) => {
             super::gpkg_blob::temporal(if let Val::Text(t) = v { Some(t) } else { None }, ty, unread, Some(rounded), k)
         }
-        (Val::Blob(_), _) => Value::Null,
         (Val::Int(i), FieldType::Boolean) => Value::Bool(*i != 0),
-        (Val::Int(i), FieldType::Double) => Value::Float(*i as f64),
+        (Val::Int(i), FieldType::Double) => super::int_as_double(*i, Some(rounded), k),
         (Val::Int(i), _) => Value::Int(*i),
         (Val::Real(f), FieldType::Integer) if f.fract() == 0.0 && f.abs() < 9e15 => Value::Int(*f as i64),
         (Val::Real(f), _) => Value::Float(*f),
         (Val::Text(t), FieldType::Text) => Value::Text(t.clone()),
         (Val::Text(t), FieldType::Boolean) => super::yes_no_text(t, unread, k),
-        (Val::Text(t), ty) => Value::parse_source(t, ty),
+        (Val::Text(t), ty) => super::number_text(t, ty, unread, k),
+        // A blob isn't a value an attribute column holds.
+        (Val::Blob(_), _) => {
+            super::unread_date(unread, k);
+            Value::Null
+        }
     }
 }
 
