@@ -108,6 +108,7 @@ impl Features {
     /// Adds `n` columns after the last, each holding `value` in every row: several fields added at
     /// once, with each row changed once rather than once per field.
     pub fn add_columns(&mut self, n: usize, value: Value) {
+        // A step that never fails: the change can't stop part way.
         let done: Result<(), std::convert::Infallible> = self.try_add_columns(n, value, || Ok(()));
         let Ok(()) = done;
     }
@@ -119,14 +120,17 @@ impl Features {
     /// Rows another owner shares (an Undo snapshot) are copied once, each at its new length. Copied
     /// first and then grown, every row would take a second allocation and leave the first as a gap
     /// that rows of the same length can't fill: on a large layer, about one more copy of it held
-    /// (#2431). Rows of its own grow in place by exactly `n`.
+    /// (#2431). Rows of its own grow in place by exactly `n`, even while a cache holds their
+    /// [`Features::allocation_key`]: that key stops matching, and nothing is copied.
     pub fn try_add_columns<E>(&mut self, n: usize, value: Value, mut step: impl FnMut() -> Result<(), E>) -> Result<(), E> {
         if n == 0 {
             return Ok(());
         }
         let added = std::iter::repeat_n(value, n);
-        if let Some(rows) = Arc::get_mut(&mut self.rows) {
-            for f in rows {
+        // The strong count, not `Arc::get_mut`, which also refuses while a cache's weak key is
+        // alive: with no other owner, `rows_mut` moves the rows out from under the key uncopied.
+        if Arc::strong_count(&self.rows) == 1 {
+            for f in self.rows_mut() {
                 step()?;
                 // Exactly `n` more slots: a doubled capacity in every row would cost more than the columns.
                 f.attrs.reserve_exact(n);
@@ -377,6 +381,18 @@ mod tests {
         assert_eq!(copy.to_rows(), own.to_rows());
         assert!(copy.iter().all(|f| f.attrs.len() == f.attrs.capacity()));
         assert!(ds.features.rows().all(|r| r.values().len() == 2));
+    }
+
+    #[test]
+    fn a_column_added_to_rows_of_its_own_under_a_cache_key_copies_nothing() {
+        let mut ds = layer();
+        let rows = ds.features.as_slice().as_ptr();
+        let key = ds.features.allocation_key();
+        ds.features.add_column(Value::Null);
+        // The same rows, moved rather than copied, and the key no longer matches them.
+        assert_eq!(ds.features.as_slice().as_ptr(), rows);
+        assert!(!std::sync::Weak::ptr_eq(&key, &ds.features.allocation_key()));
+        assert!(ds.features.rows().all(|r| r.values().len() == 3));
     }
 
     #[test]
