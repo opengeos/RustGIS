@@ -60,6 +60,15 @@ pub(in crate::cmd::layout) fn given_count(p: &Value, k: &str, hi: usize) -> Resu
     }
 }
 
+/// The name given as `k`, when it's given (and not null): an error when it's not text. The caller
+/// says which name it doesn't know, in its own words.
+pub(in crate::cmd::layout) fn given_name<'a>(p: &'a Value, k: &str, names: &str) -> Result<Option<&'a str>, String> {
+    match p.get(k).filter(|v| !v.is_null()) {
+        Some(v) => v.as_str().map(Some).ok_or_else(|| format!("{k} is {names}")),
+        None => Ok(None),
+    }
+}
+
 /// A choice given as `k` by name, when it's given (and not null): an error when it isn't one of
 /// `names`.
 pub(in crate::cmd::layout) fn given_choice<T>(p: &Value, k: &str, from: fn(&str) -> Option<T>, names: &str) -> Result<Option<T>, String> {
