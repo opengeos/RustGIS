@@ -9965,7 +9965,7 @@ mod download_service_tests {
                     if !accept {
                         return Err("browser rejected download".into());
                     }
-                    taken.lock().unwrap().push((name.to_string(), bytes));
+                    taken.lock().unwrap().push((name.to_string(), bytes.to_vec()));
                     Ok(())
                 })),
                 ..Default::default()
