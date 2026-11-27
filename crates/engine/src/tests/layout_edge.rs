@@ -384,6 +384,7 @@ fn a_kickers_tokens_are_drawn_in_capitals_and_measured_so() {
     // A text with no token is stored in capitals and needs no case, so asks no more of a reader.
     assert_eq!((case_of(&token), case_of(&typed)), (TextCase::Upper, TextCase::None));
     assert_eq!(case_of(&kicker(&mut s, "{crs}")), TextCase::Upper);
+    assert_eq!(case_of(&kicker(&mut s, "Day {22")), TextCase::None);
     assert!((token.h - typed.h).abs() < 1e-6, "{} {}", token.h, typed.h);
     let stat = kicker(&mut s, "{count:Countries} countries");
     let ElementKind::Text { text, case, .. } = &stat.kind else { panic!() };
