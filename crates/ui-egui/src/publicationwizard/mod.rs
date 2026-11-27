@@ -183,6 +183,12 @@ impl Draft {
         &[Step::Size, Step::Map, Step::Style, Step::Placement, Step::Texts, Step::Sources, Step::Accent, Step::Review]
     }
 
+    /// The favourite Create sets once the layout is made, if any: what the review says and what
+    /// Create does.
+    fn favourite_to_set(&self, s: &Session) -> Option<Value> {
+        self.arrangement.as_favourite(s).filter(|_| self.make_favourite)
+    }
+
     /// The step `by` places from this one, if there is one.
     fn moved(&self, by: isize) -> Option<Step> {
         let steps = self.steps();
@@ -540,8 +546,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                 if crate::ribbon::make_publication(app, params) {
                     close = true;
                     // Only once the layout is made: a refused one changes no preference.
-                    if d.make_favourite
-                        && let Some(favourite) = d.arrangement.as_favourite()
+                    if let Some(favourite) = d.favourite_to_set(&app.session)
                         && let Err(e) = app.run("layout.arrangement", json!({"favourite": favourite}))
                     {
                         app.session.notify(e, true);

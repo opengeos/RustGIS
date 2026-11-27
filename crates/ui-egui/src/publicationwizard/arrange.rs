@@ -1,6 +1,8 @@
 //! The wizard's placement step: which corner each surround takes.
 use super::*;
-use rustgis_engine::cmd::layout::{ARRANGEMENTS, Homes, corners_of, parse_arrangement, usable_saved_arrangement};
+use rustgis_engine::cmd::layout::{
+    ARRANGEMENTS, Homes, corners_of, parse_arrangement, publication_style_has_column, usable_saved_arrangement,
+};
 
 /// The arrangement `layout.publication` is asked for.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -25,10 +27,11 @@ impl Arrangement {
         }
     }
 
-    /// What making this the favourite saves: an arrangement chosen by name or corner by corner;
-    /// `best` and the favourite itself aren't one.
-    pub(super) fn as_favourite(&self) -> Option<Value> {
-        matches!(self, Arrangement::Named(_) | Arrangement::Custom(_)).then(|| self.value()).flatten()
+    /// What making this the favourite saves: an arrangement chosen by name or corner by corner,
+    /// one that still holds; `best` and the favourite itself aren't one.
+    pub(super) fn as_favourite(&self, s: &Session) -> Option<Value> {
+        let chosen = matches!(self, Arrangement::Named(_) | Arrangement::Custom(_)) && self.held(s).is_ok();
+        chosen.then(|| self.value()).flatten()
     }
 
     /// Its name, as the review says it: none for one that no longer holds.
@@ -131,13 +134,12 @@ pub(super) fn arrange_step(ui: &mut egui::Ui, s: &Session, d: &mut Draft) {
         });
     }
     // The styles with a column keep the locator and legend in it (`cmd/layout/publication`).
-    if !d.figure() && matches!(d.style.as_str(), "panel" | "editorial" | "modular") {
+    if !d.figure() && publication_style_has_column(&d.style) {
         let note = tl!("The locator and legend sit in this style's column: only the north arrow and scale bar take these corners.");
         ui.label(egui::RichText::new(note).small().weak());
     }
     ui.add_space(4.0);
-    let favourable = d.arrangement.held(s).is_ok() && d.arrangement.as_favourite().is_some();
-    ui.add_enabled_ui(favourable, |ui| {
+    ui.add_enabled_ui(d.arrangement.as_favourite(s).is_some(), |ui| {
         ui.checkbox(&mut d.make_favourite, tl!("Make this my favourite"))
             .on_hover_text(tl!("Create also keeps it with the app's preferences as the favourite arrangement."));
     });
@@ -423,5 +425,26 @@ mod tests {
         }
         let next = h.get_by_role_and_label(Role::Button, "Next").rect();
         assert!(next.right() <= 320.0, "Next at {next:?} on a screen 320 wide");
+    }
+
+    /// The review says Create makes the arrangement the favourite only where it will: ticked, and
+    /// on an arrangement by name or Custom.
+    #[test]
+    fn the_review_says_when_create_sets_the_favourite() {
+        let said = |h: &Wizard| h.query_by_label("Create makes this arrangement the favourite").is_some();
+        for size in ["a4", "figure-1col"] {
+            for (arrangement, will) in [
+                (Arrangement::Named("mirrored".into()), true),
+                (Arrangement::Custom([3, 0, 1, 2]), true),
+                (Arrangement::Best, false),
+                (Arrangement::Favourite, false),
+                (Arrangement::Named("Gone".into()), false),
+            ] {
+                let h = creating(arrangement.clone(), |d| d.size = size.into());
+                assert_eq!(said(&h), will, "{size}: {arrangement:?}");
+            }
+        }
+        let h = creating(Arrangement::Named("mirrored".into()), |d| d.make_favourite = false);
+        assert!(!said(&h), "unticked");
     }
 }
