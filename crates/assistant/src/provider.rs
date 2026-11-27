@@ -167,6 +167,18 @@ pub const PRESETS: &[Preset] = &[
         key_url: "https://platform.opper.ai",
         login: false,
     },
+    Preset {
+        id: "llmtr",
+        label: "LLMTR",
+        api: Api::OpenAi,
+        base_url: "https://llmtr.com/v1",
+        model: "qwen/qwen3.8-flash",
+        key_env: &["LLMTR_API_KEY"],
+        url_env: "",
+        keyless: false,
+        key_url: "https://llmtr.com/dashboard/keys",
+        login: false,
+    },
 ];
 
 /// The preset with this id.
