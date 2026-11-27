@@ -1772,6 +1772,90 @@ mod tests {
     }
 
     #[test]
+    fn a_polygon_blocks_hole_seam_across_a_notch_fills_no_ground_outside_the_polygon() {
+        // #2318: a U, its bay x 1 to 2 from y = 1 up, the east arm's inner side with a spike into
+        // the bay to (1.2, 5), and a hole in the west arm. Every corner of the hole is nearer the
+        // spike's tip than any corner of the west arm, so the seam from the part's nearest corner
+        // crosses the bay. Filled as the frame fills it (by winding), the seam's two edges cancel:
+        // the bay stays bare, the hole too, and the walls are the outline's sides only.
+        let ring = |c: &[(f64, f64)]| c.iter().map(|&(x, y)| Coord::new(x, y)).collect::<Vec<_>>();
+        let u = ring(&[
+            (0.0, 0.0),
+            (3.0, 0.0),
+            (3.0, 10.0),
+            (2.0, 10.0),
+            (2.0, 5.2),
+            (1.2, 5.0),
+            (2.0, 4.8),
+            (2.0, 1.0),
+            (1.0, 1.0),
+            (1.0, 10.0),
+            (0.0, 10.0),
+        ]);
+        let hole = ring(&[(0.3, 4.8), (0.9, 4.8), (0.9, 5.2), (0.3, 5.2)]);
+        let o = Outline::from_polygons(vec![vec![u, hole.clone()]]).expect("an outline");
+        assert_eq!((o.side_count(), o.holes()), (15, 1));
+        let [x0, y0, x1, y1] = o.extent();
+        let b = Block { x0, y0, x1, y1, outline: Some(Arc::new(o)), ..unit_block() };
+        let o = b.outline.as_deref().expect("an outline");
+        let parts = pieces([Coord::new(-5.0, -5.0), Coord::new(30.0, -5.0), Coord::new(-5.0, 30.0)], &b);
+        assert_eq!(parts.len(), 1);
+        // The U's 30 less the bay's 9, plus the spike's 0.16, less the hole's 0.24.
+        assert!((area(&parts) - 20.92).abs() < 1e-9, "{}", area(&parts));
+        // The seam does run from the spike's tip, across the bay, to a corner of the hole.
+        let p = &parts[0];
+        let tip = Coord::new(1.2, 5.0);
+        assert!(p.iter().zip(p.iter().cycle().skip(1)).any(|(a, z)| a.1 == tip && hole.contains(&z.1)), "{p:?}");
+        // Drawn as the frame draws a part, 40 px a unit: every pixel more than 1.5 px from the
+        // outline is filled where the outline holds it and bare elsewhere (the bay, the hole).
+        let (k, m) = (40.0, 8.0);
+        let mut pm = Pixmap::new((3.0 * k + 2.0 * m) as u32, (10.0 * k + 2.0 * m) as u32).expect("a pixmap");
+        let mut pb = PathBuilder::new();
+        for (i, c) in p.iter().enumerate() {
+            let (x, y) = ((c.1.x * k + m) as f32, (c.1.y * k + m) as f32);
+            if i == 0 { pb.move_to(x, y) } else { pb.line_to(x, y) }
+        }
+        pb.close();
+        let path = pb.finish().expect("a path");
+        let mut paint = Paint { anti_alias: true, ..Paint::default() };
+        paint.set_color_rgba8(0, 0, 0, 255);
+        pm.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
+        let off = |q: Coord| {
+            o.sides()
+                .iter()
+                .map(|s| {
+                    let (dx, dy) = (s.z.x - s.a.x, s.z.y - s.a.y);
+                    let u = (((q.x - s.a.x) * dx + (q.y - s.a.y) * dy) / (dx * dx + dy * dy)).clamp(0.0, 1.0);
+                    (q.x - s.a.x - u * dx).hypot(q.y - s.a.y - u * dy)
+                })
+                .fold(f64::INFINITY, f64::min)
+        };
+        let (mut bay, mut wrong) = (0, Vec::new());
+        for j in 0..pm.height() {
+            for i in 0..pm.width() {
+                let q = Coord::new((f64::from(i) + 0.5 - m) / k, (f64::from(j) + 0.5 - m) / k);
+                if off(q) * k <= 1.5 {
+                    continue;
+                }
+                let alpha = pm.pixel(i, j).map_or(0, |c| c.alpha());
+                let ground = o.contains(q);
+                bay += usize::from(!ground && q.x > 1.0 && q.x < 2.0 && q.y > 1.0 && q.y < 10.0);
+                if alpha != if ground { 255 } else { 0 } {
+                    wrong.push((q.x, q.y, alpha));
+                }
+            }
+        }
+        assert!(bay > 1000 && wrong.is_empty(), "{bay} {:?}", &wrong[..wrong.len().min(8)]);
+        // Its walls are the outline's 15 sides, none along the seam (it runs along none).
+        let mut out = Vec::new();
+        edges(&b, p, &p.iter().map(|c| (c.1.x, c.1.y)).collect::<Vec<_>>(), 1.0, &mut out);
+        let mut sides: Vec<u16> = out.iter().map(|e| e.side).collect();
+        sides.sort_unstable();
+        sides.dedup();
+        assert_eq!(sides, (0..15).collect::<Vec<u16>>());
+    }
+
+    #[test]
     fn a_polygon_block_cuts_a_triangle_across_its_inner_corner_to_the_part_inside() {
         // #2318: an L, the square 10 a side without its north-east quarter (given clockwise: it is
         // turned round). A triangle across the inner corner keeps all but the corner's notch,
