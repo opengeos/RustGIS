@@ -2466,20 +2466,21 @@ fn a_legends_rows_are_measured_once_a_size() {
     assert_eq!(rows.len(), r);
     assert!(!rows.iter().any(|row| matches!(row, LegendRow::Picture(_))), "every row has a text");
     // Manual, in one column in a box ten rows tall at the default size. The drawing measures
-    // the R rows' symbols once (`symbol_sides`) and their texts once (`RowSizes::of`); then
-    // `legend_column`, as before, takes its swatch column from every row's symbol (R) and
-    // each row's height until one passes the box: ten drawn and the eleventh, 11. Before fits,
-    // the same drawing called `symbol_side` through `LegendRow::height` and `swatch_column`:
-    // `balanced` R for its total, 24 R for its 24 `flow`s, R for the last `flow` and R for
-    // the tallest column (27 R); the drawing's own `flow` R; `widest` over the one column, R
-    // for its swatches and R texts; and `legend_column` R + 11: 30 R + 11 symbols, R texts.
+    // the R rows' symbols once (`symbol_sides`) and their texts once (`RowSizes::of`), and
+    // `legend_column` takes its swatch column and each row's height from those measures, so
+    // it measures none again: R symbols, R texts. Before fits, the same drawing called
+    // `symbol_side` through `LegendRow::height` and `swatch_column`: `balanced` R for its total,
+    // 24 R for its 24 `flow`s, R for the last `flow` and R for the tallest column (27 R); the
+    // drawing's own `flow` R; `widest` over the one column, R for its swatches and R texts; and
+    // `legend_column` R for its swatches and 11 heights (ten rows drawn and the eleventh, which
+    // passes the box): 30 R + 11 symbols, R texts.
     let manual = legend_calls(|| {
         let mut pm = Pixmap::new(300, 150).unwrap();
         crate::canvas::with_canvas(&mut pm, |c| {
             legend(c, Rect::from_xywh(0.0, 0.0, 300.0, 10.0 * LEGEND_ROW).unwrap(), &map, ("", 1), None, opts(true), 1.0);
         });
     });
-    assert_eq!(manual, (2 * r + 11, r));
+    assert_eq!(manual, (r, r));
     assert!(manual.0 <= 30 * r + 11 && manual.1 <= r, "no more than before fits: {manual:?}");
     // adjustColumnsAndSize in a box it can never fit: 9 points fits in no columns, nor does 4,
     // so `largest_fitting` stops after those two sizes, six column counts each. The symbols

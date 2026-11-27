@@ -212,6 +212,7 @@ impl LegendRow<'_> {
     /// Its height at 1:`scale` in a legend `size` times the default ([`legend_size`]), in points:
     /// a picture's a pixel a point at the default size, as the Layers pane shows it; a row grows to
     /// hold its point symbol.
+    #[cfg(test)]
     pub(super) fn height(&self, scale: f64, size: f32) -> f32 {
         match self {
             LegendRow::Picture(_) => self.height_beside(0.0, size),
@@ -1029,7 +1030,7 @@ pub(super) fn legend_missing(
         // The room left of it that holds nothing: none at the box's edge, the gap between columns
         // as drawn after it.
         let lead = if k == 0 { 0.0 } else { gap * ppp * close_up };
-        legend_column(pm, column, part.rows, (columns > 1, lead), map, &opts, ink, ppp);
+        legend_column(pm, column, part, (columns > 1, lead), map, &opts, ink, ppp);
         x = right + gap * ppp * close_up;
     }
     (missing, fitted)
@@ -1049,13 +1050,14 @@ pub(super) fn legend(
     legend_missing(pm, r, map, (title, columns, LegendFit::Manual), drawn, opts, INK, ppp);
 }
 
-/// A column of a legend: its rows from the top of `r`, as many as fit. With `name_with_class`, a
-/// layer's name only with room for the class under it, as [`flow`] keeps them together. `lead`
-/// pixels left of it hold nothing, which its swatches may reach into.
+/// A column of a legend: its rows `m` from the top of `r`, as many as fit, by their measures (their
+/// symbols' sides and heights, measured once). With `name_with_class`, a layer's name only with
+/// room for the class under it, as [`flow`] keeps them together. `lead` pixels left of it hold
+/// nothing, which its swatches may reach into.
 pub(super) fn legend_column(
     pm: &mut Canvas,
     r: Rect,
-    rows: &[LegendRow],
+    m: Measured,
     (name_with_class, lead): (bool, f32),
     map: &Map,
     opts: &LegendOptions,
@@ -1065,11 +1067,11 @@ pub(super) fn legend_column(
     let mut y = r.y();
     let size = opts.size;
     let line = LEGEND_ROW * size * ppp;
-    let sw = swatch_column(rows.iter().map(|row| row.symbol_side(opts.scale)), size) * ppp;
+    let sw = swatch_column(m.sides.iter().copied(), size) * ppp;
     // A line's or polygon's swatch, across the column of swatches.
     let across = LEGEND_SWATCH * size * ppp;
-    let mut rows = rows.iter().peekable();
-    while let Some(row) = rows.next() {
+    let mut rows = m.rows.iter().zip(m.heights).peekable();
+    while let Some((row, &row_height)) = rows.next() {
         if let LegendRow::Picture(p) = row {
             match &**p {
                 rustgis_tiles::cache::Payload::Image(pic) => match legend_picture(pm, r, y, pic, ppp * size) {
@@ -1083,20 +1085,20 @@ pub(super) fn legend_column(
         }
         // The rectangle's own bottom, which a sum of its top and height can miss by a rounding,
         // and a thousandth of a row's slack: a legend sized to its rows keeps the last one.
-        let height = row.height(opts.scale, size) * ppp;
+        let height = row_height * ppp;
         if y + height > r.bottom() + line * 1e-3 {
             break;
         }
         // A WMS or WMTS layer's name only with room for some of its picture under it.
-        if let (LegendRow::Head(_), Some(LegendRow::Picture(p))) = (&row, rows.peek())
+        if let (LegendRow::Head(_), Some((LegendRow::Picture(p), _))) = (&row, rows.peek())
             && let rustgis_tiles::cache::Payload::Image(pic) = &**p
             && y + line + picture_scale(r, pic, ppp * size) > r.bottom() + line * 1e-3
         {
             break;
         }
-        if let (true, LegendRow::Head(_), Some(next)) = (name_with_class, &row, rows.peek())
+        if let (true, LegendRow::Head(_), Some(&(next, next_height))) = (name_with_class, &row, rows.peek())
             && matches!(next, LegendRow::Class(..))
-            && y + height + next.height(opts.scale, size) * ppp > r.bottom() + line * 1e-3
+            && y + height + next_height * ppp > r.bottom() + line * 1e-3
         {
             break;
         }
