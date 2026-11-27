@@ -3,7 +3,7 @@
 //! delimited text or spreadsheet read whole, a ZIP or CityJSON/CityGML model's layers, the opening
 //! of a large Shapefile or GeoJSON file read in place, #2446), Repair/Reload Data, Load All
 //! Features, Convert To Annotation's read of a layer read in place, native models or scripts, the
-//! Error Inspector's topology check (#1291), Source File State's hashing of a layer's file, Column Statistics' count of a column and Import QGIS Style's file and images. [`read_ahead`]
+//! Error Inspector's topology check (#1291), Source File State's hashing of a layer's file, Column Statistics' count of a column, Import QGIS Style's file and images, and Import QGIS Project's import on a copy of the session. [`read_ahead`]
 //! takes what the read needs of the session, [`ReadAhead::run`] reads on the thread, and [`read_land`]
 //! runs the admitted command under its initiating owner: the command takes
 //! it instead of reading again, so what it adds, says, logs and puts in Undo is the same as when
@@ -237,6 +237,7 @@ pub(crate) const IN_BACKGROUND: &[(&str, &str)] = &[
     ("layer.sizeBy", "Size by Field"),
     ("offline.keepRows", "Keep Field Package Rows"),
     ("style.importQgis", "Import QGIS Style"),
+    ("project.importQgis", "Import QGIS Project"),
 ];
 
 /// What `command`'s read is called, when it is one the app makes before the command lands
@@ -331,6 +332,13 @@ pub(crate) fn prepare(s: &mut Session, op: Authorized<CommandOp>, owner: Continu
         "layer.sizeBy" => (super::layer::size_by_ahead(s, params), None),
         "offline.keepRows" => (super::field_changes::keep_ahead(s), None),
         "style.importQgis" => (super::qgis::style_ahead(s, params), None),
+        "project.importQgis" => {
+            #[cfg(not(target_arch = "wasm32"))]
+            let work = super::qgis::import_ahead(s, params, owner.native_tool_owner());
+            #[cfg(target_arch = "wasm32")]
+            let work = None;
+            (work, None)
+        }
         // Listed in IN_BACKGROUND without a read here.
         id => return Err(not_in_background(id)),
     };

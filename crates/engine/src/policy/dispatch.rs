@@ -179,6 +179,16 @@ impl Session {
             let id = self.layer_id(&Value::Object(params.clone()))?;
             params.insert("layer".into(), json!(id));
         }
+        // A QGIS project's import runs on a copy that borrows the logins its services need: they
+        // are opened here, before its approval and its read record the accounts they are checked
+        // against (#2476).
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.import_opened = None;
+            if command == "project.importQgis" && self.policy_user() {
+                self.import_opened = crate::cmd::qgis::open_import_logins(self, &Value::Object(params.clone()));
+            }
+        }
         let mut op = self.authorize(command, &Value::Object(params))?;
         self.check_read_command(&op)?;
         let copy_command = matches!(command, "model.run" | "script.run") && self.policy_user();
@@ -198,7 +208,13 @@ impl Session {
         owner.check()?;
         let current = owner.clone();
         let still = Arc::new(move || current.check().is_ok());
-        self.with_node(node, |s| crate::render::rustgis_tiles::cache::with_still(still, || crate::cmd::reads::prepare(s, op, owner)))
+        let prepared =
+            self.with_node(node, |s| crate::render::rustgis_tiles::cache::with_still(still, || crate::cmd::reads::prepare(s, op, owner)));
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.import_opened = None;
+        }
+        prepared
     }
     /// Lands only the original read invocation; no result can be claimed by another command.
     pub(crate) fn finish_read(&mut self, read: crate::cmd::reads::Read) -> CmdResult {

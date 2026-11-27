@@ -413,6 +413,7 @@ fn called<'a>(command: &str, what: &'a str) -> &'a str {
         (true, "data.similar") => tl_raw!("Find Similar"),
         (true, "layer.sizeBy") => tl_raw!("Size by Field"),
         (true, "style.importQgis") => tl_raw!("Import QGIS Style"),
+        (true, "project.importQgis") => tl_raw!("Import QGIS Project"),
         (true, "service.add") => tl_raw!("Add Service Layer"),
         (true, "service.layers") => tl_raw!("List Service Layers"),
         (true, "edit.previewShapeConversion") => tl_raw!("Preview Shape Conversion"),
@@ -1709,6 +1710,41 @@ mod tests {
         let steps = app.ws.recording.clone().unwrap();
         let step = steps.iter().find(|s| s.command == "layer.sizeBy").expect("recorded");
         assert_eq!(step.params["layer"], json!("towns"));
+    }
+
+    /// Import QGIS Project runs on a copy of the session on a thread of its own (#2476): the map it
+    /// made comes in when it lands, in one Undo step, with what the import says.
+    #[test]
+    fn a_qgis_project_is_imported_on_a_thread_before_it_lands() {
+        let dir = tempfile::tempdir().unwrap();
+        let towns = json!({"type": "FeatureCollection", "features": [
+            {"type": "Feature", "properties": {"name": "A"}, "geometry": {"type": "Point", "coordinates": [8.5, 47.4]}}]});
+        std::fs::write(dir.path().join("towns.geojson"), towns.to_string()).unwrap();
+        let path = dir.path().join("towns.qgs");
+        std::fs::write(
+            &path,
+            r#"<qgis version="4.2.3"><title>Towns</title><layer-tree-group><layer-tree-layer id="Towns" checked="Qt::Checked"/>
+            <layer-tree-layer id="Gone" checked="Qt::Checked"/></layer-tree-group><projectlayers>
+            <maplayer type="vector"><id>Towns</id><datasource>./towns.geojson</datasource><layername>Towns</layername><provider>ogr</provider></maplayer>
+            <maplayer type="vector"><id>Gone</id><datasource>./gone.geojson</datasource><layername>Gone</layername><provider>ogr</provider></maplayer>
+            </projectlayers></qgis>"#,
+        )
+        .unwrap();
+        let mut app = RustGisApp::new(rustgis_engine::Session::new(rustgis_engine::Project::default()));
+        let maps = app.session.project.maps.len();
+        app.reads_off_frame = true;
+        let params = json!({"path": path.display().to_string()});
+        assert_eq!(app.run_by_user("project.importQgis", params).unwrap()["started"], "Import QGIS Project");
+        assert_eq!(app.session.project.maps.len(), maps, "a map only once it has been imported");
+        let said = |app: &RustGisApp| app.session.notices.iter().filter(|n| n.text.contains("Imported 1 of 2 QGIS layers")).count();
+        assert_eq!(said(&app), 0);
+        landed(&mut app, 60);
+        assert_eq!(app.session.project.maps.len(), maps + 1);
+        assert_eq!(app.session.map().name, "Towns");
+        assert!(app.session.map().layer_by_name("Towns").is_some());
+        assert_eq!(said(&app), 1, "said once, when it lands");
+        app.run("edit.undo", Value::Null).unwrap();
+        assert_eq!(app.session.project.maps.len(), maps);
     }
 
     /// Import QGIS Style reads its file and its raster image and SVG markers' images on a thread first

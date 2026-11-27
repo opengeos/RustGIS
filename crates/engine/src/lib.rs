@@ -1201,6 +1201,10 @@ pub struct Session {
     /// there. Its notices stay its own: the run there says them.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) requests_into: Option<rustgis_data::diagnostics::Capture>,
+    /// A QGIS project's import prepared for the read about to run it on a copy, its logins opened
+    /// before the read recorded the accounts (#2476): taken at once by that read.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) import_opened: Option<crate::cmd::qgis::ImportOpened>,
     /// The tools run ahead that a model's run took, for the tests.
     #[cfg(test)]
     pub(crate) tools_taken: usize,
@@ -1612,6 +1616,8 @@ impl Session {
             zones_ahead: None,
             #[cfg(not(target_arch = "wasm32"))]
             requests_into: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            import_opened: None,
             #[cfg(test)]
             tools_taken: 0,
             #[cfg(test)]

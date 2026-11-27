@@ -356,7 +356,10 @@ pub fn temporary_probe(c: &Connection, secret: &str, insecure: bool, url: &str) 
 }
 
 /// An active login belongs to one connection in one session; the token is not a secret, but
-/// saved projects must never treat it as authority to use another session's login.
+/// saved projects must never treat it as authority to use another session's login. The one
+/// exception is a borrowing copy ([`SessionLogins::borrowing`]): a command's own run on a copy of
+/// its session, which uses the logins its session opened for it and opens none.
+#[derive(Clone)]
 struct ActiveLogin {
     origin: String,
     binding: String,
@@ -390,6 +393,9 @@ pub struct SessionLogins {
     said: BTreeSet<String>,
     /// Token generations under way, by connection id (see [`crate::service_tokens`]).
     pub(crate) pending: BTreeMap<String, crate::service_tokens::Pending>,
+    /// For a borrowing copy ([`SessionLogins::borrowing`]), why its session couldn't open the
+    /// login of each origin it was opened for, by origin: a login not open is refused with it.
+    borrowed: Option<BTreeMap<String, String>>,
 }
 
 impl SessionLogins {
@@ -403,12 +409,35 @@ impl SessionLogins {
             failed: BTreeMap::new(),
             said: BTreeSet::new(),
             pending: BTreeMap::new(),
+            borrowed: None,
         }
+    }
+
+    /// The logins a copy of this session uses while it runs a command of this session's on a
+    /// thread of its own (Import QGIS Project, #2476): those open here for `origins`, which this
+    /// session opened for it before it started, and why each that isn't couldn't be (`refused`,
+    /// by origin). The copy opens no login itself: it reads no saved login and asks for none, and a
+    /// login not open is refused with that reason. Dropping it ends none of the logins it borrowed,
+    /// which stay this session's; one logged out here meanwhile is no longer active, and its
+    /// requests are refused.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn borrowing(&self, origins: &BTreeSet<String>, refused: BTreeMap<String, String>) -> Self {
+        let mut copy = Self::new();
+        copy.active = self.active.iter().filter(|(_, a)| origins.contains(&a.origin)).map(|(id, a)| (id.clone(), a.clone())).collect();
+        copy.anonymous = self.anonymous;
+        copy.logged_out.clone_from(&self.logged_out);
+        copy.borrowed = Some(refused);
+        copy
     }
 
     /// Starts or ends [`SessionLogins::anonymous`] reads, saying what it was.
     pub(crate) fn set_anonymous(&mut self, on: bool) -> bool {
         std::mem::replace(&mut self.anonymous, on)
+    }
+
+    /// Whether these are a borrowing copy's ([`SessionLogins::borrowing`]).
+    pub(crate) fn is_borrowing(&self) -> bool {
+        self.borrowed.is_some()
     }
 
     /// Whether [`SessionLogins::anonymous`] reads are running: nothing may pick a login for them.
@@ -450,7 +479,9 @@ pub(crate) fn anonymously<T>(s: &mut Session, on: bool, f: impl FnOnce(&mut Sess
 impl Drop for SessionLogins {
     fn drop(&mut self) {
         let mut ended = false;
-        for active in self.active.values() {
+        // A borrowing copy's logins are its session's, which ends them.
+        let own = if self.borrowed.is_some() { BTreeMap::new() } else { std::mem::take(&mut self.active) };
+        for active in own.values() {
             ended |= logins::deactivate(&active.binding);
         }
         for op in self.pending.values() {
@@ -485,6 +516,10 @@ fn clear_cache() {
 /// Other sessions and other connections at this origin retain their own bindings.
 /// Returns the number of addresses that could not be rebound; resolution reports it once.
 pub(crate) fn activate(s: &mut Session, c: &Connection, secret: Option<&Secret>, insecure: bool) -> Result<usize, String> {
+    // A borrowing copy neither opens a login nor ends one of its session's.
+    if s.web_logins.borrowed.is_some() {
+        return Err(REQUIRED.into());
+    }
     let origin = login_origin(c).ok_or(NO_ORIGIN)?;
     let next = match secret {
         Some(secret) => {
@@ -521,7 +556,10 @@ pub(crate) fn reselect(s: &mut Session, c: &Connection, origin: &str) -> usize {
 }
 
 pub(crate) fn deactivate(s: &mut Session, c: &Connection, _origin: Option<String>) {
-    if let Some(old) = s.web_logins.active.remove(&c.id) {
+    // (A borrowing copy only stops using its session's login, which stays active there.)
+    if let Some(old) = s.web_logins.active.remove(&c.id)
+        && s.web_logins.borrowed.is_none()
+    {
         logins::deactivate(&old.binding);
         clear_cache();
     }
@@ -626,7 +664,9 @@ fn lapsed(c: &Connection, secret: &Secret) -> bool {
 /// isn't asked for the same expired payload again. The saved login itself is left as it is.
 /// The connection stays chosen for its origin, so asking for a new login finds it.
 fn expire(s: &mut Session, c: &Connection) -> String {
-    if let Some(old) = s.web_logins.active.remove(&c.id) {
+    if let Some(old) = s.web_logins.active.remove(&c.id)
+        && s.web_logins.borrowed.is_none()
+    {
         logins::deactivate(&old.binding);
         clear_cache();
     }
@@ -727,6 +767,12 @@ pub fn request(s: &mut Session, connection: Option<&str>, url: &str) -> Result<S
     if c.auth.is_empty() {
         return Ok(plain.to_string());
     }
+    // A borrowing copy opens no login: one its session didn't open for it is refused, saying why.
+    if let Some(refused) = &s.web_logins.borrowed
+        && !logged_in(s, &c)
+    {
+        return Err(refused.get(&origin).cloned().unwrap_or_else(|| REQUIRED.to_string()));
+    }
     if !logged_in(s, &c) {
         // Confirmed already: a web connection's session secret is kept only after its login passed
         // the plain-http:// check (`connection.login`), and is forgotten when the connection's
@@ -736,6 +782,24 @@ pub fn request(s: &mut Session, connection: Option<&str>, url: &str) -> Result<S
     }
     let active = s.web_logins.active.get(&c.id).ok_or(REQUIRED)?;
     logins::bind(&active.binding, plain).map_err(str::to_string)
+}
+
+/// The logins a copy of `s` running one of its commands uses ([`SessionLogins::borrowing`]): the
+/// login of each web address in `addresses`' origins, opened here first as a request to it would
+/// open it (a saved login read, a choice of connection asked for), and why each that couldn't be
+/// wasn't. The copy then sends only what `s` could send.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn borrow_for<'a>(s: &mut Session, addresses: impl IntoIterator<Item = &'a str>) -> SessionLogins {
+    let (mut origins, mut refused) = (BTreeSet::new(), BTreeMap::new());
+    for address in addresses {
+        let Some(origin) = logins::origin(logins::inner(address)) else { continue };
+        if origins.insert(origin.clone())
+            && let Err(e) = request(s, None, address)
+        {
+            refused.insert(origin, e);
+        }
+    }
+    s.web_logins.borrowing(&origins, refused)
 }
 
 /// Opens a service using its existing or remembered login without retrying a failed store read

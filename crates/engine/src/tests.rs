@@ -42076,6 +42076,7 @@ mod ogc_server;
 
 mod ogc_dataset;
 
+mod qgis_import_ahead;
 mod qgis_services;
 
 #[path = "../../../tests/support/esripbf.rs"]
