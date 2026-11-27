@@ -345,7 +345,8 @@ definition and, saving them again, drops only the WKT.
 A saved `layout.publication` that leaves out or sets up a part of the sheet (`grid` or
 `scaleBar` as `"none"` or an object that gives something, or `northArrow` as such an object,
 #3094) requires `layout-publication-parts`, so an older reader refuses it instead of making the
-default sheet. `null`, `{}` and the north arrow's `"auto"`, `"always"` and `"none"` need nothing.
+default sheet. `null`, `{}` and the north arrow given as the text `"auto"`, `"always"` or `"none"`
+need nothing.
 
 ## New dependencies
 

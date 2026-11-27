@@ -1908,7 +1908,9 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
         let losses: Vec<_> = text_fit_loss(s, i, bar).into_iter().collect();
         warnings.extend(rustgis_render::layout::scale_bar_fit_notices(&losses));
     }
-    if let Some(crs) = p.get("grid").and_then(|g| g.get("crs")).and_then(Value::as_str) {
+    // Only a measured grid reads its coordinate system.
+    let measured = grid.as_ref().is_some_and(|g| g.kind == GridKind::Measured);
+    if let Some(crs) = p.get("grid").and_then(|g| g.get("crs")).and_then(Value::as_str).filter(|_| measured) {
         crate::cmd::say_crs_note(s, crs);
     }
     let locator = locator_map.map(|(map, ..)| map);
