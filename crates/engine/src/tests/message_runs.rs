@@ -40,7 +40,7 @@ fn a_commands_messages_remember_its_run_and_undo_reaches_back_past_it() {
     assert_eq!(s.undo_steps_back_past(joined.before, joined.after.unwrap()), None);
     // An undo makes no step: a message it says offers no Undo to before it.
     s.run("edit.undo", &json!({})).unwrap();
-    let undone = s.diagnostics.records().into_iter().rev().find_map(|r| r.run.filter(|run| run.id > later.id));
+    let undone = s.diagnostics.records().into_iter().rev().find_map(|r| r.run.filter(|run| run.id > joined.id));
     assert!(undone.as_ref().is_none_or(|run| run.after.is_none()), "{undone:?}");
     // A message no command said has no run.
     s.notify("said by the app", false);
