@@ -1588,7 +1588,9 @@ fn a_default_its_field_cant_hold_as_given_is_refused_when_set() {
     }
     let err = s.run("edit.template", &json!({"layer": "Cities", "name": "T", "defaults": {"x": 9_007_199_254_740_993_i64}})).unwrap_err();
     assert_eq!(err, "field 'x': a Double field can't hold '9007199254740993' as given");
-    for (field, text) in [("x", "9007199254740993.0"), ("x", "12345678901234567890"), ("n", "1.00000000000000001e0")] {
+    for (field, text) in
+        [("x", "9007199254740993.0"), ("x", "12345678901234567890"), ("n", "1.00000000000000001e0"), ("n", "9007199254740993e0")]
+    {
         let err = s.run("edit.template", &json!({"layer": "Cities", "name": "T", "defaults": {field: text}})).unwrap_err();
         assert_eq!(err, format!("field '{field}': a {} field can't hold '{text}' as given", if field == "n" { "Long" } else { "Double" }));
     }
@@ -1600,6 +1602,8 @@ fn a_default_its_field_cant_hold_as_given_is_refused_when_set() {
         ("x", json!(0.1), None),
         ("n", json!("2.0000000000000000001e0"), Some(rustgis_data::loss::LossCode::ChangedTruncated)),
         ("n", json!("1e3"), None),
+        ("n", json!("9007199254740993e0"), Some(rustgis_data::loss::LossCode::ChangedRounded)),
+        ("n", json!("9007199254740992e0"), None),
     ] {
         let mark = s.notice_mark();
         s.run("edit.setValue", &json!({"layer": "Cities", "row": 0, "field": field, "value": value})).unwrap();
@@ -1629,6 +1633,26 @@ fn a_default_its_field_cant_hold_as_given_is_refused_when_set() {
     let ds = &s.map().layer_by_name("Cities").unwrap().dataset;
     assert_eq!(ds.value(0, ds.field_index("note").unwrap()), &V::Text("0.1234567".into()), "edit.setValue too");
     s.run("edit.undo", &Value::Null).unwrap();
+    // Calculate Field and Paste say what a decimal field rounds; exact values say nothing.
+    // (A number written in an expression is read as a decimal when it is parsed, so text stands in.)
+    for (expression, said) in
+        [("'9007199254740993.0'", true), ("'9007199254740993'", true), ("'9007199254740992.0'", false), ("0.1", false)]
+    {
+        let mark = s.notice_mark();
+        s.run("edit.calculateField", &json!({"layer": "Cities", "field": "x", "expression": expression})).unwrap();
+        let codes: Vec<_> = s.notices_since(mark).iter().filter_map(|n| n.loss()).collect();
+        assert_eq!(codes.contains(&rustgis_data::loss::LossCode::ChangedRounded), said, "{expression}: {:?}", s.notices_since(mark));
+        s.run("edit.undo", &Value::Null).unwrap();
+    }
+    for (x, said) in [(json!(9_007_199_254_740_993_i64), true), (json!(0.1), false)] {
+        let feature = json!({"type": "Feature", "geometry": {"type": "Point", "coordinates": [0.0, 0.0]}, "properties": {"x": x}});
+        let text = json!({"type": "FeatureCollection", "features": [feature]}).to_string();
+        let mark = s.notice_mark();
+        s.run("edit.paste", &json!({"layer": "Cities", "text": text})).unwrap();
+        let codes: Vec<_> = s.notices_since(mark).iter().filter_map(|n| n.loss()).collect();
+        assert_eq!(codes.contains(&rustgis_data::loss::LossCode::ChangedRounded), said, "{x}: {:?}", s.notices_since(mark));
+        s.run("edit.undo", &Value::Null).unwrap();
+    }
     s.run("edit.calculateField", &json!({"layer": "Cities", "field": "note", "expression": "0.1234567"})).unwrap();
     let ds = &s.map().layer_by_name("Cities").unwrap().dataset;
     assert_eq!(ds.value(0, ds.field_index("note").unwrap()), &V::Text("0.1234567".into()), "Calculate Field too");

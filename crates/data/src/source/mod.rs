@@ -287,7 +287,7 @@ pub(crate) fn unread_date(counts: &mut Vec<usize>, k: usize) {
 /// value that isn't yes or no ([`unread_dates_note`]). Empty text and `<Null>` are null, uncounted.
 pub(crate) fn yes_no_text(text: &str, counts: &mut Vec<usize>, k: usize) -> crate::Value {
     let v = crate::Value::parse(text, crate::FieldType::Boolean);
-    if v.is_null() && !crate::Value::Text(text.to_string()).asks_null() {
+    if v.is_null() && !text.trim().is_empty() && !crate::Value::is_null_marker(text) {
         unread_date(counts, k);
     }
     v
