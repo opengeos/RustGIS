@@ -113,6 +113,9 @@ fn add_layer(s: &mut Session, p: &Value) -> CmdResult {
         if let Some(note) = rustgis_data::source::rounded_dates_note(&info.fields, &editable.rounded_dates) {
             s.say(note.prefixed(&name));
         }
+        if let Some(note) = rustgis_data::source::not_utf8_note(&info.fields, &editable.not_utf8, rustgis_data::source::GEOPACKAGE_TEXT) {
+            s.say(note.prefixed(&name));
+        }
         if !editable.writable {
             s.notify(format!("{name}: the file is read-only, so edits can't be saved to it"), false);
         }
@@ -399,6 +402,9 @@ pub(super) fn read_candidate(name: &str, edit: &rustgis_map::source::GpkgEdit) -
         notes.push(note.map_text(|note| format!("{note}; saving leaves them as they are unless they're edited")));
     }
     if let Some(note) = rustgis_data::source::rounded_dates_note(&info.fields, &editable.rounded_dates) {
+        notes.push(note);
+    }
+    if let Some(note) = rustgis_data::source::not_utf8_note(&info.fields, &editable.not_utf8, rustgis_data::source::GEOPACKAGE_TEXT) {
         notes.push(note);
     }
     if !editable.writable {

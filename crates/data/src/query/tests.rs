@@ -75,13 +75,21 @@ fn number_literals_are_exact_or_refused() {
     assert_eq!(select("pop > 9007199254740993", &d).unwrap(), Vec::<usize>::new());
     // 2^63, past `i64::MAX`, is a decimal that holds it exactly.
     assert_eq!(v("9223372036854775808"), Value::Float(9_223_372_036_854_775_808.0));
-    for text in ["9223372036854775809", "99999999999999999999", "9007199254740993.0", "9007199254740993.5", "12345678901234567000.0"] {
+    for text in [
+        "9223372036854775809",
+        "99999999999999999999",
+        "9007199254740993.0",
+        "9007199254740993.5",
+        "12345678901234567000.0",
+        "1.2345678901234567891e19",
+    ] {
         assert!(parse(text, &d).is_err_and(|e| e.contains("exact") || e.contains("rounded")), "{text}");
     }
     assert_eq!(v("0.1"), Value::Float(0.1));
     assert_eq!(v("2.5"), Value::Float(2.5));
     assert_eq!(v("1e3"), Value::Int(1000));
     assert_eq!(v("1.5e3"), Value::Int(1500));
+    assert_eq!(v("1e19"), Value::Float(1e19), "a decimal holds it exactly");
     assert_eq!(v("9007199254740992.0"), Value::Float(9_007_199_254_740_992.0));
     assert_eq!(v("0.12345678901234567891"), Value::Float(0.123_456_789_012_345_68));
 }

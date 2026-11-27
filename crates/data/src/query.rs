@@ -803,8 +803,9 @@ fn lex_first(s: &str, tolerant: bool, most: usize) -> Result<Lexed, String> {
 /// The token of a number literal, refusing one that can't be held exactly rather than rounding it.
 /// A literal of digits only is an exact `i64`; past `i64::MAX`, a decimal that holds it exactly, or
 /// refused. Any other literal is a
-/// decimal (`f64`), refused only when it would lose its whole-number digits: it has 16 or more
-/// of them and a decimal doesn't hold its digits (`9007199254740993.0`). One that merely has no
+/// decimal (`f64`), refused only when it would lose whole-number digits: it is 1e15 or more, so
+/// has 16 or more of them however it is written, and a decimal doesn't hold its digits
+/// (`9007199254740993.0`, `1.2345678901234567891e19`). One that merely has no
 /// exact binary form (`0.1`) or many fraction digits (`0.12345678901234567891`) is read as the
 /// nearest decimal, as every number written in decimal is.
 fn number_token(t: &str) -> Result<Tok, String> {
@@ -820,9 +821,9 @@ fn number_token(t: &str) -> Result<Tok, String> {
         return t.parse().map(Tok::Num).map_err(|_| format!("bad number '{t}'"));
     }
     let n: f64 = t.parse().map_err(|_| format!("bad number '{t}'"))?;
-    let mantissa = t.split(['e', 'E']).next().unwrap_or_default();
-    let whole = mantissa.split('.').next().unwrap_or_default().trim_start_matches('0');
-    if whole.len() >= 16 && n.is_finite() && Value::Text(t.to_string()).rounds_as_double() {
+    // A number of 1e15 or more has 16 or more whole-number digits, whether written out or moved
+    // there by an exponent: refused when a decimal wouldn't hold them.
+    if n.is_finite() && n.abs() >= 1e15 && Value::Text(t.to_string()).rounds_as_double() {
         return Err(format!("the number {t} has more digits than a decimal number holds exactly, so it would be rounded"));
     }
     Ok(Tok::Num(n))

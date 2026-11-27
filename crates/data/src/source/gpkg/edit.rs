@@ -34,6 +34,8 @@ pub struct Editable {
     pub unread_dates: Vec<usize>,
     /// Date-times rounded to the microsecond, by field ([`crate::source::Batch::rounded_dates`]).
     pub rounded_dates: Vec<usize>,
+    /// Text values that aren't valid UTF-8, by field ([`crate::source::Batch::not_utf8`]).
+    pub not_utf8: Vec<usize>,
     pub writable: bool,
 }
 
@@ -159,6 +161,7 @@ impl EditTable {
             skipped: 0,
             unread_dates: Vec::new(),
             rounded_dates: Vec::new(),
+            not_utf8: Vec::new(),
             writable: std::fs::metadata(&self.path).is_ok_and(|m| !m.permissions().readonly()),
         };
         {
@@ -183,7 +186,14 @@ impl EditTable {
                 }
                 let mut values = Vec::with_capacity(attrs.len());
                 for (k, (f, &i)) in self.info().fields.iter().zip(&attrs).enumerate() {
-                    values.push(value(row.get_ref(i).map_err(err)?, f.ty, &mut out.unread_dates, Some(&mut out.rounded_dates), k));
+                    values.push(value(
+                        row.get_ref(i).map_err(err)?,
+                        f.ty,
+                        &mut out.unread_dates,
+                        Some(&mut out.rounded_dates),
+                        &mut out.not_utf8,
+                        k,
+                    ));
                 }
                 let attrs = values;
                 out.versions.push((id, hash.cast_signed()));
@@ -306,7 +316,7 @@ impl EditTable {
                 let attr = f.attrs.get(i).unwrap_or(&Value::Null);
                 // A stored date that isn't one reads as null and is kept unless edited; one with
                 // digits past the microsecond reads rounded, as the load showed it, so it is kept too.
-                let previous = value(ValueRef::from(old), field.ty, &mut Vec::new(), Some(&mut Vec::new()), 0);
+                let previous = value(ValueRef::from(old), field.ty, &mut Vec::new(), Some(&mut Vec::new()), &mut Vec::new(), 0);
                 let same_nan = matches!((&previous, attr), (Value::Float(a), Value::Float(b)) if a.is_nan() && b.is_nan());
                 if previous != *attr && !same_nan {
                     sets.push(format!("{} = ?", quote(columns.get(c).ok_or_else(|| self.shape_error())?)));
@@ -447,7 +457,7 @@ impl EditTable {
                 // trigger touched, wasn't read before, so it is said.
                 let stored = row.get(c).ok_or_else(|| self.shape_error())?;
                 let (mut unread, mut rounded) = (Vec::new(), Vec::new());
-                let read = value(ValueRef::from(stored), field.ty, &mut unread, Some(&mut rounded), i);
+                let read = value(ValueRef::from(stored), field.ty, &mut unread, Some(&mut rounded), &mut Vec::new(), i);
                 if before.get(&(k, c)) != Some(stored) {
                     crate::source::add_unread_dates(&mut unread_dates, &unread);
                     crate::source::add_unread_dates(&mut rounded_dates, &rounded);

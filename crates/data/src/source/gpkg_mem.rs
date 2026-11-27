@@ -323,7 +323,7 @@ impl GpkgMemSource {
 /// and counted in `unread` ([`Batch::unread_dates`]): text that isn't a number in a number field,
 /// a blob. A date-time with digits past the microsecond, or a whole number past 2^53 in a Double
 /// field, is rounded and counted in `rounded` ([`Batch::rounded_dates`]).
-fn value(v: &Val, ty: FieldType, unread: &mut Vec<usize>, rounded: &mut Vec<usize>, k: usize) -> Value {
+fn value(v: &Val, ty: FieldType, unread: &mut Vec<usize>, rounded: &mut Vec<usize>, not_utf8: &mut Vec<usize>, k: usize) -> Value {
     match (v, ty) {
         (Val::Null, _) => Value::Null,
         (v, FieldType::Date | FieldType::DateTime) => {
@@ -336,9 +336,9 @@ fn value(v: &Val, ty: FieldType, unread: &mut Vec<usize>, rounded: &mut Vec<usiz
         (Val::Real(f), _) => Value::Float(*f),
         (Val::Text(t), FieldType::Text) => Value::Text(t.clone()),
         (Val::Text(t), FieldType::Boolean) => super::yes_no_text(t, unread, k),
-        (Val::Text(t), ty) => super::number_text(t, ty, unread, k),
+        (Val::Text(t), ty) => super::number_text(t, ty, unread, Some(rounded), k),
         // A blob in a text column is its text, as SQLite stores text either way.
-        (Val::Blob(b), FieldType::Text) => Value::Text(String::from_utf8_lossy(b).into_owned()),
+        (Val::Blob(b), FieldType::Text) => super::utf8_text(b, not_utf8, k),
         // A blob isn't a value another attribute column holds.
         (Val::Blob(_), _) => {
             super::unread_date(unread, k);
@@ -348,6 +348,10 @@ fn value(v: &Val, ty: FieldType, unread: &mut Vec<usize>, rounded: &mut Vec<usiz
 }
 
 impl FeatureSource for GpkgMemSource {
+    /// Text that isn't valid UTF-8 is said as GeoPackage text ([`super::not_utf8_note`]).
+    fn text_encoding(&self) -> &'static str {
+        super::GEOPACKAGE_TEXT
+    }
     fn info(&self) -> &SourceInfo {
         &self.info
     }
@@ -372,7 +376,7 @@ impl FeatureSource for GpkgMemSource {
         }
         // A whole read knows its count; an extent, bounded natively or not, is matched as it goes.
         let mut sample = if req.extent.is_none() { Sampler::with_total(limit, self.info.count.unwrap_or(0)) } else { Sampler::new(limit) };
-        let (mut skipped, mut unread_dates, mut rounded_dates) = (0, Vec::new(), Vec::new());
+        let (mut skipped, mut unread_dates, mut rounded_dates, mut not_utf8) = (0, Vec::new(), Vec::new(), Vec::new());
         let mut failed = None;
         crate::progress::begin(self.info.count.and_then(|n| usize::try_from(n).ok()).unwrap_or(0));
         self.db
@@ -390,7 +394,7 @@ impl FeatureSource for GpkgMemSource {
                             sample.keep(Feature {
                                 id: rowid as u64,
                                 geometry: None,
-                                attrs: self.attrs(r, &mut unread_dates, &mut rounded_dates),
+                                attrs: self.attrs(r, &mut unread_dates, &mut rounded_dates, &mut not_utf8),
                             });
                         }
                         return ControlFlow::Continue(());
@@ -427,7 +431,7 @@ impl FeatureSource for GpkgMemSource {
                 sample.keep(Feature {
                     id: rowid as u64,
                     geometry: Some(geometry),
-                    attrs: self.attrs(r, &mut unread_dates, &mut rounded_dates),
+                    attrs: self.attrs(r, &mut unread_dates, &mut rounded_dates, &mut not_utf8),
                 });
                 ControlFlow::Continue(())
             })
@@ -444,7 +448,7 @@ impl FeatureSource for GpkgMemSource {
             rounded_dates,
             null_text: Vec::new(),
             notes: Default::default(),
-            not_utf8: Vec::new(),
+            not_utf8,
         })
     }
 
@@ -501,7 +505,7 @@ impl FeatureSource for GpkgMemSource {
                 match chunks.push(Feature {
                     id: rowid as u64,
                     geometry,
-                    attrs: self.attrs(r, &mut out.unread_dates, &mut out.rounded_dates),
+                    attrs: self.attrs(r, &mut out.unread_dates, &mut out.rounded_dates, &mut out.not_utf8),
                 }) {
                     Ok(()) => ControlFlow::Continue(()),
                     Err(e) => {
@@ -522,11 +526,11 @@ impl FeatureSource for GpkgMemSource {
 impl GpkgMemSource {
     /// A row's field values, in `info.fields` order, counting in `unread_dates` the dates that
     /// aren't ones.
-    fn attrs(&self, r: &[Val], unread_dates: &mut Vec<usize>, rounded_dates: &mut Vec<usize>) -> Vec<Value> {
+    fn attrs(&self, r: &[Val], unread_dates: &mut Vec<usize>, rounded_dates: &mut Vec<usize>, not_utf8: &mut Vec<usize>) -> Vec<Value> {
         let mut out = Vec::with_capacity(self.info.fields.len());
         for (k, (f, &c)) in self.info.fields.iter().zip(&self.field_cols).enumerate() {
             out.push(match r.get(c) {
-                Some(v) => value(v, f.ty, unread_dates, rounded_dates, k),
+                Some(v) => value(v, f.ty, unread_dates, rounded_dates, not_utf8, k),
                 None => Value::Null,
             });
         }

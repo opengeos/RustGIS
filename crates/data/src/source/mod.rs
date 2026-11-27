@@ -305,12 +305,42 @@ pub(crate) fn yes_no_text(text: &str, counts: &mut Vec<usize>, k: usize) -> crat
 /// ([`crate::Value::parse_source`]): text that isn't a number is null, counted in `counts`
 /// ([`Batch::unread_dates`]), which says it as a value that isn't a number ([`unread_dates_note`]).
 /// Empty text and `<Null>` are null, uncounted.
-pub(crate) fn number_text(text: &str, ty: crate::FieldType, counts: &mut Vec<usize>, k: usize) -> crate::Value {
+pub(crate) fn number_text(
+    text: &str,
+    ty: crate::FieldType,
+    counts: &mut Vec<usize>,
+    rounded: Option<&mut Vec<usize>>,
+    k: usize,
+) -> crate::Value {
     let v = crate::Value::parse_source(text, ty);
     if v.is_null() && !text.trim().is_empty() && !crate::Value::is_null_marker(text) {
         unread_date(counts, k);
     }
+    // A number a decimal can't hold as written (`9007199254740993`) is rounded: counted in
+    // `rounded` ([`Batch::rounded_dates`]), as a whole number stored past 2^53 is.
+    if let (crate::Value::Float(_), Some(rounded)) = (&v, rounded)
+        && crate::Value::Text(text.trim().to_string()).rounds_as_double()
+    {
+        unread_date(rounded, k);
+    }
     v
+}
+
+/// The text encoding a GeoPackage reader gives ([`FeatureSource::text_encoding`]): UTF-8, which the
+/// standard requires, so [`not_utf8_note`] says why without a `.cpg` to point to.
+pub const GEOPACKAGE_TEXT: &str = "UTF-8 (GeoPackage)";
+
+/// A text field's value from bytes SQLite holds as text or as a blob: the text, or, when they
+/// aren't valid UTF-8, the text with U+FFFD in place of what isn't, counted in `not_utf8`
+/// ([`Batch::not_utf8`], said by [`not_utf8_note`]).
+pub(crate) fn utf8_text(bytes: &[u8], not_utf8: &mut Vec<usize>, k: usize) -> crate::Value {
+    match std::str::from_utf8(bytes) {
+        Ok(text) => crate::Value::Text(text.to_string()),
+        Err(_) => {
+            not_utf8_at(not_utf8, k);
+            crate::Value::Text(String::from_utf8_lossy(bytes).into_owned())
+        }
+    }
 }
 
 /// The decimal value of a whole number stored in a Double field at `k`: counted in `rounded`
@@ -429,6 +459,12 @@ pub fn not_utf8_note(fields: &[crate::Field], counts: &[usize], encoding: &str) 
     if total == 0 {
         return None;
     }
+    // A GeoPackage's text is UTF-8 by its standard: no file chooses another.
+    let (encoding, cause) = if encoding == GEOPACKAGE_TEXT {
+        ("UTF-8", "a GeoPackage holds its text in UTF-8".to_string())
+    } else {
+        (encoding, crate::dbf::cause(encoding))
+    };
     let what = if total == 1 {
         format!("1 text value isn't valid {encoding} and was")
     } else {
@@ -437,7 +473,7 @@ pub fn not_utf8_note(fields: &[crate::Field], counts: &[usize], encoding: &str) 
     let text = format!(
         "{what} read with U+FFFD in place of the bytes that can't be read, in {}; {}",
         crate::io::named_fields(fields, counts),
-        crate::dbf::cause(encoding)
+        cause
     );
     Some(crate::loss::Note::loss(crate::loss::LossCode::ChangedEncoding, text))
 }
@@ -450,7 +486,8 @@ pub fn rounded_dates_note(fields: &[crate::Field], counts: &[usize]) -> Option<c
     if total == 0 {
         return None;
     }
-    let counted = |numbers: bool| fields.iter().zip(counts).any(|(f, n)| *n > 0 && (f.ty == crate::FieldType::Double) == numbers);
+    let number = |f: &crate::Field| matches!(f.ty, crate::FieldType::Integer | crate::FieldType::Double);
+    let counted = |numbers: bool| fields.iter().zip(counts).any(|(f, n)| *n > 0 && number(f) == numbers);
     let (numbers, dates) = (counted(true), counted(false));
     let text = match (numbers, dates) {
         (true, true) => format!(
