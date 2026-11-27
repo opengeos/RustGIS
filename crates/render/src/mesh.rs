@@ -513,7 +513,9 @@ pub(crate) fn collect_layer(
         }
         let n = estimate_vertices(g, &s, wireframe);
         estimate = estimate.saturating_add(n);
-        if estimate > limit {
+        // One mesh takes every feature whole, so a layer estimated past the limit isn't started;
+        // tiles take only each feature's part in them, and keep to the limit as they're made.
+        if area.is_none() && estimate > limit {
             return Err(TessError::TooDense);
         }
         let reach = stroke_reach(g, &s, wireframe, ppp, map_per_px);

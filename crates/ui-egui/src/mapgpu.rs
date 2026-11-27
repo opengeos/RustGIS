@@ -104,7 +104,11 @@ fn marker_templates() -> [[f32; 4]; TEMPLATE_VERTS * SHAPES] {
     out
 }
 
-/// Per-draw-call uniforms (WGSL `CmdUniforms`: 144 bytes).
+/// The stencil bit a layer tile's square sets while its mesh draws (the shadows count in the
+/// bits below it, and never as far as this one).
+const MESH_SQUARE_BIT: u32 = 0x80;
+
+/// Per-draw-call uniforms (WGSL `CmdUniforms`: 160 bytes).
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct CmdUniforms {
@@ -488,12 +492,11 @@ impl GpuMapRenderer {
             ..d
         });
         // A tile's square writes its number into the stencil; its mesh draws only where it is.
-        let stencil = |face: wgpu::StencilFaceState, write_mask: u32| {
-            flat.clone().map(|d| wgpu::DepthStencilState {
-                stencil: wgpu::StencilState { front: face, back: face, read_mask: 0xff, write_mask },
-                ..d
-            })
+        let stencil_in = |face: wgpu::StencilFaceState, read_mask: u32, write_mask: u32| {
+            flat.clone()
+                .map(|d| wgpu::DepthStencilState { stencil: wgpu::StencilState { front: face, back: face, read_mask, write_mask }, ..d })
         };
+        let stencil = |face: wgpu::StencilFaceState, write_mask: u32| stencil_in(face, 0xff, write_mask);
         let mark = wgpu::StencilFaceState {
             compare: wgpu::CompareFunction::Always,
             fail_op: wgpu::StencilOperation::Keep,
@@ -531,8 +534,9 @@ impl GpuMapRenderer {
             &[&cmd_layout],
             scene_format,
             samples,
-            stencil(inside, 0),
+            stencil_in(inside, MESH_SQUARE_BIT, 0),
         );
+        // A layer tile's square sets and clears its own bit, so the shadows' marks under it stay.
         let mesh_square_pipeline = pipeline(
             "mapgpu_mesh_square",
             "vs_mesh_square",
@@ -541,7 +545,7 @@ impl GpuMapRenderer {
             &[&cmd_layout],
             scene_format,
             samples,
-            stencil(mark, 0xff),
+            stencil_in(mark, MESH_SQUARE_BIT, MESH_SQUARE_BIT),
         );
         let point_pipeline =
             pipeline("mapgpu_points", "vs_marker", "fs_marker", &point_buffers, &[&cmd_layout], scene_format, samples, flat.clone());
@@ -1715,7 +1719,7 @@ fn paint_draws(renderer: &GpuMapRenderer, draws: &[SceneDraw], rp: &mut wgpu::Re
             SceneDraw::Mesh { vertices, indices, index_count, bind, square: Some(_), .. } => {
                 rp.set_bind_group(0, bind, &[]);
                 rp.set_pipeline(&renderer.mesh_square_pipeline);
-                rp.set_stencil_reference(1);
+                rp.set_stencil_reference(MESH_SQUARE_BIT);
                 rp.draw(0..6, 0..1);
                 rp.set_pipeline(&renderer.mesh_in_square_pipeline);
                 rp.set_vertex_buffer(0, vertices.slice(..));

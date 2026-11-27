@@ -4734,8 +4734,11 @@ fn render_frame(
     // GPU meshes reach further (`GPU_CULL_MARGIN`), so the camera fast path can move them.
     let mesh_cull = cull_extent(view, GPU_CULL_MARGIN);
     // A tilted view widens a far stroke past a tile's reach (the shader scales it by depth), so
-    // it keeps one mesh a layer; a flat one cuts its layers into tiles of the cull.
-    let mesh_tiled = (view.camera.pitch == 0.0).then_some(&mesh_cull);
+    // it keeps one mesh a layer; a flat one cuts its layers into tiles of the cull. A tilted
+    // view's bands are drawn as flat views (their cameras look straight down) for the shader to
+    // tilt, so they're told apart by what their labels are for.
+    let tilted = view.camera.pitch != 0.0 || matches!(labels_to, Labels::Tilted(..) | Labels::Shared);
+    let mesh_tiled = (!tilted).then_some(&mesh_cull);
     let mesh_visible = |e: &Extent| match &globe {
         Some(g) => g.may_see(e),
         None => e.intersects(&mesh_cull),
@@ -11683,6 +11686,13 @@ mod tests {
         let side = crate::mesh_tiles::tile_side(1_000.0).expect("tiles");
         let reach = gpu_scene::reach(&scene.cmds);
         assert!(reach >= side && reach < side * 1.01, "reach {reach} vs a tile's side {side}");
+
+        // Tilted, its bands (each drawn as a flat view for the shader to tilt) keep one mesh a
+        // layer: a far stroke widens past a tile's reach.
+        let view = View { camera: Camera { pitch: 45.0, ..camera }, ..view };
+        let Some(RenderOutput::Gpu(scene)) = render_backend(&mut m, &view, Backend::Gpu) else { panic!("gpu scene") };
+        assert!(scene.tilt.is_some() && cmd_kinds(&scene).contains(&"mesh"), "a tilted scene: {:?}", cmd_kinds(&scene));
+        assert!(scene.cmds.iter().all(|c| !matches!(c, gpu_scene::DrawCmd::Mesh { square: Some(_), .. })), "no tiles in a tilted view");
     }
 
     #[test]

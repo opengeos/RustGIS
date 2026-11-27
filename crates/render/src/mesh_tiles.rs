@@ -21,6 +21,7 @@
 //! layer is meshed on one thread, and the threads are no more than the memory set aside for
 //! drawing holds ([`threads_for`]).
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -37,6 +38,10 @@ pub(crate) const TILE_PX: f64 = 512.0;
 /// The most tiles a layer is cut into; past it (a scene far larger than a screen) the layer is
 /// one mesh, as before.
 const MAX_TILES: usize = 4096;
+
+/// The most (tile, feature) pairs a layer's tiles list: past it (many features each over many
+/// tiles), the layer is made one mesh, so the lists stay within 8 MB of indices.
+const MAX_MEMBERS: usize = 1 << 20;
 
 /// A layer estimated at fewer vertices than this is meshed on one thread: starting threads would
 /// cost more than they save.
@@ -94,10 +99,12 @@ pub(crate) struct Feature<'a> {
 }
 
 /// The tiles of a layer's features within `area`, each with the features (by index) reaching
-/// it, in grid order. `None` when they would be more than [`MAX_TILES`].
+/// it, in grid order. `None` when they would be more than [`MAX_TILES`], or list more than
+/// [`MAX_MEMBERS`] features in all.
 fn buckets(features: &[Feature<'_>], area: &Extent, side: f64) -> Option<Vec<(Tile, Vec<usize>)>> {
     let index = |v: f64| (v / side).floor() as i64;
-    let mut tiles: std::collections::BTreeMap<Tile, Vec<usize>> = std::collections::BTreeMap::new();
+    let mut tiles: BTreeMap<Tile, Vec<usize>> = BTreeMap::new();
+    let mut members = 0usize;
     for (k, f) in features.iter().enumerate() {
         let r = f.reach;
         let grown = Extent::new(f.extent.min_x - r, f.extent.min_y - r, f.extent.max_x + r, f.extent.max_y + r);
@@ -111,6 +118,10 @@ fn buckets(features: &[Feature<'_>], area: &Extent, side: f64) -> Option<Vec<(Ti
         let span = |r: &std::ops::RangeInclusive<i64>| r.end().saturating_sub(*r.start()).saturating_add(1);
         let count = span(&columns).saturating_mul(span(&rows));
         if usize::try_from(count).map_or(true, |n| n > MAX_TILES) {
+            return None;
+        }
+        members = members.saturating_add(usize::try_from(count).unwrap_or(usize::MAX));
+        if members > MAX_MEMBERS {
             return None;
         }
         for row in rows {
@@ -325,19 +336,23 @@ fn tile_mesh(
     let (mut v, mut i, mut no_points) = (Vec::new(), Vec::new(), Vec::new());
     for &k in members {
         let Some(f) = features.get(k) else { continue };
-        // The layer's room: what the tiles finished so far left, less this one's.
-        let room = limit.saturating_sub(used.load(Ordering::Relaxed));
+        // Tiles finished already past the limit: the layer is refused whatever this one holds,
+        // so it stops early. A tile's own room is the whole limit, so whether the layer meshes
+        // doesn't hang on which tiles finished first (the same on any number of threads).
+        if used.load(Ordering::Relaxed) > limit {
+            return Err(TessError::TooDense);
+        }
         let r = f.reach;
         let grown = Extent::new(square.min_x - r, square.min_y - r, square.max_x + r, square.max_y + r);
         let e = &f.extent;
         if e.min_x >= grown.min_x && e.max_x <= grown.max_x && e.min_y >= grown.min_y && e.max_y <= grown.max_y {
             // Whole, it takes about its estimate; cut, only its part here, bounded as it's made.
-            if v.len().saturating_add(f.estimate) > room {
+            if v.len().saturating_add(f.estimate) > limit {
                 return Err(TessError::TooDense);
             }
-            crate::mesh::append_geometry(&mut v, &mut i, &mut no_points, f.geometry, &f.symbol, origin, wireframe, ppp, map_per_px, room)?;
+            crate::mesh::append_geometry(&mut v, &mut i, &mut no_points, f.geometry, &f.symbol, origin, wireframe, ppp, map_per_px, limit)?;
         } else {
-            append_cut(&mut v, &mut i, f, &grown, origin, wireframe, ppp, map_per_px, room)?;
+            append_cut(&mut v, &mut i, f, &grown, origin, wireframe, ppp, map_per_px, limit)?;
         }
     }
     if i.is_empty() {
@@ -378,9 +393,9 @@ fn tile_meshes_on(
     let side = tile_side(map_per_px)?;
     let tiles = buckets(features, area, side)?;
     let threads = threads.unwrap_or_else(|| threads_for(features, &tiles));
-    // The vertices of the tiles made so far, which every tile checks against `limit` as it
-    // goes: the layer never holds much more than `limit` (by the tiles at work at once, each
-    // within the room left when it started a feature), not `limit` a tile.
+    // The vertices of the tiles made so far: past `limit` the layer is refused, and the tiles
+    // still at work stop at their next feature, so it never holds much more than `limit` (by
+    // the tiles at work at once, each at most `limit`).
     let used = AtomicUsize::new(0);
     let made = crate::tile_mesh::parallel_on(&tiles, threads, |(tile, members)| {
         tile_mesh(features, *tile, members, side, wireframe, ppp, map_per_px, limit, &used)
@@ -523,9 +538,13 @@ mod tests {
         let room = used.max(biggest);
         assert!(room < f.estimate);
         assert!(tile_meshes_on(std::slice::from_ref(&f), &area, false, 1.0, 1.0, room, Some(1)).unwrap().is_ok());
-        for threads in [1, 8] {
-            let short = tile_meshes_on(std::slice::from_ref(&f), &area, false, 1.0, 1.0, used - 1, Some(threads)).unwrap();
-            assert!(matches!(short, Err(TessError::TooDense)), "{threads} threads");
+        // Past the limit by a vertex, or with room for each tile but not all: refused alike on
+        // any number of threads.
+        for limit in [used - 1, biggest.max(used / 2)] {
+            for threads in [1, 8] {
+                let short = tile_meshes_on(std::slice::from_ref(&f), &area, false, 1.0, 1.0, limit, Some(threads)).unwrap();
+                assert!(matches!(short, Err(TessError::TooDense)), "limit {limit}, {threads} threads");
+            }
         }
     }
 
