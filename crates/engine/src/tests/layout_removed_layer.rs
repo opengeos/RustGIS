@@ -200,3 +200,41 @@ fn a_series_and_titles_of_another_map_are_not_counted() {
     s.run("layer.addSample", &json!({"name": "countries"})).unwrap();
     assert_eq!(lost_pages(&mut s, "layer.remove", json!({"layer": "Countries"})), Vec::<String>::new());
 }
+
+/// What exporting the first layout to a file named `file` warns about its map series' index layer.
+fn export_warnings(s: &mut Session, file: &str, all: bool) -> Vec<String> {
+    let dir = std::env::temp_dir().join(format!("rustgis-3075-{}-{:?}", std::process::id(), std::thread::current().id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join(file);
+    let mark = s.notice_mark();
+    s.run("layout.export", &json!({"path": path, "dpi": 36, "allPages": all})).unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    s.notices_since(mark).iter().map(|n| n.text.clone()).filter(|t| t.contains("index layer")).collect()
+}
+
+const ONE_PAGE: &str = "The map series' index layer 'Countries' isn't in its frame's map: the PDF holds the current page only";
+
+#[test]
+fn exporting_a_series_without_its_index_layer_says_the_pdf_holds_one_page() {
+    let mut s = with_layout();
+    series(&mut s, "Countries");
+    s.run("layer.remove", &json!({"layer": "Countries"})).unwrap();
+    assert_eq!(export_warnings(&mut s, "series.pdf", true), [ONE_PAGE]);
+}
+
+#[test]
+fn an_export_that_never_wrote_the_series_says_nothing_of_its_index_layer() {
+    let mut s = with_layout();
+    // No series.
+    assert_eq!(export_warnings(&mut s, "plain.pdf", true), Vec::<String>::new());
+    series(&mut s, "Countries");
+    s.run("layer.remove", &json!({"layer": "Countries"})).unwrap();
+    // One page asked for, or a format that only ever writes one.
+    assert_eq!(export_warnings(&mut s, "page.pdf", false), Vec::<String>::new());
+    assert_eq!(export_warnings(&mut s, "page.png", true), Vec::<String>::new());
+    assert_eq!(export_warnings(&mut s, "page.svg", true), Vec::<String>::new());
+    // The layer back, the series is whole again.
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert!(s.map().layer_by_name("Countries").is_some());
+    assert_eq!(export_warnings(&mut s, "series.pdf", false), Vec::<String>::new());
+}

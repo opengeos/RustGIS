@@ -809,7 +809,8 @@ The locator outlines the main frame's changing extent as the series turns its pa
 **Export Layout** writes all pages to PDF by default, but only the **first 500** when there are
 more, with a warning. Split longer books' index data into layers of at most 500 features.
 `layout.export` with `"allPages":false` writes only the current PDF page; PNG and SVG always
-write the current page.
+write the current page. When the index layer is no longer in the series frame's map (it was
+removed, say), the PDF holds only the current page, and the export says so.
 
 ### Mark the page's own feature
 
