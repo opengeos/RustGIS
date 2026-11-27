@@ -170,7 +170,7 @@ pub(crate) fn bands_param(p: &Value, r: &Raster) -> Result<Vec<usize>, String> {
 fn layer_of(r: Raster) -> Result<rustgis_map::RasterLayer, String> {
     let bytes = rustgis_data::raster::geotiff::write_all(&r).map_err(|e| e.to_string())?;
     let fname = format!("{}.tif", r.name);
-    Ok(rustgis_map::RasterLayer::from_bytes(r, fname, bytes))
+    Ok(rustgis_map::RasterLayer::from_written(r, fname, bytes))
 }
 
 /// A raster of classes as a layer, each class a colour of its own.
@@ -1777,17 +1777,34 @@ pub(crate) fn process_work(s: &Session, p: &Value) -> Result<super::workflows::W
                         format!("no cell of {} falls inside {pl} ({} polygon part(s) failed raster projection)", r.name, failed_parts.len())
                     })?;
                 let clipped = clip_window(&r, cols, rows, Some(&mask), None, out)?;
-                let mut messages = Vec::new();
+                // Each a loss with its code: said as a notice once the clip is added, and kept in the
+                // answer's `messages` for a script.
+                let mut notes = Vec::new();
                 if skipped > 0 {
-                    messages.push(format!("{pl}: skipped {skipped} feature(s) with invalid polygon geometry"));
-                }
-                if !failed_parts.is_empty() {
-                    messages.push(format!(
-                        "{pl}: skipped {} polygon part(s) that could not be projected onto the raster grid; valid parts were retained",
-                        failed_parts.len()
+                    notes.push(rustgis_data::loss::Note::loss(
+                        rustgis_data::loss::LossCode::DroppedFeature,
+                        format!("{pl}: skipped {skipped} feature(s) with invalid polygon geometry"),
                     ));
                 }
-                super::workflows::made(clipped, (!messages.is_empty()).then(|| json!({"messages": messages})))
+                if !failed_parts.is_empty() {
+                    notes.push(rustgis_data::loss::Note::loss(
+                        rustgis_data::loss::LossCode::DroppedGeometry,
+                        format!(
+                            "{pl}: skipped {} polygon part(s) that could not be projected onto the raster grid; valid parts were retained",
+                            failed_parts.len()
+                        ),
+                    ));
+                }
+                let messages: Vec<&str> = notes.iter().map(|n| n.text.as_str()).collect();
+                let extra = (!messages.is_empty()).then(|| json!({"messages": messages}));
+                let then: Option<super::workflows::Then> = (!notes.is_empty()).then(|| {
+                    Box::new(move |s: &mut Session, _: &mut Value| {
+                        for note in notes {
+                            s.say(note);
+                        }
+                    }) as super::workflows::Then
+                });
+                super::workflows::made_then(clipped, extra, then)
             }))
         }
         "clip" => {
@@ -2481,9 +2498,14 @@ impl Tiles {
             .iter()
             .skip(1)
             .filter(|r| r.copyright.is_some() && r.copyright != first.copyright)
-            .map(|r| (r.name.clone(), "its copyright differs from the first input's and is not kept in the mosaic".to_string()))
+            .map(|r| {
+                (
+                    r.name.clone(),
+                    rustgis_data::loss::Note::plain("its copyright differs from the first input's and is not kept in the mosaic"),
+                )
+            })
             .collect();
-        notes.extend(super::raster::loss_lines(credits).into_iter().map(|n| (n, false)));
+        notes.extend(super::raster::loss_lines(credits).into_iter().map(|n| (n.text, false)));
         // Cells rounded when an input was read may be among those the mosaic keeps.
         out.keep_rounded_marks(rs.iter().map(|r| &**r));
         let other: Vec<&str> =
@@ -2548,7 +2570,7 @@ pub(crate) fn mosaic_rasters_work(s: &Session, p: &Value) -> Result<super::workf
     }
     Ok(Box::new(move || {
         // What reading a file left out is said once they are all read.
-        let mut lost: Vec<(String, String)> = Vec::new();
+        let mut lost: Vec<(String, rustgis_data::loss::Note)> = Vec::new();
         for input in rest {
             rustgis_data::progress::check().map_err(|e| e.to_string())?;
             let r = match input? {
@@ -2561,7 +2583,11 @@ pub(crate) fn mosaic_rasters_work(s: &Session, p: &Value) -> Result<super::workf
             };
             tiles.take(r)?;
         }
-        let mut notes: Notes = super::raster::loss_lines(lost).into_iter().map(|n| (n, false)).collect();
+        // What reading the inputs lost keeps its code: said as a loss; the rest with the mosaic's
+        // other notes.
+        let (coded, plain): (Vec<_>, Vec<_>) = super::raster::loss_lines(lost).into_iter().partition(|n| n.loss.is_some());
+        let mut notes: Notes = plain.into_iter().map(|n| (n.text, false)).collect();
+        let coded_said: Vec<String> = coded.iter().map(|n| n.text.clone()).collect();
         let made = (|| -> Result<super::workflows::Made, String> {
             // The inputs are let go of once joined, before the file is written.
             let out = tiles.join(given, &mut notes)?;
@@ -2573,9 +2599,12 @@ pub(crate) fn mosaic_rasters_work(s: &Session, p: &Value) -> Result<super::workf
             let (written, staged) = wrote.map(|(wrote, file)| (wrote.notes, file)).unzip();
             let written = written.unwrap_or_default();
             // Said with the error should its file not go in place; what the file holds then isn't.
-            let said: Vec<String> = notes.iter().map(|(n, _)| n.clone()).collect();
+            let said: Vec<String> = coded_said.iter().cloned().chain(notes.iter().map(|(n, _)| n.clone())).collect();
             let notes = std::mem::take(&mut notes);
             let then: super::workflows::Then = Box::new(move |s: &mut Session, _: &mut Value| {
+                for note in coded {
+                    s.say(note);
+                }
                 say(s, notes);
                 for note in written {
                     s.say_written(note);
@@ -2587,7 +2616,11 @@ pub(crate) fn mosaic_rasters_work(s: &Session, p: &Value) -> Result<super::workf
                 None => made,
             })
         })();
-        made.map_err(|e| with_notes(e, &notes))
+        made.map_err(|e| {
+            let mut all: Notes = coded_said.iter().map(|n| (n.clone(), false)).collect();
+            all.extend(notes);
+            with_notes(e, &all)
+        })
     }))
 }
 
@@ -2685,6 +2718,8 @@ fn clip_window(
     }
     // Some of the values rounded when the file was read may be in the window: how many isn't known.
     out.keep_rounded_mark(r);
+    // What reading the input left out was said, with its code, when the input was read: a clip,
+    // like a resample or a pixel edit, doesn't say it again.
     Ok(out)
 }
 

@@ -104,6 +104,11 @@ impl Project {
                 required.push(name);
             }
         }
+        // A presentation's map page draws its title over its map frame, where a layer statistic is
+        // filled in (#2853); the title of a page with no map frame is drawn as written.
+        if !required.contains(&"layout-text-statistics") && self.presentations.iter().any(presentation_uses_text_statistics) {
+            required.push("layout-text-statistics");
+        }
         // A coordinate system whose PROJ definition, which an older reader reads, doesn't place
         // points as its WKT does (angles in grads, a datum transformation the definition can't
         // hold).
@@ -160,6 +165,7 @@ const COMMAND_CAPABILITIES: &[(&str, CommandCheck)] = &[
     ("graticule-color", command_colors_graticule),
     ("layout-element-ink", command_uses_element_ink),
     ("layout-element-wrap", command_uses_element_wrap),
+    ("layout-text-block", command_uses_text_block),
     ("layout-chart-data", command_uses_chart_data),
     ("layout-chart-look", command_uses_chart_look),
     ("layout-chart-classes", command_uses_chart_classes),
@@ -176,6 +182,7 @@ const COMMAND_CAPABILITIES: &[(&str, CommandCheck)] = &[
     ("label-duplicates", command_removes_duplicate_labels),
     ("tile-resampling", command_resamples_tiles),
     ("layout-page-color", command_colours_the_page),
+    ("layout-text-statistics", command_uses_text_statistics),
 ];
 
 /// A saved `labels.placement` that has a class remove duplicates, read as the command reads it
@@ -198,6 +205,72 @@ fn command_resamples_tiles(id: &str, params: &Value) -> bool {
             crate::cmd::tiles::resampling(params).ok().flatten() == Some(rustgis_map::raster::Resampling::Nearest)
         }
         "script.run" => params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, command_resamples_tiles)),
+        _ => false,
+    }
+}
+
+/// A layout text holding a layer statistic (#2853): an older reader prints the token as written.
+fn text_statistics(e: &rustgis_map::layout::Element) -> bool {
+    matches!(&e.kind, rustgis_map::layout::ElementKind::Text { text, .. } if !rustgis_map::layout::stat_tokens(text).is_empty())
+}
+
+/// A presentation with a layer statistic in the title of a map page, which draws it over its map
+/// frame (#2853); the title of a page with no map frame is drawn as written.
+fn presentation_uses_text_statistics(p: &rustgis_map::presentation::Presentation) -> bool {
+    p.pages.iter().any(|page| {
+        matches!(page.kind, rustgis_map::presentation::PageKind::Map { .. }) && !rustgis_map::layout::stat_tokens(&page.title).is_empty()
+    })
+}
+
+/// A text, or a list of texts, with a layer statistic in one of them.
+fn holds_statistic(v: &Value) -> bool {
+    match v {
+        Value::String(t) => !rustgis_map::layout::stat_tokens(t).is_empty(),
+        Value::Array(texts) => texts.iter().any(holds_statistic),
+        _ => false,
+    }
+}
+
+/// [`holds_statistic`] for a list read as one text, its entries joined by `sep`: a token may be split
+/// across them.
+fn holds_statistic_joined(v: &Value, sep: &str) -> bool {
+    match v {
+        Value::Array(texts) => holds_statistic(&Value::String(texts.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(sep))),
+        other => holds_statistic(other),
+    }
+}
+
+/// What the JSON of a layout or presentation shows of a layer statistic (#2853): a file with none
+/// of these keys has none, so only the others are parsed.
+const STATISTIC_KEYS: [&str; 5] = ["{count:", "{sum:", "{mean:", "{min:", "{max:"];
+
+/// A layout command that gives a text a layer statistic (#2853), read as a text reads its tokens
+/// ([`rustgis_map::layout::stat_tokens`]): only a text takes `"text"`.
+fn command_uses_text_statistics(id: &str, params: &Value) -> bool {
+    match id {
+        "layout.addElement" | "layout.update" => params.get("text").is_some_and(holds_statistic),
+        // The texts a publication layout is made of, which keep the tokens as they are written.
+        "layout.publication" => {
+            let joined = |keys: &[&str], sep: &str| keys.iter().any(|k| params.get(*k).is_some_and(|v| holds_statistic_joined(v, sep)));
+            // A title, subtitle, note or author given as a list is joined with a space, the sources
+            // and the reference with a line break, as `publication` reads them; each heading is a
+            // text of its own.
+            joined(&["title", "subtitle", "note", "author"], " ")
+                || joined(&["sources", "reference"], "\n")
+                || params.get("headings").is_some_and(holds_statistic)
+        }
+        // A map page's title, which the page draws over its map frame; `updatePage` doesn't say the
+        // kind of the page it changes, so a title with a token counts.
+        "presentation.mapPage" | "presentation.updatePage" => params.get("title").is_some_and(holds_statistic),
+        // A layout file, read as `layout.import` reads it, which `report.existingTemplate` also does.
+        "layout.import" | "report.existingTemplate" => imported_layout_uses(params, &STATISTIC_KEYS, text_statistics),
+        "presentation.import" => params
+            .get("text")
+            .and_then(Value::as_str)
+            .filter(|t| STATISTIC_KEYS.iter().any(|key| t.contains(key)) || t.contains('\\'))
+            .and_then(|t| serde_json::from_str::<rustgis_map::presentation::Presentation>(t).ok())
+            .is_some_and(|p| presentation_uses_text_statistics(&p)),
+        "script.run" => params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, command_uses_text_statistics)),
         _ => false,
     }
 }
@@ -368,6 +441,40 @@ fn command_uses_element_wrap(id: &str, params: &Value) -> bool {
         "layout.addElement" | "layout.update" => params.get("wrap").and_then(crate::cmd::bool_value) == Some(true),
         "layout.import" => imported_layout_uses(params, &["\"wrap\""], wraps),
         "script.run" => params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, command_uses_element_wrap)),
+        _ => false,
+    }
+}
+
+/// Whether a layout element is a text placed in the middle or at the bottom of its box, spaced
+/// other than at the usual line spacing, or drawn in upper or lower case, once brought into range:
+/// an older reader would draw it at the top, at the usual spacing and as typed.
+fn text_blocks(e: &rustgis_map::layout::Element) -> bool {
+    e.kind.text_uses_block()
+}
+
+/// A layout command that gives a text a block alignment, line spacing or case off its default:
+/// an older reader ignores `valign`, `lineSpacing` and `case` and draws the text at the top, at
+/// the usual spacing and as typed. Each is read on its own by the command's own reader
+/// ([`crate::cmd::layout::text_block_settings`]), so the defaults (`"top"`, `1` or `"1"`, `"none"`,
+/// in any case) and `null`, which leaves a text as it is, keep a text as an older reader draws it.
+/// A value the command refuses on a text needs nothing either: the command changes nothing. The
+/// keys are read here alone, so a block key given to another kind counts too, though its command
+/// refuses it: an over-count that asks for the capability sooner, never a missing one. A
+/// `layout.import` requires it for such a text once its layout is read into range, so a name it
+/// doesn't know or a spacing that isn't a number, read as the default, needs nothing.
+fn command_uses_text_block(id: &str, params: &Value) -> bool {
+    use rustgis_map::layout::{LINE_SPACING, TextCase, TextVAlign};
+    match id {
+        "layout.addElement" | "layout.update" => {
+            let usual = (TextVAlign::Top, LINE_SPACING, TextCase::None);
+            // Each key on its own, so one the command refuses doesn't hide another one set.
+            ["valign", "lineSpacing", "case"].into_iter().any(|k| {
+                let one = Value::Object(params.get(k).into_iter().map(|v| (k.to_string(), v.clone())).collect());
+                crate::cmd::layout::text_block_settings(&one, usual).is_ok_and(|set| set != usual)
+            })
+        }
+        "layout.import" => imported_layout_uses(params, &["\"valign\"", "\"line_spacing\"", "\"case\""], text_blocks),
+        "script.run" => params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, command_uses_text_block)),
         _ => false,
     }
 }
@@ -954,6 +1061,7 @@ fn layout_capabilities(layouts: &[rustgis_map::layout::Layout]) -> Vec<&'static 
         (elements().any(|e| e.background.is_some()), "layout-element-background"),
         (elements().any(|e| e.kind.ink().is_some()), "layout-element-ink"),
         (elements().any(wraps), "layout-element-wrap"),
+        (elements().any(text_blocks), "layout-text-block"),
         (elements().any(charts_data), "layout-chart-data"),
         (elements().any(charts_look), "layout-chart-look"),
         (elements().any(charts_classes), "layout-chart-classes"),
@@ -964,6 +1072,7 @@ fn layout_capabilities(layouts: &[rustgis_map::layout::Layout]) -> Vec<&'static 
         (elements().any(|e| e.kind.has_custom_text_size()), "layout-text-size"),
         (elements().any(bar_details), "layout-scale-bar-details"),
         (layouts.iter().any(|l| l.paper.is_some()), "layout-page-color"),
+        (elements().any(text_statistics), "layout-text-statistics"),
     ]
     .into_iter()
     .filter_map(|(used, name)| used.then_some(name))
@@ -1245,6 +1354,7 @@ mod tests {
             (&["graticule-color"], "map.graticule", json!({"color": "#000000"})),
             (&["layout-element-ink"], "layout.import", json!({"text": ink_layout})),
             (&["layout-element-wrap"], "layout.addElement", json!({"kind": "text", "wrap": true})),
+            (&["layout-text-block"], "layout.update", json!({"element": 1, "lineSpacing": 1.5})),
             (&["layout-chart-data"], "layout.addElement", json!({"kind": "chart", "group": "Region"})),
             (&["layout-chart-look"], "layout.update", json!({"element": 1, "values": true})),
             (&["layout-chart-classes"], "layout.update", json!({"element": 1, "classes": true})),
@@ -1262,6 +1372,7 @@ mod tests {
             (&["label-duplicates"], "labels.placement", json!({"removeDuplicates": 20})),
             (&["tile-resampling"], "map.addTiles", json!({"resampling": "nearest"})),
             (&["layout-page-color"], "layout.page", json!({"color": "#0B1B2B"})),
+            (&["layout-text-statistics"], "layout.addElement", json!({"kind": "text", "text": "{count:Cities}"})),
             // An SVG image is a picture marker as well, in a node as in a saved command.
             (&["picture-markers", "svg-markers"], "layer.marker", json!({"image": svg})),
             (&[], "buffer", json!({"input": "Cities", "distance": 1})),
@@ -1906,6 +2017,64 @@ mod tests {
         }
     }
 
+    /// A text with a block setting is required where it is saved, so an older reader refuses the
+    /// project instead of drawing it at the top, at the usual spacing, as typed, and saving it again
+    /// without them; so is a saved command that sets one. The defaults, null and values read as
+    /// them need nothing.
+    #[test]
+    fn text_block_capability_follows_saved_layouts_and_commands() {
+        use rustgis_map::layout::ElementKind;
+        let fixture = Project::from_json(include_str!("../../../schema/fixtures/layout_text_block.rgis")).unwrap();
+        let saved = serde_json::to_value(&fixture).unwrap();
+        assert_eq!(saved["requires"], json!(["layout-text-block"]));
+        let reread = Project::from_json(&saved.to_string()).unwrap();
+        assert!(reread.layouts[0].elements[1].kind.text_uses_block());
+        assert!(!reread.layouts[0].elements[2].kind.text_uses_block());
+        let mut clean = fixture;
+        for e in &mut clean.layouts[0].elements {
+            if let ElementKind::Text { text, size, color, bold, .. } = &e.kind {
+                e.kind = ElementKind::text(text.clone(), *size, *color, *bold);
+            }
+        }
+        let base = serde_json::to_value(&clean).unwrap();
+        assert!(base.get("requires").is_none(), "a plain text needs nothing");
+        for key in ["valign", "line_spacing", "\"case\""] {
+            assert!(!base["layouts"].to_string().contains(key), "nor writes {key}");
+        }
+        // A name it doesn't know and a spacing that isn't a number read as the defaults.
+        let mut damaged = base["layouts"][0].clone();
+        damaged["elements"][1]["kind"]["Text"]["valign"] = json!("sideways");
+        damaged["elements"][1]["kind"]["Text"]["line_spacing"] = json!("x");
+        for (id, params, required) in [
+            ("layout.addElement", json!({"kind": "text", "valign": "middle"}), true),
+            ("layout.addElement", json!({"kind": "dynamicText", "case": "upper"}), true),
+            ("layout.update", json!({"element": 2, "lineSpacing": 1.5}), true),
+            ("layout.update", json!({"element": 2, "lineSpacing": "0.75"}), true),
+            ("layout.update", json!({"element": 2, "valign": "top", "lineSpacing": 1, "case": "none"}), false),
+            ("layout.update", json!({"element": 2, "valign": " Top ", "lineSpacing": "1", "case": "NONE"}), false),
+            ("layout.update", json!({"element": 2, "lineSpacing": 1.0}), false),
+            ("layout.update", json!({"element": 2, "valign": null, "lineSpacing": null, "case": null}), false),
+            ("layout.update", json!({"element": 2, "wrap": false}), false),
+            ("layout.import", json!({"text": saved["layouts"][0].to_string()}), true),
+            ("layout.import", json!({"text": base["layouts"][0].to_string()}), false),
+            ("layout.import", json!({"text": damaged.to_string()}), false),
+            ("layout.import", json!({"path": "texts.rgislayout"}), false),
+        ] {
+            let script = format!("{id}= {params}");
+            for value in [
+                json!([{"name": "Task", "steps": [{"title": "Text", "command": id, "params": params}]}]),
+                json!([{"name": "Script", "steps": [{"title": "Text", "command": "script.run", "params": {"script": script}}]}]),
+            ] {
+                let mut document = base.clone();
+                document["tasks"] = value;
+                let saved = serde_json::to_value(Project::from_json(&document.to_string()).unwrap()).unwrap();
+                let requires = saved.get("requires").and_then(Value::as_array).cloned().unwrap_or_default();
+                assert_eq!(requires.contains(&json!("layout-text-block")), required, "{id} {params}");
+                assert!(requires.iter().all(|r| r == "layout-text-block"), "{id} {params}: {requires:?}");
+            }
+        }
+    }
+
     /// A scale bar with details is required where it is saved, so an older reader refuses the project
     /// instead of drawing a plain bar and saving it again without them; so is a saved command that
     /// sets one. The defaults, or a unit label taken back to its abbreviation, need nothing.
@@ -2534,6 +2703,105 @@ mod tests {
             document["tasks"] = json!([{"name": "Task", "steps": [{"title": "Import", "command": "layout.import", "params": {"text": layout.to_string()}}]}]);
             let saved = serde_json::to_value(Project::from_json(&document.to_string()).unwrap()).unwrap();
             assert_eq!(saved.get("requires").is_some(), required, "{layout}");
+        }
+    }
+
+    /// A layout text holding a layer statistic (#2853) is required where it is saved, so an older
+    /// reader refuses the project by name instead of printing the token; a text with other tokens,
+    /// or braces that aren't one, needs nothing.
+    #[test]
+    fn text_statistics_capability_follows_saved_layouts_and_commands() {
+        use rustgis_map::layout::{ElementKind, Layout};
+        // The fixture the schema check opens lists it.
+        let fixture = Project::from_json(include_str!("../../../schema/fixtures/layout_text_statistics.rgis")).unwrap();
+        assert_eq!(serde_json::to_value(&fixture).unwrap()["requires"], json!(["layout-text-statistics"]));
+        let with_text = |text: &str| {
+            let mut p = Project::default();
+            let mut l = Layout::new("L", 100.0, 100.0);
+            l.add("T", (10.0, 10.0, 50.0, 10.0), ElementKind::text(text, 12.0, rustgis_map::Rgba::rgb(0, 0, 0), false));
+            p.layouts.push(l);
+            serde_json::to_value(&p).unwrap()
+        };
+        let saved = with_text("{count:Sites} sites");
+        assert_eq!(saved["requires"], json!(["layout-text-statistics"]));
+        assert_eq!(Project::from_json(&saved.to_string()).unwrap().layouts[0].elements.len(), 1);
+        let base = with_text("{scale} {count:} {foo}");
+        assert_eq!(base.get("requires"), None);
+        let layout = saved["layouts"][0].to_string();
+        for (id, params, required) in [
+            ("layout.addElement", json!({"kind": "text", "text": "{sum:Sites:visits}"}), true),
+            ("layout.addElement", json!({"kind": "text", "text": "{scale}"}), false),
+            ("layout.addElement", json!({"kind": "legend", "title": "{count:Sites}"}), false),
+            ("layout.update", json!({"element": 1, "text": "Mean {mean:Sites:visits}"}), true),
+            ("layout.update", json!({"element": 1, "text": "{sum:Sites}"}), false),
+            ("layout.update", json!({"element": 1, "x": 3}), false),
+            ("layout.publication", json!({"extent": [-1, -1, 1, 1], "title": "{count:Sites}"}), true),
+            ("layout.publication", json!({"extent": [-1, -1, 1, 1], "sources": ["Data", "{mean:Sites:visits}"]}), true),
+            ("layout.publication", json!({"extent": [-1, -1, 1, 1], "author": "{max:Sites:visits}"}), true),
+            ("layout.publication", json!({"extent": [-1, -1, 1, 1], "title": "{scale} {projection}", "sources": "Data"}), false),
+            // A title, subtitle, note or author given as a list is joined with a space, and the sources
+            // and the reference with a line break, so a token may be split across their entries; the
+            // headings are each a text of their own.
+            ("layout.publication", json!({"extent": [-1, -1, 1, 1], "title": ["{count:New", "York}"]}), true),
+            ("layout.publication", json!({"extent": [-1, -1, 1, 1], "note": ["Data", "{sum:Sites:visits}"]}), true),
+            ("layout.publication", json!({"extent": [-1, -1, 1, 1], "sources": ["{count:New", "York}"]}), true),
+            ("layout.publication", json!({"extent": [-1, -1, 1, 1], "reference": ["{sum:Sites:vis", "its}"]}), true),
+            ("layout.publication", json!({"extent": [-1, -1, 1, 1], "headings": ["{count:New", "York}"]}), false),
+            ("layout.import", json!({"text": layout}), true),
+            // A report section's template is a layout file read as `layout.import` reads it.
+            ("report.existingTemplate", json!({"text": layout}), true),
+        ] {
+            let script = format!("{id} {params}");
+            for value in [
+                json!([{"name": "Task", "steps": [{"title": "Figure", "command": id, "params": params}]}]),
+                json!([{"name": "Script", "steps": [{"title": "Figure", "command": "script.run", "params": {"script": script}}]}]),
+            ] {
+                let mut document = base.clone();
+                document["tasks"] = value;
+                let saved = serde_json::to_value(Project::from_json(&document.to_string()).unwrap()).unwrap();
+                let expected = if required { json!(["layout-text-statistics"]) } else { Value::Null };
+                assert_eq!(saved["requires"], expected, "{id} {params}");
+            }
+        }
+    }
+
+    /// A presentation's map page draws its title over its map frame, where a layer statistic is
+    /// filled in (#2853), so it is required where it is saved, in a project or a command; the title
+    /// of a page with no map frame, or without a token, needs nothing.
+    #[test]
+    fn text_statistics_capability_follows_presentation_map_pages() {
+        let map_page =
+            |title: &str| json!({"title": title, "kind": {"type": "map", "map": "World", "center": {"x": 0, "y": 0}, "widthM": 1000}});
+        let blank_page = |title: &str| json!({"title": title, "kind": {"type": "blank", "text": "", "background": [255, 255, 255, 255]}});
+        let presentation = |page: Value| json!({"name": "P", "width": 297, "height": 210, "pages": [page]}).to_string();
+        let base = serde_json::to_value(Project::default()).unwrap();
+        for (page, required) in [(map_page("{count:Sites}"), true), (map_page("Sites"), false), (blank_page("{count:Sites}"), false)] {
+            let mut document = base.clone();
+            document["presentations"] = json!([{"name": "P", "width": 297, "height": 210, "pages": [page.clone()]}]);
+            let saved = serde_json::to_value(Project::from_json(&document.to_string()).unwrap()).unwrap();
+            let expected = if required { json!(["layout-text-statistics"]) } else { Value::Null };
+            assert_eq!(saved.get("requires").cloned().unwrap_or(Value::Null), expected, "{page}");
+        }
+        for (id, params, required) in [
+            ("presentation.mapPage", json!({"title": "{count:Sites}"}), true),
+            ("presentation.mapPage", json!({"title": "Sites"}), false),
+            ("presentation.updatePage", json!({"page": 0, "title": "{sum:Sites:visits}"}), true),
+            ("presentation.blankPage", json!({"title": "{count:Sites}"}), false),
+            ("presentation.import", json!({"text": presentation(map_page("{count:Sites}"))}), true),
+            ("presentation.import", json!({"text": presentation(map_page("Sites"))}), false),
+            ("presentation.import", json!({"text": presentation(blank_page("{count:Sites}"))}), false),
+        ] {
+            let script = format!("{id} {params}");
+            for value in [
+                json!([{"name": "Task", "steps": [{"title": "Page", "command": id, "params": params}]}]),
+                json!([{"name": "Script", "steps": [{"title": "Page", "command": "script.run", "params": {"script": script}}]}]),
+            ] {
+                let mut document = base.clone();
+                document["tasks"] = value;
+                let saved = serde_json::to_value(Project::from_json(&document.to_string()).unwrap()).unwrap();
+                let expected = if required { json!(["layout-text-statistics"]) } else { Value::Null };
+                assert_eq!(saved.get("requires").cloned().unwrap_or(Value::Null), expected, "{id} {params}");
+            }
         }
     }
 

@@ -100,6 +100,9 @@ mod layout_files;
 #[path = "tests/layout_title.rs"]
 mod layout_title;
 
+#[path = "tests/layout_removed_layer.rs"]
+mod layout_removed_layer;
+
 #[path = "tests/sde_connections.rs"]
 mod sde_connections;
 
@@ -1521,6 +1524,173 @@ fn set_value_says_what_a_whole_number_field_took_with_its_code() {
     }
 }
 
+#[test]
+fn yes_no_text_that_isnt_yes_or_no_is_refused_or_said_never_read_as_no() {
+    use rustgis_data::{Value as V, loss::LossCode};
+    let mut s = world();
+    s.run("edit.addField", &json!({"layer": "Cities", "name": "flag", "type": "boolean"})).unwrap();
+    let cell = |s: &Session, row: usize| {
+        let ds = &s.map().layer_by_name("Cities").unwrap().dataset;
+        ds.value(row, ds.field_index("flag").unwrap()).clone()
+    };
+    // The yes/no words go in, and a whole number is yes when it isn't 0; anything else is refused.
+    for (value, held) in [(json!(" No "), false), (json!("t"), true), (json!(2), true), (json!(0), false)] {
+        s.run("edit.setValue", &json!({"layer": "Cities", "row": 0, "field": "flag", "value": value})).unwrap();
+        assert_eq!(cell(&s, 0), V::Bool(held), "{value}");
+    }
+    let err = s.run("edit.setValue", &json!({"layer": "Cities", "row": 0, "field": "flag", "value": "maybe"})).unwrap_err();
+    assert_eq!(err, "'maybe' isn't a Boolean value");
+    let err = s.run("edit.setValue", &json!({"layer": "Cities", "row": 0, "field": "flag", "value": 0.5})).unwrap_err();
+    assert_eq!(err, "'0.5' isn't a Boolean value");
+    let err = s.run("edit.setValue", &json!({"layer": "Cities", "row": 0, "field": "flag", "value": 1e-7})).unwrap_err();
+    assert!(err.ends_with("isn't a Boolean value"), "not the 0 it shows as: {err}");
+    let err = s.run("edit.template", &json!({"layer": "Cities", "name": "T", "defaults": {"flag": 1e-7}})).unwrap_err();
+    assert_eq!(err, "field 'flag': '0.0000001' isn't a Boolean value", "named as given");
+    assert_eq!(cell(&s, 0), V::Bool(false), "a refused value leaves the cell as it was");
+    // Calculate Field writes null for a result that isn't yes or no, and says so; clean results say nothing.
+    let mark = s.notice_mark();
+    s.run("edit.calculateField", &json!({"layer": "Cities", "field": "flag", "expression": "'yes'"})).unwrap();
+    assert!(s.notices_since(mark).iter().all(|n| !n.text.contains("Calculate Field")), "{:?}", s.notices_since(mark));
+    let mark = s.notice_mark();
+    s.run("edit.calculateField", &json!({"layer": "Cities", "field": "flag", "expression": "'maybe'"})).unwrap();
+    let said: Vec<_> = s.notices_since(mark).iter().filter(|n| n.text.contains("'flag' is null in")).map(|n| n.loss()).collect();
+    assert_eq!(said, [Some(LossCode::DroppedValue)], "{:?}", s.notices_since(mark));
+    assert_eq!(cell(&s, 0), V::Null);
+    // Paste: the same.
+    let point = json!({"type": "Point", "coordinates": [0.0, 0.0]});
+    let pasted = |flags: &[&str]| {
+        let features: Vec<Value> = flags.iter().map(|f| json!({"type": "Feature", "geometry": point, "properties": {"flag": f}})).collect();
+        json!({"layer": "Cities", "text": json!({"type": "FeatureCollection", "features": features}).to_string()})
+    };
+    let mark = s.notice_mark();
+    s.run("edit.paste", &pasted(&["yes", "N", ""])).unwrap();
+    assert!(s.notices_since(mark).iter().all(|n| !n.text.contains("is null in")), "{:?}", s.notices_since(mark));
+    s.run("edit.undo", &Value::Null).unwrap();
+    let mark = s.notice_mark();
+    s.run("edit.paste", &pasted(&["yes", "maybe", "later"])).unwrap();
+    let said: Vec<_> = s.notices_since(mark).iter().filter(|n| n.text.contains("'flag' is null in 2 features")).map(|n| n.loss()).collect();
+    assert_eq!(said, [Some(LossCode::DroppedValue)], "{:?}", s.notices_since(mark));
+    s.run("edit.undo", &Value::Null).unwrap();
+}
+
+#[test]
+fn a_default_its_field_cant_hold_as_given_is_refused_when_set() {
+    use rustgis_data::Value as V;
+    let mut s = world();
+    s.run("edit.addField", &json!({"layer": "Cities", "name": "n", "type": "long"})).unwrap();
+    s.run("edit.addField", &json!({"layer": "Cities", "name": "flag", "type": "boolean"})).unwrap();
+    s.run("edit.addField", &json!({"layer": "Cities", "name": "x", "type": "double"})).unwrap();
+    s.run("edit.addField", &json!({"layer": "Cities", "name": "kind", "type": "long"})).unwrap();
+    for (field, value) in [("n", json!(2.7)), ("n", json!("seven")), ("n", json!(1e30)), ("flag", json!("maybe"))] {
+        let defaults = json!({field: value});
+        let err = s.run("edit.template", &json!({"layer": "Cities", "name": "T", "defaults": defaults})).unwrap_err();
+        assert!(err.starts_with(&format!("field '{field}': ")) && (err.contains("isn't a") || err.contains("as given")), "{value}: {err}");
+        let subtypes = json!([{"code": 1, "name": "One", "defaults": defaults}]);
+        let err = s.run("data.subtypes", &json!({"layer": "Cities", "field": "kind", "subtypes": subtypes})).unwrap_err();
+        assert!(err.starts_with(&format!("field '{field}': ")), "{value}: {err}");
+    }
+    let err = s.run("edit.template", &json!({"layer": "Cities", "name": "T", "defaults": {"x": 9_007_199_254_740_993_i64}})).unwrap_err();
+    assert_eq!(err, "field 'x': a Double field can't hold '9007199254740993' as given");
+    for (field, text) in
+        [("x", "9007199254740993.0"), ("x", "12345678901234567890"), ("n", "1.00000000000000001e0"), ("n", "9007199254740993e0")]
+    {
+        let err = s.run("edit.template", &json!({"layer": "Cities", "name": "T", "defaults": {field: text}})).unwrap_err();
+        assert_eq!(err, format!("field '{field}': a {} field can't hold '{text}' as given", if field == "n" { "Long" } else { "Double" }));
+    }
+    // edit.setValue keeps such values, and says what holding them lost; exact ones say nothing.
+    for (field, value, said) in [
+        ("x", json!(9_007_199_254_740_993_i64), Some(rustgis_data::loss::LossCode::ChangedRounded)),
+        ("x", json!("9007199254740993.0"), Some(rustgis_data::loss::LossCode::ChangedRounded)),
+        ("x", json!("9007199254740992.0"), None),
+        ("x", json!(0.1), None),
+        ("n", json!("2.0000000000000000001e0"), Some(rustgis_data::loss::LossCode::ChangedTruncated)),
+        ("n", json!("1e3"), None),
+        ("n", json!("9007199254740993e0"), Some(rustgis_data::loss::LossCode::ChangedRounded)),
+        ("n", json!("9007199254740992e0"), None),
+    ] {
+        let mark = s.notice_mark();
+        s.run("edit.setValue", &json!({"layer": "Cities", "row": 0, "field": field, "value": value})).unwrap();
+        let codes: Vec<_> = s.notices_since(mark).iter().filter_map(|n| n.loss()).collect();
+        assert_eq!(codes, said.into_iter().collect::<Vec<_>>(), "{value}");
+        s.run("edit.undo", &Value::Null).unwrap();
+    }
+    let err = s.run("data.contingentValues", &json!({"layer": "Cities", "name": "C", "fields": ["n", "flag"], "combos": [[2.5, true]]}));
+    assert_eq!(err.unwrap_err(), "field 'n': a Long field can't hold '2.5' as given");
+    let err = s.run("data.domain", &json!({"layer": "Cities", "field": "flag", "coded": [[true, "Yes"], ["maybe", "Maybe"]]})).unwrap_err();
+    assert_eq!(err, "field 'flag': 'maybe' isn't a Boolean value");
+    assert!(s.map().layer_by_name("Cities").unwrap().design.templates.is_empty(), "a refused template isn't added");
+    // Defaults the fields hold as given are kept, and fill new features with nothing to say.
+    s.run("edit.addField", &json!({"layer": "Cities", "name": "note", "type": "text"})).unwrap();
+    let defaults = json!({"n": 2.0, "flag": "yes", "x": "9007199254740992.0", "note": 0.1234567});
+    s.run("edit.template", &json!({"layer": "Cities", "name": "T", "defaults": defaults})).unwrap();
+    let mark = s.notice_mark();
+    let point = json!({"type": "Point", "coordinates": [0.0, 0.0]});
+    let row = s.run("edit.addFeature", &json!({"layer": "Cities", "geometry": point, "template": "T"})).unwrap()["row"].as_u64().unwrap();
+    assert!(s.notices_since(mark).iter().all(|n| n.loss().is_none()), "{:?}", s.notices_since(mark));
+    let ds = &s.map().layer_by_name("Cities").unwrap().dataset;
+    let row = row as usize;
+    assert_eq!((ds.value(row, ds.field_index("n").unwrap()), ds.value(row, ds.field_index("flag").unwrap())), (&V::Int(2), &V::Bool(true)));
+    assert_eq!(ds.value(row, ds.field_index("note").unwrap()), &V::Text("0.1234567".into()), "in full, not to six places");
+    s.run("edit.undo", &Value::Null).unwrap();
+    s.run("edit.setValue", &json!({"layer": "Cities", "row": 0, "field": "note", "value": 0.1234567})).unwrap();
+    let ds = &s.map().layer_by_name("Cities").unwrap().dataset;
+    assert_eq!(ds.value(0, ds.field_index("note").unwrap()), &V::Text("0.1234567".into()), "edit.setValue too");
+    s.run("edit.undo", &Value::Null).unwrap();
+    // Calculate Field and Paste say what a decimal field rounds; exact values say nothing.
+    // (A number written in an expression is read as a decimal when it is parsed, so text stands in.)
+    for (expression, said) in
+        [("'9007199254740993.0'", true), ("'9007199254740993'", true), ("'9007199254740992.0'", false), ("0.1", false)]
+    {
+        let mark = s.notice_mark();
+        s.run("edit.calculateField", &json!({"layer": "Cities", "field": "x", "expression": expression})).unwrap();
+        let codes: Vec<_> = s.notices_since(mark).iter().filter_map(|n| n.loss()).collect();
+        assert_eq!(codes.contains(&rustgis_data::loss::LossCode::ChangedRounded), said, "{expression}: {:?}", s.notices_since(mark));
+        s.run("edit.undo", &Value::Null).unwrap();
+    }
+    for (x, said) in [(json!(9_007_199_254_740_993_i64), true), (json!(0.1), false)] {
+        let feature = json!({"type": "Feature", "geometry": {"type": "Point", "coordinates": [0.0, 0.0]}, "properties": {"x": x}});
+        let text = json!({"type": "FeatureCollection", "features": [feature]}).to_string();
+        let mark = s.notice_mark();
+        s.run("edit.paste", &json!({"layer": "Cities", "text": text})).unwrap();
+        let codes: Vec<_> = s.notices_since(mark).iter().filter_map(|n| n.loss()).collect();
+        assert_eq!(codes.contains(&rustgis_data::loss::LossCode::ChangedRounded), said, "{x}: {:?}", s.notices_since(mark));
+        s.run("edit.undo", &Value::Null).unwrap();
+    }
+    s.run("edit.calculateField", &json!({"layer": "Cities", "field": "note", "expression": "0.1234567"})).unwrap();
+    let ds = &s.map().layer_by_name("Cities").unwrap().dataset;
+    assert_eq!(ds.value(0, ds.field_index("note").unwrap()), &V::Text("0.1234567".into()), "Calculate Field too");
+    s.run("edit.undo", &Value::Null).unwrap();
+    // A subtype's defaults fill a new feature of its code. One saved before defaults were
+    // checked, that its field can't hold as given, is left out and said.
+    let subtypes = json!([{"code": 1, "name": "One", "defaults": {"n": "7", "flag": "no"}}]);
+    s.run("data.subtypes", &json!({"layer": "Cities", "field": "kind", "subtypes": subtypes, "symbolize": false})).unwrap();
+    let new = |s: &mut Session| {
+        let mark = s.notice_mark();
+        let row = s.run("edit.addFeature", &json!({"layer": "Cities", "geometry": point, "attributes": {"kind": 1}})).unwrap()["row"]
+            .as_u64()
+            .unwrap();
+        let ds = &s.map().layer_by_name("Cities").unwrap().dataset;
+        let held =
+            (ds.value(row as usize, ds.field_index("n").unwrap()).clone(), ds.value(row as usize, ds.field_index("flag").unwrap()).clone());
+        let said: Vec<_> = s.notices_since(mark).iter().filter(|n| n.loss().is_some()).map(|n| (n.text.clone(), n.loss())).collect();
+        s.run("edit.undo", &Value::Null).unwrap();
+        (held, said)
+    };
+    assert_eq!(new(&mut s), ((V::Int(7), V::Bool(false)), vec![]));
+    let cities = s.map_mut().layers.iter_mut().find(|l| l.name == "Cities").unwrap();
+    let defaults = &mut cities.design.subtypes.as_mut().unwrap().subtypes[0].defaults;
+    defaults.iter_mut().find(|(f, _)| f == "n").unwrap().1 = V::Float(2.7);
+    let (held, said) = new(&mut s);
+    assert_eq!(held, (V::Null, V::Bool(false)));
+    assert_eq!(
+        said,
+        [(
+            "Cities: subtype defaults left out of 1 new feature, as their fields can't hold them as given: 'n'".to_string(),
+            Some(rustgis_data::loss::LossCode::DroppedValue)
+        )]
+    );
+}
+
 /// A date field is added, edited as ISO text, compared in a where clause, calculated, offered to
 /// the time slider, and kept as dates through a project save; arithmetic on it is an error, and
 /// text that isn't a date is reported, not quietly stored as null.
@@ -2747,6 +2917,10 @@ fn svg_image_markers_that_dont_draw_are_said_with_why() {
             "Image markers in \"Cities\", \"Rivers\" are SVGs with filters, text, images, animation or links to other files, which RustGIS doesn't draw in marker images, and are drawn as circles",
         ),
         (MarkerRefusal::TooManyBytes, "Image markers in \"Cities\", \"Rivers\" are longer than 2 MiB as base64 and are drawn as circles"),
+        (
+            MarkerRefusal::SvgTooMuchToRead,
+            "Image markers in \"Cities\", \"Rivers\" are SVGs whose style sheets, element attributes or entities holding tags take more to read than RustGIS allows and are drawn as circles",
+        ),
         (
             MarkerRefusal::SvgTooNested,
             "Image markers in \"Cities\", \"Rivers\" are SVGs with more than 40,000 XML nodes or nested deeper than 64 levels and are drawn as circles",
@@ -4130,6 +4304,50 @@ fn qgis_raster_image_markers_read_their_files_from_the_style_folder() {
     }
 }
 
+/// A QGIS style's and project's SVG markers draw their file through the importer's one reader, and
+/// saving asks for `svg-markers`; one whose colours the style sets is a circle, noted.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn qgis_svg_markers_draw_their_file_and_saving_requires_svg_markers() {
+    use base64::Engine;
+    use rustgis_map::{Marker, Picture};
+    let dir = std::env::temp_dir().join(format!("rustgis-qgis-svg-markers-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 4"><rect width="8" height="4" fill="#c81e1e"/></svg>"##;
+    std::fs::write(dir.join("pin.svg"), svg).unwrap();
+    std::fs::write(dir.join("tinted.svg"), svg.replace("#c81e1e", "param(fill) #c81e1e")).unwrap();
+    let qml = |file: &str| {
+        format!(
+            r#"<qgis version="4.2.3"><renderer-v2 type="singleSymbol"><symbols><symbol type="marker" name="0" alpha="1">
+            <layer class="SvgMarker" enabled="1"><Option type="Map"><Option name="name" value="{file}"/><Option name="size" value="6"/>
+            <Option name="size_unit" value="Point"/></Option></layer></symbol></symbols></renderer-v2></qgis>"#
+        )
+    };
+    let marker = |s: &Session| s.map().layer_by_name("Cities").unwrap().symbol(0).marker;
+    let notes =
+        |r: &serde_json::Value| r["notes"].as_array().unwrap().iter().map(|n| n["text"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+    let b64 = base64::engine::general_purpose::STANDARD.encode(svg);
+    let path = dir.join("pins.qml");
+    // From its file beside the style, and embedded in the text with no folder.
+    for params in
+        [json!({"layer": "Cities", "path": path.to_string_lossy()}), json!({"layer": "Cities", "text": qml(&format!("base64:{b64}"))})]
+    {
+        std::fs::write(&path, qml("pin.svg")).unwrap();
+        let mut s = world();
+        let r = s.run("style.importQgis", &params).unwrap();
+        assert_eq!(marker(&s), Marker::Picture(Picture::new(&b64)), "{params}");
+        assert!(notes(&r).is_empty(), "{:?}", notes(&r));
+        assert_eq!(serde_json::to_value(&s.project).unwrap()["requires"], json!(["picture-markers", "svg-markers"]));
+    }
+    std::fs::write(&path, qml("tinted.svg")).unwrap();
+    let mut s = world();
+    let r = s.run("style.importQgis", &json!({"layer": "Cities", "path": path.to_string_lossy()})).unwrap();
+    assert_eq!(marker(&s), Marker::Circle);
+    assert_eq!(notes(&r), ["SVG markers whose colours the style sets, which RustGIS doesn't apply yet, drawn as circles"]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A QGIS style's file and its raster image markers' images are read on a thread before the
 /// command lands (#2620): the landing needs neither file, says what the inline import says, can be
 /// undone, and a style read for a layer that was renamed meanwhile is refused. A cancelled read
@@ -5081,6 +5299,45 @@ fn qgis_import_notices_group_layers_and_bound_the_sample_without_dropping_return
     );
     assert!(!said[0].text.contains(notes[9]["layer"].as_str().unwrap()));
     assert!(said[0].text.len() < 4096);
+}
+
+#[test]
+fn qgis_import_codes_only_the_notes_that_lose_data() {
+    use rustgis_data::loss::LossCode;
+    let mut s = world();
+    let layer = |name: &str, provider: &str, source: &str| {
+        format!(
+            r#"<maplayer type="vector"><id>{name}</id><layername>{name}</layername><provider>{provider}</provider><datasource>{source}</datasource></maplayer>"#
+        )
+    };
+    let layers = [
+        layer("Unsupported", "not-a-provider", "x"),
+        r#"<maplayer type="vector"><id>Unnamed</id><layername>Unnamed</layername><datasource>x</datasource></maplayer>"#.to_string(),
+        layer("Heights", "memory", "PointZ?crs=EPSG:4326&amp;field=a:string"),
+        layer("Arcs", "memory", "CompoundCurve?crs=EPSG:4326&amp;field=a:string"),
+    ]
+    .concat();
+    let text = format!(r#"<qgis><projectlayers>{layers}</projectlayers><Layouts><Layout name="page"/></Layouts></qgis>"#);
+    let mark = s.notice_mark();
+    let result = s.run("project.importQgis", &json!({"text": text})).unwrap();
+    let notes = result["notes"].as_array().unwrap();
+    let json_loss = |layer: &str, text: &str| {
+        notes.iter().find(|n| n["layer"] == layer && n["text"].as_str().unwrap().contains(text)).map(|n| n["loss"].as_str())
+    };
+    assert_eq!(json_loss("Unsupported", "RustGIS doesn't read"), Some(Some("dropped.feature")));
+    assert_eq!(json_loss("Unnamed", "RustGIS doesn't read"), Some(Some("dropped.feature")), "a vector layer naming no provider");
+    // A memory layer opens empty, so its Z values and curves held no data: plain.
+    assert_eq!(json_loss("Heights", "Z and M"), Some(None));
+    assert_eq!(json_loss("Arcs", "curves read as lines"), Some(None));
+    assert_eq!(json_loss("", "print layouts"), Some(None), "a layout is drawing, not data: no code");
+    let said = s.notices_since(mark);
+    let with = |code| said.iter().filter(|n| n.loss() == Some(code)).collect::<Vec<_>>();
+    assert!(with(LossCode::DroppedFeature)[0].text.contains("Unsupported"), "{said:?}");
+    assert!(with(LossCode::DroppedZm).is_empty() && with(LossCode::ApproximatedCurve).is_empty(), "{said:?}");
+    let layouts: Vec<_> = said.iter().filter(|n| n.text.contains("print layouts")).collect();
+    assert_eq!(layouts.len(), 1);
+    assert_eq!(layouts[0].loss(), None);
+    assert!(said.iter().filter(|n| n.loss().is_some()).all(|n| !n.text.contains("print layouts")), "no coded notice holds a plain note");
 }
 
 /// A QGIS categorized renderer by an expression classes by it where the expression reads on the
@@ -6237,7 +6494,7 @@ fn a_qgis_project_opens_as_a_map_and_a_qgis_style_styles_a_layer() {
         <maplayer type="raster" hasScaleBasedVisibilityFlag="1" minScale="100000" maxScale="1000"><id>w</id><datasource>url=https://wms.example/wms&amp;layers=a</datasource><layername>Web</layername><provider>wms</provider>
         <pipe><rasterrenderer opacity="0.5" type="singlebandcolordata"/></pipe><blendMode>6</blendMode></maplayer></projectlayers></qgis>"#;
     let mut report = rustgis_map::qgis::Report::default();
-    let project = rustgis_map::qgis::read_project(web, "", &mut |_| Err("whose image file doesn't open"), &mut report).unwrap();
+    let project = rustgis_map::qgis::read_project(web, "", &mut |_| Err(rustgis_map::qgis::IMAGE_UNOPENED), &mut report).unwrap();
     let mut w = world();
     let before = w.active_layer;
     w.active_layer = w.map().layers.iter().map(|l| l.id).find(|id| Some(*id) != before);
@@ -8177,6 +8434,9 @@ fn hostile_junk() -> Vec<Value> {
         json!({"kind": "scaleBar", "element": 1, "unitLabelPosition": "", "decimals": "x", "textSize": "NaN", "fit": {"x": 1}}),
         json!({"kind": "scaleBar", "element": 1, "subdivisions": 1e308, "divisionsBeforeZero": -1e308, "decimals": f64::MAX, "textSize": -1e308, "unitLabel": null}),
         json!({"kind": "scaleBar", "element": 1, "unitLabel": "x".repeat(5000), "fit": "adjustWidth", "labelPosition": "below", "unitLabelPosition": "afterBar"}),
+        json!({"kind": "text", "element": 1, "valign": {}, "lineSpacing": [null], "case": 7}),
+        json!({"kind": "dynamicText", "element": 1, "valign": "", "lineSpacing": f64::MAX, "case": "x".repeat(5000)}),
+        json!({"kind": "scaleBar", "element": 1, "valign": "middle", "lineSpacing": "1e309", "case": null}),
         json!({"kind": "legend", "element": 1, "decimals": 2, "textSize": f64::INFINITY, "fit": "adjustDivision", "unitLabel": "m"}),
         // A QGIS project and style whose web layer and scale range are junk.
         json!({"text": "<qgis><projectlayers><maplayer type=\"raster\" hasScaleBasedVisibilityFlag=\"1\" minScale=\"NaN\" maxScale=\"-1e308\"><datasource>type=xyz&amp;url=&amp;zmax=999</datasource><layername></layername><provider>wms</provider><pipe><rasterrenderer opacity=\"inf\"/></pipe></maplayer></projectlayers></qgis>"}),
@@ -12549,6 +12809,162 @@ fn layout_surrounds_take_cartographic_options() {
     assert_eq!(back, s.project.layouts[0]);
 }
 
+/// A text's block alignment, line spacing and case through layout.addElement and layout.update:
+/// names and numbers checked before anything changes, refused for other elements, null leaving
+/// them as they are, one undo step, saved with the layout.
+#[test]
+fn layout_texts_take_a_block_alignment_line_spacing_and_case() {
+    use rustgis_map::layout::{ElementKind, TextCase, TextVAlign};
+    let mut s = world();
+    s.run("layout.new", &json!({"page": "a4", "orientation": "landscape", "template": "map"})).unwrap();
+    let title = s.project.layouts[0].elements.iter().find(|e| e.name == "Title").unwrap().id;
+    let block = |s: &Session, id: u32| match &s.project.layouts[0].element(id).unwrap().kind {
+        ElementKind::Text { valign, line_spacing, case, .. } => (*valign, *line_spacing, *case),
+        k => panic!("{k:?}"),
+    };
+    let plain = (TextVAlign::Top, 1.0, TextCase::None);
+    assert_eq!(block(&s, title), plain);
+    let depth = s.undo_depth();
+    s.run("layout.update", &json!({"element": title, "valign": "middle", "lineSpacing": 1.5, "case": "upper"})).unwrap();
+    let all = (TextVAlign::Middle, 1.5, TextCase::Upper);
+    assert_eq!((block(&s, title), s.undo_depth()), (all, depth + 1));
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert_eq!(block(&s, title), plain);
+    s.run("edit.redo", &Value::Null).unwrap();
+    assert_eq!(block(&s, title), all);
+    // Names in any case and with spaces, centre for middle; a number as text; the limits taken.
+    s.run("layout.update", &json!({"element": title, "valign": " Bottom ", "lineSpacing": "2", "case": "LOWER"})).unwrap();
+    assert_eq!(block(&s, title), (TextVAlign::Bottom, 2.0, TextCase::Lower));
+    s.run("layout.update", &json!({"element": title, "valign": "centre", "lineSpacing": 0.5})).unwrap();
+    assert_eq!(block(&s, title), (TextVAlign::Middle, 0.5, TextCase::Lower));
+    s.run("layout.update", &json!({"element": title, "lineSpacing": 3})).unwrap();
+    assert_eq!(block(&s, title), (TextVAlign::Middle, 3.0, TextCase::Lower));
+    // Null leaves each as it is, as for wrap.
+    s.run("layout.update", &json!({"element": title, "valign": null, "lineSpacing": null, "case": null})).unwrap();
+    assert_eq!(block(&s, title), (TextVAlign::Middle, 3.0, TextCase::Lower));
+    // A bad value changes nothing, not even the good values given with it.
+    let before = block(&s, title);
+    for bad in [
+        json!({"valign": "baseline"}),
+        json!({"valign": 2}),
+        json!({"valign": true}),
+        json!({"valign": ["top"]}),
+        json!({"lineSpacing": 0.49}),
+        json!({"lineSpacing": 3.01}),
+        json!({"lineSpacing": -1}),
+        json!({"lineSpacing": "wide"}),
+        json!({"lineSpacing": "NaN"}),
+        json!({"lineSpacing": "1e309"}),
+        json!({"lineSpacing": {}}),
+        json!({"case": "title"}),
+        json!({"case": 1}),
+        json!({"case": ""}),
+    ] {
+        let mut p = bad.clone();
+        p["element"] = json!(title);
+        p["size"] = json!(30);
+        p["case"] = p.get("case").cloned().unwrap_or(json!("upper"));
+        assert!(s.run("layout.update", &p).is_err(), "{bad}");
+        assert_eq!(block(&s, title), before, "{bad}");
+        assert!(matches!(s.project.layouts[0].element(title).unwrap().kind, ElementKind::Text { size, .. } if size != 30.0), "{bad}");
+    }
+    // Added: text and dynamicText take them; a bad one adds nothing.
+    let count = s.project.layouts[0].elements.len();
+    for kind in ["text", "dynamicText"] {
+        let id =
+            s.run("layout.addElement", &json!({"kind": kind, "valign": "bottom", "lineSpacing": 1.25, "case": "upper"})).unwrap()["element"]
+                .as_u64()
+                .unwrap() as u32;
+        assert_eq!(block(&s, id), (TextVAlign::Bottom, 1.25, TextCase::Upper), "{kind}");
+    }
+    assert!(s.run("layout.addElement", &json!({"kind": "text", "lineSpacing": 4})).is_err());
+    assert!(s.run("layout.addElement", &json!({"kind": "text", "valign": "baseline"})).is_err());
+    assert!(s.run("layout.addElement", &json!({"kind": "text", "case": "title"})).is_err());
+    assert_eq!(s.project.layouts[0].elements.len(), count + 2);
+    // Other kinds refuse them with one message; null is not refused there, as wrap's isn't.
+    let bar = s.project.layouts[0].elements.iter().find(|e| e.kind.code() == "scaleBar").unwrap().id;
+    for key in ["valign", "lineSpacing", "case"] {
+        let value = if key == "lineSpacing" { json!(1.5) } else { json!("middle") };
+        let err = s.run("layout.update", &json!({"element": bar, key: value})).unwrap_err().to_string();
+        assert!(err.contains("only text elements take a vertical alignment, line spacing or case"), "{key}: {err}");
+        let err = s.run("layout.addElement", &json!({"kind": "legend", key: value})).unwrap_err().to_string();
+        assert!(err.contains("only text elements take"), "{key}: {err}");
+        s.run("layout.update", &json!({"element": bar, key: null})).unwrap();
+    }
+    assert_eq!(s.project.layouts[0].elements.len(), count + 2);
+    // Saved with the layout and read back.
+    let back: rustgis_map::layout::Layout = serde_json::from_value(serde_json::to_value(&s.project.layouts[0]).unwrap()).unwrap();
+    assert_eq!(back, s.project.layouts[0]);
+}
+
+/// A wider line spacing that leaves lines out of a text's box is said at once, a tighter one that
+/// draws them all says nothing, and a case or a block alignment that moves ink past the page's
+/// edge is said.
+#[test]
+fn layout_update_says_the_lines_a_wider_line_spacing_leaves_out() {
+    let mut s = world();
+    s.run("layout.new", &json!({"page": "a4", "orientation": "landscape", "template": "blank"})).unwrap();
+    let said = |s: &Session, mark: u64| s.notices_since(mark).iter().map(|n| n.text.clone()).collect::<Vec<_>>().join(" | ");
+    let add = |s: &mut Session, p: Value| s.run("layout.addElement", &p).unwrap()["element"].as_u64().unwrap();
+    let mark = s.notice_mark();
+    let id = add(&mut s, json!({"kind": "text", "text": "one\ntwo\nthree\nfour\nfive", "size": 12, "x": 20, "y": 20, "w": 60, "h": 25}));
+    assert_eq!(said(&s, mark), "", "all five lines fit");
+    let mark = s.notice_mark();
+    s.run("layout.update", &json!({"element": id, "lineSpacing": 2})).unwrap();
+    let wider = said(&s, mark);
+    assert!(wider.contains("2 lines of the text") && wider.contains("don't fit its box"), "{wider}");
+    let mark = s.notice_mark();
+    s.run("layout.update", &json!({"element": id, "lineSpacing": 1})).unwrap();
+    assert_eq!(said(&s, mark), "", "back at the usual spacing they all fit");
+    // Upper case widens an unwrapped line past the page's right edge: its box placed so the line
+    // in lower case ends inside the page and in upper case past it.
+    let words = "The Quick Brown Fox Jumps";
+    let width = |s: &str| crate::render::report::width_mm(s, 12.0, false);
+    let (lower, upper) = (width(&words.to_lowercase()), width(&words.to_uppercase()));
+    assert!(upper - lower > 4.0, "{lower} {upper}");
+    let x = 297.0 - (lower + upper) / 2.0;
+    let line = add(&mut s, json!({"kind": "text", "text": words, "size": 12, "x": x, "y": 100, "w": 10, "h": 10}));
+    let mark = s.notice_mark();
+    s.run("layout.update", &json!({"element": line, "case": "lower"})).unwrap();
+    assert_eq!(said(&s, mark), "", "in lower case it is on the page");
+    let mark = s.notice_mark();
+    s.run("layout.update", &json!({"element": line, "case": "upper"})).unwrap();
+    assert!(said(&s, mark).contains("runs off the page"), "{}", said(&s, mark));
+    // At the top of a box reaching past the page's foot its line is on the page; at the bottom, not.
+    let low = add(&mut s, json!({"kind": "text", "text": "Note", "size": 12, "x": 20, "y": 190, "w": 60, "h": 40}));
+    let mark = s.notice_mark();
+    s.run("layout.update", &json!({"element": low, "valign": "top"})).unwrap();
+    assert_eq!(said(&s, mark), "", "at the top it is on the page");
+    let mark = s.notice_mark();
+    s.run("layout.update", &json!({"element": low, "valign": "bottom"})).unwrap();
+    assert!(said(&s, mark).contains("runs off the page"), "{}", said(&s, mark));
+}
+
+/// A hand-edited project whose text has a block setting out of range, of the wrong kind or not a
+/// name opens, the setting repaired, and says so.
+#[test]
+fn a_project_with_a_damaged_text_block_opens_and_says_so() {
+    use rustgis_map::layout::{ElementKind, TextCase, TextVAlign};
+    let fixture = include_str!("../../../schema/fixtures/layout_text_block.rgis");
+    let block = |p: &crate::Project| match &p.layouts[0].element(2).unwrap().kind {
+        ElementKind::Text { valign, line_spacing, case, .. } => (*valign, *line_spacing, *case),
+        k => panic!("{k:?}"),
+    };
+    let notices = |p: &mut crate::Project| -> Vec<String> {
+        p.take_read_notices(&[crate::project::ReadPart::Layouts]).iter().map(|n| n.english()).collect()
+    };
+    let mut clean = crate::Project::from_json(fixture).unwrap();
+    assert_eq!(block(&clean), (TextVAlign::Bottom, 1.5, TextCase::Upper));
+    let said = notices(&mut clean);
+    assert!(!said.iter().any(|n| n.contains("value out of range")), "{said:?}");
+    let edited = fixture.replace("\"valign\":\"bottom\",\"line_spacing\":1.5", "\"valign\":\"sideways\",\"line_spacing\":\"x\"");
+    assert_ne!(edited, fixture);
+    let mut damaged = crate::Project::from_json(&edited).unwrap();
+    assert_eq!(block(&damaged), (TextVAlign::Top, 1.0, TextCase::Upper));
+    let said = notices(&mut damaged);
+    assert!(said.iter().any(|n| n.contains("1 layout element(s) with a value out of range")), "{said:?}");
+}
+
 /// A scale bar's details through layout.addElement and layout.update: names and numbers checked
 /// before anything changes, refused for other elements, one undo step, saved with the layout.
 #[test]
@@ -12790,6 +13206,50 @@ fn a_publication_scale_box_follows_a_detailed_bar() {
     assert!((boxed(&s) - hand).abs() < 1e-9, "set by hand, kept with a detail: {} vs {hand}", boxed(&s));
     s.run("layout.update", &json!({"layout": li, "element": bar, "subdivisions": 0})).unwrap();
     assert!((boxed(&s) - hand).abs() < 1e-9, "set by hand, kept plain again: {} vs {hand}", boxed(&s));
+}
+
+/// A publication's scale bar box is measured from the text under its bar in the case it is drawn
+/// in: upper case, which widens the line, widens the box, and the box goes back with the case.
+#[test]
+fn a_publication_scale_box_follows_its_scale_text_into_its_case() {
+    let mut s = world();
+    s.run("layout.publication", &json!({"profile": "thesis-half", "extent": [-46.8, -11.6, -38.5, -2.2]})).unwrap();
+    let li = s.project.layouts.len() - 1;
+    let named = |s: &Session, n: &str| s.project.layouts[li].elements.iter().find(|e| e.name == n).unwrap().clone();
+    let auto = |s: &Session| crate::cmd::layout::scale_box_auto(s, li).expect("an automatic box");
+    let boxed = |s: &Session| named(s, "Scale Box").w;
+    let text = named(&s, "Scale");
+    let size = match &text.kind {
+        rustgis_map::layout::ElementKind::Text { size, .. } => *size,
+        k => panic!("{k:?}"),
+    };
+    // The box as the bar alone sets it, and the widest one a publication gives (0.3 of its frame).
+    let bar = boxed(&s);
+    let frame = s.project.layouts[li].first_frame().unwrap();
+    let widest = (s.project.layouts[li].element(frame).unwrap().w * 0.3).max(25.0);
+    assert!(widest - bar > 2.0, "room between the bar's box and the widest: {bar} to {widest}");
+    // A line, measured as the box measures it (a millimetre each side), that in upper case is
+    // wider than the bar and still within the widest box: found by adding narrow letters, so it
+    // holds in any face.
+    let wide = |t: &str| crate::render::report::width_mm(t, size as f32, false) + 2.0;
+    let line = (0..400)
+        .map(|n| format!("{}{}", "a".repeat(20), "i".repeat(n)))
+        .find(|t| wide(&t.to_uppercase()) > bar + 1.0)
+        .expect("a line wider than the bar");
+    let (typed_w, upper_w) = (wide(&line), wide(&line.to_uppercase()));
+    assert!(upper_w < widest - 0.2 && typed_w < upper_w - 0.5, "{typed_w} then {upper_w} in {bar} to {widest}");
+    s.run("layout.update", &json!({"layout": li, "element": text.id, "text": line})).unwrap();
+    let typed = boxed(&s);
+    assert!((typed - auto(&s)).abs() < 0.01 && (typed - typed_w.max(bar)).abs() < 0.01, "as typed: {typed} vs {}", auto(&s));
+    // In upper case the same line is wider, and so is the box, with the bar and the text in it.
+    s.run("layout.update", &json!({"layout": li, "element": text.id, "case": "upper"})).unwrap();
+    let upper = boxed(&s);
+    assert!((upper - upper_w).abs() < 0.01 && upper > typed + 0.4, "upper case widens the box: {upper} vs {upper_w}, typed {typed}");
+    assert!((upper - auto(&s)).abs() < 0.01, "upper, refitted: {upper} vs {}", auto(&s));
+    assert!((named(&s, "Scale").w - upper).abs() < 1e-9 && (named(&s, "Scale Bar").w - upper).abs() < 1e-9);
+    // Back as typed, back to its width.
+    s.run("layout.update", &json!({"layout": li, "element": text.id, "case": "none"})).unwrap();
+    assert!((boxed(&s) - typed).abs() < 0.01, "as typed again: {} vs {typed}", boxed(&s));
 }
 
 /// A layout element refuses a colour, fill or outline its kind doesn't draw, before anything
@@ -13357,6 +13817,11 @@ fn publication_layouts_fit_their_pages() {
     s.project.layouts.pop();
     assert_eq!(capitals("Fontes, {date} e {pageName}"), "FONTES, {date} E {pageName}");
     assert_eq!(capitals("Dados {2024 e {só} }"), "DADOS {2024 E {SÓ} }", "a lone or odd brace is text");
+    assert_eq!(
+        capitals("Cidades {count:New York} e {sum:Cities:pop}, {max:Cities:pop} ({min:a:b"),
+        "CIDADES {count:New York} E {sum:Cities:pop}, {max:Cities:pop} ({MIN:A:B",
+        "a layer statistic (#2853) is a token the layout fills in its own case"
+    );
     assert_eq!(grid_step(&rustgis_geom::Extent::new(10.0, 45.0, 11.0, 46.0)), 0.25);
     assert_eq!(grid_step(&rustgis_geom::Extent::new(-180.0, -90.0, 180.0, 90.0)), 30.0);
     assert_eq!((step_text(2.0), step_text(0.25), step_text(0.02)), ("2°".to_string(), "15′".to_string(), "1′12″".to_string()));
@@ -13386,6 +13851,42 @@ fn every_publication_style_in_the_menu_is_taken() {
             s.run("layout.publication", &json!({"extent": [-46.8, -11.6, -38.5, -2.2], "profile": "a4-portrait", "style": style})).unwrap();
         assert_eq!(r["style"], *style);
     }
+}
+
+/// The defaults `layout.publication` exposes for the UI match what the command uses: every style
+/// in `PUBLICATION_STYLES` has an opaque accent (unknown styles give `None`), omitted `author`
+/// writes `PUBLICATION_DEFAULT_CREDIT`, and `MAX_PUBLICATION_TEXT` is the exact character limit.
+#[test]
+fn publication_defaults_match_the_command() {
+    use crate::cmd::layout::{MAX_PUBLICATION_TEXT, PUBLICATION_DEFAULT_CREDIT, PUBLICATION_STYLES, publication_style_accent};
+    use rustgis_map::layout::ElementKind;
+
+    for (style, _) in PUBLICATION_STYLES {
+        let accent = publication_style_accent(style).unwrap_or_else(|| panic!("accent for {style}"));
+        assert_eq!(accent.a(), 255, "{style} accent is opaque");
+    }
+    assert!(publication_style_accent("unknown").is_none());
+
+    let mut s = world();
+    let extent = json!([-46.8, -11.6, -38.5, -2.2]);
+    // Banner paints its top band in the style's own accent when no accent is given.
+    let banner_accent = publication_style_accent("banner").unwrap();
+    s.run("layout.publication", &json!({"extent": extent, "profile": "a4-portrait", "style": "banner", "title": "Check"})).unwrap();
+    let l = s.project.layouts.last().unwrap();
+    assert!(
+        l.elements.iter().any(|e| matches!(e.kind, ElementKind::Rectangle { fill, .. } if fill == banner_accent)),
+        "banner band uses publication_style_accent(\"banner\")"
+    );
+    assert!(
+        l.elements.iter().any(|e| matches!(&e.kind, ElementKind::Text { text, .. } if text == PUBLICATION_DEFAULT_CREDIT)),
+        "omitted author uses PUBLICATION_DEFAULT_CREDIT"
+    );
+
+    let at_limit = "a".repeat(MAX_PUBLICATION_TEXT);
+    assert!(s.run("layout.publication", &json!({"extent": extent, "profile": "a4-portrait", "note": at_limit})).is_ok());
+    let over_limit = "a".repeat(MAX_PUBLICATION_TEXT + 1);
+    let err = s.run("layout.publication", &json!({"extent": extent, "profile": "a4-portrait", "note": over_limit})).unwrap_err();
+    assert!(err.contains(&MAX_PUBLICATION_TEXT.to_string()), "{err}");
 }
 
 /// A publication sheet's style (#682): `classic` (the default) as before; `banner` the title and
@@ -18968,6 +19469,41 @@ fn hillshade_is_made_and_written_as_bytes() {
             "cog: {cog}"
         );
     }
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// A made raster embeds the bytes an encode would write, and its plain export writes the file the
+/// layer embeds; once its pixels change, the export encodes them.
+#[test]
+fn exporting_a_made_raster_writes_its_embedded_file_until_its_pixels_change() {
+    let mut s = world();
+    s.run("layer.addDataBytes", &json!({"fileName": "dem.tif", "data": dem_b64()})).unwrap();
+    let dem = s.map().layers.iter().find(|l| l.is_raster()).unwrap().name.clone();
+    let v = s.run("raster.function", &json!({"layer": dem, "function": "hillshade", "name": "hill"})).unwrap();
+    let id = v["layer"].as_u64().unwrap() as u32;
+    let rl = s.map().layer(id).unwrap().raster.clone().unwrap();
+    let embedded = rl.embedded.clone().unwrap();
+    assert_eq!(embedded.as_slice(), rustgis_data::raster::geotiff::write(rl.data.as_ref().unwrap(), 0).unwrap().as_slice());
+    let dir = std::env::temp_dir().join(format!("rustgis-written-export-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    // Marked bytes in its place show which file the export writes: a fresh encode wouldn't hold them.
+    let marked = [embedded.as_slice(), b"written"].concat();
+    let pixels = rl.data.clone().unwrap();
+    drop(rl);
+    s.map_mut().layer_mut(id).unwrap().raster =
+        Some(rustgis_map::RasterLayer::from_written(std::sync::Arc::unwrap_or_clone(pixels), "hill.tif", marked.clone()));
+    let tif = dir.join("hill.tif");
+    s.run("share.exportRaster", &json!({"layer": id, "path": tif.display().to_string()})).unwrap();
+    assert_eq!(std::fs::read(&tif).unwrap(), marked);
+    // The browser's download takes the same file; a cloud-optimised one is encoded.
+    assert_eq!(crate::cmd::raster::geotiff_bytes(&mut s, &json!({"layer": id})).unwrap().1, marked);
+    assert_ne!(crate::cmd::raster::geotiff_bytes(&mut s, &json!({"layer": id, "cog": true})).unwrap().1, marked);
+    let rl = s.map_mut().layer_mut(id).unwrap().raster.as_mut().unwrap();
+    let band = &mut std::sync::Arc::make_mut(rl.data.as_mut().unwrap()).bands[0];
+    band.data[0] = if band.data[0] == 7.0 { 8.0 } else { 7.0 };
+    let changed = band.data[0];
+    s.run("share.exportRaster", &json!({"layer": id, "path": tif.display().to_string()})).unwrap();
+    assert_eq!(rustgis_data::raster::read_path(&tif).unwrap().bands[0].data[0], changed);
     std::fs::remove_dir_all(&dir).ok();
 }
 
@@ -27199,6 +27735,10 @@ fn a_service_query_added_by_address_is_read_in_pages_without_the_app() {
     assert_eq!((sym.marker, sym.fill), (rustgis_map::symbology::Marker::Square, rustgis_map::Rgba::rgb(230, 0, 0)));
     let texts: Vec<_> = s.notices.iter().map(|n| n.text.as_str()).collect();
     assert!(!texts.iter().any(|t| t.contains("record limit") || t.contains("aren't read")), "{texts:?}");
+    // Recent keeps that it was read as a service, so adding it again reads every page too.
+    let recent = &s.run("sources.list", &Value::Null).unwrap()["recent"][0];
+    assert_eq!((&recent["kind"], &recent["extra"]), (&json!("url"), &json!({"service": "true"})));
+    assert_eq!(recent["addWith"], "layer.addUrl {url, service: true}");
     // Bounds that aren't a geographic rectangle are refused before anything is fetched, as when the
     // app adds the download.
     let e = s.run("layer.addUrl", &json!({"url": url, "name": "Bad", "service": true, "bounds": [10, 0, 5, 1]})).unwrap_err();
@@ -40050,6 +40590,379 @@ fn layout_element_inks_from_commands() {
     }
 }
 
+/// A layout text's layer statistics (#2853) are said when the text is added or its text changed
+/// with a token that has no figure, each with what it misses; one with a figure, or another
+/// change to the text's element, says nothing.
+#[test]
+fn layout_text_statistics_without_a_figure_are_said() {
+    let mut s = world();
+    s.run("layout.new", &json!({"name": "L"})).unwrap();
+    let run = |s: &mut Session, id: &str, p: Value| {
+        let mark = s.notice_mark();
+        let out = s.run(id, &p).unwrap();
+        let said: Vec<String> =
+            s.notices_since(mark).iter().map(|n| n.text.as_str().to_string()).filter(|t| t.contains("shows as written")).collect();
+        (out, said)
+    };
+    let (out, said) = run(&mut s, "layout.addElement", json!({"kind": "text", "text": "{count:Countries} countries", "x": 10, "y": 10}));
+    assert_eq!(said, Vec::<String>::new());
+    let text = out["element"].clone();
+    let (_, said) = run(&mut s, "layout.update", json!({"element": text, "text": "{count:Countries} of {sum:Nowhere:pop}"}));
+    assert_eq!(said, ["{sum:Nowhere:pop} shows as written: the map of the layout's first frame has no layer named 'Nowhere'"]);
+    let (_, said) = run(&mut s, "layout.update", json!({"element": text, "x": 20}));
+    assert_eq!(said, Vec::<String>::new(), "a move doesn't say it again");
+    let (_, said) = run(&mut s, "layout.addElement", json!({"kind": "text", "text": "{max:Countries:nosuch}", "x": 10, "y": 40}));
+    assert_eq!(said, ["{max:Countries:nosuch} shows as written: 'Countries' has no field named 'nosuch'"]);
+    // A publication layout's texts are checked as an added text is.
+    let (_, said) = run(
+        &mut s,
+        "layout.publication",
+        json!({"extent": [-46.8, -11.6, -38.5, -2.2], "title": "{count:Nowhere}", "sources": ["{count:Countries}"]}),
+    );
+    assert_eq!(said, ["{count:Nowhere} shows as written: the map of the layout's first frame has no layer named 'Nowhere'"]);
+    // The first frame's map decides every text's figures: another map, which lacks the layer, says
+    // what the layout's texts lose, and another change to the frame says nothing.
+    s.run("map.new", &json!({"name": "Empty"})).unwrap();
+    s.active_layout = Some(0);
+    let frame = s.project.layouts[0].first_frame().unwrap();
+    let rustgis_map::layout::ElementKind::MapFrame { map: home, .. } = s.project.layouts[0].element(frame).unwrap().kind.clone() else {
+        panic!("the first frame is a map frame")
+    };
+    let (_, said) = run(&mut s, "layout.update", json!({"element": frame, "x": 12}));
+    assert_eq!(said, Vec::<String>::new());
+    let (_, said) = run(&mut s, "layout.update", json!({"element": frame, "map": "Empty"}));
+    assert_eq!(
+        said,
+        [
+            "{count:Countries} shows as written: the map of the layout's first frame has no layer named 'Countries'",
+            "{sum:Nowhere:pop} shows as written: the map of the layout's first frame has no layer named 'Nowhere'",
+            "{max:Countries:nosuch} shows as written: the map of the layout's first frame has no layer named 'Countries'",
+        ]
+    );
+    let (_, said) = run(&mut s, "layout.update", json!({"element": frame, "map": "Empty"}));
+    assert_eq!(said, Vec::<String>::new(), "the same map again says nothing");
+    let (_, said) = run(&mut s, "layout.update", json!({"element": frame, "map": home}));
+    assert_eq!(
+        said,
+        [
+            "{sum:Nowhere:pop} shows as written: the map of the layout's first frame has no layer named 'Nowhere'",
+            "{max:Countries:nosuch} shows as written: 'Countries' has no field named 'nosuch'",
+        ],
+        "the texts' figures are back, but the two tokens that never had one are said again"
+    );
+    // So are those of an imported layout, a copy of the first one here.
+    let copy = serde_json::to_string(&s.project.layouts[0]).unwrap();
+    let (_, said) = run(&mut s, "layout.import", json!({"text": copy}));
+    assert_eq!(
+        said,
+        [
+            "{sum:Nowhere:pop} shows as written: the map of the layout's first frame has no layer named 'Nowhere'",
+            "{max:Countries:nosuch} shows as written: 'Countries' has no field named 'nosuch'",
+        ]
+    );
+}
+
+/// The first map frame decides every text's figures (#2853), so what changes which frame is first
+/// says what the texts lose: deleting it, or drawing another frame under it.
+#[test]
+fn layout_text_statistics_are_said_when_the_first_frame_changes() {
+    let mut s = world();
+    s.run("layout.new", &json!({"name": "L"})).unwrap();
+    s.run("layout.addElement", &json!({"kind": "text", "text": "{count:Countries} countries", "x": 10, "y": 10})).unwrap();
+    s.run("map.new", &json!({"name": "Empty"})).unwrap();
+    let li = s.active_layout.unwrap();
+    let first = s.project.layouts[li].first_frame().unwrap();
+    let said = |s: &mut Session, id: &str, p: Value| {
+        let mark = s.notice_mark();
+        s.run(id, &p).unwrap();
+        s.notices_since(mark).iter().map(|n| n.text.as_str().to_string()).filter(|t| t.contains("shows as written")).collect::<Vec<_>>()
+    };
+    // A second frame, of a map with no such layer, drawn first: the first frame is the one that was.
+    let other = s.run("layout.addFrame", &json!({"map": "Empty", "x": 10, "y": 100, "w": 50, "h": 50})).unwrap()["element"]
+        .as_u64()
+        .unwrap() as u32;
+    assert_eq!(s.project.layouts[li].first_frame(), Some(first));
+    assert_eq!(
+        said(&mut s, "layout.arrange", json!({"element": other, "to": "back"})),
+        ["{count:Countries} shows as written: the map of the layout's first frame has no layer named 'Countries'"]
+    );
+    assert_eq!(s.project.layouts[li].first_frame(), Some(other));
+    // Another change of order that leaves the first frame alone says nothing.
+    assert_eq!(said(&mut s, "layout.arrange", json!({"element": first, "to": "front"})), Vec::<String>::new());
+    // The last frame deleted: no map for the figures at all.
+    s.run("layout.removeElement", &json!({"element": other})).unwrap();
+    let mark = s.notice_mark();
+    s.run("layout.removeElement", &json!({"element": first})).unwrap();
+    let told: Vec<String> =
+        s.notices_since(mark).iter().map(|n| n.text.as_str().to_string()).filter(|t| t.contains("shows as written")).collect();
+    assert_eq!(told, ["{count:Countries} shows as written: the layout has no map frame whose map it would read"]);
+}
+
+/// A layout text's layer statistics (#2853) name their layer, so renaming the layer carries them
+/// along as it does a chart's or table's layer, in the layouts whose first frame shows that map;
+/// another layer's token, and the field, stay as they are.
+#[test]
+fn renaming_a_layer_renames_it_in_layout_text_statistics() {
+    let mut s = world();
+    s.run("layout.new", &json!({"name": "L"})).unwrap();
+    let text = |s: &mut Session, t: &str| {
+        s.run("layout.addElement", &json!({"kind": "text", "text": t, "x": 10, "y": 10})).unwrap()["element"].as_u64().unwrap() as u32
+    };
+    let first = text(&mut s, "{count:Countries} in {sum:countries:pop_est}; {count:Rivers} {scale} {count:Countries:pop_est}");
+    let plain = text(&mut s, "Countries");
+    s.run("layer.rename", &json!({"layer": "Countries", "name": "Nations"})).unwrap();
+    let li = s.active_layout.unwrap();
+    let said = |s: &Session, id: u32| match &s.project.layouts[li].element(id).unwrap().kind {
+        rustgis_map::layout::ElementKind::Text { text, .. } => text.clone(),
+        _ => panic!("a text"),
+    };
+    // A count's layer is all that follows its colon, so `Countries:pop_est` is another layer's name.
+    assert_eq!(said(&s, first), "{count:Nations} in {sum:Nations:pop_est}; {count:Rivers} {scale} {count:Countries:pop_est}");
+    assert_eq!(said(&s, plain), "Countries", "a text with no token is left alone");
+}
+
+/// A presentation's map page draws its title over its own map, where a layer statistic is filled
+/// in (#2853), so renaming a layer of that map renames it in the title; a page of another map, or
+/// with no map frame, keeps its title.
+#[test]
+fn renaming_a_layer_renames_it_in_a_presentation_map_page_title() {
+    let mut s = world();
+    s.run("presentation.new", &json!({"name": "P"})).unwrap();
+    s.run("presentation.mapPage", &json!({"title": "{count:Countries} countries"})).unwrap();
+    s.run("presentation.blankPage", &json!({"title": "{count:Countries} on a blank page"})).unwrap();
+    s.run("layer.rename", &json!({"layer": "Countries", "name": "Nations"})).unwrap();
+    let titles: Vec<String> = s.project.presentations[0].pages.iter().map(|p| p.title.clone()).collect();
+    // The first page is the title page a new presentation starts with.
+    assert_eq!(titles, ["World Atlas", "{count:Nations} countries", "{count:Countries} on a blank page"]);
+    // A title that the new name would take past what a title holds keeps the old name.
+    let long = format!("{}{{count:Nations}}", "x".repeat(480));
+    s.run("presentation.mapPage", &json!({"title": long})).unwrap();
+    let mark = s.notice_mark();
+    s.run("layer.rename", &json!({"layer": "Nations", "name": "The Nations of the whole wide world"})).unwrap();
+    let titles: Vec<String> = s.project.presentations[0].pages.iter().map(|p| p.title.clone()).collect();
+    assert_eq!(titles[1], "{count:The Nations of the whole wide world} countries");
+    assert_eq!(titles[3], long, "past the limit it keeps the old name");
+    let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.as_str().to_string()).collect();
+    assert!(said.iter().any(|n| n.contains("1 presentation title(s) keep the old layer name") && n.contains("500")), "{said:?}");
+}
+
+/// A presentation map page's title fills its layer statistics (#2853) from the page's map, so a
+/// title set or imported with one that has no figure says what it misses (#2999); a page with no
+/// map frame, which never fills one in, says nothing.
+#[test]
+fn a_map_page_title_statistic_without_a_figure_is_said() {
+    let mut s = world();
+    let home = s.map().name.clone();
+    s.run("presentation.new", &json!({"name": "P"})).unwrap();
+    let run = |s: &mut Session, id: &str, p: Value| {
+        let mark = s.notice_mark();
+        s.run(id, &p).unwrap();
+        s.notices_since(mark).iter().map(|n| n.text.as_str().to_string()).filter(|t| t.contains("shows as written")).collect::<Vec<_>>()
+    };
+    let nowhere = "{count:Nowhere} shows as written: the page's map has no layer named 'Nowhere'";
+    for title in ["{count:Countries} countries", "{scale} {foo}"] {
+        assert_eq!(run(&mut s, "presentation.mapPage", json!({"title": title})), Vec::<String>::new(), "{title}");
+    }
+    assert_eq!(run(&mut s, "presentation.mapPage", Value::Null), Vec::<String>::new(), "the map's name as the title");
+    assert_eq!(run(&mut s, "presentation.mapPage", json!({"title": "{count:Nowhere} and {count:Nowhere}", "at": 0})), [nowhere]);
+    assert_eq!(
+        run(&mut s, "presentation.mapPage", json!({"title": "{max:Countries:nosuch} {sum:Countries}"})),
+        [
+            "{max:Countries:nosuch} shows as written: 'Countries' has no field named 'nosuch'",
+            "{sum:Countries} shows as written: a sum takes a field: write {sum:Countries:field}",
+        ]
+    );
+    // The page's own map is read, not the active one.
+    s.run("map.new", &json!({"name": "Other"})).unwrap();
+    s.run("map.activate", &json!({"name": home})).unwrap();
+    assert_eq!(
+        run(&mut s, "presentation.mapPage", json!({"map": "Other", "title": "{count:Countries}"})),
+        ["{count:Countries} shows as written: the page's map has no layer named 'Countries'"]
+    );
+    // A new title on a map page says it; another change to the page doesn't.
+    assert_eq!(run(&mut s, "presentation.updatePage", json!({"page": 0, "title": "{count:Nowhere}"})), [nowhere]);
+    for change in [json!({"page": 0, "notes": "n"}), json!({"page": 0, "seconds": 9}), json!({"page": 0, "moveTo": 1})] {
+        assert_eq!(run(&mut s, "presentation.updatePage", change.clone()), Vec::<String>::new(), "{change}");
+    }
+    // A page moved in the same change is still the one read.
+    assert_eq!(run(&mut s, "presentation.updatePage", json!({"page": 1, "title": "{count:Nowhere}", "moveTo": 0})), [nowhere]);
+    assert_eq!(run(&mut s, "edit.undo", Value::Null), Vec::<String>::new(), "undo says nothing");
+    // A blank page draws its title with no map frame.
+    let blank = s.project.presentations[0].pages.len();
+    s.run("presentation.blankPage", &Value::Null).unwrap();
+    assert_eq!(run(&mut s, "presentation.updatePage", json!({"page": blank, "title": "{count:Nowhere}"})), Vec::<String>::new());
+    // An imported presentation says each warning once, with how many map pages it is for when
+    // more than one.
+    s.run("presentation.new", &json!({"name": "Q", "title": "{count:Nowhere}"})).unwrap();
+    for title in ["{count:Nowhere}", "{count:Nowhere} {count:Elsewhere}"] {
+        s.run("presentation.mapPage", &json!({"title": title})).unwrap();
+    }
+    let text = serde_json::to_string(&s.project.presentations[1]).unwrap();
+    assert_eq!(
+        run(&mut s, "presentation.import", json!({"text": text})),
+        [
+            format!("{nowhere} (in 2 map pages)"),
+            "{count:Elsewhere} shows as written: the page's map has no layer named 'Elsewhere'".to_string(),
+        ]
+    );
+}
+
+/// The map of a layout's first frame decides its texts' figures (#2853), so a map deleted that a
+/// layout's first frame shows says what its texts lose, as it does for `{map}`; a map no first
+/// frame shows says nothing.
+#[test]
+fn layout_text_statistics_are_said_when_the_first_frames_map_is_deleted() {
+    let mut s = world();
+    s.run("map.new", &json!({"name": "Detail"})).unwrap();
+    s.run("map.new", &json!({"name": "Spare"})).unwrap();
+    s.run("map.activate", &json!({"name": "Detail"})).unwrap();
+    s.run("layout.new", &json!({"name": "L"})).unwrap();
+    s.run("layout.addElement", &json!({"kind": "text", "text": "{count:Countries} countries", "x": 10, "y": 10})).unwrap();
+    let said = |s: &mut Session, name: &str| {
+        let mark = s.notice_mark();
+        s.run("map.remove", &json!({"name": name})).unwrap();
+        s.notices_since(mark).iter().map(|n| n.text.as_str().to_string()).filter(|t| t.contains("shows as written")).collect::<Vec<_>>()
+    };
+    assert_eq!(said(&mut s, "Spare"), Vec::<String>::new());
+    assert_eq!(said(&mut s, "Detail"), ["{count:Countries} shows as written: the map of the layout's first frame is not in the project"]);
+}
+
+/// A publication's texts are stored with the line breaks the sheet draws them in, but a layer
+/// statistic (#2853) whose layer has a space in its name must not be broken at it: a text too wide
+/// for its box is kept whole and wrapped when it is drawn, as a `{map}` one is, so every token
+/// stays one and the page fills it in.
+#[test]
+fn a_publications_wrapped_text_keeps_its_statistic_tokens_whole() {
+    use rustgis_map::layout::ElementKind;
+    let mut s = world();
+    let extent = json!([-46.8, -11.6, -38.5, -2.2]);
+    let title = "{count:World Countries} ".repeat(12);
+    s.run("layout.publication", &json!({"profile": "a4-portrait", "extent": extent, "title": title.trim()})).unwrap();
+    let li = s.active_layout.unwrap();
+    let Some(ElementKind::Text { text, wrap, .. }) =
+        s.project.layouts[li].elements.iter().find(|e| e.name == "Title").map(|e| e.kind.clone())
+    else {
+        panic!("a title text")
+    };
+    assert_eq!(text.matches("{count:World Countries}").count(), 12, "{text:?}");
+    assert!(wrap, "the page wraps it when it draws");
+}
+
+/// A figure's width is only known when the page is drawn, so a publication text with a statistic is
+/// always kept whole and wrapped by the page, even one that fits its box as measured (#2853).
+#[test]
+fn a_publications_text_with_a_statistic_is_wrapped_by_the_page() {
+    use rustgis_map::layout::ElementKind;
+    let mut s = world();
+    let extent = json!([-46.8, -11.6, -38.5, -2.2]);
+    s.run("layout.publication", &json!({"profile": "a4-portrait", "extent": extent, "title": "Area {sum:Countries:pop_est}"})).unwrap();
+    let li = s.active_layout.unwrap();
+    let Some(ElementKind::Text { text, wrap, .. }) =
+        s.project.layouts[li].elements.iter().find(|e| e.name == "Title").map(|e| e.kind.clone())
+    else {
+        panic!("a title text")
+    };
+    assert_eq!(text, "Area {sum:Countries:pop_est}");
+    assert!(wrap, "its figure is as wide as its data makes it, so the page wraps it");
+}
+
+/// A publication measures its texts as the page draws them (#2853): a layer statistic by the figure it
+/// will show, as `{map}` is by the map's name, so the box is the one a text with that figure written
+/// out gets, whatever the token's length.
+#[test]
+fn a_publication_measures_a_statistic_as_its_figure() {
+    let mut s = world();
+    let extent = json!([-46.8, -11.6, -38.5, -2.2]);
+    let token = "{count:Countries}";
+    let figure = crate::render::layout::statistic_figures(s.map(), false, &[token]).remove(0).1;
+    let height = |s: &mut Session, title: &str| {
+        s.run("layout.publication", &json!({"profile": "a4-portrait", "extent": extent, "title": title, "style": "banner"})).unwrap();
+        let li = s.active_layout.unwrap();
+        s.project.layouts[li].elements.iter().find(|e| e.name == "Title").map(|e| e.h).unwrap()
+    };
+    // A line of many figures, so what each is measured as decides how many lines the title takes.
+    let words = "population of the countries ";
+    let with_token = height(&mut s, &format!("{}{token} total", format!("{words}{token} ").repeat(6)));
+    let literal = height(&mut s, &format!("{}{figure} total", format!("{words}{figure} ").repeat(6)));
+    assert_eq!(with_token, literal, "a token is measured as the {figure} it draws");
+}
+
+/// A layer renamed to a longer name must not take a text past the characters a text holds
+/// (#2853): the file would cut its tail when read again, so that text keeps the old name and the
+/// rename says so; a text that stays within the limit follows.
+#[test]
+fn renaming_a_layer_leaves_a_statistic_text_that_would_outgrow_its_limit() {
+    let mut s = world();
+    s.run("layout.new", &json!({"name": "L"})).unwrap();
+    let add = |s: &mut Session, text: String| {
+        s.run("layout.addElement", &json!({"kind": "text", "text": text, "x": 10, "y": 10})).unwrap()["element"].as_u64().unwrap() as u32
+    };
+    let full = format!("{}{{count:Countries}}", "x".repeat(4980));
+    let small = add(&mut s, "{count:Countries}".into());
+    let near = add(&mut s, full.clone());
+    let mark = s.notice_mark();
+    s.run("layer.rename", &json!({"layer": "Countries", "name": "The Countries of the whole wide world"})).unwrap();
+    let li = s.active_layout.unwrap();
+    let text = |s: &Session, id: u32| match &s.project.layouts[li].element(id).unwrap().kind {
+        rustgis_map::layout::ElementKind::Text { text, .. } => text.clone(),
+        _ => panic!("a text"),
+    };
+    assert_eq!(text(&s, small), "{count:The Countries of the whole wide world}");
+    assert_eq!(text(&s, near), full, "past the limit it keeps the old name");
+    let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.as_str().to_string()).collect();
+    assert!(said.iter().any(|n| n.contains("1 layout text(s) keep the old layer name") && n.contains("5000")), "{said:?}");
+}
+
+/// A layout with no map frame has its texts' figures drawn as written; the first frame added is the
+/// map they read from, so what it lacks is said (#2853).
+#[test]
+fn layout_text_statistics_are_said_when_a_first_frame_is_added() {
+    let mut s = world();
+    s.run("layout.new", &json!({"name": "L"})).unwrap();
+    s.run("layout.addElement", &json!({"kind": "text", "text": "{count:Nowhere} places", "x": 10, "y": 10})).unwrap();
+    let li = s.active_layout.unwrap();
+    let frame = s.project.layouts[li].first_frame().unwrap();
+    s.run("layout.removeElement", &json!({"element": frame})).unwrap();
+    let said = |s: &mut Session, id: &str, p: Value| {
+        let mark = s.notice_mark();
+        s.run(id, &p).unwrap();
+        s.notices_since(mark).iter().map(|n| n.text.as_str().to_string()).filter(|t| t.contains("shows as written")).collect::<Vec<_>>()
+    };
+    assert_eq!(
+        said(&mut s, "layout.addFrame", json!({})),
+        ["{count:Nowhere} shows as written: the map of the layout's first frame has no layer named 'Nowhere'"]
+    );
+    // A second frame is not the first: nothing changes for the texts.
+    assert_eq!(said(&mut s, "layout.addFrame", json!({})), Vec::<String>::new());
+}
+
+/// A layer renamed to a name a token can't hold (a brace ends it) must not be written into the
+/// statistics that name it: they would read another layer, or none (#2853).
+#[test]
+fn renaming_a_layer_to_a_name_with_braces_leaves_its_statistics() {
+    let mut s = world();
+    s.run("layout.new", &json!({"name": "L"})).unwrap();
+    let id = s
+        .run("layout.addElement", &json!({"kind": "text", "text": "{count:Countries} {sum:Countries:pop_est}", "x": 10, "y": 10}))
+        .unwrap()["element"]
+        .as_u64()
+        .unwrap() as u32;
+    s.run("presentation.new", &json!({"name": "P"})).unwrap();
+    s.run("presentation.mapPage", &json!({"title": "{count:Countries} places"})).unwrap();
+    let mark = s.notice_mark();
+    s.run("layer.rename", &json!({"layer": "Countries", "name": "Cities}"})).unwrap();
+    let li = s.active_layout.unwrap();
+    let text = match &s.project.layouts[li].element(id).unwrap().kind {
+        rustgis_map::layout::ElementKind::Text { text, .. } => text.clone(),
+        _ => panic!("a text"),
+    };
+    assert_eq!(text, "{count:Countries} {sum:Countries:pop_est}");
+    assert_eq!(s.project.presentations[0].pages[1].title, "{count:Countries} places");
+    let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.as_str().to_string()).collect();
+    assert!(said.iter().any(|n| n.contains("1 layout text(s) keep the old layer name") && n.contains("brace")), "{said:?}");
+    assert!(said.iter().any(|n| n.contains("1 presentation title(s) keep the old layer name") && n.contains("brace")), "{said:?}");
+}
+
 #[test]
 fn locked_layout_elements_take_no_change_until_unlocked() {
     use rustgis_map::layout::ElementKind;
@@ -49060,8 +49973,14 @@ fn raster_projection_failures_are_reported_for_zonal_statistics_and_clipping() {
 
     let mut s = world();
     let gt = GeoTransform { origin_x: 500_000.0, origin_y: 4_500_000.0, pixel_width: 1_000.0, pixel_height: -1_000.0 };
-    let raster = Raster::new("utm", 10, 10, vec![vec![7.0; 100]], gt, Crs::Epsg(32617), None, ColorHint::Gray, "Float32").unwrap();
+    let mut raster = Raster::new("utm", 10, 10, vec![vec![7.0; 100]], gt, Crs::Epsg(32617), None, ColorHint::Gray, "Float32").unwrap();
+    // What reading the raster left out, said when it was read, isn't said again of its clip.
+    raster.lost.push(rustgis_data::loss::Note::loss(rustgis_data::loss::LossCode::DroppedValue, "3 values past the range were left out"));
     let ring: Vec<_> = [(1.0, 1.0), (9.0, 1.0), (9.0, 9.0), (1.0, 9.0)]
+        .into_iter()
+        .map(|(x, y)| raster.transformer().to_lonlat(gt.to_world(x, y)).unwrap())
+        .collect();
+    let small: Vec<_> = [(2.0, 2.0), (4.0, 2.0), (4.0, 4.0), (2.0, 4.0)]
         .into_iter()
         .map(|(x, y)| raster.transformer().to_lonlat(gt.to_world(x, y)).unwrap())
         .collect();
@@ -49079,8 +49998,32 @@ fn raster_projection_failures_are_reported_for_zonal_statistics_and_clipping() {
     assert_eq!(out.value(0, out.field_index("utm_count").unwrap()), &rustgis_data::Value::Int(64));
     assert_eq!(out.value(0, out.field_index("utm_mean").unwrap()), &rustgis_data::Value::Float(7.0));
 
+    use rustgis_data::loss::LossCode;
+    let mark = s.notice_mark();
     let clip = s.run("raster.process", &json!({"layer": "utm", "operation": "clip", "polygon": "parts", "name": "clipped"})).unwrap();
     assert!(clip["messages"].to_string().contains("skipped 1 polygon part(s)"), "{clip}");
+    // The same failures are said as notices with their codes; the raster's own loss isn't repeated.
+    let said: Vec<_> = s.notices_since(mark).iter().map(|n| (n.loss(), n.text.clone())).collect();
+    assert!(said.iter().any(|(code, t)| *code == Some(LossCode::DroppedGeometry) && t.contains("skipped 1 polygon part(s)")), "{said:?}");
+    assert!(!said.iter().any(|(_, t)| t.contains("3 values past the range")), "{said:?}");
+    // Features with no polygon to clip by are skipped, counted and said as dropped features.
+    let mut mixed = Dataset::new("mixed", GeometryType::Polygon, vec![]);
+    mixed.push(Some(Geometry::Polygon(vec![vec![small.clone()]])), vec![]);
+    mixed.push(None, vec![]);
+    s.map_mut().add_layer(rustgis_map::Layer::new(0, mixed));
+    let mark = s.notice_mark();
+    let clip = s.run("raster.process", &json!({"layer": "utm", "operation": "clip", "polygon": "mixed", "name": "clipped2"})).unwrap();
+    assert!(clip["messages"].to_string().contains("skipped 1 feature(s)"), "{clip}");
+    let said: Vec<_> = s.notices_since(mark).iter().map(|n| (n.loss(), n.text.clone())).collect();
+    assert!(said.iter().any(|(c, t)| *c == Some(LossCode::DroppedFeature) && t.contains("skipped 1 feature(s)")), "{said:?}");
+    // A clean clip says nothing of a skip.
+    let mut clean = Dataset::new("clean", GeometryType::Polygon, vec![]);
+    clean.push(Some(Geometry::Polygon(vec![vec![small.clone()]])), vec![]);
+    s.map_mut().add_layer(rustgis_map::Layer::new(0, clean));
+    let mark = s.notice_mark();
+    let clip = s.run("raster.process", &json!({"layer": "utm", "operation": "clip", "polygon": "clean", "name": "clipped3"})).unwrap();
+    assert!(clip.get("messages").is_none(), "{clip}");
+    assert!(!s.notices_since(mark).iter().any(|n| n.text.contains("skipped")), "{:?}", s.notices_since(mark));
     let data = s.map().layer_by_name("clipped").unwrap().raster.as_ref().unwrap().data.as_ref().unwrap();
     assert_eq!((data.width, data.height), (8, 8));
 }
@@ -51055,9 +51998,28 @@ fn a_window_read_for_another_raster_says_what_its_header_left_out() {
     // A change says what each year's file left out, by its year, and once for both when both left
     // it out; the read, the same for both, once.
     use crate::cmd::embeddings::two_years_notes;
-    let lossy = read_window_raster(&WindowAsked::of(&format!("{lossy}/lossy.tif"), [10.0, 45.0, 10.5, 45.5], None, 1), &stop).unwrap();
+    let lossy_url = lossy;
+    let lossy = read_window_raster(&WindowAsked::of(&format!("{lossy_url}/lossy.tif"), [10.0, 45.0, 10.5, 45.5], None, 1), &stop).unwrap();
     let said = two_years_notes(&w, &lossy, (2017, 2025));
     assert!(said.iter().any(|n| n.starts_with("the 2025 file: its colour table has 384 entries")), "{said:?}");
+    // A loss the header's reader codes keeps its code through both reads' notes and the year prefix.
+    use rustgis_data::loss::{LossCode, Note};
+    let mut lossy_coded =
+        read_window_raster(&WindowAsked::of(&format!("{lossy_url}/lossy.tif"), [10.0, 45.0, 10.5, 45.5], None, 1), &stop).unwrap();
+    lossy_coded.raster.lost.push(Note::loss(LossCode::ChangedRounded, "values past f32's range were rounded"));
+    assert!(lossy_coded.notes().iter().any(|n| n.loss == Some(LossCode::ChangedRounded) && n.text.contains("rounded")));
+    assert!(w.notes().iter().all(|n| n.loss.is_none()), "a clean file codes nothing");
+    let said_coded = two_years_notes(&w, &lossy_coded, (2017, 2025));
+    assert!(
+        said_coded.iter().any(|n| n.loss == Some(LossCode::ChangedRounded) && n.text.starts_with("the 2025 file: values past")),
+        "{said_coded:?}"
+    );
+    assert!(said_coded.iter().filter(|n| n.loss.is_some()).count() == 1, "{said_coded:?}");
+    let both = two_years_notes(&lossy_coded, &lossy_coded, (2017, 2025));
+    assert!(
+        both.iter().any(|n| n.loss == Some(LossCode::ChangedRounded) && n.text.starts_with("the 2017 and 2025 files: values past")),
+        "{both:?}"
+    );
     assert!(!said.iter().any(|n| n.starts_with("the 2017")), "{said:?}");
     assert_eq!(said.iter().filter(|n| n.contains("window of the full image")).count(), 1, "{said:?}");
     let said = two_years_notes(&lossy, &w, (2017, 2025));
@@ -58519,6 +59481,9 @@ fn the_footer_lines_up_with_a_legend_at_the_right() {
         font_name: None,
         rotation: 0.0,
         wrap: false,
+        valign: Default::default(),
+        line_spacing: rustgis_map::layout::LINE_SPACING,
+        case: Default::default(),
     };
     let card = || ElementKind::Rectangle {
         fill: rustgis_map::Rgba::new(0, 0, 0, 0),
@@ -59687,10 +60652,24 @@ fn a_zarr_series_says_its_notes_though_the_read_fails() {
     let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
     assert!(err.as_ref().is_err_and(|e| e.contains("outside")), "{err:?}");
     assert!(said.iter().any(|n| n.contains("WGS 84")), "the grid note is said: {said:?}");
+    // The assumption is a loss with its code, said as one by the script's command.
+    let coded: Vec<_> = s.notices_since(mark).iter().filter(|n| n.text.contains("WGS 84")).map(|n| n.loss()).collect();
+    assert_eq!(coded, [Some(rustgis_data::loss::LossCode::AssumedCrs)]);
     let (read, notes) = crate::cmd::zarr::series_start(&s, &outside).unwrap().run(&rustgis_analysis::control::Control::stoppable());
     let _ = std::fs::remove_dir_all(dir);
     assert!(read.as_ref().is_err_and(|e| e.contains("outside")), "{read:?}");
     assert!(notes.iter().any(|n| n.contains("WGS 84")), "the pane gets the note too: {notes:?}");
+    // The pane gets the code with the text, and says it as a loss.
+    assert!(notes.iter().all(|n| n.loss == Some(rustgis_data::loss::LossCode::AssumedCrs)), "{notes:?}");
+    let mark = s.notice_mark();
+    for n in notes {
+        s.say_warning(n);
+    }
+    assert_eq!(s.notices_since(mark).iter().map(|n| n.loss()).collect::<Vec<_>>(), [Some(rustgis_data::loss::LossCode::AssumedCrs)]);
+    // A plain note stays a warning with no code.
+    s.say_warning(rustgis_data::loss::Note::plain("just so"));
+    let last = s.notices_since(mark).last().cloned().unwrap();
+    assert!(last.loss().is_none() && last.text == "just so", "{last:?}");
 }
 
 /// A point's series read off the window (opengeos/RustGIS#2282): `SeriesRun::run` gives what
@@ -59731,7 +60710,7 @@ fn a_zarr_series_read_off_the_window_stops_between_batches() {
     assert_eq!(series["dates"], answer["dates"]);
     assert_eq!(series["values"][129], json!(12908.0));
     // What reading it said, for the app to say as the command does: the grid taken as WGS 84.
-    assert!(notes.iter().any(|n| n.contains("WGS 84")), "{notes:?}");
+    assert!(notes.iter().any(|n| n.contains("WGS 84") && n.loss == Some(rustgis_data::loss::LossCode::AssumedCrs)), "{notes:?}");
     assert_eq!(control.progress(), Some((130, 130)));
     // Its looks at Cancel, counted on a whole run.
     let (p, _log) = serve();

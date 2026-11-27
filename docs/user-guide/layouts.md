@@ -40,9 +40,12 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
     datum under it, at 7 pt. A figure's title and sources belong in its caption, so they are
     left out, and the result says so.
   - **Step by step**: **Publication Layout Wizard…**, at the end of the same menu, asks for the
-    size (a sheet turned Auto, Portrait or Landscape, or a figure), the style, the texts (title,
-    the active map's name until one is typed; subtitle, note, sources and credit line, or none)
-    and the accent colour, then shows what was picked; **Create** makes the layout as the menu
+    size (a sheet turned Auto, Portrait or Landscape, or a figure), the style (each beside an
+    outline of where its title, map and footer go, and its column or panel if it has one, with
+    the accent colour picked, or else its own, where the sheet takes it, which Classic's doesn't;
+    a click on the outline picks the style), the texts (title, the active map's name until one is
+    typed; subtitle, note, sources and credit line, or none) and the accent colour, then shows
+    what was picked; **Create** makes the layout as the menu
     does. A figure goes from its size to the review, as it takes no style, texts or accent. A
     field left empty is left out (for the credit line, the dated default applies); the title is
     the exception: empty, it means no title. A layout the command refuses is said, and the wizard
@@ -472,27 +475,56 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
   a legend's title, which has no wrap, is told to add line breaks. Lines left out below a text's
   box are said as soon as they are: `layout.addElement` and `layout.update` warn how many lines
   don't fit when they set a text, its size, font or fallback font, bold, italic, alignment,
-  spacing, wrap or box, or show it, and the Format pane shows the count under **Wrap to the
-  box** (a text wrapped past the 200 lines a text draws counts them as "or more"). A text draws
-  200 lines at most, whatever its box: lines past them are said apart, with the advice to split
-  the text into more than one, since a taller box doesn't draw them. A text whose ink crosses the
-  page's edge is said in a notice of its own when one of these commands puts it there, so a text
-  both cut below its box and past the edge is told each: `layout.addElement` and `layout.update` add a text whose ink
-  crosses it, set what its lines or box are, show it, move it (`x`, `y`) or turn it (`rotation`),
-  and `layout.duplicateElement` copies it past the edge, and each advises moving it inside the
-  page, resizing it or reducing its size. A move, a turn or a copy alone says only that, not the
-  lines again; a text turned within the page, or with no letter or ink to show, says nothing.
+  spacing, line spacing, case, wrap or box, or show it, and the Format pane shows the count under
+  **Wrap to the box** (a text wrapped past the 200 lines a text draws counts them as "or more"). A
+  text draws 200 lines at most, whatever its box: lines past them are said apart, with the advice
+  to split the text into more than one, since a taller box doesn't draw them. A text whose ink
+  crosses the page's edge is said in a notice of its own when one of these commands puts it there,
+  so a text both cut below its box and past the edge is told each: `layout.addElement` and
+  `layout.update` add a text whose ink crosses it, set what its lines or box are, show it, move it
+  (`x`, `y`), turn it (`rotation`) or set its vertical alignment (`valign`), and
+  `layout.duplicateElement` copies it past the edge, and each advises moving it inside the page,
+  resizing it or reducing its size. A move, a turn, an alignment or a copy alone says only that, not
+  the lines again; a text turned within the page, or with no letter or ink to show, says nothing.
   Resizing the page (`layout.page`) measures no text, so a text a smaller page cuts is told only
   by the export and the layout view.
 - **Text** and **Dynamic Text**: `{date}`, `{time}`, `{scale}`, `{map}`, `{crs}`, `{page}`,
   `{pages}`, `{pageName}` and `{layout}` fill in when the page is drawn; the Format pane's
-  **Insert Dynamic Text** menu, under the text, lists each with what it shows. The text, its
-  size (2 to 400 points, as text graphics on the map), colour, bold, **Italic** (slanted, as water
-  and ocean names are; the built-in fonts have no italic face, so the letters are slanted 12°),
-  **Alignment** (left, center or right within the element) and **Letter spacing** in points
-  (spaced-out names such as O C E A N O, or a negative value to tighten) are the same form a text
-  on the map has in the pane; Enter ends the text and Shift+Enter starts a new line. Scripts set them with `italic`, `align` and
-  `letterSpacing` on `layout.addElement` and `layout.update`. A layout's text also takes a **Font**:
+  **Insert Dynamic Text** menu, under the text, lists each with what it shows. A layer's figures
+  fill in too (#2853): `{count:Cities}` is how many features the layer has, and `{sum:Cities:pop}`,
+  `{mean:Cities:pop}`, `{min:Cities:pop}` and `{max:Cities:pop}` add up, average or pick the least
+  or greatest number of a field, read as a chart reads its values. **Layer statistic** writes them,
+  in a layout text's **Insert Dynamic Text** menu and in **Publish › Text › Dynamic Text** (which
+  adds a text holding one): a submenu for each layer of the first map frame's map, with **Count**
+  and, under each numeric field, **Sum**, **Mean**, **Least** and **Greatest** (raster layers,
+  graphics layers and names a token can't hold are not listed). They follow the layer's
+  definition query (one that no longer compiles keeps every feature, as the map draws it), take the
+  map of the layout's first map frame (in a series, the whole layer, not the page's part of it, so
+  a definition query that reads the series page's values keeps nothing there), and are written as a
+  chart writes its values: thousands apart, up to two decimals with the zeros at the end dropped,
+  and the decimal comma when the layout uses one. Renaming the layer renames it in these tokens, as
+  it does for a chart's or table's layer (in the layouts whose first map frame shows its map, and
+  in a presentation's map pages of it); a text that a longer name would take past the characters a
+  text holds, or that a name with a brace (which a token can't hold) would break, keeps the old
+  name, and the rename says so; deleting it leaves them as written, and when layout elements still
+  name it (a text's tokens, or a chart's, table's or colorbar's layer), says how many. It also says
+  how many map series (by their index layer) and presentation map page titles (by their tokens)
+  name it. A layer read in place covers what is loaded, as a chart does, and a warning says so. A
+  token with no figure (no such layer or field, a field with no numbers, a raster layer, or a sum,
+  mean, least or greatest written without its field) stays as written, and a warning names what is
+  missing.
+  Both warnings come when the text is added or changed, or its layout is made or imported, or when
+  another map frame becomes the first (it is given another map, the one before it is deleted or
+  drawn over it, or its map is deleted), not when the page is exported. A presentation map page's
+  title is checked against the page's map when the page is added with it, when it is changed or
+  when the presentation is imported. The text, its size (2 to 400 points, as text graphics on the
+  map), colour, bold, **Italic** (slanted, as water and ocean names are; the built-in fonts have
+  no italic face, so the letters are slanted 12°), **Alignment** (left, center or right within the
+  element) and **Letter spacing** in points (spaced-out names such as O C E A N O, or a negative
+  value to tighten) are the same form a text on the map has in the pane; Enter ends the text and
+  Shift+Enter starts a new line. Scripts set them with `italic`, `align` and `letterSpacing` on
+  `layout.addElement` and `layout.update`.
+  A layout's text also takes a **Font**:
   Sans-serif (the default) or Serif, for a title or a classic atlas look. The serif is one installed
   on the computer (Georgia or Times New Roman on Windows and macOS, Noto, DejaVu or Liberation Serif
   on Linux), with its own bold and italic faces, so italic there is a true italic rather than
@@ -533,8 +565,23 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
   Scripts give the family's name: `"font": "Garamond"`, with `"fallback": "serif"` if wanted;
   `labels.fonts` lists the installed families. The project keeps the name, never a file. A PDF
   sets its text in the letters' own outlines, so it shows the family wherever it is opened, and
-  the text can still be searched and copied; no font file goes into it. **Picture** places a PNG
-  or JPEG.
+  the text can still be searched and copied; no font file goes into it.
+  **Vertical alignment** puts a text's block of lines at the **Top** of its box (the default, as
+  texts always were), in its **Middle**, or at its **Bottom**, its last line on the box's lower
+  edge: a caption under a picture, a note at a panel's foot. A block taller than its box is drawn
+  from the top whatever its alignment, so its first lines are kept and the last ones left out, as
+  for a top-aligned text, and said. **Line spacing** sets the distance between lines as a multiple
+  of the usual (0.5 to 3, default 1): tighter for a long address, looser for a title over two
+  lines. **Case** draws a text in **Upper case** or **Lower case** whatever was typed, once its
+  dynamic text is filled in (`{map}` and `{date}` too), before it wraps; the text itself is kept
+  as typed, so it can be set back to **As typed**. The layout view and every export (PNG, PDF,
+  GeoPDF, SVG) draw them alike. Scripts set `"valign": "middle"`, `"lineSpacing": 1.5` and
+  `"case": "upper"` on `layout.addElement` and `layout.update`; a name not listed or a spacing
+  outside 0.5 to 3 is refused, and `null` leaves each as it is. Each change is one undo step, and
+  a setting put back to its default is no longer saved. A project that uses them can't be opened
+  by an older RustGIS, and a layout file (`.rgislayout`) with such a text lists them in its
+  header, so an older RustGIS refuses it as well.
+  **Picture** places a PNG or JPEG.
 - **Map Series**: one page per feature of an index layer; see [Map series](#map-series) for setup,
   page names, scales and a locator.
 - Click an element to select it, drag to move, drag its handles to resize, and edit it in the
@@ -544,7 +591,8 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
   **Delete** (or **Backspace**, the delete key on a
   Mac) deletes the selected element, and **Ctrl+D** (**⌘D** on a Mac) duplicates it: the copy is
   placed 5 mm down and to the right, on top, and selected. The **arrow keys** nudge it 1 mm, or
-  10 mm with **Shift**, and keep it moving while held; a run of nudges is one step to undo.
+  10 mm with **Shift**, and keep it moving while held; a run of nudges is one step to undo. After
+  a click or a scroll in the attribute table, the arrows move between its cells instead.
   **Right-click** an element to select it and open a menu of Duplicate, Delete, the four Arrange
   steps and, on a map frame, **Zoom Frame** (the map view's extent, as a double-click does).
 - **Arrange**: elements later in the layout are drawn over earlier ones, and a click picks the one
@@ -766,7 +814,8 @@ The locator outlines the main frame's changing extent as the series turns its pa
 **Export Layout** writes all pages to PDF by default, but only the **first 500** when there are
 more, with a warning. Split longer books' index data into layers of at most 500 features.
 `layout.export` with `"allPages":false` writes only the current PDF page; PNG and SVG always
-write the current page.
+write the current page. When the index layer is no longer in the series frame's map (it was
+removed, say), the PDF holds only the current page, and the export says so.
 
 ### Mark the page's own feature
 

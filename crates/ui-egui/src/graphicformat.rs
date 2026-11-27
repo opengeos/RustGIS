@@ -126,14 +126,18 @@ pub fn show(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) {
         align: Some(&mut align),
         wrap: None,
         warning: None,
+        valign: None,
+        line_spacing: None,
+        case: None,
         letter_spacing: Some(&mut spacing),
         font: None,
         font_name: None,
         named_fonts: false,
         select,
     };
-    let settled = crate::textform::section(ui, "Text", |ui| crate::textform::show(ui, ("graphic_format", k), &[graphics::TOKENS], fields))
-        .unwrap_or_default();
+    let settled =
+        crate::textform::section(ui, "Text", |ui| crate::textform::show(ui, ("graphic_format", k), &[graphics::TOKENS], Vec::new, fields))
+            .unwrap_or_default();
     let save = |app: &mut RustGisApp, change: serde_json::Value| {
         let mut p = json!({"layer": layer, "row": row});
         if let (Some(p), Some(c)) = (p.as_object_mut(), change.as_object()) {
