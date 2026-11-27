@@ -937,10 +937,14 @@ pub fn shortcuts(app: &mut RustGisApp, ctx: &egui::Context) {
             {
                 continue;
             }
+            // The press that the shortcut takes, if it isn't only a held key's repeats, and the
+            // pane that was in use as it came.
+            let press = crate::inuse::press(app, b.chord.key, Some(b.chord.modifiers()));
+            let key_pane = press.map_or(pane, |press| press.pane);
             // Select All is the text's while a text field has the focus, and is left alone where
             // there are no features to select: in a layout, in ModelBuilder and in a standalone
             // table's view.
-            if b.command == "select.all" && select_all_left_alone(app, pane, typing || text_field) {
+            if b.command == "select.all" && select_all_left_alone(app, key_pane, typing || text_field) {
                 continue;
             }
             // Duplicating needs a selected layout element, and not a text field being typed in;
@@ -953,8 +957,6 @@ pub fn shortcuts(app: &mut RustGisApp, ctx: &egui::Context) {
             if element && !b.chord.command && matches!(b.chord.key, Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp | Key::ArrowDown) {
                 continue;
             }
-            // The press that the shortcut takes, if it isn't only a held key's repeats.
-            let press = crate::inuse::press(app, b.chord.key, Some(b.chord.modifiers()));
             if i.consume_shortcut(&KeyboardShortcut::new(b.chord.modifiers(), b.chord.key)) {
                 let (id, params) = (b.command.clone(), b.params.clone());
                 match press {
@@ -1001,7 +1003,7 @@ pub fn shortcuts(app: &mut RustGisApp, ctx: &egui::Context) {
             // Clipboard keys arrive as events, not key presses. In the layer list they act on the
             // layers a click picks, so one that came while a click was under way waits for the
             // click to be taken, as Delete does.
-            let mut nth = 0;
+            let (mut nth, mut waits) = (0, false);
             for e in &i.events {
                 let (id, params) = match e {
                     egui::Event::Copy => ("ui.copy", Value::Null),
@@ -1011,7 +1013,9 @@ pub fn shortcuts(app: &mut RustGisApp, ctx: &egui::Context) {
                 };
                 let (key_pane, after_click) = crate::inuse::clipboard(app, nth).unwrap_or((pane, false));
                 nth += 1;
-                if key_pane == Pane::Layers && after_click {
+                // Once one waits, those after it wait too, so they run in the order they came.
+                waits |= key_pane == Pane::Layers && after_click;
+                if waits {
                     late.push(Late { id: id.into(), params, pane: key_pane, chord: None });
                 } else {
                     run.push((id.into(), params, key_pane));

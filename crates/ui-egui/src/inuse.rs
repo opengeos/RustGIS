@@ -679,6 +679,11 @@ mod tests {
         // Text copied elsewhere since: the layers aren't the last thing copied any more.
         clip(&mut h, Event::Paste("something else".into()));
         assert_eq!(layer_names(&h), before, "a stale copy of layers isn't pasted");
+        // Another layer copied by a script since: the clipboard still names Rivers, which isn't
+        // what a paste would add.
+        h.state_mut().run("layer.copy", json!({"layer": "Cities"})).unwrap();
+        clip(&mut h, Event::Paste("Rivers".into()));
+        assert_eq!(layer_names(&h), before, "the clipboard names other layers than the ones copied");
 
         // Features copied since: Paste in the list adds them, not the layer copied before.
         let features = h.state_mut().run("edit.copy", Value::Null).unwrap()["text"].as_str().unwrap().to_string();

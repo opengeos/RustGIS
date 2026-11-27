@@ -966,24 +966,26 @@ fn paste_label(app: &RustGisApp) -> &'static str {
 /// Copies layers (`layer.copy` with `params`) and puts their names on the clipboard as text, one a
 /// line: a paste elsewhere gives the names, and a Paste key in the layer list can tell whether the
 /// layers are still the last thing copied ([`pastes_copied_layers`]). A copy with no layer in it
-/// (an empty group) leaves the clipboard alone. Whether they were copied.
-pub(crate) fn copy_layers(app: &mut RustGisApp, params: Value) -> bool {
-    let Ok(copied) = app.run("layer.copy", params) else { return false };
+/// (an empty group) puts no text there, so the Paste key doesn't take it; the menu's Paste does.
+/// A copy refused is said by `run`.
+pub(crate) fn copy_layers(app: &mut RustGisApp, params: Value) {
+    let Ok(copied) = app.run("layer.copy", params) else { return };
     let names: Vec<&str> = copied["layers"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
-    let names = names.join("\n");
-    app.ui.layers_copied_as = (!names.trim().is_empty()).then(|| names.clone());
-    if app.ui.layers_copied_as.is_some() {
-        app.ui.copy_out = Some(names);
+    if !names.is_empty() {
+        app.ui.copy_out = Some(names.join("\n"));
     }
-    true
 }
 
 /// Whether a Paste key in the layer list, with `text` on the clipboard, pastes the copied layers:
-/// while the clipboard still holds what the last copy of layers put there (line ends aside, which
-/// a clipboard may change). Features or text copied since are the newer copy.
+/// while the clipboard holds the names of the layers copied (line ends aside, which a clipboard
+/// may change). Features or text copied since are the newer copy, and layers a script copied
+/// since aren't the ones the clipboard names.
 pub(crate) fn pastes_copied_layers(app: &RustGisApp, text: &str) -> bool {
-    let lines = |text: &str| text.lines().map(str::trim_end).filter(|line| !line.is_empty()).map(str::to_owned).collect::<Vec<_>>();
-    app.session.layer_clipboard.is_some() && app.ui.layers_copied_as.as_deref().is_some_and(|names| lines(names) == lines(text))
+    let pasted: Vec<&str> = text.lines().map(str::trim_end).filter(|line| !line.is_empty()).collect();
+    app.session
+        .layer_clipboard
+        .as_ref()
+        .is_some_and(|copy| !copy.layers.is_empty() && copy.layers.iter().map(|l| l.name.trim_end()).eq(pasted.iter().copied()))
 }
 
 /// Where `layer.paste` puts the copies when they are pasted on layer `id`: above it, or at the

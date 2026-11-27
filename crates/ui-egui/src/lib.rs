@@ -1189,9 +1189,6 @@ pub struct UiState {
     pub dynamic_text: Option<&'static str>,
     /// Text to put on the system clipboard at the end of the frame.
     pub copy_out: Option<String>,
-    /// The text the last copy of layers put on the clipboard (their names): while the clipboard
-    /// still holds it, a Paste key in the layer list pastes those layers.
-    pub(crate) layers_copied_as: Option<String>,
     /// A web page to open at the end of the frame.
     pub open_url: Option<String>,
     /// An image to put on the system clipboard at the end of the frame.
@@ -1284,7 +1281,6 @@ impl Default for UiState {
             pane_rects: [None; 2],
             in_use: inuse::InUse::default(),
             copy_out: None,
-            layers_copied_as: None,
             open_url: None,
             copy_image: None,
             pending_picture: None,
