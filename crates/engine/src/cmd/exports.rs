@@ -146,7 +146,10 @@ fn for_download<'a>(command: &str, p: &'a Value) -> Result<(Cow<'a, Value>, Vec<
 /// it wrote when the front end acknowledges it.
 pub(crate) fn write_here(s: &mut Session, p: &Value, command: &str) -> CmdResult {
     let &(_, name, start) = IN_BACKGROUND.iter().find(|(c, ..)| *c == command).ok_or_else(|| format!("{command} isn't an export"))?;
-    let (p, renamed) = if s.downloads_files() { for_download(command, p)? } else { (Cow::Borrowed(p), Vec::new()) };
+    // Only an export that takes a path is named after it (Publish to Source writes the layer's
+    // own source, and says itself what the browser can't do).
+    let takes_path = s.registry.get(command).and_then(|c| c.param_keys()).is_some_and(|keys| keys.contains(&"path"));
+    let (p, renamed) = if s.downloads_files() && takes_path { for_download(command, p)? } else { (Cow::Borrowed(p), Vec::new()) };
     let owner = s.continuation()?;
     owner.check()?;
     let current = owner.clone();

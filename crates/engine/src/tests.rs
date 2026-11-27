@@ -38958,6 +38958,8 @@ fn params_name_every_key_a_command_reads() {
         ("gp.zonalStats", "input"),
         ("gp.zonalStats", "target"),
         ("profile.alongSelected", "row"),
+        // `exports::write_here` names a browser download after `path` only for exports that take one.
+        ("source.publish", "path"),
         ("sources.remove", "name"),
         ("sources.remove", "extra"),
     ];
