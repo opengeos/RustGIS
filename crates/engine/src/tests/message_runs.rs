@@ -3,32 +3,33 @@
 use super::*;
 
 #[test]
-fn a_commands_messages_remember_its_run_and_undo_reaches_back_to_before_it() {
+fn a_commands_messages_remember_its_run_and_undo_reaches_back_past_it() {
     let mut s = world();
     s.run("layer.addDataText", &json!({"fileName": "records.csv", "text": "n\n1\n2\n"})).unwrap();
     s.run("edit.enable", &json!({"on": true})).unwrap();
-    let loss_records = |s: &Session| -> Vec<rustgis_data::diagnostics::Record> {
-        s.diagnostics.records().into_iter().filter(|r| r.loss.is_some()).collect()
+    let last_run = |s: &Session| -> rustgis_data::diagnostics::Run {
+        s.diagnostics.records().into_iter().rev().find(|r| r.loss.is_some()).and_then(|r| r.run).expect("a coded message from a run")
     };
     s.run("edit.calculateField", &json!({"table": "records", "field": "n", "expression": "n + 1.5"})).unwrap();
-    let first = loss_records(&s);
-    let [cut] = first.as_slice() else { panic!("one coded message: {first:?}") };
-    assert_eq!(cut.source, "edit.calculateField");
-    let run = cut.run.clone().expect("said by a command run");
-    assert_eq!(run.target.as_deref(), Some("records"));
-    assert_eq!(s.undo_steps_to(run.before), Some(1), "one step back to before it");
+    let first = last_run(&s);
+    assert_eq!(first.target.as_deref(), Some("records"));
+    let after = first.after.expect("finished");
+    assert_ne!(after, first.before, "it changed the project");
+    assert_eq!(s.undo_steps_back_past(after), Some(1), "one step back past it");
 
     s.run("edit.calculateField", &json!({"table": "records", "field": "n", "expression": "n + 0.5"})).unwrap();
-    let both = loss_records(&s);
-    let later = both.last().and_then(|r| r.run.clone()).unwrap();
-    assert_ne!(later.id, run.id, "each run is its own");
-    assert_eq!(s.undo_steps_to(run.before), Some(2), "back past the later run too");
-    assert_eq!(s.undo_steps_to(later.before), Some(1));
+    let later = last_run(&s);
+    assert_ne!(later.id, first.id, "each run is its own");
+    assert_eq!(s.undo_steps_back_past(after), Some(2), "back past the later run too");
+    assert_eq!(s.undo_steps_back_past(later.after.unwrap()), Some(1));
 
-    // Undone back to before the first run, its state is the current one.
+    // Both undone, then another edit from the state before the first: the first run's change is
+    // gone from the history, so its message offers nothing, not the new edit.
     s.run("edit.undo", &json!({})).unwrap();
     s.run("edit.undo", &json!({})).unwrap();
-    assert_eq!(s.undo_steps_to(run.before), Some(0));
+    assert_eq!(s.state(), first.before);
+    s.run("edit.calculateField", &json!({"table": "records", "field": "n", "expression": "n * 2"})).unwrap();
+    assert_eq!(s.undo_steps_back_past(after), None);
     // A message no command said has no run.
     s.notify("said by the app", false);
     assert!(s.diagnostics.records().last().is_some_and(|r| r.run.is_none()));

@@ -50,6 +50,8 @@ pub enum Filter {
 }
 
 impl Filter {
+    /// Whether the pane's filter shows `record`: by severity, as a network failure, or as a message
+    /// that reports lost data (one with a loss code).
     pub fn matches(self, record: &Record) -> bool {
         match self {
             Self::All => true,
@@ -113,9 +115,12 @@ pub struct Record {
 pub struct Run {
     /// Counts the session's runs, so the messages of one run are told from the next one's.
     pub id: u64,
-    /// The project's state before the run ([`Session::history_position`] in the engine): Undo
-    /// returns to it while it is still in the history.
+    /// The project's state before the run (`Session::state` in the engine).
     pub before: u64,
+    /// The state the run left the project in, once it has finished: another than `before` when it
+    /// changed the project. A change makes a state no other change has, so the history finds the
+    /// run's own step by it, even after an Undo and another edit from the same state before.
+    pub after: Option<u64>,
     /// What the run worked on, as its parameters name it (a layer, a table, a file).
     pub target: Option<String>,
 }
@@ -255,6 +260,19 @@ impl History {
 
     fn retain(&self, record: Record) {
         store(&mut lock(&self.0), record);
+    }
+
+    /// Records the state the run `id` left the project in ([`Run::after`]) on the messages it said,
+    /// which are the newest ones with a run.
+    pub fn finish_run(&self, id: u64, after: u64) {
+        let mut state = lock(&self.0);
+        for record in state.records.iter_mut().rev() {
+            match &mut record.run {
+                Some(run) if run.id == id => run.after = Some(after),
+                Some(_) => break,
+                None => {}
+            }
+        }
     }
 
     /// Oldest first; both the count and every string in this independent snapshot are bounded.

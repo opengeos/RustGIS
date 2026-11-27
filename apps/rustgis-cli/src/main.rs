@@ -59,7 +59,7 @@ fn usage() -> ExitCode {
 /// `explain [CODE]`: what a loss code means and what to do about it, from the text built into
 /// RustGIS, so it reads offline, as a compiler explains its error codes; with no code, every code.
 fn explain(code: Option<&str>) -> Result<(), String> {
-    let Some(id) = code.filter(|c| !c.starts_with("--")) else {
+    let Some(id) = code else {
         for code in LossCode::ALL {
             let spec = code.spec();
             println!("{:<28} {}", spec.id, spec.meaning);
@@ -1065,7 +1065,11 @@ fn cli() -> ExitCode {
             print(&out);
             Ok(())
         }
-        "explain" => explain(args.get(1).map(String::as_str)),
+        "explain" => match args.get(1..).unwrap_or_default() {
+            [] => explain(None),
+            [code] if !code.starts_with("--") => explain(Some(code)),
+            _ => Err("explain takes one loss code, or none to list them all".into()),
+        },
         "skills" => skills(&args),
         "mcp-register" => mcp_register(&args),
         "commands" => {

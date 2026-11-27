@@ -95,15 +95,17 @@ fn run_heading(ui: &mut Ui, app: &mut RustGisApp, record: &Record, t: &Tokens) {
         }
         ui.label(RichText::new(time(record.timestamp_ms)).small().monospace().color(t.text_dim));
     });
-    // Only a run that changed the project, whose state before is still in the history.
-    let steps = app.session.undo_steps_to(run.before).filter(|steps| *steps > 0);
+    // Only a run that changed the project, whose change is still in the history.
+    let steps = run.after.filter(|after| *after != run.before).and_then(|after| app.session.undo_steps_back_past(after));
     if let Some(steps) = steps {
         let hover = if steps == 1 {
             tl!("Takes back this command's changes").to_string()
         } else {
             crate::i18n::fmt("Takes back this command's changes and the {n} after it", &[("n", &(steps - 1).to_string())])
         };
-        if ui.small_button(tl!("Undo to before this")).on_hover_text(hover).clicked() {
+        // One history jump at a time: Undo History's own, or another message's.
+        let free = app.ui.history_jump.is_none();
+        if ui.add_enabled(free, egui::Button::new(tl!("Undo to before this")).small()).on_hover_text(hover).clicked() {
             app.ui.history_jump = Some(crate::chrome::HistoryJump::undo(app.session.history_position(), steps));
             ui.ctx().request_repaint();
         }
