@@ -466,3 +466,34 @@ fn a_publication_legend_title_wider_than_its_box_is_named() {
     let (_, r) = sheet(json!({"legend": {"title": "Key"}}));
     assert!(!r["warnings"].to_string().contains("wider than its box"), "{}", r["warnings"]);
 }
+
+#[test]
+fn a_publication_legend_does_not_wait_for_a_layer_it_leaves_out() {
+    // A raster read in place from a host that never answers: still reading throughout.
+    let host = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let mut s = Session::new(Project::default());
+    let address = format!("http://{}/depth.tif", host.local_addr().unwrap());
+    let mut raster = rustgis_map::raster::RasterLayer::opening_in_place(address);
+    // Drawn by classes, so the legend would list it.
+    raster.style.renderer = rustgis_map::raster::RasterRenderer::Colormap;
+    s.map_mut().add_raster("Depth".to_string(), raster);
+    let mut said = |legend: Value| {
+        let p = json!({"profile": "a4-portrait", "extent": [0, 0, 10, 10], "colorbar": "none", "legend": legend});
+        s.run("layout.publication", &p).unwrap()["warnings"].to_string()
+    };
+    let waited = said(json!({"title": "Key"}));
+    assert!(waited.contains("classes aren't known yet"), "{waited}");
+    let left_out = said(json!({"title": "Key", "exclude": ["Depth"]}));
+    assert!(!left_out.contains("classes aren't known yet") && left_out.contains("the legend lists nothing"), "{left_out}");
+}
+
+#[test]
+fn a_publication_legend_lists_the_layers_asked_to_leave_out_first() {
+    // A loaded project keeps the first `MAX_LEGEND_EXCLUDED` names: those asked come first.
+    let mut s = world();
+    let name = "Cities".to_string();
+    s.run("layout.publication", &json!({"extent": [0, 40, 20, 55], "legend": {"exclude": [name.clone()]}})).unwrap();
+    let out = legend(&s).2;
+    assert!(out.len() > 1, "a context layer too: {out:?}");
+    assert_eq!(out[0], name);
+}

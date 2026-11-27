@@ -120,10 +120,11 @@ pub(super) fn publication_legend(p: &Value, map: &Map) -> Result<Option<Publicat
 }
 
 impl PublicationLegend {
-    /// The layers the legend leaves out: the `context` ones, none of them among those asked, and
-    /// those asked.
+    /// The layers the legend leaves out: those asked, and the `context` ones, none of them among
+    /// those asked. The asked ones go first, as a loaded project cuts a list past
+    /// `MAX_LEGEND_EXCLUDED` at its end.
     pub(super) fn left_out(&self, context: &[String]) -> Vec<String> {
-        [context, &self.exclude].concat()
+        [&self.exclude, context].concat()
     }
 
     /// The legend's size in each number of columns the placement tries, in mm, its text `text_pt`

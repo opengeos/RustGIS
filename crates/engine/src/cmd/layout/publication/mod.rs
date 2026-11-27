@@ -1111,7 +1111,11 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
             (fw * 0.3, fh * 0.25)
         }
     };
-    let listed = legend.is_some() && s.map().layers.iter().any(|l| s.map().shows(l) && crate::render::layout::legend_lists(l));
+    // Whether a layer the legend isn't asked to leave out may have rows in it.
+    let listed = legend.as_ref().is_some_and(|legend| {
+        let asked_out = |name: &str| legend.exclude.iter().any(|n| n.eq_ignore_ascii_case(name));
+        s.map().layers.iter().any(|l| s.map().shows(l) && crate::render::layout::legend_lists(l) && !asked_out(&l.name))
+    });
     if reading && listed {
         (cw, ch) = (cw.max(fw * 0.3), ch.max(fh * 0.25));
         sizes = None;
