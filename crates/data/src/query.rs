@@ -801,16 +801,23 @@ fn lex_first(s: &str, tolerant: bool, most: usize) -> Result<Lexed, String> {
 }
 
 /// The token of a number literal, refusing one that can't be held exactly rather than rounding it.
-/// A literal of digits only is an exact `i64`, or refused past `i64::MAX`. Any other literal is a
+/// A literal of digits only is an exact `i64`; past `i64::MAX`, a decimal that holds it exactly, or
+/// refused. Any other literal is a
 /// decimal (`f64`), refused only when it would lose its whole-number digits: it has 16 or more
 /// of them and a decimal doesn't hold its digits (`9007199254740993.0`). One that merely has no
 /// exact binary form (`0.1`) or many fraction digits (`0.12345678901234567891`) is read as the
 /// nearest decimal, as every number written in decimal is.
 fn number_token(t: &str) -> Result<Tok, String> {
     if t.bytes().all(|b| b.is_ascii_digit()) {
-        return t.parse::<i64>().map(Tok::Int).map_err(|_| {
-            format!("the whole number {t} is too large to hold exactly (the most is {}); write it as a decimal, such as 1e19", i64::MAX)
-        });
+        if let Ok(i) = t.parse::<i64>() {
+            return Ok(Tok::Int(i));
+        }
+        // Past `i64::MAX`, a whole number is a decimal when one holds it exactly (2^63 does), and
+        // refused when it would be rounded.
+        if Value::Text(t.to_string()).rounds_as_double() {
+            return Err(format!("the whole number {t} has more digits than a number holds exactly, so it would be rounded"));
+        }
+        return t.parse().map(Tok::Num).map_err(|_| format!("bad number '{t}'"));
     }
     let n: f64 = t.parse().map_err(|_| format!("bad number '{t}'"))?;
     let mantissa = t.split(['e', 'E']).next().unwrap_or_default();
