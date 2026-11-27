@@ -13,6 +13,7 @@ pub(super) fn review_step(ui: &mut egui::Ui, d: &Draft) {
         };
         row(tl!("Size"), size_label(&d.size));
         if d.figure() {
+            row(tl!("Placement"), d.arrangement.label());
             return;
         }
         let turned = match d.orientation {
@@ -23,6 +24,7 @@ pub(super) fn review_step(ui: &mut egui::Ui, d: &Draft) {
         row(tl!("Orientation"), turned.to_string());
         let style = crate::ribbon::publication_style(&d.style).map(|s| s.0.to_string()).unwrap_or_else(|| d.style.clone());
         row(tl!("Style"), style);
+        row(tl!("Placement"), d.arrangement.label());
         row(tl!("Title"), or_none(&d.title));
         row(tl!("Subtitle"), or_none(&d.subtitle));
         row(tl!("Note"), or_none(&d.note));

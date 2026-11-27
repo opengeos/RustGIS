@@ -43,10 +43,13 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
     size (a sheet turned Auto, Portrait or Landscape, or a figure), the style (each beside an
     outline of where its title, map and footer go, and its column or panel if it has one, with
     the accent colour picked, or else its own, where the sheet takes it, which Classic's doesn't;
-    a click on the outline picks the style), the texts (title, the active map's name until one is
-    typed; subtitle, note, sources and credit line, or none) and the accent colour, then shows
-    what was picked; **Create** makes the layout as the menu
-    does. A figure goes from its size to the review, as it takes no style, texts or accent. A
+    a click on the outline picks the style), the placement, the texts (title, the active map's
+    name until one is typed; subtitle, note, sources and credit line, or none) and the accent
+    colour, then shows what was picked; **Create** makes the layout as the menu does. The
+    **placement** is the arrangement (below): `best`, the favourite, one by name or one saved, or
+    **Custom**, a corner for each surround (a corner another has swaps the two); a chosen one can
+    be made the favourite, once the layout is made. A figure goes from its size to its placement
+    and the review, as it takes no style, texts or accent. A
     field left empty is left out (for the credit line, the dated default applies); the title is
     the exception: empty, it means no title. A layout the command refuses is said, and the wizard
     stays open.
