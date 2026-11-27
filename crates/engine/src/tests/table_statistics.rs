@@ -143,10 +143,10 @@ fn whole_numbers_added_with_decimals_past_2_53_say_how_many_are_rounded() {
     let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
     assert_eq!(said, ["w: 2 whole number(s) in 'x' past 2^53 are rounded in the statistics, because the column also holds decimals"]);
     assert!(s.notices_since(mark).iter().all(|n| n.loss() == Some(rustgis_data::loss::LossCode::ChangedRounded)), "each with its code");
-    // The same column with values a decimal holds: nothing said.
-    let mut s = layer_of("w", fields, vec![vec![V::Int(5)], vec![V::Float(0.5)]]);
+    // The same column with values a decimal holds, past 2^53 too: nothing said.
+    let mut s = layer_of("w", fields, vec![vec![V::Int(5)], vec![V::Float(0.5)], vec![V::Int(1 << 54)]]);
     let mark = s.notice_mark();
-    assert_eq!(stats(&mut s, json!({"layer": "w", "field": "x"}))["sum"], 5.5);
+    assert_eq!(stats(&mut s, json!({"layer": "w", "field": "x"}))["count"], 3);
     assert!(s.notices_since(mark).is_empty());
 }
 

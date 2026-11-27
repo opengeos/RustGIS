@@ -169,7 +169,8 @@ impl Numbers {
     fn add_whole(&mut self, i: i64) {
         self.add_float(i as f64);
         self.ints += 1;
-        if i.unsigned_abs() > EXACT_IN_F64 {
+        // Past 2^53, a whole number a decimal still holds exactly (2^54) isn't rounded.
+        if i.unsigned_abs() > EXACT_IN_F64 && (i as f64) as i128 != i128::from(i) {
             self.big += 1;
         }
         self.isum += i128::from(i);
