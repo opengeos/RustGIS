@@ -154,6 +154,18 @@ fn whole_numbers_added_with_decimals_past_2_53_say_how_many_are_rounded() {
     let mark = s.notice_mark();
     stats(&mut s, json!({"layer": "w", "field": "x"}));
     assert!(s.notices_since(mark).is_empty(), "an exact sum says nothing");
+    // So is the exact sum given where the running one overflows.
+    let huge = || vec![V::Float(f64::MAX), V::Float(f64::MAX), V::Float(-f64::MAX), V::Float(-f64::MAX), V::Int(1 << 54)];
+    let mut rows: Vec<Vec<V>> = huge().into_iter().map(|v| vec![v]).collect();
+    rows.push(vec![V::Float(0.5)]);
+    let mut s = layer_of("w", fields.clone(), rows);
+    let mark = s.notice_mark();
+    stats(&mut s, json!({"layer": "w", "field": "x"}));
+    assert!(
+        s.notices_since(mark).iter().any(|n| n.loss() == Some(rustgis_data::loss::LossCode::ChangedRounded)),
+        "{:?}",
+        s.notices_since(mark)
+    );
     // The same column with values a decimal holds: nothing said.
     let mut s = layer_of("w", fields, vec![vec![V::Int(5)], vec![V::Float(0.5)]]);
     let mark = s.notice_mark();

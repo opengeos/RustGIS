@@ -368,7 +368,11 @@ fn gather(ds: &Dataset, t: &Target) -> Result<Done, String> {
                     t.layer, n.inexact, f.name
                 ),
             ));
-        } else if !whole && n.big > 0 && n.sum.is_finite() && !n.wide_sum.holds(n.sum) {
+        } else if !whole && n.big > 0 && {
+            // The sum the answer gives: the running one, or the exact one where that overflowed.
+            let given = if n.sum.is_finite() { n.sum } else { n.wide_sum.total() };
+            given.is_finite() && !n.wide_sum.holds(given)
+        } {
             // Each is held exactly, but their sum with the decimals isn't (5 + 0.5 + 2^54): rounded,
             // and checked against the exact sum, so a sum that comes out exact says nothing.
             notices.push(Note::loss(
