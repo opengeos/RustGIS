@@ -12988,6 +12988,74 @@ fn a_fit_that_cannot_make_a_legend_fit_says_so() {
     );
 }
 
+/// A legend whose fit made it fit when it was set, and no longer does once a layer is added to its
+/// map, says so at export, once an export, in the words setting the fit gave: as PNG, PDF and SVG,
+/// and as the page the Assistant is shown. While it still fits, an export says nothing of it; nor,
+/// as before, does a manual legend's.
+#[test]
+fn a_fitted_legend_that_no_longer_fits_says_so_at_export() {
+    use std::collections::BTreeMap;
+    let mut s = world();
+    s.run("layout.new", &json!({"page": "a4", "orientation": "landscape", "template": "map"})).unwrap();
+    let frame = s.project.layouts[0].first_frame().unwrap();
+    let labels = BTreeMap::new();
+    let at = |pt: f64| crate::render::layout::LegendAsked {
+        all_classes: true,
+        hide_other: false,
+        show_no_data: false,
+        layer_names: true,
+        text_size: pt,
+        exclude: &[],
+        labels: &labels,
+    };
+    let point = r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{},"geometry":{"type":"Point","coordinates":[2.35,48.85]}}]}"#;
+    let added = json!({"fileName": "extra.geojson", "text": point, "name": "Extra"});
+    // Its rows in one column at 4 points, and at 9, without the layer and with it.
+    let (small, big) = (legend_sizes(&mut s, frame, &at(4.0))[0], legend_sizes(&mut s, frame, &at(9.0))[0]);
+    s.run("layer.addDataText", &added).unwrap();
+    let more = legend_sizes(&mut s, frame, &at(4.0))[0];
+    s.run("layer.remove", &json!({"layer": "Extra"})).unwrap();
+    assert_eq!(legend_sizes(&mut s, frame, &at(4.0))[0], small, "the layer gone, its rows are as they were");
+    assert!(more.1 > small.1, "the layer adds a row: {small:?} {more:?}");
+    // As wide as any of them, and as tall as its title and half-way between its rows at 4 points
+    // without the layer and with it: shrunk, they fit without it, and not with it.
+    let title = crate::render::layout::legend_title_mm(9.0);
+    let (w, h) = (big.0.max(more.0) + 5.0, title + (small.1 + more.1) / 2.0);
+    let dir = std::env::temp_dir().join(format!("rustgis-unfitted-legend-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    // What each export says of the legend's box.
+    let exports = |s: &mut Session| -> Vec<(&'static str, Vec<String>)> {
+        let mut told = Vec::new();
+        for ext in ["png", "pdf", "svg"] {
+            let mark = s.notice_mark();
+            s.run("layout.export", &json!({"path": dir.join(format!("page.{ext}")), "dpi": 48})).unwrap();
+            told.push((ext, legend_said(s, mark)));
+        }
+        let mark = s.notice_mark();
+        crate::cmd::layout::layout_png(s, 0, 48.0, None).unwrap();
+        told.push(("view", legend_said(s, mark)));
+        told
+    };
+    // The exports that said something of it.
+    let told = |s: &mut Session| exports(s).into_iter().filter(|(_, said)| !said.is_empty()).collect::<Vec<_>>();
+    let mark = s.notice_mark();
+    let legend = json!({"kind": "legend", "allClasses": true, "fit": "adjustSize", "x": 10, "y": 10, "w": w, "h": h});
+    let id = s.run("layout.addElement", &legend).unwrap()["element"].clone();
+    assert_eq!(legend_said(&s, mark), Vec::<String>::new(), "it fits as added");
+    let said = told(&mut s);
+    assert!(said.is_empty(), "still fitting, its exports say nothing of it: {said:?}");
+    s.run("layer.addDataText", &added).unwrap();
+    let expected = "the legend lists more than fits its box even with its text shrunk to 4 points: its last rows or the ends of long labels are left out";
+    for (ext, said) in exports(&mut s) {
+        assert_eq!(said, [expected], "{ext}");
+    }
+    // Made manual, its exports say nothing of its box, as before legends had a fit.
+    s.run("layout.update", &json!({"element": id, "fit": "manual"})).unwrap();
+    let said = told(&mut s);
+    assert!(said.is_empty(), "a manual legend's exports: {said:?}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// A hand-edited project whose legend has a fit or layer-names value of the wrong kind or not a
 /// name opens, the value repaired, and says so; columns past three are kept.
 #[test]

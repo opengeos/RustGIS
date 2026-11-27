@@ -3819,6 +3819,24 @@ fn say_legend_fit(s: &mut Session, li: usize, id: u32) {
     }
 }
 
+/// Says what the legends under a fit that an export drew still lose in their boxes
+/// ([`rustgis_render::layout::unfitted_legends`]), in the words setting the fit gave
+/// ([`legend_fit_warnings`]), each notice once: a fit can stop succeeding after it is set, as when
+/// a layer is added to its map. A manual legend is not listed, so its export says what it did.
+fn say_unfitted_legends(s: &mut Session, unfitted: &[rustgis_render::layout::UnfittedLegend]) {
+    let mut said: Vec<String> = Vec::new();
+    for l in unfitted {
+        for notice in legend_fit_warnings(l.fit, l.columns, (l.too_wide, l.too_tall)) {
+            if !said.contains(&notice) {
+                said.push(notice);
+            }
+        }
+    }
+    for notice in said {
+        s.warn(notice);
+    }
+}
+
 /// Says how many lines of the text `id` of the layout `li` don't fit its box (#2346), as the
 /// layout view and an export count them: on the series' current page, measured at 300 dpi as a
 /// wrapped text is broken, and, a notice of its own, that its ink runs off the page (#2703). A
@@ -6658,13 +6676,20 @@ pub fn layout_png(s: &mut Session, li: usize, dpi: f64, region: Option<[f64; 4]>
     if let Some(r) = region {
         clipped.retain(|(id, _)| layout.element(*id).is_some_and(|e| rustgis_render::layout::meets(e, r, 0.0)));
     }
-    let img = super::share::saying_shadows(s, "The layout", |s| match region {
-        Some(r) => rustgis_render::layout::render_region(&layout, &mut s.project.maps, dpi, &info, r),
-        None => rustgis_render::layout::render(&layout, &mut s.project.maps, dpi, &info),
-    })?;
+    let (img, mut unfitted) = rustgis_render::layout::unfitted_legends(|| {
+        super::share::saying_shadows(s, "The layout", |s| match region {
+            Some(r) => rustgis_render::layout::render_region(&layout, &mut s.project.maps, dpi, &info, r),
+            None => rustgis_render::layout::render(&layout, &mut s.project.maps, dpi, &info),
+        })
+    });
+    let img = img?;
+    if let Some(r) = region {
+        unfitted.retain(|l| layout.element(l.id).is_some_and(|e| rustgis_render::layout::meets(e, r, 0.0)));
+    }
     if let Some(note) = rustgis_render::layout::clipped_text_notice(&layout, &clipped) {
         s.warn(note);
     }
+    say_unfitted_legends(s, &unfitted);
     img.encode_png().map_err(|e| e.to_string())
 }
 
@@ -6780,7 +6805,8 @@ fn layout_bytes_inner(
     // Layers its frames drew without their cast shadows (read in place, too large for the
     // browser, no memory, still being worked out on the interface's thread): said, as the map's
     // export says them.
-    let (result, said) = rustgis_render::shadows_said(render_pages);
+    // And the legends a fit drew that still don't fit, each once, whatever the page.
+    let ((result, said), unfitted) = rustgis_render::layout::unfitted_legends(|| rustgis_render::shadows_said(render_pages));
     if result.is_ok() {
         for w in super::share::shadow_warnings("The layout", &said) {
             s.warn(w);
@@ -6794,6 +6820,7 @@ fn layout_bytes_inner(
     if let Some(note) = rustgis_render::layout::clipped_text_notice(&saved, &clipped.into_iter().collect::<Vec<_>>()) {
         s.warn(note);
     }
+    say_unfitted_legends(s, &unfitted);
     pictured_notices(s, &frames_pictured, &pages_pictured);
     georeference_notices(s, &left_out, &by_corners, pages.len());
     if !pdf {
@@ -7016,10 +7043,13 @@ fn layout_svg(s: &mut Session, li: usize, dpi: f64) -> Result<String, String> {
     let layout = s.project.layouts.get(li).ok_or("no layout")?;
     let clipped = rustgis_render::layout::clipped_text(layout, &s.project.maps, dpi, &info);
     let note = rustgis_render::layout::clipped_text_notice(layout, &clipped);
-    let (text, pictured) = rustgis_render::svg::layout_svg(layout, &mut s.project.maps, dpi, &info)?;
+    let (drawn, unfitted) =
+        rustgis_render::layout::unfitted_legends(|| rustgis_render::svg::layout_svg(layout, &mut s.project.maps, dpi, &info));
+    let (text, pictured) = drawn?;
     if let Some(note) = note {
         s.warn(note);
     }
+    say_unfitted_legends(s, &unfitted);
     pictured_notices(s, &pictured, &[]);
     Ok(text)
 }

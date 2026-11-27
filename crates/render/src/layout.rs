@@ -946,8 +946,13 @@ fn draw_page(
                     // Whether a picture was still on its way when the rows were made: the very lookup
                     // that drew the legend, not an earlier one a retry or an eviction could outdate.
                     let ink = color.unwrap_or(INK);
-                    let missing = legend_missing(&mut pm, r, map, (title, *columns, *fit), drawn, opts, ink, ppp) && on_canvas;
+                    let (missing, fitted) = legend_missing(&mut pm, r, map, (title, *columns, *fit), drawn, opts, ink, ppp);
+                    let missing = missing && on_canvas;
                     pending.legends |= missing;
+                    // A fit still leaving rows out, for an export to say ([`unfitted_legends`]).
+                    if let Some(f) = fitted.filter(|f| on_canvas && !f.fits()) {
+                        unfitted(e.id, *fit, &f);
+                    }
                     // An export's page drawn without a picture stays incomplete, whenever the
                     // picture lands after (see `finish_legends`).
                     if missing && wait_legends && LEGEND_BUDGET.get().is_some() {
@@ -3650,6 +3655,74 @@ pub(crate) fn legend_budget() -> LegendBudget {
     LegendBudget(opened)
 }
 
+/// A legend under a fit other than manual that the page drew still wider or taller than the room
+/// its title leaves in its box ([`unfitted_legends`]): the columns and verdict of the very fit
+/// ([`fit_legend`]) its rows were drawn by.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct UnfittedLegend {
+    /// The legend element's id.
+    pub id: u32,
+    pub fit: LegendFit,
+    /// The columns its rows were drawn in.
+    pub columns: usize,
+    pub too_wide: bool,
+    pub too_tall: bool,
+}
+
+thread_local! {
+    /// While [`unfitted_legends`] runs on this thread: the fitted legends drawn that still don't
+    /// fit, each element once.
+    static UNFITTED: std::cell::RefCell<Option<Vec<UnfittedLegend>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Ends the list [`unfitted_legends`] opened when dropped, even by a panic.
+struct UnfittedList(bool);
+
+impl Drop for UnfittedList {
+    fn drop(&mut self) {
+        if self.0 {
+            UNFITTED.set(None);
+        }
+    }
+}
+
+/// `f`, and the legends under a fit other than manual that the pages it drew on this thread drew
+/// still wider or taller than their boxes, each element once, the first time it was: what an
+/// export says of them, as setting the fit said it, since a fit can stop succeeding after it is
+/// set (a layer added to its map, its frame's scale changed, a legend picture arrived). A manual
+/// legend is never listed. A call inside another lists nothing and leaves its legends to the
+/// outer one.
+pub fn unfitted_legends<T>(f: impl FnOnce() -> T) -> (T, Vec<UnfittedLegend>) {
+    let opened = UNFITTED.with_borrow_mut(|u| {
+        let none = u.is_none();
+        if none {
+            *u = Some(Vec::new());
+        }
+        none
+    });
+    let _list = UnfittedList(opened);
+    let out = f();
+    let listed = if opened { UNFITTED.with_borrow_mut(Option::take).unwrap_or_default() } else { Vec::new() };
+    (out, listed)
+}
+
+/// Lists the legend `id` under `fit`, drawn as `fitted`, while [`unfitted_legends`] runs.
+fn unfitted(id: u32, fit: LegendFit, fitted: &Fitted) {
+    UNFITTED.with_borrow_mut(|u| {
+        if let Some(listed) = u
+            && !listed.iter().any(|l| l.id == id)
+        {
+            listed.push(UnfittedLegend {
+                id,
+                fit: fit.kept(),
+                columns: fitted.columns,
+                too_wide: fitted.too_wide,
+                too_tall: fitted.too_tall,
+            });
+        }
+    });
+}
+
 /// When the open budget's legend wait ends, started by the first legend that waits.
 fn legend_deadline() -> web_time::Instant {
     #[cfg(test)]
@@ -3977,6 +4050,10 @@ fn legend_rows_missing<'a>(
 /// text size its rows are drawn at in the room the title leaves ([`fit_legend`]); the title keeps
 /// the legend's own size, and the rows are then drawn as a manual legend of those. Either way its
 /// rows' point symbols are measured once, and their heights and texts once a size.
+///
+/// Whether a picture of its rows was still on its way, and, under a fit other than manual, what
+/// the fit drew them at ([`Fitted`]), which an export says when they still don't fit
+/// ([`unfitted_legends`]).
 fn legend_missing(
     pm: &mut Canvas,
     r: Rect,
@@ -3986,7 +4063,7 @@ fn legend_missing(
     opts: LegendOptions,
     ink: Rgba,
     ppp: f64,
-) -> bool {
+) -> (bool, Option<Fitted>) {
     let ppp = ppp as f32;
     let mut y = r.y();
     if !title.is_empty() {
@@ -3998,16 +4075,16 @@ fn legend_missing(
     let sides = symbol_sides(&rows, opts.scale);
     let room_h = (r.bottom() - y) / ppp;
     // As set; or the columns and size a fit picks, its rows measured at that size already.
-    let (opts, columns, sizes, tallest) = match fit.kept() {
+    let (opts, columns, sizes, tallest, fitted) = match fit.kept() {
         LegendFit::Manual | LegendFit::Invalid => {
             let columns = legend_columns_in_range(columns);
             let sizes = RowSizes::of(&rows, &sides, opts.size);
             let tallest = balanced(Measured::new(&rows, &sides, &sizes), columns).1;
-            (opts, columns, sizes, tallest)
+            (opts, columns, sizes, tallest, None)
         }
         _ => {
             let (fitted, sizes) = fit_measured(&rows, &sides, (columns, fit), (r.width() / ppp, room_h), opts.text_size);
-            (LegendOptions { size: fitted.size, text_size: fitted.text_size, ..opts }, fitted.columns, sizes, fitted.tallest)
+            (LegendOptions { size: fitted.size, text_size: fitted.text_size, ..opts }, fitted.columns, sizes, fitted.tallest, Some(fitted))
         }
     };
     let m = Measured::new(&rows, &sides, &sizes);
@@ -4026,7 +4103,7 @@ fn legend_missing(
         legend_column(pm, column, part, (columns > 1, lead), map, &opts, ink, ppp);
         x = right + gap * ppp * close_up;
     }
-    missing
+    (missing, fitted)
 }
 
 /// [`legend_missing`], for a legend whose missing pictures nobody asks about.
@@ -7021,6 +7098,7 @@ mod tests {
                 INK,
                 1.0,
             )
+            .0
         };
         assert!(draw(&mut canvas), "drawn while its picture is on its way");
         fetch.recv_timeout(std::time::Duration::from_secs(5)).unwrap()(Ok(red_picture()));

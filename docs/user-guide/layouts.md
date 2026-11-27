@@ -366,8 +366,10 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
     `"textSize"` (`null` included), `"showNoData"`, `"labels"`, `"fit"` or `"showLayerNames"`, and,
     in columns, at a text size of its own or with a fit, when its box or what it lists changes. A
     legend in one column at the default size and with no fit is told so only when given one of
-    those. A legend is checked when it is added or changed, as it always has been, not again when
-    the map's layers change later (the drawing itself fits again on every draw, as below).
+    those. A manual legend is checked when it is added or changed, as it always has been, not again
+    when the map's layers change later. A legend with a fit is checked then too, and again by every
+    export, which says, in the same words, when its fit no longer makes it fit (a layer added to the
+    map, the frame's scale changed); the drawing itself fits again on every draw, as below.
   - **Fit** (`"fit"`): what gives way when the rows don't fit the box. **Manual** (`"manual"`, the
     default) keeps the text's size and the columns and leaves out the last rows, as legends always
     have. **Shrink the text** (`"adjustSize"`) draws the rows' text a quarter point smaller at a
