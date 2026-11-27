@@ -541,3 +541,27 @@ fn a_publication_legend_wider_than_its_box_is_said_under_a_wider_title_too() {
     assert!(said.contains("the legend's title is wider than its box"), "{said}");
     assert!(said.contains("the legend's columns are wider than its box"), "{said}");
 }
+
+#[test]
+fn a_publication_legend_says_nothing_of_a_raster_it_does_not_key() {
+    use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster, geotiff};
+    // A colour table over more values than a legend can list.
+    let mut s = Session::new(Project::default());
+    let gt = GeoTransform { origin_x: 0.0, origin_y: 10.0, pixel_width: 0.5, pixel_height: -0.5 };
+    let z: Vec<f32> = (0..400u16).map(f32::from).collect();
+    let r = Raster::new("many", 20, 20, vec![z], gt, Crs::LonLat, None, ColorHint::Palette(vec![[0, 0, 0, 255]; 400]), "UInt16").unwrap();
+    let bytes = geotiff::write(&r, 0).unwrap();
+    let mut layer = rustgis_map::RasterLayer::from_bytes(r, "many.tif".to_string(), bytes);
+    layer.style.renderer = rustgis_map::RasterRenderer::Colormap;
+    crate::cmd::raster::add_raster(&mut s, "many", layer).unwrap();
+    let mut said = |legend: Value| {
+        let p = json!({"profile": "a4-portrait", "extent": [0, 0, 10, 10], "legend": legend});
+        s.run("layout.publication", &p).unwrap()["warnings"].to_string()
+    };
+    let keyed = said(json!(null));
+    assert!(keyed.contains("have no key in the legend: many"), "{keyed}");
+    for legend in [json!("none"), json!({"exclude": ["many"]})] {
+        let w = said(legend.clone());
+        assert!(!w.contains("have no key in the legend"), "{legend}: {w}");
+    }
+}

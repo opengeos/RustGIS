@@ -1237,7 +1237,10 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
     }
     // A colour table whose values can't be known (too many to list) gives the legend no class, and
     // the sheet no key for it; classes from an overview may miss a rare one: said, not left out.
-    warnings.extend(raster_key_notices(s.map(), &[], false));
+    // Of the rasters the legend keys: none without one.
+    if let Some(legend) = &legend {
+        warnings.extend(raster_key_notices(s.map(), &legend.exclude, false));
+    }
     // A page of cards gives the locator in its column a card of the column's width, and the legend
     // under it one as wide.
     let card = style == Style::Modular && column.is_some();
