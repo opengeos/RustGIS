@@ -259,8 +259,9 @@ fn map_budgeted_on<T: Sync>(
     map_budgeted_rows(items.len(), budget, threads, |i| build(&items[i]))
 }
 
-/// `build` of each row of `0..len`, given its number, in order, on up to `threads` threads taking turns at chunks of rows (at
-/// most [`CHUNK_ROWS`], and eight turns a thread where the rows allow);
+/// `build` of each row of `0..len`, given its number, in order, on up to `threads` threads
+/// taking turns at chunks of rows (at most [`CHUNK_ROWS`], and eight turns a thread where the
+/// rows allow);
 /// `None` when the copy (a slot a row, and each geometry's heap) takes more than `budget` bytes,
 /// as one thread would find it. Each row is built on its own, so the copy is the same on any
 /// number of threads. Past the budget the threads stop after the row they are on: at most one row
