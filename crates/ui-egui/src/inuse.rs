@@ -65,8 +65,14 @@ pub struct InUse {
     pointer: Option<Pos2>,
     /// The mouse buttons that are down by this frame's events, a bit each (a finger is the first).
     down: u8,
+    /// Whether a click was under way at some point of this frame: a button was down as it began,
+    /// or went down or up on it.
+    clicking: bool,
     /// The keys pressed on this frame, in order.
     presses: Vec<Press>,
+    /// The keys that are down, each with the pane that was in use as it went down: a held key's
+    /// repeats are that pane's.
+    held: Vec<(Key, Pane)>,
     /// This frame's keys kept until its panes are drawn, and the dialogs that were up as they
     /// were pressed (a number that differs when they do).
     late: Vec<Late>,
@@ -106,7 +112,8 @@ pub fn follow(app: &mut RustGisApp, ctx: &egui::Context) {
     // A pane closed (by a key or a command, with no press elsewhere) is no longer in use, and
     // isn't again when it is opened. Nor is one pressed where it was drawn as it closed.
     let open = |pane: Pane| match pane {
-        Pane::Layers => app.ui.left == Some(LeftPane::Contents),
+        // Not behind the File menu's backstage either, which a command can open with no press.
+        Pane::Layers => !app.ui.backstage && app.ui.left == Some(LeftPane::Contents),
         Pane::Table => app.session.table_layer.is_some() || app.session.table_standalone.is_some(),
         _ => true,
     };
@@ -119,7 +126,9 @@ pub fn follow(app: &mut RustGisApp, ctx: &egui::Context) {
     let mut down = in_use.down;
     let mut clicked = down != 0;
     let mut worked: Vec<Pos2> = Vec::new();
-    let mut keys: Vec<(Key, Modifiers, usize, bool)> = Vec::new();
+    // Each key going down (with its modifiers, how many of them came before and whether a click
+    // was under way) or up (`None`), in order.
+    let mut keys: Vec<(Key, Option<(Modifiers, usize, bool)>)> = Vec::new();
     ctx.input(|i| {
         for e in &i.events {
             match e {
@@ -140,14 +149,16 @@ pub fn follow(app: &mut RustGisApp, ctx: &egui::Context) {
                 // elsewhere isn't told): no release will come.
                 egui::Event::Touch { phase: egui::TouchPhase::Cancel, .. } | egui::Event::WindowFocused(false) => down = 0,
                 egui::Event::Key { key, pressed: true, repeat: false, modifiers, .. } => {
-                    keys.push((*key, *modifiers, worked.len(), clicked))
+                    keys.push((*key, Some((*modifiers, worked.len(), clicked))));
                 }
+                egui::Event::Key { key, pressed: false, .. } => keys.push((*key, None)),
                 _ => {}
             }
         }
     });
     in_use.pointer = pointer;
     in_use.down = down;
+    in_use.clicking = clicked;
     // The pane after each of them, in turn.
     let modal = ctx.memory(|m| m.top_modal_layer());
     let mut panes = vec![in_use.pane];
@@ -170,15 +181,15 @@ pub fn follow(app: &mut RustGisApp, ctx: &egui::Context) {
         });
     }
     in_use.pane = panes.last().copied().unwrap_or_default();
-    in_use.presses = keys
-        .into_iter()
-        .map(|(key, modifiers, worked, after_click)| Press {
-            key,
-            modifiers,
-            pane: panes.get(worked).copied().unwrap_or(in_use.pane),
-            after_click,
-        })
-        .collect();
+    in_use.presses.clear();
+    for (key, pressed) in keys {
+        in_use.held.retain(|(held, _)| *held != key);
+        if let Some((modifiers, worked, after_click)) = pressed {
+            let pane = panes.get(worked).copied().unwrap_or(in_use.pane);
+            in_use.presses.push(Press { key, modifiers, pane, after_click });
+            in_use.held.push((key, pane));
+        }
+    }
 }
 
 /// The pane in use.
@@ -189,6 +200,16 @@ pub fn pane(app: &RustGisApp) -> Pane {
 /// Whether a mouse button or a finger is down, by this frame's events.
 pub fn down(app: &RustGisApp) -> bool {
     app.ui.in_use.down != 0
+}
+
+/// Whether a click was under way at some point of this frame.
+pub fn clicking(app: &RustGisApp) -> bool {
+    app.ui.in_use.clicking
+}
+
+/// The pane that was in use as `key`, still down, was pressed.
+pub fn held_in(app: &RustGisApp, key: Key) -> Option<Pane> {
+    app.ui.in_use.held.iter().find(|(held, _)| *held == key).map(|(_, pane)| *pane)
 }
 
 /// The first press of `key` on this frame that isn't a held key's repeat: with modifiers that
@@ -343,7 +364,16 @@ mod tests {
         // Down again with no release between: a repeat, as a held key sends.
         h.key_down(Key::Delete);
         h.run_steps(2);
+        // Still held, and the wheel turned over the map: the key stays the layer list's, and its
+        // repeats don't reach the map's selected features.
+        let map = rect(&h, Pane::View).center();
+        in_one_frame(&mut h, [Event::PointerMoved(map), wheel()]);
+        h.key_down(Key::Delete);
+        h.run_steps(2);
+        assert_eq!(cities(&h), all, "a key held since the layer list was in use deletes no features");
         h.key_up(Key::Delete);
+        h.get_by_label("Cities").click();
+        h.run_steps(2);
         h.key_press_modifiers(Modifiers::SHIFT, Key::Backspace);
         h.run_steps(2);
         assert_eq!(layer_names(&h).len(), before.len() - 1, "one press removes one layer: {:?}", layer_names(&h));
@@ -577,6 +607,13 @@ mod tests {
 
         h.state_mut().run("project.sample", Value::Null).unwrap();
         h.run_steps(3);
+        list(&mut h);
+        // The File menu's backstage opened by a command, with no press: it covers the list.
+        h.state_mut().run("ui.backstage", json!({"open": true})).unwrap();
+        h.run_steps(2);
+        assert_eq!(pane(h.state()), Pane::Other, "the layer list is behind the backstage");
+        h.state_mut().run("ui.backstage", json!({"open": false})).unwrap();
+        h.run_steps(2);
         list(&mut h);
         // The wheel turned where the pane was drawn as it closed: it isn't there any more.
         h.state_mut().ui.left = None;

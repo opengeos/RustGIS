@@ -952,11 +952,7 @@ pub fn shortcuts(app: &mut RustGisApp, ctx: &egui::Context) {
             if i.consume_shortcut(&KeyboardShortcut::new(b.chord.modifiers(), b.chord.key)) {
                 let (id, params) = (b.command.clone(), b.params.clone());
                 match press {
-                    // A held Delete removes the layers picked, not the list from there down: each
-                    // removal makes the next layer the active one.
-                    None if pane == Pane::Layers && id == "edit.delete" => {}
-                    // Nor does a held key act while a button is down, when its first press didn't.
-                    None if follows_click(&id) && crate::inuse::down(app) => {}
+                    None if follows_click(&id) && repeat_stops(app, b.chord.key, pane) => {}
                     None => run.push((id, params, pane)),
                     // A key that acts on what a click picks waits for the click to be taken.
                     Some(press) if press.after_click && follows_click(&id) => {
@@ -977,7 +973,7 @@ pub fn shortcuts(app: &mut RustGisApp, ctx: &egui::Context) {
                 let (id, params) = ("edit.delete".to_string(), Value::Null);
                 if press.is_some_and(|press| press.after_click) {
                     late.push(Late { id, params, pane: key_pane, chord: None });
-                } else if press.is_some() || !crate::inuse::down(app) {
+                } else if press.is_some() || !repeat_stops(app, Key::Backspace, key_pane) {
                     run.push((id, params, key_pane));
                 }
             }
@@ -1020,14 +1016,25 @@ fn behind_a_dialog(app: &RustGisApp, ctx: &egui::Context) -> bool {
         || app.ui.shortcut_editor.capturing()
 }
 
-/// The dialogs and questions that are up, as one number: it differs once a click has opened or
-/// answered one. (egui says a modal dialog is up only from the frame after it first shows.)
+/// The dialogs and questions that are up, and the project, as one number: it differs once a click
+/// has opened or answered one, or another project has taken this one's place. (egui says a modal
+/// dialog is up only from the frame after it first shows.)
 fn dialogs_up(app: &RustGisApp) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     let asked = (app.map.deleting.is_some(), app.mb.asking(), crate::saveprompt::waiting(app));
-    (app.dialogs.open, asked, app.ui.command_search.is_some()).hash(&mut hasher);
+    (app.dialogs.open, asked, app.ui.command_search.is_some(), app.session.opened).hash(&mut hasher);
     hasher.finish()
+}
+
+/// Whether a held key's repeat of a command that acts on what a click picks ([`follows_click`])
+/// does nothing, with `pane` in use. In the layer list, each removal makes the next layer the
+/// active one, so a held Delete would take the list from there down. A key held since another
+/// pane was in use stays that pane's (Delete held in the layer list, then the wheel turned over
+/// the map, must not reach the map's features). And while a click is under way, the key's first
+/// press didn't act either.
+fn repeat_stops(app: &RustGisApp, key: Key, pane: Pane) -> bool {
+    pane == Pane::Layers || crate::inuse::clicking(app) || crate::inuse::held_in(app, key).is_some_and(|pressed_in| pressed_in != pane)
 }
 
 /// Whether text is being typed. The search box (or a table cell, or the Script pane's find bar)
@@ -1075,6 +1082,10 @@ pub fn late_keys(app: &mut RustGisApp, ctx: &egui::Context) {
     let (typing, text_field) = (typing(app, ctx), ctx.text_edit_focused());
     let run: Vec<(String, Value, Pane)> =
         late.into_iter().filter(|key| !text_takes(key.chord, typing, text_field)).map(|key| (key.id, key.params, key.pane)).collect();
+    // The panes and dialogs were drawn before these keys run: another frame shows what they did.
+    if !run.is_empty() {
+        ctx.request_repaint();
+    }
     run_keys(app, ctx, &run);
 }
 

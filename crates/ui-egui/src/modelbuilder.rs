@@ -601,15 +601,16 @@ pub fn shortcuts(app: &mut RustGisApp, ctx: &egui::Context) {
     let cmd = egui::Modifiers::COMMAND;
     // The pane in use as the key went down: the wheel turned over the canvas after it, on the
     // same frame, doesn't make the key the canvas's.
-    let pane_at = |key| crate::inuse::press(app, key, None).map_or(crate::inuse::pane(app), |press| press.pane);
-    let layers = [egui::Key::Delete, egui::Key::Backspace].into_iter().any(|key| pane_at(key) == crate::inuse::Pane::Layers);
+    let layers =
+        |key| crate::inuse::press(app, key, None).map_or(crate::inuse::pane(app), |press| press.pane) == crate::inuse::Pane::Layers;
     let (mut del, mut dup, mut undo, mut redo) = (false, false, false, false);
     ctx.input_mut(|i| {
         undo = i.consume_shortcut(&egui::KeyboardShortcut::new(cmd, egui::Key::Z));
         redo = i.consume_shortcut(&egui::KeyboardShortcut::new(cmd | egui::Modifiers::SHIFT, egui::Key::Z))
             || i.consume_shortcut(&egui::KeyboardShortcut::new(cmd, egui::Key::Y));
-        if (app.mb.selected.is_some() || app.mb.selected_edge.is_some()) && !layers {
-            del = i.consume_key(egui::Modifiers::NONE, egui::Key::Delete) || i.consume_key(egui::Modifiers::NONE, egui::Key::Backspace);
+        if app.mb.selected.is_some() || app.mb.selected_edge.is_some() {
+            del =
+                [egui::Key::Delete, egui::Key::Backspace].into_iter().any(|key| !layers(key) && i.consume_key(egui::Modifiers::NONE, key));
         }
         if app.mb.selected.is_some() {
             dup = i.consume_shortcut(&egui::KeyboardShortcut::new(cmd, egui::Key::D));
