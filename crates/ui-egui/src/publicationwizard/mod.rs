@@ -14,7 +14,8 @@ use accent::accent_step;
 use review::review_step;
 use rustgis_engine::Session;
 use rustgis_engine::cmd::layout::{
-    MAX_PUBLICATION_TEXT, PUBLICATION_DEFAULT_REFERENCE, PUBLICATION_HEADINGS, PUBLICATION_PROFILES, publication_style_accent,
+    MAX_PUBLICATION_LINES, MAX_PUBLICATION_TEXT, PUBLICATION_DEFAULT_REFERENCE, PUBLICATION_HEADINGS, PUBLICATION_PROFILES,
+    publication_style_accent,
 };
 use rustgis_engine::map::Map;
 use rustgis_engine::map::layout::PAGES;

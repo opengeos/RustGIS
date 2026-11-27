@@ -32,12 +32,19 @@ pub(super) fn review_step(ui: &mut egui::Ui, d: &Draft) {
             let given = d.headings[i].trim();
             if given.is_empty() { or.to_string() } else { given.to_string() }
         };
+        // A heading typed for a section left out isn't sent: said, not dropped unseen.
+        let typed_at = |i: usize| Some(d.headings[i].trim()).filter(|h| !h.is_empty());
         if !sources.is_empty() {
             row(tl!("Sources heading"), heading(0, PUBLICATION_HEADINGS[0]));
+        } else if let Some(h) = typed_at(0) {
+            row(tl!("Sources heading"), i18n::fmt("{heading} (not used: no sources)", &[("heading", h)]));
         }
         let typed = lines(&d.reference).collect::<Vec<_>>().join("\n");
         if d.no_reference {
             row(tl!("Reference"), none.to_string());
+            if let Some(h) = typed_at(1) {
+                row(tl!("Reference heading"), i18n::fmt("{heading} (not used: no reference)", &[("heading", h)]));
+            }
         } else {
             let default = tl!("The default: projection, datum and graticule, filled in on the sheet");
             row(tl!("Reference"), if typed.is_empty() { default.to_string() } else { typed });

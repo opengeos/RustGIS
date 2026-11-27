@@ -1,9 +1,6 @@
 //! The wizard's sources and reference step.
 use super::*;
 
-/// The most lines `layout.publication` takes in a list.
-const MAX_LINES: usize = 50;
-
 /// The sources step: the sources, the cartographic reference and their headings.
 pub(super) fn sources_step(ui: &mut egui::Ui, d: &mut Draft, map: &Map) {
     egui::Grid::new("publication_wizard_sources").num_columns(2).spacing(egui::vec2(8.0, 8.0)).show(ui, |ui| {
@@ -35,9 +32,9 @@ fn list(ui: &mut egui::Ui, d: &mut Draft, label: &str, field: Field, hint: &str,
     let r = ui.add_enabled(on, edit).labelled_by(caption.id);
     d.edited(&r, field);
     ui.end_row();
-    if on && lines(d.field_mut(field)).count() > MAX_LINES {
+    if on && lines(d.field_mut(field)).count() > MAX_PUBLICATION_LINES {
         ui.label("");
-        let note = i18n::fmt("At most {limit} lines.", &[("limit", &MAX_LINES.to_string())]);
+        let note = i18n::fmt("At most {limit} lines.", &[("limit", &MAX_PUBLICATION_LINES.to_string())]);
         ui.label(egui::RichText::new(note).small().weak());
         ui.end_row();
     }
@@ -305,6 +302,23 @@ mod tests {
         h.run_steps(4);
         assert!(h.query_by_label(default).is_none());
         assert!(h.query_by_label("Fontes").is_some() && h.query_by_label("About").is_some());
+    }
+
+    /// A heading typed for a section left out (no sources, no reference) is listed as not used.
+    #[test]
+    fn the_review_says_a_heading_of_a_section_left_out_isnt_used() {
+        let mut h = at(Step::Review, |d| {
+            d.headings = ["Fontes".into(), "Base".into(), String::new()];
+            d.no_reference = true;
+        });
+        for said in ["Fontes (not used: no sources)", "Base (not used: no reference)"] {
+            assert!(h.query_by_label(said).is_some(), "{said}");
+        }
+        let d = h.state_mut().dialogs.publication.as_mut().unwrap();
+        (d.sources, d.no_reference) = ("IBGE".into(), false);
+        h.run_steps(4);
+        assert!(h.query_by_label_contains("not used").is_none());
+        assert!(h.query_by_label("Fontes").is_some() && h.query_by_label("Base").is_some());
     }
 
     /// Create puts the sources, the reference and the heading given on the sheet, and Undo takes
