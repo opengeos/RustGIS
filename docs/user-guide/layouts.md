@@ -48,7 +48,7 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
     sources and reference (each one per line, with its heading; the reference can be left out) and
     the accent colour, then shows what was picked; **Create** makes the layout as the menu
     does. **Insert Statistic**, on the texts and sources steps, adds a layer figure of the active
-    map to the field last edited there (the note or the sources, where none was). A figure goes
+    map to the field the cursor was last in there (the note or the sources, where it was in none). A figure goes
     from its size to the review, as it takes no style, texts or accent. A field left empty is left
     out (for the credit line, the reference and the headings, the command's default applies); the
     title is the exception: empty, it means no title. A layout the command refuses is said, and the

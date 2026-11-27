@@ -93,8 +93,8 @@ pub struct Draft {
     /// The headings of the sources, the reference and an editorial sheet's column; one left empty
     /// is left to the command.
     pub headings: [String; 3],
-    /// The field last edited on the texts step and on the sources step, which a layer statistic
-    /// added there goes to ([`Field::slot`]).
+    /// The field the cursor was last in on the texts step and on the sources step, which a layer
+    /// statistic added there goes to ([`Field::slot`]).
     targets: [Option<Field>; 2],
     /// The field the last statistic didn't fit in, said until its step's text changes.
     refused: Option<Field>,
@@ -237,17 +237,18 @@ impl Draft {
         }
     }
 
-    /// Notes `field` as the one last edited while it has the focus.
+    /// Notes `field` as its step's last one while it has the focus, typed into or not, and ends
+    /// its step's refusal note when its text changes.
     fn edited(&mut self, r: &egui::Response, field: Field) {
         if r.has_focus() {
             self.targets[field.slot()] = Some(field);
         }
-        if r.changed() {
+        if r.changed() && self.refused.is_some_and(|f| f.step() == field.step()) {
             self.refused = None;
         }
     }
 
-    /// Adds a layer statistic to the field last edited on `own`'s step, or to `own` where none was
+    /// Adds a layer statistic to the field last focused on `own`'s step, or to `own` where none was
     /// or that one is off now; one that would take the field past the limit isn't added.
     fn add_statistic(&mut self, token: &str, own: Field) {
         let on = |f: Field| match f {

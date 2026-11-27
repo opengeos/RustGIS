@@ -186,9 +186,9 @@ mod tests {
         assert!(h.query_by_label("Column heading").is_some());
     }
 
-    /// A statistic goes to the field last edited, here the subtitle.
+    /// A statistic goes to the field the cursor was last in, here the subtitle.
     #[test]
-    fn a_statistic_goes_to_the_field_last_edited() {
+    fn a_statistic_goes_to_the_field_last_focused() {
         let mut h = at(Step::Texts, |d| d.subtitle = "In ".into());
         h.get_by_label("Subtitle").focus();
         h.run_steps(2);
@@ -197,9 +197,9 @@ mod tests {
         assert!(wizard(&h).note.is_empty());
     }
 
-    /// Each step keeps its own: a field edited on the sources step leaves the texts' last one.
+    /// Each step keeps its own: a field focused on the sources step leaves the texts' last one.
     #[test]
-    fn each_step_keeps_the_field_last_edited_on_it() {
+    fn each_step_keeps_the_field_last_focused_on_it() {
         let mut h = at(Step::Texts, |_| {});
         h.get_by_label("Subtitle").focus();
         h.run_steps(2);
@@ -213,6 +213,22 @@ mod tests {
         click(&mut h, "Next");
         insert_count(&mut h);
         assert_eq!(wizard(&h).headings[0], token);
+    }
+
+    /// A statistic that didn't fit stays said when a field of the other step changes.
+    #[test]
+    fn a_refused_statistic_stays_said_after_editing_the_other_step() {
+        let full = "x".repeat(MAX_PUBLICATION_TEXT - 3);
+        let mut h = at(Step::Sources, |d| (d.headings[0], d.targets[1]) = (full, Some(Field::Heading(0))));
+        let limit = format!("Each field takes at most {MAX_PUBLICATION_TEXT} characters.");
+        insert_count(&mut h);
+        click(&mut h, "Back");
+        h.get_by_label("Subtitle").focus();
+        h.run_steps(2);
+        h.get_by_label("Subtitle").type_text("a");
+        h.run_steps(2);
+        click(&mut h, "Next");
+        assert!(h.query_by_label(&limit).is_some());
     }
 
     /// With nothing edited on the step it goes to the note, or to the sources on their step, a
