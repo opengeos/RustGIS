@@ -304,21 +304,24 @@ mod tests {
         assert!(h.query_by_label("Fontes").is_some() && h.query_by_label("About").is_some());
     }
 
-    /// A heading typed for a section left out (no sources, no reference) is listed as not used.
+    /// A heading typed for a section left out (no sources, no reference, a column on a sheet that
+    /// isn't editorial) is listed as not used.
     #[test]
     fn the_review_says_a_heading_of_a_section_left_out_isnt_used() {
         let mut h = at(Step::Review, |d| {
-            d.headings = ["Fontes".into(), "Base".into(), String::new()];
+            d.headings = ["Fontes".into(), "Base".into(), "About".into()];
             d.no_reference = true;
         });
-        for said in ["Fontes (not used: no sources)", "Base (not used: no reference)"] {
+        for said in ["Fontes (not used: no sources)", "Base (not used: no reference)", "About (not used: not an editorial sheet)"] {
             assert!(h.query_by_label(said).is_some(), "{said}");
         }
         let d = h.state_mut().dialogs.publication.as_mut().unwrap();
-        (d.sources, d.no_reference) = ("IBGE".into(), false);
+        (d.sources, d.no_reference, d.style) = ("IBGE".into(), false, "editorial".into());
         h.run_steps(4);
         assert!(h.query_by_label_contains("not used").is_none());
-        assert!(h.query_by_label("Fontes").is_some() && h.query_by_label("Base").is_some());
+        for sent in ["Fontes", "Base", "About"] {
+            assert!(h.query_by_label(sent).is_some(), "{sent}");
+        }
     }
 
     /// Create puts the sources, the reference and the heading given on the sheet, and Undo takes

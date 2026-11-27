@@ -52,6 +52,8 @@ pub(super) fn review_step(ui: &mut egui::Ui, d: &Draft) {
         }
         if d.editorial() {
             row(tl!("Column heading"), heading(2, none));
+        } else if let Some(h) = typed_at(2) {
+            row(tl!("Column heading"), i18n::fmt("{heading} (not used: not an editorial sheet)", &[("heading", h)]));
         }
         let credit = if d.no_author {
             none.to_string()
