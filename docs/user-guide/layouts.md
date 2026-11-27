@@ -44,12 +44,15 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
     outline of where its title, map and footer go, and its column or panel if it has one, with
     the accent colour picked, or else its own, where the sheet takes it, which Classic's doesn't;
     a click on the outline picks the style), the texts (title, the active map's name until one is
-    typed; subtitle, note, sources and credit line, or none) and the accent colour, then shows
-    what was picked; **Create** makes the layout as the menu
-    does. A figure goes from its size to the review, as it takes no style, texts or accent. A
-    field left empty is left out (for the credit line, the dated default applies); the title is
-    the exception: empty, it means no title. A layout the command refuses is said, and the wizard
-    stays open.
+    typed; subtitle, note and credit line, or none; an Editorial sheet's column heading), the
+    sources and reference (each one per line, with its heading; the reference can be left out) and
+    the accent colour, then shows what was picked; **Create** makes the layout as the menu
+    does. **Insert Statistic**, on the texts and sources steps, adds a layer figure of the active
+    map to the field last edited there (the note or the sources, where none was). A figure goes
+    from its size to the review, as it takes no style, texts or accent. A field left empty is left
+    out (for the credit line, the reference and the headings, the command's default applies); the
+    title is the exception: empty, it means no title. A layout the command refuses is said, and the
+    wizard stays open.
   - **The map**: the `extent` given (or the view) fitted north-up, without tilt, at a round scale,
     two significant figures, rounded up so it still fits within the strips the graticule's labels
     take inside the frame. A graticule's step follows the extent (2° for a state, 15′ for a city),

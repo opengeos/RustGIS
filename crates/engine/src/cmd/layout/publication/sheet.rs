@@ -58,6 +58,15 @@ pub const PUBLICATION_STYLES: &[(&str, &str)] = &[
 /// with today's date when the layout is drawn).
 pub const PUBLICATION_DEFAULT_CREDIT: &str = "Made with RustGIS · {date}";
 
+/// The headings of a publication's sources and cartographic reference when `"headings"` doesn't
+/// give them.
+pub const PUBLICATION_HEADINGS: [&str; 2] = ["Sources", "Cartographic reference"];
+
+/// The cartographic reference's lines when `"reference"` isn't given (`{projection}`, `{datum}`
+/// and `{grid}` are filled with the sheet's; without a graticule the second names the datum
+/// alone).
+pub const PUBLICATION_DEFAULT_REFERENCE: [&str; 2] = ["Projection: {projection}", "Datum: {datum} · Graticule: {grid}"];
+
 /// The longest text a publication layout takes in one field, in characters.
 pub const MAX_PUBLICATION_TEXT: usize = 2000;
 

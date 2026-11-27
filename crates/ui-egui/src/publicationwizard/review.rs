@@ -26,7 +26,25 @@ pub(super) fn review_step(ui: &mut egui::Ui, d: &Draft) {
         row(tl!("Title"), or_none(&d.title));
         row(tl!("Subtitle"), or_none(&d.subtitle));
         row(tl!("Note"), or_none(&d.note));
-        row(tl!("Sources"), or_none(&d.sources));
+        let sources = lines(&d.sources).join("\n");
+        row(tl!("Sources"), or_none(&sources));
+        let heading = |i: usize, or: &str| {
+            let given = d.headings[i].trim();
+            if given.is_empty() { or.to_string() } else { given.to_string() }
+        };
+        if !sources.is_empty() {
+            row(tl!("Sources heading"), heading(0, PUBLICATION_HEADINGS[0]));
+        }
+        let typed = lines(&d.reference).join("\n");
+        if d.no_reference {
+            row(tl!("Reference"), none.to_string());
+        } else {
+            row(tl!("Reference"), if typed.is_empty() { PUBLICATION_DEFAULT_REFERENCE.join("\n") } else { typed });
+            row(tl!("Reference heading"), heading(1, PUBLICATION_HEADINGS[1]));
+        }
+        if d.editorial() {
+            row(tl!("Column heading"), heading(2, none));
+        }
         let credit = if d.no_author {
             none.to_string()
         } else if d.author.trim().is_empty() {
