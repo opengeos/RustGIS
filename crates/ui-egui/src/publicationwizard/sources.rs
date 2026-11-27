@@ -129,6 +129,8 @@ mod tests {
         let mut d = draft();
         assert!(d.params().get("headings").is_none());
         d.headings[0] = " S ".into();
+        assert!(d.params().get("headings").is_none(), "no sources, so no section to head");
+        d.sources = "IBGE".into();
         assert_eq!(d.params()["headings"], json!(["S"]));
         d.headings = [String::new(), "Ref".into(), String::new()];
         assert_eq!(d.params()["headings"], json!([PUBLICATION_HEADINGS[0], "Ref"]));

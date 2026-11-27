@@ -193,12 +193,13 @@ impl Draft {
         p
     }
 
-    /// `"headings"` up to the last one given, a gap before it filled with the command's own; the
-    /// reference's not where there is none, and the column's only on an editorial sheet, the one
-    /// style that draws it.
+    /// `"headings"` up to the last one given, a gap before it filled with the command's own; none
+    /// for a section left out (no sources, no reference), and the column's only on an editorial
+    /// sheet, the one style that draws it.
     fn headings_sent(&self) -> Vec<&str> {
         let given = |i: usize| {
             let drawn = match i {
+                0 => lines(&self.sources).next().is_some(),
                 1 => !self.no_reference,
                 2 => self.editorial(),
                 _ => true,
