@@ -855,6 +855,10 @@ pub(crate) fn borrow_for<'a>(s: &mut Session, addresses: impl IntoIterator<Item 
 pub(crate) fn release_held(s: &mut Session, token: &std::sync::Arc<()>) {
     let Some(i) = s.web_logins.held.iter().position(|(t, _)| std::sync::Arc::ptr_eq(t, token)) else { return };
     let (_, ids) = s.web_logins.held.remove(i);
+    // The session's from now on: another import still running that holds one too can't end it.
+    for id in &ids {
+        unhold(s, id);
+    }
     rebind_held(s, &ids);
 }
 

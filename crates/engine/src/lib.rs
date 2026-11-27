@@ -1205,6 +1205,9 @@ pub struct Session {
     /// before the read recorded the accounts (#2476): taken at once by that read.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) import_opened: Option<crate::cmd::qgis::ImportOpened>,
+    /// The project an import's first part read for it ([`cmd::reads::scan_import`]), while its read starts.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) import_scanned: Option<crate::cmd::qgis::ImportScan>,
     /// The tools run ahead that a model's run took, for the tests.
     #[cfg(test)]
     pub(crate) tools_taken: usize,
@@ -1618,6 +1621,8 @@ impl Session {
             requests_into: None,
             #[cfg(not(target_arch = "wasm32"))]
             import_opened: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            import_scanned: None,
             #[cfg(test)]
             tools_taken: 0,
             #[cfg(test)]

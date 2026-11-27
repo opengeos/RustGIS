@@ -454,3 +454,71 @@ fn an_import_on_a_copy_lands_whichever_map_is_shown() {
     assert_eq!(s.map().name, "Ahead");
     assert_eq!(s.project.maps.len(), 3);
 }
+
+/// A login two imports hold is the session's once one lands: the other one cancelled after leaves
+/// it open, with the tiles the landing rebound to it (#3120).
+#[test]
+fn a_login_two_imports_hold_stays_open_when_one_lands_and_the_other_is_cancelled() {
+    let dir = Folder::new("landed-one");
+    let server = roads_server();
+    let path = project(&dir, &server.base);
+    let p = json!({"path": path.display().to_string()});
+    let mut s = Session::new(Project::default());
+    let (id, before) = saved_login_with_a_tile(&mut s, &server.base);
+    let c = s.connections.connections.iter().find(|c| c.id == id).unwrap().clone();
+    let first = crate::cmd::reads::read_ahead(&mut s, "project.importQgis", &p).unwrap();
+    let second = crate::cmd::reads::read_ahead(&mut s, "project.importQgis", &p).unwrap();
+    let done = first.run(&Control::new()).unwrap();
+    crate::cmd::reads::read_land(&mut s, done).unwrap();
+    let rebound = s.project.maps[0].tiles[0].url.clone();
+    assert_ne!(rebound, before);
+    drop(second);
+    s.reclaim_rooms();
+    assert!(crate::service_logins::logged_in(&s, &c), "the landed import's");
+    assert_eq!(s.project.maps[0].tiles[0].url, rebound);
+}
+
+/// The desktop's way: the project read and parsed first ([`crate::cmd::reads::scan_import`]), then
+/// the import started with it, which reads the file no more and makes the same map.
+#[test]
+fn an_import_scanned_first_makes_the_map_an_import_here_makes() {
+    let dir = Folder::new("scanned");
+    let server = roads_server();
+    let path = project(&dir, &server.base);
+    let p = json!({"path": path.display().to_string()});
+    let mut here = Session::new(Project::default());
+    let made = here.run("project.importQgis", &p).unwrap();
+    let mut s = Session::new(Project::default());
+    let scan = crate::cmd::reads::scan_import(&p, &Control::new(), false).unwrap();
+    // Gone once read: the import reads it no more.
+    std::fs::remove_file(&path).unwrap();
+    let read = crate::cmd::reads::read_ahead_scanned(&mut s, &p, scan).unwrap();
+    assert!(read.reads(), "the import runs on a copy");
+    let done = read.run(&Control::new()).unwrap();
+    let answer = crate::cmd::reads::read_land(&mut s, done).unwrap();
+    assert_eq!(answer, made);
+    assert!(super::cancellation::contents(&s.project) == super::cancellation::contents(&here.project));
+    // Cancelled while it reads: no project, and nothing here.
+    let control = Control::new();
+    control.cancel();
+    assert!(crate::cmd::reads::scan_import(&p, &control, false).is_err());
+}
+
+/// With the processing log on, the files the scan read (the project's) are the import's inputs,
+/// as when it reads them itself; with it off, none is kept.
+#[test]
+fn an_import_scanned_first_logs_the_project_file_as_an_input() {
+    let dir = Folder::new("logged");
+    let server = roads_server();
+    let path = project(&dir, &server.base);
+    let p = json!({"path": path.display().to_string()});
+    for on in [true, false] {
+        let mut s = Session::new(Project::default());
+        s.log.set_on(on);
+        let scan = crate::cmd::reads::scan_import(&p, &Control::new(), on).unwrap();
+        let read = crate::cmd::reads::read_ahead_scanned(&mut s, &p, scan).unwrap();
+        let done = read.run(&Control::new()).unwrap();
+        let logged = done.inputs.iter().any(|i| i.path.ends_with("ahead.qgs"));
+        assert_eq!(logged, on, "{:?}", done.inputs.iter().map(|i| &i.path).collect::<Vec<_>>());
+    }
+}
