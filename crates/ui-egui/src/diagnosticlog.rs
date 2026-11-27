@@ -61,8 +61,26 @@ pub(crate) fn show(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         egui::Frame::NONE.inner_margin(egui::Margin::symmetric(12, 8)).show(ui, |ui| {
             let filter = app.ui.diagnostic_filter;
             let shown: Vec<&Record> = records.iter().rev().filter(|r| filter.matches(r)).collect();
-            // The messages of one command run, newest first, under that run's heading.
-            for group in shown.chunk_by(|a, b| a.run.is_some() && a.run.as_ref().map(|r| r.id) == b.run.as_ref().map(|r| r.id)) {
+            // The messages of one command run, newest first, under that run's heading, wherever a
+            // message no run said (a network failure) falls among them.
+            let mut groups: Vec<Vec<&Record>> = Vec::new();
+            let mut at: std::collections::HashMap<u64, usize> = std::collections::HashMap::new();
+            for &record in &shown {
+                match record.run.as_ref().and_then(|run| at.get(&run.id).copied()) {
+                    Some(i) => {
+                        if let Some(group) = groups.get_mut(i) {
+                            group.push(record);
+                        }
+                    }
+                    None => {
+                        if let Some(run) = &record.run {
+                            at.insert(run.id, groups.len());
+                        }
+                        groups.push(vec![record]);
+                    }
+                }
+            }
+            for group in &groups {
                 let Some(first) = group.first() else { continue };
                 ui.push_id(first.id, |ui| {
                     if first.run.is_some() {
@@ -87,7 +105,8 @@ pub(crate) fn show(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
 /// when, with Undo to before it while the history still reaches that state.
 fn run_heading(ui: &mut Ui, app: &mut RustGisApp, record: &Record, t: &Tokens) {
     let Some(run) = &record.run else { return };
-    let name = app.session.registry.get(record.source.as_str()).map_or(record.source.as_str(), |spec| crate::i18n::t(spec.label));
+    // The command that started the run, whichever step said the message.
+    let name = app.session.registry.get(run.command.as_str()).map_or(run.command.as_str(), |spec| crate::i18n::t(spec.label));
     ui.horizontal_wrapped(|ui| {
         ui.label(RichText::new(name).strong());
         if let Some(target) = &run.target {

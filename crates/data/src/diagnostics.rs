@@ -115,6 +115,8 @@ pub struct Record {
 pub struct Run {
     /// Counts the session's runs, so the messages of one run are told from the next one's.
     pub id: u64,
+    /// The top-level command that started the run: a message a nested step said is still the run's.
+    pub command: String,
     /// The project's state before the run (`Session::state` in the engine).
     pub before: u64,
     /// The state the run left the project in, once it has finished: another than `before` when it

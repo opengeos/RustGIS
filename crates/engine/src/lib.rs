@@ -1949,7 +1949,13 @@ impl Session {
         // undo back to before it.
         let previous_run = outermost.then(|| {
             self.runs = self.runs.wrapping_add(1);
-            let run = rustgis_data::diagnostics::Run { id: self.runs, before: self.state, after: None, target: run_target(params) };
+            let run = rustgis_data::diagnostics::Run {
+                id: self.runs,
+                command: id.to_string(),
+                before: self.state,
+                after: None,
+                target: run_target(params),
+            };
             self.run.replace(run)
         });
         let history_deferred = std::mem::replace(&mut self.undo_memory.deferred, true);
