@@ -1,5 +1,5 @@
 //! The wizard's review step.
-use super::map::{DEFAULT_NAME, area_label};
+use super::map::{area_label, name_label};
 use super::*;
 
 /// The review step: what was picked, step by step.
@@ -15,7 +15,7 @@ pub(super) fn review_step(ui: &mut egui::Ui, s: &Session, d: &Draft) {
         };
         row(tl!("Size"), size_label(&d.size));
         row(tl!("Map extent"), area_label(s, &d.area));
-        row(tl!("Name"), if d.name.trim().is_empty() { DEFAULT_NAME.to_string() } else { d.name.trim().to_string() });
+        row(tl!("Name"), name_label(s, &d.name));
         if d.figure() {
             return;
         }

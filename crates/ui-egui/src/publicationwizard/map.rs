@@ -17,7 +17,7 @@ pub enum Area {
 }
 
 /// The name `layout.publication` gives when none is: data, not translated.
-pub(super) const DEFAULT_NAME: &str = "Publication";
+const DEFAULT_NAME: &str = "Publication";
 
 /// What a side with no length (a point, a straight line) is widened to, in degrees; on the ±180 or
 /// ±90 edge half of it is cut off again.
@@ -86,6 +86,17 @@ pub(super) fn map_step(ui: &mut egui::Ui, s: &Session, d: &mut Draft) {
     });
 }
 
+/// How the review names the layout: as typed, or as the command names one given no name, saying
+/// when it numbers it because a layout has that name.
+pub(super) fn name_label(s: &Session, name: &str) -> String {
+    let name = Some(name.trim()).filter(|n| !n.is_empty()).unwrap_or(DEFAULT_NAME);
+    if s.project.layouts.iter().any(|l| l.name.eq_ignore_ascii_case(name)) {
+        i18n::fmt("{name} (numbered: a layout has that name)", &[("name", name)])
+    } else {
+        name.to_string()
+    }
+}
+
 /// How the review names the area.
 pub(super) fn area_label(s: &Session, area: &Area) -> String {
     match area {
@@ -96,7 +107,7 @@ pub(super) fn area_label(s: &Session, area: &Area) -> String {
             .iter()
             .find(|l| l.instance_id() == *layer && map.holds(s))
             .map_or_else(|| tl!("(none)").to_string(), |l| i18n::fmt("Layer: {layer}", &[("layer", &l.name)])),
-        Area::Selection { map } if map.holds(s) => tl!("Selected features").to_string(),
+        Area::Selection { map } if map.holds(s) && s.map().selection_count() > 0 => tl!("Selected features").to_string(),
         Area::Selection { .. } => tl!("(none)").to_string(),
     }
 }
@@ -311,6 +322,29 @@ mod tests {
             area_extent(&app.session, &area),
             Err("The layer picked is no longer in the map: pick the map extent again.".to_string())
         );
+    }
+
+    /// The review names what Create will make: a selection cleared since reads as none, and a name
+    /// another layout has (the default's too, case aside) is said to be numbered.
+    #[test]
+    fn the_review_says_a_cleared_selection_and_a_taken_name() {
+        let mut app = app();
+        open(&mut app);
+        app.run("select.byAttributes", json!({"layer": "Cities", "where": "name = 'Tokyo'"})).unwrap();
+        let d = app.dialogs.publication.as_mut().unwrap();
+        (d.area, d.step) = (Area::Selection { map: MapOwner::of(&app.session) }, Step::Review);
+        let mut h = harness(app);
+        assert!(h.query_by_label("Selected features").is_some());
+        assert!(h.query_by_label("Publication").is_some());
+        h.state_mut().run("select.clear", Value::Null).unwrap();
+        h.state_mut().run("layout.new", json!({"name": "publication"})).unwrap();
+        h.state_mut().dialogs.open = Some("publicationWizard");
+        h.run_steps(4);
+        assert!(h.query_by_label("Selected features").is_none());
+        assert!(h.query_by_label("Publication (numbered: a layout has that name)").is_some());
+        h.state_mut().dialogs.publication.as_mut().unwrap().name = " Publication ".into();
+        h.run_steps(4);
+        assert!(h.query_by_label("Publication (numbered: a layout has that name)").is_some());
     }
 
     /// Create frames the layer picked and names the layout as typed; a figure takes both too.
