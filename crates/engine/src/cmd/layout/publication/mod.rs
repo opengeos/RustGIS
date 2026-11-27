@@ -126,6 +126,7 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
     let may_veil = publication_veil(p)?;
     let context_in_legend = publication_flag(p, "contextInLegend")?.unwrap_or(false);
     let (north_arrow, mut arrow_kind) = publication_north_arrow(p)?;
+    let legend = publication_legend(p, s.map())?;
     let legend_box_always = publication_legend_box(p)?;
     // A style or an accent that isn't text is refused, as an unknown one is, rather than left out.
     for k in ["style", "accent"] {
@@ -1084,18 +1085,24 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
     // placement already sets aside, is left out of the legend too, unless "contextInLegend" (#1379).
     // It is judged again at each other scale the search below draws the map at, as the placement
     // judges it there, and the legend takes the one at the scale settled on.
+    // Those "legend" already asks to leave out aren't among them, so the warning doesn't offer to
+    // list them; without a legend there are none.
     let context_at = |s: &Session, center: Coord, scale: f64| {
-        if context_in_legend { Vec::new() } else { legend_context(s.map(), center, scale, (fw, fh)) }
+        let Some(legend) = legend.as_ref().filter(|_| !context_in_legend) else { return Vec::new() };
+        let mut context = legend_context(s.map(), center, scale, (fw, fh));
+        context.retain(|c| !legend.exclude.iter().any(|n| n.eq_ignore_ascii_case(c)));
+        context
     };
+    // The legend's sizes at a render scale: nothing without one.
+    let legend_sizes = |s: &mut Session, scale: f64, context: &[String]| match &legend {
+        None => Some([(0.0, 0.0); PUBLICATION_LEGEND_COLUMNS]),
+        Some(legend) => legend.sizes(s.map_mut(), scale, context, legend_pt),
+    };
+    // Whether a legend picture still loading keeps its size at a render scale unknown.
+    let pictures_pending =
+        |s: &Session, scale: f64| legend.as_ref().is_some_and(|l| crate::render::layout::tile_legends_pending(s.map(), scale, &l.exclude));
     let mut context = context_at(s, center, scale);
-    let mut sizes = crate::render::layout::legend_sizes_in_columns_mm::<PUBLICATION_LEGEND_COLUMNS>(
-        s.map_mut(),
-        render_scale,
-        false,
-        false,
-        (false, legend_pt),
-        (&context, &Default::default()),
-    );
+    let mut sizes = legend_sizes(s, render_scale, &context);
     let (mut cw, mut ch) = match sizes {
         Some(sizes) => sizes[0],
         None => {
@@ -1104,12 +1111,12 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
             (fw * 0.3, fh * 0.25)
         }
     };
-    let listed = s.map().layers.iter().any(|l| s.map().shows(l) && crate::render::layout::legend_lists(l));
+    let listed = legend.is_some() && s.map().layers.iter().any(|l| s.map().shows(l) && crate::render::layout::legend_lists(l));
     if reading && listed {
         (cw, ch) = (cw.max(fw * 0.3), ch.max(fh * 0.25));
         sizes = None;
         warnings.push("the legend's classes aren't known yet (a layer still reading): it has a fixed size to fit by hand".into());
-    } else if crate::render::layout::tile_legends_pending(s.map(), render_scale, &[]) {
+    } else if pictures_pending(s, render_scale) {
         // Not waited for: a slow legend server would hold the command up.
         (cw, ch) = (cw.max(fw * 0.3), ch.max(fh * 0.25));
         sizes = None;
@@ -1361,28 +1368,20 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
                     let reading =
                         s.map_mut().sync_sources_in(&lonlat, own.as_ref(), render_scale, true, &rustgis_data::query::Env::default());
                     let here_context = if tried == asked_scale { context.clone() } else { context_at(s, centred, tried) };
-                    let here =
-                        if reading || (tried != asked_scale && crate::render::layout::tile_legends_pending(s.map(), render_scale, &[])) {
+                    let here = if (reading && legend.is_some()) || (tried != asked_scale && pictures_pending(s, render_scale)) {
+                        unknown_at.get_or_insert(tried);
+                        None
+                    } else if tried == asked_scale {
+                        Some(known)
+                    } else {
+                        // A legend that can't be measured there (a source that can't be read
+                        // through) leaves that scale untried too, which is said.
+                        let measured = legend_sizes(s, render_scale, &here_context);
+                        if measured.is_none() {
                             unknown_at.get_or_insert(tried);
-                            None
-                        } else if tried == asked_scale {
-                            Some(known)
-                        } else {
-                            // A legend that can't be measured there (a source that can't be read
-                            // through) leaves that scale untried too, which is said.
-                            let measured = crate::render::layout::legend_sizes_in_columns_mm::<PUBLICATION_LEGEND_COLUMNS>(
-                                s.map_mut(),
-                                render_scale,
-                                false,
-                                false,
-                                (false, legend_pt),
-                                (&here_context, &Default::default()),
-                            );
-                            if measured.is_none() {
-                                unknown_at.get_or_insert(tried);
-                            }
-                            measured
-                        };
+                        }
+                        measured
+                    };
                     let cells = (384.0 * wide.0.max(wide.1) / fw.max(fh)).round() as u32;
                     // What is context is judged on the frame asked for, not the wide drawing, so
                     // every move's cut leaves out the same layers.
@@ -1463,14 +1462,7 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
                             *here
                         } else {
                             let at_there = crate::render::layout::frame_render_scale(s.map(), there, tried);
-                            let measured = crate::render::layout::legend_sizes_in_columns_mm::<PUBLICATION_LEGEND_COLUMNS>(
-                                s.map_mut(),
-                                at_there,
-                                false,
-                                false,
-                                (false, legend_pt),
-                                (&own_context, &Default::default()),
-                            );
+                            let measured = legend_sizes(s, at_there, &own_context);
                             // A legend that can't be measured there leaves that move untried, which is
                             // said, as at a scale.
                             let Some(measured) = measured else {
@@ -1735,6 +1727,10 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
             .collect();
         arrangement_used = "veil".into();
     }
+    // A legend asked for some columns takes them, whichever of the equal sizes was picked.
+    if let Some(columns) = legend.as_ref().and_then(|l| l.columns) {
+        legend_cols = columns;
+    }
     if let Some(ElementKind::MapFrame { center: at, scale: drawn_at, .. }) = l.element_mut(frame).map(|e| &mut e.kind) {
         (*at, *drawn_at) = (center, scale);
     }
@@ -1871,17 +1867,17 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
                 warnings.push(format!("the legend's box has no room for the colorbar of '{layer}': it is left out"));
             }
         }
-        if ch > 0.0 && rows_h >= 1.0 {
+        if let Some(legend) = legend.as_ref().filter(|_| ch > 0.0 && rows_h >= 1.0) {
             l.add(
                 "Legend",
                 (ix, iy, iw, rows_h),
                 ElementKind::Legend {
                     frame,
-                    title: String::new(),
+                    title: legend.title.clone(),
                     all_classes: false,
                     hide_other: false,
                     show_no_data: false,
-                    exclude: context.clone(),
+                    exclude: legend.left_out(&context),
                     columns: legend_cols,
                     labels: Default::default(),
                     color: None,
@@ -1989,7 +1985,7 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
     }
     let locator = locator_map.map(|(map, ..)| map);
     Ok(
-        json!({"layout": i, "name": name, "profile": profile.id, "page": [w, h], "scale": scale, "grid": step, "locator": locator, "style": style.code(), "arrangement": arrangement_used, "legendColumns": legend_cols, "mapShift": [map_shift.0, map_shift.1], "veiled": veiled.is_some(), "legendBox": legend_rect.is_some() && !legend_bare, "elements": elements, "moved": moved, "coverage": coverage_written, "warnings": warnings}),
+        json!({"layout": i, "name": name, "profile": profile.id, "page": [w, h], "scale": scale, "grid": step, "locator": locator, "style": style.code(), "arrangement": arrangement_used, "legendColumns": legend.as_ref().map(|_| legend_cols), "mapShift": [map_shift.0, map_shift.1], "veiled": veiled.is_some(), "legendBox": legend_rect.is_some() && !legend_bare, "elements": elements, "moved": moved, "coverage": coverage_written, "warnings": warnings}),
     )
 }
 

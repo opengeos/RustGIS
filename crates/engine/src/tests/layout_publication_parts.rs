@@ -256,3 +256,176 @@ fn a_publication_grid_says_what_its_typed_coordinate_system_loses() {
     assert!(said(json!({"type": "measured", "crs": crs})));
     assert!(!said(json!({"type": "measured", "crs": "EPSG:32723"})));
 }
+
+/// The columns, title and layers left out of the layout's legend.
+fn legend(s: &Session) -> (usize, String, Vec<String>) {
+    match &find(s, "Legend").unwrap().kind {
+        ElementKind::Legend { columns, title, exclude, .. } => (*columns, title.clone(), exclude.clone()),
+        k => panic!("{k:?}"),
+    }
+}
+
+/// The name of a sample layer the legend lists.
+fn listed(s: &Session) -> String {
+    s.map().layers.iter().find(|l| s.map().shows(l) && crate::render::layout::legend_lists(l)).unwrap().name.clone()
+}
+
+/// A path for a file of this test run.
+fn temp(name: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("rustgis-3095-{}-{:?}-{name}", std::process::id(), std::thread::current().id()))
+}
+
+/// An A4 sheet of the sample map with a raster on a colour ramp over it, which gets a colorbar.
+fn with_colorbar(parts: Value) -> (Session, Value) {
+    let tif = temp("ramp.tif");
+    std::fs::write(&tif, rustgis_data::raster::cog::example(256, 128)).unwrap();
+    let mut s = world();
+    s.run("layer.addData", &json!({"path": tif.display().to_string()})).unwrap();
+    let r = publish(&mut s, parts).unwrap();
+    (s, r)
+}
+
+#[test]
+fn a_publication_without_a_legend_has_no_legend_and_no_box() {
+    let (s, r) = sheet(json!({"legend": "none", "colorbar": "none"}));
+    assert!(find(&s, "Legend").is_none() && find(&s, "Legend Box").is_none());
+    assert_eq!(r["legendColumns"], Value::Null);
+    assert_eq!(r["legendBox"], json!(false));
+    assert!(!r["warnings"].to_string().contains("legend"), "{}", r["warnings"]);
+}
+
+#[test]
+fn a_publication_without_a_legend_keeps_the_colorbar_in_its_box() {
+    let (s, r) = with_colorbar(json!({"legend": "none"}));
+    assert!(find(&s, "Legend").is_none());
+    let (bx, bar) = (find(&s, "Legend Box").unwrap(), find(&s, "Colorbar").unwrap());
+    let (default, _) = with_colorbar(json!({}));
+    assert!(bx.h < find(&default, "Legend Box").unwrap().h, "{}", bx.h);
+    assert!(bar.y >= bx.y && bar.y + bar.h <= bx.y + bx.h + 1e-6);
+    assert_eq!(r["legendColumns"], Value::Null);
+}
+
+#[test]
+fn a_publication_legend_takes_its_columns() {
+    for n in [1, 2, rustgis_map::layout::MAX_LEGEND_COLUMNS] {
+        for style in ["classic", "panel"] {
+            let (s, r) = sheet(json!({"legend": {"columns": n}, "style": style}));
+            assert_eq!(legend(&s).0, n, "{style} {n}");
+            assert_eq!(r["legendColumns"], json!(n), "{style} {n}");
+        }
+    }
+}
+
+#[test]
+fn a_publication_legend_keeps_its_columns_on_a_veiled_map() {
+    let mut s = Session::new(Project::default());
+    let fill = [-30.0, 35.0, 70.0, 82.0];
+    let [w, so, e, n] = fill;
+    let ring = json!([[[w, so], [e, so], [e, n], [w, n], [w, so]]]);
+    let fc = json!({"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": ring}}]});
+    let path = temp("fill.geojson");
+    std::fs::write(&path, fc.to_string()).unwrap();
+    for _ in 0..30 {
+        s.run("layer.addData", &json!({"path": path.display().to_string()})).unwrap();
+    }
+    let features: Vec<Value> = (0..)
+        .map(|i| so + 0.25 * f64::from(i))
+        .take_while(|lat| *lat <= 61.0)
+        .map(|lat| json!({"type": "Feature", "properties": {}, "geometry": {"type": "Point", "coordinates": [20.0, lat]}}))
+        .collect();
+    let points = temp("points.geojson");
+    std::fs::write(&points, json!({"type": "FeatureCollection", "features": features}).to_string()).unwrap();
+    s.run("layer.addData", &json!({"path": points.display().to_string(), "stream": true, "name": "Column"})).unwrap();
+    let r = s
+        .run(
+            "layout.publication",
+            &json!({"profile": "a4-portrait", "extent": [10.0, 57.0, 30.0, 61.0], "author": "", "locator": "none", "legend": {"columns": 2}}),
+        )
+        .unwrap();
+    assert_eq!(r["veiled"], json!(true), "{r}");
+    assert_eq!((legend(&s).0, r["legendColumns"].as_u64()), (2, Some(2)), "{r}");
+}
+
+#[test]
+fn a_publication_legend_leaves_out_the_layers_asked() {
+    let name = listed(&world());
+    let (s, _) = sheet(json!({"legend": {"exclude": [name.to_uppercase(), name.clone()]}}));
+    let out = legend(&s).2;
+    assert_eq!(out.iter().filter(|n| **n == name).count(), 1, "{out:?}");
+    let (default, _) = sheet(json!({}));
+    assert!(legend(&default).2.iter().all(|n| out.contains(n)), "{out:?}");
+    assert!(find(&s, "Legend Box").unwrap().h < find(&default, "Legend Box").unwrap().h);
+}
+
+#[test]
+fn a_publication_legend_title_is_drawn_and_the_box_grows_to_hold_it() {
+    let (default, _) = sheet(json!({}));
+    let (s, _) = sheet(json!({"legend": {"title": "Leyenda"}}));
+    assert_eq!(legend(&s).1, "Leyenda");
+    let (bx, was) = (find(&s, "Legend Box").unwrap(), find(&default, "Legend Box").unwrap());
+    let title = crate::render::layout::legend_title_mm(rustgis_map::layout::LEGEND_TEXT_PT);
+    assert!((bx.h - was.h - title).abs() < 1e-6, "{} {} {title}", bx.h, was.h);
+    let long = "A legend title much wider than any of its rows";
+    let (wide, _) = sheet(json!({"legend": {"title": long}}));
+    let wanted = crate::render::layout::legend_title_width_mm(long, rustgis_map::layout::LEGEND_TEXT_PT);
+    assert!(find(&wide, "Legend").unwrap().w >= wanted - 1e-6, "{wanted}");
+}
+
+#[test]
+fn a_publication_legend_given_nothing_is_the_default_one() {
+    let elements = |parts: Value| serde_json::to_value(&sheet(parts).0.project.layouts[0].elements).unwrap();
+    let default = elements(json!({}));
+    for legend in [json!(null), json!({}), json!({"title": null, "columns": null, "exclude": null}), json!({"title": "", "exclude": []})] {
+        assert_eq!(elements(json!({"legend": legend})), default, "{legend}");
+    }
+}
+
+#[test]
+fn a_publication_legend_given_wrong_is_refused_and_nothing_is_made() {
+    let most = rustgis_map::layout::MAX_LEGEND_COLUMNS;
+    let columns = format!("columns is a whole number from 1 to {most}");
+    for (given, said) in [
+        (json!({"columns": 0}), columns.as_str()),
+        (json!({"columns": most + 1}), columns.as_str()),
+        (json!({"columns": "2"}), columns.as_str()),
+        (json!({"exclude": ["Nowhere"]}), "no layer 'Nowhere'"),
+        (json!({"exclude": "Cities"}), "exclude is a list of layer names"),
+        (json!({"exclude": [1]}), "exclude is a list of layer names"),
+        (json!({"title": 5}), "title is text"),
+        (json!({"title": "x".repeat(201)}), "title is 201 characters"),
+        (json!({"labels": {}}), "legend takes no \"labels\" (it reads title, columns, exclude)"),
+        (json!({"allClasses": true}), "legend takes no \"allClasses\""),
+        (json!({"hideOther": true}), "legend takes no \"hideOther\""),
+        (json!(5), "legend is \"none\""),
+        (json!(true), "legend is \"none\""),
+        (json!("auto"), "legend is \"none\""),
+    ] {
+        let mut s = world();
+        let maps = s.project.maps.len();
+        let err = publish(&mut s, json!({"legend": given})).unwrap_err();
+        assert!(err.contains(said), "{given}: {err}");
+        assert_eq!((s.project.layouts.len(), s.project.maps.len()), (0, maps), "{given}");
+    }
+}
+
+#[test]
+fn a_saved_publication_that_sets_its_legend_requires_its_capability() {
+    let requires = |legend: Value| {
+        let mut s = world();
+        let step = json!({"tool": "layout.publication", "params": {"legend": legend}});
+        s.project.models.push(serde_json::from_value(json!({"name": "Sheet", "steps": [step]})).unwrap());
+        serde_json::to_value(&s.project).unwrap()["requires"].to_string().contains("layout-publication-legend")
+    };
+    for legend in [json!("none"), json!({"title": "Key"}), json!({"columns": 2}), json!({"exclude": ["Cities"]})] {
+        assert!(requires(legend.clone()), "{legend}");
+    }
+    for legend in [json!(null), json!({}), json!({"title": null, "columns": null})] {
+        assert!(!requires(legend.clone()), "{legend}");
+    }
+}
+
+#[test]
+fn the_publication_legend_fixture_opens_and_keeps_its_requirement() {
+    let fixture = crate::Project::from_json(include_str!("../../../../schema/fixtures/layout_publication_legend.rgis")).unwrap();
+    assert_eq!(serde_json::to_value(&fixture).unwrap()["requires"], json!(["layout-publication-legend"]));
+}
