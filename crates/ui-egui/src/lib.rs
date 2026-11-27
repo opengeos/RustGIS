@@ -5855,7 +5855,7 @@ impl RustGisApp {
             "ui.exportLayer" | "ui.annotationExport" | "ui.exportTable" => {
                 let annotation_export = id == "ui.annotationExport";
                 let table = id == "ui.exportTable";
-                let (command, key) = if table { ("share.exportTable", "table") } else { ("share.exportLayer", "layer") };
+                let (command, target_key) = if table { ("share.exportTable", "table") } else { ("share.exportLayer", "layer") };
                 let ext = p.get("format").and_then(Value::as_str).unwrap_or("geojson").to_ascii_lowercase();
                 let label = dialogs::EXPORT_FORMATS
                     .iter()
@@ -5869,7 +5869,7 @@ impl RustGisApp {
                 let name = self.export_file_name(id, &ext, table, annotation_export)?;
                 let arguments = |path: String| {
                     let mut args = json!({"path": path});
-                    args[key] = json!(id);
+                    args[target_key] = json!(id);
                     for key in ["mode", "tableName"] {
                         if let Some(v) = p.get(key) {
                             args[key] = v.clone();
