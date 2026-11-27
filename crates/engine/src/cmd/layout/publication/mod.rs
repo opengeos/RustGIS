@@ -151,7 +151,7 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
         return Err(format!("{k} is for a sheet with \"style\": \"edge\""));
     }
     // White is the page's own colour, kept as none, as `layout.page` keeps it.
-    let paper = crate::cmd::opaque_color(p, "paper")?.flatten().filter(|c| *c != Rgba::rgb(0xFF, 0xFF, 0xFF));
+    let page_colour = crate::cmd::opaque_color(p, "paper")?.flatten().filter(|c| *c != Rgba::rgb(0xFF, 0xFF, 0xFF));
     let kicker = one("kicker")?;
     // Where the coverage grid the placement searches is written as an image (#1379).
     let coverage_path = match p.get("coverage") {
@@ -547,8 +547,8 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
                         // A kicker, the title and the subtitle at the top left; the map from one side
                         // of the page to the other; under a thin rule, the footer with no boxes. On a
                         // dark paper (the rule a presentation's blank page uses) the texts are light.
-                        let dark =
-                            paper.is_some_and(|c| 0.299 * f64::from(c.r()) + 0.587 * f64::from(c.g()) + 0.114 * f64::from(c.b()) < 140.0);
+                        let dark = page_colour
+                            .is_some_and(|c| 0.299 * f64::from(c.r()) + 0.587 * f64::from(c.g()) + 0.114 * f64::from(c.b()) < 140.0);
                         let (ink, soft) = if dark { (Rgba::rgb(0xF2, 0xEE, 0xE6), Rgba::rgb(0xCF, 0xC6, 0xB8)) } else { (ink, soft) };
                         let mut y = m + pad;
                         if let Some(t) = &kicker {
@@ -854,7 +854,7 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
     let given = crate::cmd::within("name", "a layout's name", ps(p, "name").unwrap_or("Publication").trim(), crate::cmd::MAX_NAME)?;
     let (name, name_cut) = unique_name(s, "New Publication Layout", "the name given", &given);
     let mut l = Layout::new(name.clone(), w, h);
-    (l.decimal_comma, l.paper) = (comma, paper);
+    (l.decimal_comma, l.paper) = (comma, page_colour);
     let (over, under): (Vec<_>, Vec<_>) = page_wide.into_iter().partition(|e| e.3);
     for (n, r, kind, _) in under {
         l.add(&n, r, kind);
