@@ -138,6 +138,23 @@ impl PublicationLegend {
         context: &[String],
         text_pt: f64,
     ) -> Option<[(f64, f64); PUBLICATION_LEGEND_COLUMNS]> {
+        let sizes = self.rows_sizes(map, scale, context, text_pt)?;
+        if self.title.is_empty() {
+            return Some(sizes);
+        }
+        let title_w = crate::render::layout::legend_title_width_mm(&self.title, text_pt);
+        let title_h = crate::render::layout::legend_title_mm(text_pt);
+        Some(sizes.map(|(w, h)| if h > 0.0 { (w.max(title_w), h + title_h) } else { (w, h) }))
+    }
+
+    /// [`PublicationLegend::sizes`] of the rows alone, without the title.
+    pub(super) fn rows_sizes(
+        &self,
+        map: &mut Map,
+        scale: f64,
+        context: &[String],
+        text_pt: f64,
+    ) -> Option<[(f64, f64); PUBLICATION_LEGEND_COLUMNS]> {
         use crate::render::layout::{LegendAsked, legend_size_asked_mm, legend_sizes_in_columns_mm};
         let exclude = self.left_out(context);
         let labels = Default::default();
@@ -156,11 +173,6 @@ impl PublicationLegend {
                 [legend_size_asked_mm(map, scale, &asked, columns)?; PUBLICATION_LEGEND_COLUMNS]
             }
         };
-        if self.title.is_empty() {
-            return Some(sizes);
-        }
-        let title_w = crate::render::layout::legend_title_width_mm(&self.title, text_pt);
-        let title_h = crate::render::layout::legend_title_mm(text_pt);
-        Some(sizes.map(|(w, h)| if h > 0.0 { (w.max(title_w), h + title_h) } else { (w, h) }))
+        Some(sizes)
     }
 }

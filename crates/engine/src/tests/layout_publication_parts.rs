@@ -531,3 +531,13 @@ fn a_publication_without_a_legend_still_waits_for_a_layer_before_moving_the_map(
     assert!(r["warnings"].to_string().contains("a layer there is still reading"), "{r}");
     assert_eq!((r["mapShift"][0].as_f64(), r["veiled"].as_bool()), (Some(0.0), Some(false)), "{r}");
 }
+
+#[test]
+fn a_publication_legend_wider_than_its_box_is_said_under_a_wider_title_too() {
+    // Six columns in a side column don't fit it, and the title is wider than they are.
+    let long = "A very long legend title ".repeat(8);
+    let (_, r) = sheet(json!({"legend": {"title": long, "columns": 6}, "style": "panel"}));
+    let said = r["warnings"].to_string();
+    assert!(said.contains("the legend's title is wider than its box"), "{said}");
+    assert!(said.contains("the legend's columns are wider than its box"), "{said}");
+}

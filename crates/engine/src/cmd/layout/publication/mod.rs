@@ -1921,7 +1921,14 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
         let title_w = title.map_or(0.0, |t| crate::render::layout::legend_title_width_mm(t, legend_pt));
         if title_w > iw + LEGEND_FIT_MM {
             warnings.push("the legend's title is wider than its box: shorten it".into());
-            too_wide &= cw > title_w + LEGEND_FIT_MM;
+            // `cw` holds the title's width too: where the title is the widest, the rows are
+            // measured on their own. Rows of unknown size aren't said to be wider.
+            if let Some(legend) = legend.as_ref().filter(|_| cw <= title_w + LEGEND_FIT_MM) {
+                let at = crate::render::layout::frame_render_scale(s.map(), center, scale);
+                let rows = sizes.and_then(|_| legend.rows_sizes(s.map_mut(), at, &context, legend_pt));
+                let column = legend_cols.min(PUBLICATION_LEGEND_COLUMNS) - 1;
+                too_wide = rows.is_some_and(|rows| rows[column].0 > iw + LEGEND_FIT_MM);
+            }
         }
         warnings.extend(legend_fit_warnings(LegendFit::Manual, legend_cols, (too_wide, too_tall)));
         let short = bar_need > bar_fit + LEGEND_FIT_MM;
