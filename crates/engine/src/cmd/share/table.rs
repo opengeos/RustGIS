@@ -153,7 +153,7 @@ pub(in crate::cmd) fn table_work(s: &Session, p: &Value) -> Result<Work, String>
     let gpkg = super::gpkg_table(p, &ext)?;
     let mut ds = s.project.tables.get(s.table_index(p)?).ok_or("no such table")?.dataset.clone();
     let (sort, limit) = options(&ds, p)?;
-    let download = s.downloads_files();
+    let download = s.download_room()?;
     Ok(Box::new(move || {
         let omitted = ordered(&mut ds, &sort, limit)?;
         let default = ds.name.clone();
@@ -176,8 +176,9 @@ pub(in crate::cmd) fn table_work(s: &Session, p: &Value) -> Result<Work, String>
         notes.extend(rustgis_data::io::export_losses_notes(&ds, &ext, name_field, &path).map_err(|e| e.to_string())?);
         let crs = rustgis_data::raster::Crs::LonLat;
         let mut held = None;
-        let (left_out, table, placed) = if download {
-            let (bytes, left_out, notes, _) = rustgis_data::io::write_bytes_noted(&ds, &ext, crs, &path).map_err(|e| e.to_string())?;
+        let (left_out, table, placed) = if let Some(room) = download {
+            let (bytes, left_out, notes, _) =
+                room.encode(&path, |limit| rustgis_data::io::write_bytes_noted_within(&ds, &ext, crs, &path, limit))?;
             held = Some(std::sync::Arc::new(bytes));
             (left_out, None, notes)
         } else {

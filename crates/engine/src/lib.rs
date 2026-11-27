@@ -1064,6 +1064,9 @@ pub struct Session {
     /// Exercises the browser delivery path with real tools in native engine tests.
     #[cfg(test)]
     queue_gp_files: bool,
+    /// A smaller limit than [`cmd::exports::MAX_DOWNLOAD_BYTES`] for a test to reach.
+    #[cfg(test)]
+    pub(crate) download_cap: Option<usize>,
     /// Asynchronous runs started and not yet complete: (id, job, resolved params, start time).
     #[cfg(feature = "geolibre")]
     pub(crate) started: Vec<(u64, rustgis_geolibre::Job, serde_json::Value, u64, policy::Continuation)>,
@@ -1574,6 +1577,8 @@ impl Session {
             file_outputs: Vec::new(),
             #[cfg(test)]
             queue_gp_files: false,
+            #[cfg(test)]
+            download_cap: None,
             request_only: false,
             shared_steps: StepTally::default(),
             leave_downloads: false,
@@ -1796,6 +1801,34 @@ impl Session {
             return true;
         }
         cfg!(target_arch = "wasm32")
+    }
+
+    /// The most bytes the files waiting for download may hold in all.
+    pub(crate) fn download_cap(&self) -> usize {
+        #[cfg(test)]
+        if let Some(cap) = self.download_cap {
+            return cap;
+        }
+        cmd::exports::MAX_DOWNLOAD_BYTES
+    }
+
+    /// Where files are downloaded, the room for one more; `None` where they are written. Refused
+    /// when no more can wait, before any of it is made.
+    pub(crate) fn download_room(&self) -> Result<Option<cmd::exports::Room>, String> {
+        if !self.downloads_files() {
+            return Ok(None);
+        }
+        let waiting = self.waiting_download_bytes();
+        let bytes = self.download_cap().saturating_sub(waiting);
+        if self.file_outputs.len() >= cmd::exports::MAX_DOWNLOADS || bytes == 0 {
+            return Err(cmd::gp::queue_full(self.download_cap()));
+        }
+        Ok(Some(cmd::exports::Room { bytes, waiting }))
+    }
+
+    /// The bytes of the files waiting to be handed over for download.
+    pub(crate) fn waiting_download_bytes(&self) -> usize {
+        self.file_outputs.iter().filter_map(|f| f.bytes.as_ref()).map(|bytes| bytes.len()).sum()
     }
 
     /// Whether pending download `id` is an export's: no geoprocessing run records it.

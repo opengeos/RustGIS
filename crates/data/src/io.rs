@@ -4,6 +4,7 @@ use std::path::Path;
 
 use serde_json::{Map, Value as Json, json};
 
+use crate::capped::Limit;
 use crate::raster::{Crs, planetary};
 use crate::{Coord, DataError, Dataset, Field, FieldType, Geometry, GeometryType, ReadReport, Result, Value};
 
@@ -1038,6 +1039,18 @@ pub fn write_bytes_noted(
     crs: Crs,
     name: &str,
 ) -> Result<(Vec<u8>, usize, Vec<crate::loss::Note>, rustgis_geom::Extent)> {
+    write_bytes_noted_within(ds, ext, crs, name, &Limit::none())
+}
+
+/// [`write_bytes_noted`] within `limit`: the file, and a zipped format's files before they are
+/// zipped, are refused as soon as they would pass it.
+pub fn write_bytes_noted_within(
+    ds: &Dataset,
+    ext: &str,
+    crs: Crs,
+    name: &str,
+    limit: &Limit,
+) -> Result<(Vec<u8>, usize, Vec<crate::loss::Note>, rustgis_geom::Extent)> {
     let ext = ext.to_ascii_lowercase();
     if crs != Crs::LonLat {
         if !holds_a_system(&ext) {
@@ -1046,11 +1059,11 @@ pub fn write_bytes_noted(
         check_projected(&ext, crs)?;
     }
     if crs == ds.coord_crs() {
-        let (bytes, left_out) = projected_bytes(ds, &ext, crs)?;
+        let (bytes, left_out) = projected_bytes_within(ds, &ext, crs, limit)?;
         return Ok((bytes, left_out, Vec::new(), ds.lonlat_extent()));
     }
     let (projected, unplaced, placed) = project_leaving_out_placed(ds, crs)?;
-    let (bytes, left_out) = projected_bytes(&projected, &ext, crs)?;
+    let (bytes, left_out) = projected_bytes_within(&projected, &ext, crs, limit)?;
     let notes = unplaced_export_note(name, &ds.name, unplaced, crs).into_iter().collect();
     Ok((bytes, left_out, notes, lonlat_extent_placed(ds, crs, placed)))
 }
@@ -1066,31 +1079,80 @@ fn lonlat_extent_placed(ds: &Dataset, crs: Crs, placed: Option<rustgis_geom::Ext
 
 /// [`write_bytes_in`] for a dataset already in `crs`'s coordinates.
 fn projected_bytes(ds: &Dataset, ext: &str, crs: Crs) -> Result<(Vec<u8>, usize)> {
+    projected_bytes_within(ds, ext, crs, &Limit::none())
+}
+
+/// [`projected_bytes`] within `limit` ([`write_bytes_noted_within`]).
+fn projected_bytes_within(ds: &Dataset, ext: &str, crs: Crs, limit: &Limit) -> Result<(Vec<u8>, usize)> {
     crate::progress::begin(ds.features.len());
-    Ok(match ext {
-        "geojson" | "json" => {
-            let mut w = GeoJsonWriter::new(Vec::new(), &ds.name, &ds.fields)?;
-            w.write(&ds.features)?;
-            (w.finish()?, 0)
-        }
-        "csv" => (to_csv_in(ds, crs)?.into_bytes(), 0),
-        "fgb" => (crate::source::fgb::write_in(ds, crs)?, without_geometry(ds)),
-        "parquet" | "geoparquet" => (crate::source::parquet::write_in(ds, crs)?, 0),
-        "kml" => (crate::interop::to_kml(ds, name_field(ds))?.into_bytes(), without_geometry(ds)),
-        "kmz" => {
-            let kml = crate::interop::to_kml(ds, name_field(ds))?.into_bytes();
-            (crate::zip::write(&[("doc.kml".to_string(), kml)]).map_err(DataError::Format)?, without_geometry(ds))
-        }
-        "gpx" => (crate::interop::to_gpx(ds, name_field(ds))?.into_bytes(), gpx_left_out(ds)),
-        "shp" | "zip" => {
-            let (parts, left_out) = shapefile_parts_in(ds, crs)?;
-            let base: String = ds.name.chars().map(|c| if c.is_alphanumeric() || matches!(c, '-' | '_' | ' ') { c } else { '_' }).collect();
-            let base = if base.trim().is_empty() { "layer".to_string() } else { base };
-            let entries: Vec<(String, Vec<u8>)> = parts.into_iter().map(|(e, b)| (format!("{base}.{e}"), b)).collect();
-            (crate::zip::write(&entries).map_err(DataError::Format)?, left_out)
-        }
-        other => return Err(DataError::Unsupported(other.to_string())),
-    })
+    let mut out = limit.buffer();
+    let made = (|| {
+        Ok(match ext {
+            "geojson" | "json" => {
+                write_geojson(ds, &mut out)?;
+                (out.into_inner(), 0)
+            }
+            "csv" => {
+                write_csv(ds, crs, &mut out)?;
+                (out.into_inner(), 0)
+            }
+            "fgb" => {
+                let left_out = without_geometry(ds);
+                crate::source::fgb::write_features(&ds.name, ds.geometry_type, &ds.fields, crs, &mut out, &mut |add| add(&ds.features))?;
+                (out.into_inner(), left_out)
+            }
+            "parquet" | "geoparquet" => {
+                crate::source::parquet::write_features(ds.geometry_type, &ds.fields, crs, &mut out, &mut |add| add(&ds.features))?;
+                (out.into_inner(), 0)
+            }
+            "kml" => {
+                crate::interop::write_kml(ds, name_field(ds), &mut out)?;
+                (out.into_inner(), without_geometry(ds))
+            }
+            "kmz" => {
+                crate::interop::write_kml(ds, name_field(ds), &mut out)?;
+                let kml = out.into_inner();
+                (zipped(&[("doc.kml".to_string(), kml)], limit)?, without_geometry(ds))
+            }
+            "gpx" => {
+                crate::interop::write_gpx(ds, name_field(ds), &mut out)?;
+                (out.into_inner(), gpx_left_out(ds))
+            }
+            "shp" | "zip" => {
+                let (parts, left_out, _) = shapefile_parts_within(ds, crs, None, limit)?;
+                let base: String =
+                    ds.name.chars().map(|c| if c.is_alphanumeric() || matches!(c, '-' | '_' | ' ') { c } else { '_' }).collect();
+                let base = if base.trim().is_empty() { "layer".to_string() } else { base };
+                let entries: Vec<(String, Vec<u8>)> = parts.into_iter().map(|(e, b)| (format!("{base}.{e}"), b)).collect();
+                (zipped(&entries, limit)?, left_out)
+            }
+            other => return Err(DataError::Unsupported(other.to_string())),
+        })
+    })();
+    limit.whole(made)
+}
+
+/// A zip of `entries`, which were held to `limit` as they were made, refused too when it passes
+/// it by itself.
+fn zipped(entries: &[(String, Vec<u8>)], limit: &Limit) -> Result<Vec<u8>> {
+    let zip = crate::zip::write(entries).map_err(DataError::Format)?;
+    limit.admit(zip.len());
+    Ok(zip)
+}
+
+/// The text `data.convert` makes of a dataset in longitude/latitude, in `format` (`geojson`,
+/// `csv`, `kml`, `gpx`, else WKT in a CSV), within `limit`. KML and GPX name placemarks by the
+/// field `name_field`.
+pub fn text_bytes_within(ds: &Dataset, format: &str, name_field: Option<usize>, limit: &Limit) -> Result<Vec<u8>> {
+    let mut out = limit.buffer();
+    let made = match format {
+        "geojson" => write_geojson(ds, &mut out),
+        "csv" => write_csv(ds, Crs::LonLat, &mut out),
+        "kml" => crate::interop::write_kml(ds, name_field, &mut out),
+        "gpx" => crate::interop::write_gpx(ds, name_field, &mut out),
+        _ => crate::interop::write_wkt_csv(ds, &mut out),
+    };
+    limit.whole(made.map(|()| out.into_inner()))
 }
 
 /// Writes a dataset by extension (`.geojson`/`.json`, `.csv`, `.fgb`, `.gpkg` on the desktop,
@@ -2320,9 +2382,18 @@ pub fn to_geojson(ds: &Dataset) -> Json {
 /// A GeoJSON text conversion with per-feature progress and cancellation, of `ds`'s coordinates as
 /// they are: the caller converts a dataset held in another system first ([`Dataset::in_lonlat`]).
 pub fn to_geojson_text(ds: &Dataset) -> Result<String> {
-    let mut writer = GeoJsonWriter::new(Vec::new(), &ds.name, &ds.fields)?;
+    let mut out = Vec::new();
+    write_geojson(ds, &mut out)?;
+    String::from_utf8(out).map_err(|e| DataError::Format(e.to_string()))
+}
+
+/// [`to_geojson_text`]'s collection, written to `out`, buffered: its serializer writes a few
+/// bytes at a time.
+fn write_geojson(ds: &Dataset, out: &mut impl std::io::Write) -> Result<()> {
+    let mut writer = GeoJsonWriter::new(std::io::BufWriter::new(out), &ds.name, &ds.fields)?;
     writer.write(&ds.features)?;
-    String::from_utf8(writer.finish()?).map_err(|e| DataError::Format(e.to_string()))
+    std::io::Write::flush(&mut writer.finish()?)?;
+    Ok(())
 }
 
 /// A feature as a GeoJSON Feature, its attributes named by `fields`.
@@ -3531,9 +3602,17 @@ pub fn to_csv(ds: &Dataset) -> Result<String> {
 /// As [`to_csv`], for a dataset whose coordinates are in `crs`: a projected system's go in x and y
 /// columns ([`csv_projected_names`]).
 pub fn to_csv_in(ds: &Dataset, crs: Crs) -> Result<String> {
-    let mut w = CsvWriter::new(Vec::new(), &ds.fields, ds.geometry_type, crs)?;
+    let mut out = Vec::new();
+    write_csv(ds, crs, &mut out)?;
+    String::from_utf8(out).map_err(|e| DataError::Format(e.to_string()))
+}
+
+/// [`to_csv_in`]'s text, written to `out`.
+fn write_csv(ds: &Dataset, crs: Crs, out: &mut impl std::io::Write) -> Result<()> {
+    let mut w = CsvWriter::new(out, &ds.fields, ds.geometry_type, crs)?;
     w.write(&ds.features)?;
-    String::from_utf8(w.finish()?).map_err(|e| DataError::Format(e.to_string()))
+    w.finish()?;
+    Ok(())
 }
 
 /// Writes CSV a run of features at a time: a header of the fields, and for a point layer
@@ -6128,8 +6207,17 @@ pub(crate) fn shapefile_parts_styled(
     crs: Crs,
     style: Option<&DbfStyle>,
 ) -> Result<(Vec<(&'static str, Vec<u8>)>, usize, Vec<String>)> {
+    shapefile_parts_within(ds, crs, style, &Limit::none())
+}
+
+/// [`shapefile_parts_styled`], the `.shp`, `.shx` and `.dbf` together within `limit`.
+fn shapefile_parts_within(
+    ds: &Dataset,
+    crs: Crs,
+    style: Option<&DbfStyle>,
+    limit: &Limit,
+) -> Result<(Vec<(&'static str, Vec<u8>)>, usize, Vec<String>)> {
     use shapefile::dbase::{FieldName, FieldValue, Record, TableWriterBuilder};
-    use std::io::Cursor;
     let fmt = |e: shapefile::Error| DataError::Format(format!("Shapefile: {e}"));
     let names = dbf_names(&ds.fields);
     let dbf_name = |n: &str| FieldName::try_from(n).map_err(|e| DataError::Format(format!("Shapefile: field {n}: {e}")));
@@ -6185,7 +6273,7 @@ pub(crate) fn shapefile_parts_styled(
 
     let pt = |c: &Coord| shapefile::Point::new(c.x, c.y);
     let finite = |c: &&Coord| c.x.is_finite() && c.y.is_finite();
-    let (mut shp, mut shx, mut dbf) = (Cursor::new(Vec::new()), Cursor::new(Vec::new()), Cursor::new(Vec::new()));
+    let (mut shp, mut shx, mut dbf) = (limit.buffer(), limit.buffer(), limit.buffer());
     let mut left_out = 0;
     let mut written = 0;
     {

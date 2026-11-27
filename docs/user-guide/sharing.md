@@ -92,7 +92,10 @@ folder in the path isn't used, and a `.shp` path downloads a `.zip` of the Shape
 notice says each. At most 8 files, 256 MiB in all, can wait to be downloaded (a geoprocessing
 tool's file output waits the same way), and those of a script that then fails, or of a project
 replaced before they are offered, are dropped with a notice. A tool output dropped this way leaves
-its run out of the geoprocessing history.
+its run out of the geoprocessing history. An export is refused once its file passes what is left of
+the 256 MiB, as it is made where the format allows, and for a Shapefile's `.zip` or a KMZ counting
+its files before they are zipped: export a selection of features, a smaller size or fewer pages,
+or use the desktop app.
 `share.exportLayer` and `data.convert` read a layer read in place whole for such a download, up to
 256 MiB of features; past that, select the features you need and export a layer made from them with
 **Make Layer From Selected Features**, or use the desktop app. They don't read a layer added by its

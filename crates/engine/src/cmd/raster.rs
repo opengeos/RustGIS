@@ -1299,23 +1299,23 @@ pub(crate) fn export_work(s: &Session, p: &Value) -> Result<super::exports::Work
     let (id, r) = get(s, p)?;
     let bi = band(p, "band", &r)?.unwrap_or(0);
     let cog = b(p, "cog") == Some(true);
-    let download = s.downloads_files();
+    let download = s.download_room()?;
     if let Some(bytes) = written_export(s, id, &r, bi, cog) {
         return Ok(Box::new(move || {
             // One write of bytes the layer holds, with no look at Cancel inside it: looked at before.
             rustgis_data::progress::check().map_err(|e| e.to_string())?;
-            let held = super::exports::place(download, &path, bytes)?;
+            let held = super::exports::place(download.is_some(), &path, bytes)?;
             let wrote = wrote_geotiff(&r, bi, &path, None, "give \"band\" for another")?;
             Ok(super::exports::Wrote { download: held, ..wrote })
         }));
     }
-    if download {
+    if let Some(room) = download {
         return Ok(Box::new(move || {
             let (bytes, cog) = if cog {
-                let (bytes, info) = raster::cogwrite::write_with_info(&r, bi).map_err(|e| format!("{path}: {e}"))?;
+                let (bytes, info) = room.encode(&path, |limit| raster::cogwrite::write_with_info_within(&r, bi, limit))?;
                 (bytes, Some(info))
             } else {
-                (raster::geotiff::write(&r, bi).map_err(|e| format!("{path}: {e}"))?, None)
+                (room.encode(&path, |limit| raster::geotiff::write_within(&r, bi, limit))?, None)
             };
             let wrote = wrote_geotiff(&r, bi, &path, cog, "give \"band\" for another")?;
             Ok(super::exports::Wrote { download: Some(Arc::new(bytes)), ..wrote })

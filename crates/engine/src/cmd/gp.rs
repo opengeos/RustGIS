@@ -3870,20 +3870,32 @@ pub(super) fn queue_export(s: &mut Session, mut wrote: super::exports::Wrote) ->
     Ok(out)
 }
 
+/// Why no more can wait for download, of the `cap` bytes that waiting files may hold in all.
+pub(crate) fn queue_full(cap: usize) -> String {
+    format!(
+        "file export queue limit reached ({} files or {} MiB); split the task, model, or script into smaller runs",
+        super::exports::MAX_DOWNLOADS,
+        super::exports::mib(cap)
+    )
+}
+
 /// Holds `bytes` for the front end to offer as the download `file_name` and acknowledge with
 /// `gp.fileDelivered`, within what the queue holds.
 fn queue(s: &mut Session, file_name: String, bytes: Arc<Vec<u8>>, from: Delivery) -> CmdResult {
-    const MAX_PENDING_BYTES: usize = super::exports::MAX_DOWNLOAD_BYTES;
-    let held = s.file_outputs.iter().filter_map(|f| f.bytes.as_ref()).map(|bytes| bytes.len()).sum::<usize>();
-    if matches!(from, Delivery::Export(_)) && bytes.len() > MAX_PENDING_BYTES {
+    use super::exports::{MAX_DOWNLOADS, mib};
+    let cap = s.download_cap();
+    let held = s.waiting_download_bytes();
+    // An export whose writer takes a limit was stopped at it; this is what holds the others (a
+    // picture, an SVG, a PDF past its pages, the file a raster layer holds) to it.
+    if matches!(from, Delivery::Export(_)) && bytes.len() > cap {
         return Err(format!(
             "{file_name}: {} MiB, more than the {} MiB a command can download in the browser; export less (a selection of features, a smaller size or fewer pages), use the Export buttons, or use the desktop app",
-            bytes.len().div_ceil(1024 * 1024),
-            MAX_PENDING_BYTES / (1024 * 1024)
+            mib(bytes.len()),
+            mib(cap)
         ));
     }
-    if s.file_outputs.len() >= 8 || bytes.len() > MAX_PENDING_BYTES.saturating_sub(held) {
-        return Err("file export queue limit reached (8 files or 256 MiB); split the task, model, or script into smaller runs".into());
+    if s.file_outputs.len() >= MAX_DOWNLOADS || bytes.len() > cap.saturating_sub(held) {
+        return Err(queue_full(cap));
     }
     s.next_pending = s.next_pending.wrapping_add(1);
     let id = s.next_pending;

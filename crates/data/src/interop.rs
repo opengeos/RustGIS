@@ -77,10 +77,23 @@ fn kml_geometry(g: &Geometry) -> String {
 /// A KML document, one placemark per feature, named by `name_field` and with every attribute.
 /// A cancelled run ([`crate::progress`]) stops it with [`crate::DataError::Cancelled`].
 pub fn to_kml(ds: &Dataset, name_field: Option<usize>) -> crate::Result<String> {
-    let mut out = format!(
+    let mut out = Vec::new();
+    write_kml(ds, name_field, &mut out)?;
+    text(out)
+}
+
+/// What a writer of text made, as a string.
+fn text(out: Vec<u8>) -> crate::Result<String> {
+    String::from_utf8(out).map_err(|e| crate::DataError::Format(e.to_string()))
+}
+
+/// [`to_kml`]'s document, written to `out` a placemark at a time.
+pub(crate) fn write_kml(ds: &Dataset, name_field: Option<usize>, out: &mut impl std::io::Write) -> crate::Result<()> {
+    write!(
+        out,
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<kml xmlns=\"http://www.opengis.net/kml/2.2\"><Document><name>{}</name>\n",
         xml(&ds.name, "KML", || "layer name".to_string())?
-    );
+    )?;
     // KML's description is text. Other types and differently-cased columns stay in
     // ExtendedData, where the reader preserves their values and reports name collisions.
     let description = ds.fields.iter().position(|f| f.name == "description" && f.ty == crate::FieldType::Text);
@@ -114,52 +127,65 @@ pub fn to_kml(ds: &Dataset, name_field: Option<usize>) -> crate::Result<String> 
                 Ok(format!("<Data name=\"{name}\"><value>{value}</value></Data>"))
             })
             .collect::<crate::Result<String>>()?;
-        out.push_str(&format!(
-            "<Placemark><name>{}</name>{description}<ExtendedData>{data}</ExtendedData>{}</Placemark>\n",
+        writeln!(
+            out,
+            "<Placemark><name>{}</name>{description}<ExtendedData>{data}</ExtendedData>{}</Placemark>",
             xml(&name, "KML", || feature_place(&ds.name, f.id, "name"))?,
             kml_geometry(g)
-        ));
+        )?;
     }
-    out.push_str("</Document></kml>\n");
-    Ok(out)
+    out.write_all(b"</Document></kml>\n")?;
+    Ok(())
 }
 
 /// A GPX file: points become waypoints, lines tracks (polygon outlines too).
 /// A cancelled run ([`crate::progress`]) stops it with [`crate::DataError::Cancelled`].
 pub fn to_gpx(ds: &Dataset, name_field: Option<usize>) -> crate::Result<String> {
-    let mut out = String::from(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<gpx version=\"1.1\" creator=\"RustGIS\" xmlns=\"http://www.topografix.com/GPX/1/1\">\n",
-    );
+    let mut out = Vec::new();
+    write_gpx(ds, name_field, &mut out)?;
+    text(out)
+}
+
+/// [`to_gpx`]'s document, written to `out` a feature at a time: GPX holds its waypoints before
+/// its tracks, so the features are gone through for each, and no track waits in memory.
+pub(crate) fn write_gpx(ds: &Dataset, name_field: Option<usize>, out: &mut impl std::io::Write) -> crate::Result<()> {
+    out.write_all(
+        b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<gpx version=\"1.1\" creator=\"RustGIS\" xmlns=\"http://www.topografix.com/GPX/1/1\">\n",
+    )?;
     let pt = |c: &Coord| format!("lat=\"{}\" lon=\"{}\"", c.y, c.x);
-    let mut tracks = String::new();
-    for (r, f) in ds.features.iter().enumerate() {
-        crate::progress::step(1)?;
-        let Some(g) = &f.geometry else { continue };
-        let name = name_field.map(|fi| ds.value(r, fi).to_file_text()).unwrap_or_else(|| f.id.to_string());
-        let name = xml(&name, "GPX", || feature_place(&ds.name, f.id, "name"))?;
-        match g {
-            Geometry::Point(c) => out.push_str(&format!("<wpt {}><name>{name}</name></wpt>\n", pt(c))),
-            Geometry::MultiPoint(v) => v.iter().for_each(|c| out.push_str(&format!("<wpt {}><name>{name}</name></wpt>\n", pt(c)))),
-            Geometry::Line(parts) => {
-                let segs: String = parts
-                    .iter()
-                    .map(|p| format!("<trkseg>{}</trkseg>", p.iter().map(|c| format!("<trkpt {}/>", pt(c))).collect::<String>()))
-                    .collect();
-                tracks.push_str(&format!("<trk><name>{name}</name>{segs}</trk>\n"));
+    let segment = |p: &Vec<Coord>| format!("<trkseg>{}</trkseg>", p.iter().map(|c| format!("<trkpt {}/>", pt(c))).collect::<String>());
+    for tracks in [false, true] {
+        for (r, f) in ds.features.iter().enumerate() {
+            // Each feature counts once, in the first pass.
+            if tracks {
+                crate::progress::check()?;
+            } else {
+                crate::progress::step(1)?;
             }
-            Geometry::Polygon(polys) => {
-                let segs: String = polys
-                    .iter()
-                    .filter_map(|r| r.first())
-                    .map(|p| format!("<trkseg>{}</trkseg>", p.iter().map(|c| format!("<trkpt {}/>", pt(c))).collect::<String>()))
-                    .collect();
-                tracks.push_str(&format!("<trk><name>{name}</name>{segs}</trk>\n"));
+            let Some(g) = &f.geometry else { continue };
+            let name = name_field.map(|fi| ds.value(r, fi).to_file_text()).unwrap_or_else(|| f.id.to_string());
+            let name = xml(&name, "GPX", || feature_place(&ds.name, f.id, "name"))?;
+            match g {
+                Geometry::Point(c) if !tracks => writeln!(out, "<wpt {}><name>{name}</name></wpt>", pt(c))?,
+                Geometry::MultiPoint(v) if !tracks => {
+                    for c in v {
+                        writeln!(out, "<wpt {}><name>{name}</name></wpt>", pt(c))?;
+                    }
+                }
+                Geometry::Line(parts) if tracks => {
+                    let segs: String = parts.iter().map(segment).collect();
+                    writeln!(out, "<trk><name>{name}</name>{segs}</trk>")?;
+                }
+                Geometry::Polygon(polys) if tracks => {
+                    let segs: String = polys.iter().filter_map(|r| r.first()).map(segment).collect();
+                    writeln!(out, "<trk><name>{name}</name>{segs}</trk>")?;
+                }
+                _ => {}
             }
         }
     }
-    out.push_str(&tracks);
-    out.push_str("</gpx>\n");
-    Ok(out)
+    out.write_all(b"</gpx>\n")?;
+    Ok(())
 }
 
 /// Well-known text for a geometry.
@@ -528,26 +554,31 @@ pub(crate) fn wkt_csv_text(s: &str) -> String {
 
 /// CSV with a `wkt` geometry column and every attribute; cancellable between features.
 pub fn to_wkt_csv(ds: &Dataset) -> crate::Result<String> {
+    let mut out = Vec::new();
+    write_wkt_csv(ds, &mut out)?;
+    text(out)
+}
+
+/// [`to_wkt_csv`]'s text, written to `out` a row at a time.
+pub(crate) fn write_wkt_csv(ds: &Dataset, out: &mut impl std::io::Write) -> crate::Result<()> {
     let q = |s: &str| {
         let s = wkt_csv_text(s);
         if s.contains([',', '"', '\n', '\r']) { format!("\"{}\"", s.replace('"', "\"\"")) } else { s }
     };
-    let mut out = String::from("wkt");
+    out.write_all(b"wkt")?;
     for f in &ds.fields {
-        out.push(',');
-        out.push_str(&q(&f.name));
+        write!(out, ",{}", q(&f.name))?;
     }
-    out.push('\n');
+    out.write_all(b"\n")?;
     for f in &ds.features {
         crate::progress::step(1)?;
-        out.push_str(&q(&f.geometry.as_ref().map(wkt).unwrap_or_default()));
+        out.write_all(q(&f.geometry.as_ref().map(wkt).unwrap_or_default()).as_bytes())?;
         for v in &f.attrs {
-            out.push(',');
-            out.push_str(&q(&v.to_file_text()));
+            write!(out, ",{}", q(&v.to_file_text()))?;
         }
-        out.push('\n');
+        out.write_all(b"\n")?;
     }
-    Ok(out)
+    Ok(())
 }
 
 #[cfg(test)]

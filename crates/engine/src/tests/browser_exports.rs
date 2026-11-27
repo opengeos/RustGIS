@@ -383,6 +383,82 @@ fn a_browser_export_of_a_large_streamed_layer_is_refused() {
     }
 }
 
+/// Every export command that downloads, over the limit (a stand-in of ten bytes): its
+/// writer stops once the file passes it, nothing waits to be downloaded, and the refusal says
+/// how to export. A picture's size is bounded by its pixels, so a PNG, an SVG, and the file a
+/// raster layer already holds are refused once made. Under the limit, each downloads.
+#[test]
+fn a_browser_export_over_the_limit_is_stopped_as_it_is_made() {
+    const STOPPED: &str = "stopped once the file passed";
+    const MADE: &str = "more than the 1 MiB a command can download";
+    let cases = [
+        ("share.exportTable", json!({"table": "Totals"}), "t.csv", STOPPED),
+        ("share.exportTable", json!({"table": "Totals"}), "t.geojson", STOPPED),
+        ("share.exportLayer", json!({"layer": "Places"}), "z.geojson", STOPPED),
+        ("share.exportLayer", json!({"layer": "Places"}), "z.csv", STOPPED),
+        ("share.exportLayer", json!({"layer": "Places"}), "z.parquet", STOPPED),
+        ("share.exportLayer", json!({"layer": "Places"}), "z.kml", STOPPED),
+        ("share.exportLayer", json!({"layer": "Places"}), "z.kmz", STOPPED),
+        ("share.exportLayer", json!({"layer": "Places"}), "z.gpx", STOPPED),
+        ("share.exportLayer", json!({"layer": "Places"}), "z.zip", STOPPED),
+        ("data.convert", json!({"layer": "Places", "format": "geojson"}), "z.geojson", STOPPED),
+        ("data.convert", json!({"layer": "Places", "format": "csv"}), "z.csv", STOPPED),
+        ("data.convert", json!({"layer": "Places", "format": "kml"}), "z.kml", STOPPED),
+        ("data.convert", json!({"layer": "Places", "format": "gpx"}), "z.gpx", STOPPED),
+        ("data.convert", json!({"layer": "Places", "format": "wkt"}), "z.txt", STOPPED),
+        ("share.exportRaster", json!({"layer": "Dem"}), "dem.tif", STOPPED),
+        ("share.exportRaster", json!({"layer": "Dem", "cog": true}), "cog.tif", STOPPED),
+        ("share.exportMap", json!({"width": 64, "height": 64}), "map.tif", STOPPED),
+        ("share.exportMap", json!({"width": 64, "height": 64, "cog": true}), "mapcog.tif", STOPPED),
+        ("layout.export", json!({"layout": "Page", "dpi": 72}), "page.pdf", STOPPED),
+        ("report.export", json!({"report": "List", "dpi": 72}), "list.pdf", STOPPED),
+        ("share.exportMap", json!({"width": 64, "height": 64}), "map.png", MADE),
+        ("layout.export", json!({"layout": "Page", "dpi": 72}), "page.png", MADE),
+        ("layout.export", json!({"layout": "Page", "dpi": 72}), "page.svg", MADE),
+        ("report.export", json!({"report": "List", "dpi": 72}), "list.png", MADE),
+        ("share.exportRaster", json!({"layer": "Made"}), "made.tif", MADE),
+    ];
+    for (command, ..) in crate::cmd::exports::IN_BACKGROUND {
+        assert!(cases.iter().any(|c| c.0 == *command) || REFUSED.iter().any(|r| r.0 == *command), "{command}");
+    }
+    let files = Files::new();
+    let mut s = session(&files, true);
+    let (r, tif) = raster("Made", 1);
+    s.map_mut().add_raster("Made", rustgis_map::RasterLayer::from_written(r, "made.tif", tif));
+    for (command, params, file, refusal) in cases {
+        s.download_cap = Some(10);
+        let e = s.run(command, &to(&params, file)).unwrap_err();
+        assert!(e.contains(file) && e.contains(refusal) && e.contains("export less"), "{command} {file}: {e}");
+        assert!(e.contains("desktop app"), "{e}");
+        assert!(s.take_gp_files().is_empty(), "{command} {file}");
+        s.download_cap = Some(1 << 20);
+        let pending = s.run(command, &to(&params, file)).unwrap_or_else(|e| panic!("{command} {file}: {e}"));
+        let (_, bytes, answer) = deliver(&mut s, &pending, None);
+        assert!(!bytes.is_empty() && bytes.len() <= 1 << 20, "{command} {file}: {}", bytes.len());
+        answer.unwrap();
+    }
+}
+
+/// The limit is what the downloads waiting leave of it: an export that would fit by itself is
+/// refused, saying what is waiting, and a full queue is refused before anything is made.
+#[test]
+fn a_browser_export_is_held_to_what_the_waiting_downloads_leave() {
+    let files = Files::new();
+    let mut s = session(&files, true);
+    let table = |path: &str| json!({"table": "Totals", "path": path});
+    s.run("share.exportTable", &table("first.csv")).unwrap();
+    let first = s.file_outputs.iter().filter_map(|f| f.bytes.as_ref()).map(|b| b.len()).sum::<usize>();
+    s.download_cap = Some(first * 2 - 1);
+    let e = s.run("share.exportTable", &table("second.csv")).unwrap_err();
+    assert!(e.contains("second.csv: stopped once the file passed") && e.contains("already waiting"), "{e}");
+    assert!(e.contains("split the task"), "{e}");
+    s.download_cap = Some(first * 2);
+    s.run("share.exportTable", &table("second.csv")).unwrap();
+    let e = s.run("share.exportTable", &table("third.csv")).unwrap_err();
+    assert!(e.contains("file export queue limit reached"), "{e}");
+    assert_eq!(s.take_gp_files().len(), 2);
+}
+
 /// An export queued in a project a command opened, before that command fails, is said to be
 /// dropped; one that waited in the project given back still waits.
 #[test]

@@ -15,6 +15,7 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 use rustgis_data::Dataset;
+use rustgis_data::capped::Limit;
 use serde_json::Value;
 
 use crate::{CmdResult, Session};
@@ -104,9 +105,49 @@ pub(crate) fn place(download: bool, path: &str, bytes: impl Into<Arc<Vec<u8>>>) 
     Ok(None)
 }
 
+/// The most files that wait for download at once.
+pub(crate) const MAX_DOWNLOADS: usize = 8;
+
+/// The room for one more download: what the files waiting leave of the most bytes they may hold
+/// in all ([`Session::download_room`]).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Room {
+    pub(crate) bytes: usize,
+    /// What the files already waiting hold.
+    pub(crate) waiting: usize,
+}
+
+impl Room {
+    /// Why `path`'s file, stopped as it passed the room, can't be downloaded, and what to do.
+    pub(crate) fn refusal(self, path: &str) -> String {
+        let cap = mib(self.bytes.saturating_add(self.waiting));
+        let ways = "export less (a selection of features, a smaller size or fewer pages), use the Export buttons, or use the desktop app";
+        if self.waiting == 0 {
+            format!("{path}: stopped once the file passed the {cap} MiB a command can download in the browser; {ways}")
+        } else {
+            format!(
+                "{path}: stopped once the file passed what is left of the {cap} MiB that downloads can hold in the browser, {} MiB of it taken by those already waiting; split the task, model, or script into smaller runs, {ways}",
+                mib(self.waiting)
+            )
+        }
+    }
+
+    /// `path`'s file as `make` encodes it, stopped as soon as it passes the room, so no more of
+    /// it is ever held.
+    pub(crate) fn encode<T>(self, path: &str, make: impl FnOnce(&Limit) -> rustgis_data::Result<T>) -> Result<T, String> {
+        let limit = Limit::new(self.bytes);
+        make(&limit).map_err(|e| if limit.passed() { self.refusal(path) } else { format!("{path}: {e}") })
+    }
+}
+
+/// `bytes` in MiB, rounded up.
+pub(crate) fn mib(bytes: usize) -> usize {
+    bytes.div_ceil(1 << 20)
+}
+
 /// The most feature storage a layer read in place may take while its download is made, and the
-/// most a command's download may be. The features and the file are held at once, in the browser's
-/// memory. A fixed figure: the browser can't say what memory it has free, so
+/// most the files waiting for download may hold. The features and the file are held at once, in
+/// the browser's memory. A fixed figure: the browser can't say what memory it has free, so
 /// `rustgis_data::memory::planned` would give its floor there.
 pub(crate) const MAX_DOWNLOAD_BYTES: usize = 256 << 20;
 
