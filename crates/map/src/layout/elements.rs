@@ -115,7 +115,8 @@ pub enum ElementKind {
         exclude: Vec<String>,
         /// The columns its rows are laid in, 1 to [`MAX_LEGEND_COLUMNS`], under its title: as even
         /// as they can be, a layer's name staying with the row under it. Under a fit that adds
-        /// columns ([`LegendFit::adds_columns`]), the fewest it starts from.
+        /// columns ([`LegendFit::AdjustColumns`], [`LegendFit::AdjustColumnsAndSize`]), the fewest
+        /// it starts from.
         #[serde(default = "one_column", skip_serializing_if = "is_one_column")]
         columns: usize,
         /// The label it shows for a layer instead of the layer's name, by the layer's name (any

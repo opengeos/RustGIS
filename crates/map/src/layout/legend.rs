@@ -69,16 +69,6 @@ impl LegendFit {
     pub fn is_manual(&self) -> bool {
         self.kept() == LegendFit::Manual
     }
-
-    /// Whether this fit adds columns to those set.
-    pub fn adds_columns(self) -> bool {
-        matches!(self.kept(), LegendFit::AdjustColumns | LegendFit::AdjustColumnsAndSize)
-    }
-
-    /// Whether this fit shrinks the text from the size set.
-    pub fn shrinks_text(self) -> bool {
-        matches!(self.kept(), LegendFit::AdjustSize | LegendFit::AdjustColumnsAndSize)
-    }
 }
 
 impl Serialize for LegendFit {

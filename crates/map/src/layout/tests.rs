@@ -929,7 +929,6 @@ fn legend_fit_and_layer_names_save_only_when_set_and_load_into_range() {
         assert_eq!(LegendFit::from_name(f.code()), Some(f), "{f:?}");
     }
     assert_eq!(LegendFit::ALL.map(LegendFit::label), ["Manual", "Shrink the text", "Add columns", "Add columns, then shrink the text"]);
-    assert_eq!(LegendFit::ALL.map(|f| (f.adds_columns(), f.shrinks_text())), [(false, false), (false, true), (true, false), (true, true)]);
     assert_eq!((LegendFit::Invalid.kept(), LayerNames::Invalid.kept()), (LegendFit::Manual, LayerNames::Shown));
     assert!(LayerNames::Invalid.shown() && LayerNames::from_shown(true).shown() && !LayerNames::from_shown(false).shown());
     // An unclamped marker writes as the default, and needs nothing: byte for byte the plain one.
