@@ -218,7 +218,9 @@ fn header_branding(ui: &mut Ui, app: &mut RustGisApp, right: f32, tokens: &Token
 
 /// Fits as many toolbar items as the header has room for. At the narrowest width, search joins the overflow.
 fn quick_access(ui: &mut Ui, app: &mut RustGisApp, right: f32, separate_search: bool) {
-    let pinned = app.ui.quick_access.clone();
+    // A pinned command of an extension that is off stays pinned, and isn't shown (#1752).
+    let mut pinned = app.ui.quick_access.clone();
+    pinned.retain(|id| !crate::extensionsui::hidden(app, id));
     let mut items = vec![
         ("project.new", "new", "New project"),
         ("ui.open", "open", "Open project"),
@@ -637,6 +639,47 @@ pub fn status_bar(app: &mut RustGisApp, ui: &mut Ui) {
         });
 }
 
+/// How the strip of work running off the frame is drawn: in the desktop's status bar, or at a
+/// finger's size for a shell with its own interface ([`RustGisApp::chrome`]).
+#[derive(Clone, Copy)]
+pub(crate) struct StripSize {
+    /// The size of its words.
+    pub(crate) text: f32,
+    finger: bool,
+}
+
+impl StripSize {
+    pub(crate) fn of(app: &RustGisApp) -> StripSize {
+        let finger = app.chrome.is_some();
+        StripSize { text: if finger { 14.0 } else { 11.5 }, finger }
+    }
+
+    /// A job's progress bar, `fraction` of the way.
+    pub(crate) fn progress(self, ui: &mut Ui, fraction: f32) {
+        let height = if self.finger { 20.0 } else { 12.0 };
+        ui.add(egui::ProgressBar::new(fraction).show_percentage().desired_width(120.0).desired_height(height));
+    }
+
+    /// A job's Cancel where a finger's strip has it, before the job's words, so it is in sight
+    /// however long they are. Says whether it was tapped; nothing in the status bar.
+    pub(crate) fn cancel_first(self, ui: &mut Ui, enabled: bool) -> bool {
+        let size = vec2(FINGER_CANCEL, FINGER);
+        self.finger && ui.add_enabled(enabled, egui::Button::new(egui::RichText::new(tl!("Cancel")).size(16.0)).min_size(size)).clicked()
+    }
+
+    /// A job's Cancel where the status bar has it, after the job's words. Says whether it was
+    /// clicked; nothing in a finger's strip.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn cancel_last(self, ui: &mut Ui, enabled: bool) -> bool {
+        !self.finger && ui.add_enabled(enabled, egui::Button::new(tl!("Cancel")).small()).clicked()
+    }
+}
+
+/// The height of what a finger taps, in points (Android's guidance is 48).
+pub(crate) const FINGER: f32 = 48.0;
+/// The width of a finger's strip's Cancel.
+const FINGER_CANCEL: f32 = 88.0;
+
 /// Restored local FlatGeobuf layers classify dates off the frame, including hidden maps.
 /// This status keeps progress and Cancel available until those scans finish.
 #[cfg(not(target_arch = "wasm32"))]
@@ -653,15 +696,19 @@ fn source_open_status(app: &RustGisApp, ui: &mut Ui, t: &Tokens) {
     if sources.is_empty() {
         return;
     }
+    let size = StripSize::of(app);
+    let cancellable = sources.iter().any(|(_, (_, _, cancelled))| !cancelled);
     sep(ui, t);
     ui.spinner();
-    ui.label(egui::RichText::new(tl!("Reading dates…")).size(11.5).color(t.text_dim));
+    let mut cancel = size.cancel_first(ui, cancellable);
+    ui.label(egui::RichText::new(tl!("Reading dates…")).size(size.text).color(t.text_dim));
     let (done, total) =
         sources.iter().fold((0u64, 0u64), |(done, total), (_, (d, n, _))| (done.saturating_add(*d), total.saturating_add(*n)));
     if total > 0 && sources.iter().all(|(_, (_, n, _))| *n > 0) {
-        ui.add(egui::ProgressBar::new((done as f32 / total as f32).min(1.0)).show_percentage().desired_width(120.0).desired_height(12.0));
+        size.progress(ui, (done as f32 / total as f32).min(1.0));
     }
-    if ui.add_enabled(sources.iter().any(|(_, (_, _, cancelled))| !cancelled), egui::Button::new(tl!("Cancel")).small()).clicked() {
+    cancel |= size.cancel_last(ui, cancellable);
+    if cancel {
         for (source, _) in sources {
             source.cancel_opening();
         }
@@ -718,16 +765,23 @@ fn window_reads_under_way(app: &RustGisApp) -> bool {
 /// (`RustGisApp::cancel_download`): one in the bar itself, several as a menu of them.
 fn downloads_status(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     let under_way = app.downloads_under_way();
+    let size = StripSize::of(app);
     let mut cancel = None;
     ui.spinner();
     match under_way.as_slice() {
         [] => {}
-        [one] => download_row(ui, t, one, &mut cancel),
+        [one] => download_row(ui, t, size, one, &mut cancel),
         many => {
-            ui.menu_button(crate::i18n::fmt("{n} downloads", &[("n", &many.len().to_string())]), |ui| {
-                for d in many {
-                    ui.horizontal(|ui| download_row(ui, t, d, &mut cancel));
+            ui.scope(|ui| {
+                // A finger opens the menu too; what the strip draws after it keeps its own size.
+                if size.finger {
+                    ui.spacing_mut().interact_size.y = FINGER;
                 }
+                ui.menu_button(crate::i18n::fmt("{n} downloads", &[("n", &many.len().to_string())]), |ui| {
+                    for d in many {
+                        ui.horizontal(|ui| download_row(ui, t, size, d, &mut cancel));
+                    }
+                });
             });
         }
     }
@@ -742,7 +796,11 @@ fn downloads_status(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
 /// progress and its Cancel. A file's whole download shows a bar once the server said its size and
 /// the megabytes read before; a window's read ("Reading…", as its start notice says) isn't
 /// counted, nor is a download in the browser.
-fn download_row(ui: &mut Ui, t: &Tokens, d: &crate::UnderWay, cancel: &mut Option<u64>) {
+fn download_row(ui: &mut Ui, t: &Tokens, size: StripSize, d: &crate::UnderWay, cancel: &mut Option<u64>) {
+    let hint = tl!("Stop this download; nothing is added");
+    if size.cancel_first(ui, true) {
+        *cancel = Some(d.id);
+    }
     let received = d.progress.as_ref().map_or(0, |p| p.received());
     let fraction = d.progress.as_ref().and_then(|p| p.fraction());
     let doing = match (&d.progress, fraction) {
@@ -752,14 +810,14 @@ fn download_row(ui: &mut Ui, t: &Tokens, d: &crate::UnderWay, cancel: &mut Optio
         }
         (Some(_), _) => tl!("Downloading…").to_string(),
     };
-    ui.label(egui::RichText::new(doing).size(11.5).color(t.text_dim));
+    ui.label(egui::RichText::new(doing).size(size.text).color(t.text_dim));
     let short: String =
         if d.shown.chars().count() > 48 { format!("{}…", d.shown.chars().take(47).collect::<String>()) } else { d.shown.clone() };
-    ui.label(egui::RichText::new(short).size(11.5)).on_hover_text(&d.shown);
+    ui.label(egui::RichText::new(short).size(size.text)).on_hover_text(&d.shown);
     if let Some(f) = fraction {
-        ui.add(egui::ProgressBar::new(f).show_percentage().desired_width(120.0).desired_height(12.0));
+        size.progress(ui, f);
     }
-    if ui.small_button(tl!("Cancel")).on_hover_text(tl!("Stop this download; nothing is added")).clicked() {
+    if !size.finger && ui.small_button(tl!("Cancel")).on_hover_text(hint).clicked() {
         *cancel = Some(d.id);
     }
 }
@@ -820,6 +878,9 @@ fn parse_scale(text: &str) -> Option<f64> {
 
 /// Global keyboard shortcuts.
 pub fn shortcuts(app: &mut RustGisApp, ctx: &egui::Context) {
+    if app.ui.command_search.is_some() {
+        return;
+    }
     // Behind a dialog (Save changes?, Recover unsaved work?, Command Search…) the keys are the
     // dialog's: Escape answers it rather than switching tools, and Ctrl+N can't start what it
     // asks about.
@@ -849,15 +910,17 @@ pub fn shortcuts(app: &mut RustGisApp, ctx: &egui::Context) {
         app.ui.history_jump = None;
     }
     crate::modelbuilder::shortcuts(app, ctx);
-    // The search box (or a table cell) was typed in until egui took its focus away on Escape:
-    // that Escape clears the box (leaves the cell as it was), not the tool. An open list (a
-    // clause's Functions) keeps the same keys as a box, those without Ctrl (⌘): Escape closes it.
+    // The search box (or a table cell, or the Script pane's find bar) had the focus until egui
+    // took it away on Escape: that Escape clears the box (leaves the cell as it was, closes the
+    // bar), not the tool. An open list (a clause's Functions) keeps the same keys as a box, those
+    // without Ctrl (⌘): Escape closes it.
     let pass = ctx.cumulative_pass_nr();
     let typing = ctx.egui_wants_keyboard_input()
         || crate::completion::menu_is_open(ctx)
         || crate::crspicker::list_is_open(ctx)
         || crate::searchbox::had_focus(&app.ui.search, pass)
-        || crate::table::had_focus(&app.table, pass);
+        || crate::table::had_focus(&app.table, pass)
+        || app.workflow.script_find.had_focus(pass);
     // A text field focused, not any widget (a button reached with Tab): it has an undo of its own.
     let text_field = ctx.text_edit_focused();
     // An element selected in the open layout, for the layout's own keys.
@@ -1298,6 +1361,45 @@ fn command_matches(id: &str, label: &str, location: &str, ql: &str) -> bool {
         || crate::i18n::location_raw(location).to_lowercase().contains(ql)
 }
 
+/// Keeps an Escape press owned by the palette until release, even after it closes.
+#[derive(Default)]
+struct CommandSearchEscape {
+    open: bool,
+    held: bool,
+    presses: Vec<(usize, egui::Event)>,
+}
+
+impl egui::Plugin for CommandSearchEscape {
+    fn debug_name(&self) -> &'static str {
+        "Command search Escape"
+    }
+
+    fn input_hook(&mut self, _ctx: &egui::Context, input: &mut egui::RawInput) {
+        // egui stops drags on Escape before the application draws. Give palette
+        // presses only to the palette, in order relative to its IME events.
+        self.presses.clear();
+        let mut position = 0;
+        input.events.retain(|event| {
+            match event {
+                egui::Event::Key { key: Key::Escape, pressed: true, repeat, .. } if self.open || self.held => {
+                    if !self.held && !repeat {
+                        self.presses.push((position, event.clone()));
+                        position += 1;
+                    }
+                    self.held = true;
+                    return false;
+                }
+                egui::Event::Key { key: Key::Escape, pressed: false, .. } | egui::Event::WindowFocused(false) => {
+                    self.held = false;
+                }
+                _ => {}
+            }
+            position += 1;
+            true
+        });
+    }
+}
+
 /// The row the arrow keys have picked in Command Search, kept between frames while the palette
 /// stays open on the same query.
 #[derive(Clone, Default)]
@@ -1327,7 +1429,102 @@ pub(crate) const NUMBER_KEYS: [Key; 10] =
 /// The command palette: type to filter every command, Up and Down pick a row, Enter runs it, and
 /// Ctrl (⌘) with 1 … 9 and 0 runs one of the first ten.
 pub fn command_search(app: &mut RustGisApp, ctx: &egui::Context) {
-    let Some(mut q) = app.ui.command_search.take() else { return };
+    let Some(mut q) = app.ui.command_search.take() else {
+        app.ui.command_search_composing = false;
+        return;
+    };
+    if ctx.plugin_opt::<CommandSearchEscape>().is_none() {
+        ctx.add_plugin(CommandSearchEscape::default());
+    }
+    let edit_id = egui::Id::unique("command_search_input");
+    // Enter and Escape may arrive in the same frame that begins or ends a composition.
+    // Leave that frame's keys to the IME as well as keys during an ongoing preedit.
+    let focused = ctx.memory(|m| m.has_focus(edit_id));
+    app.ui.command_search_composing &= focused;
+    let escape_presses = ctx.with_plugin::<CommandSearchEscape, _>(|input| std::mem::take(&mut input.presses)).unwrap_or_default();
+    let (mut enter, mut escape, deleting_preedit, after_delete, ime_owns_keys) = ctx.input(|i| {
+        // Raw events preserve their positions even if another widget consumed a key.
+        let mut events = std::borrow::Cow::Borrowed(i.raw.events.as_slice());
+        for (position, event) in escape_presses {
+            let events = events.to_mut();
+            events.insert(position.min(events.len()), event);
+        }
+        let mut accept_keys = !app.ui.command_search_composing;
+        let mut ime_owns_frame = false;
+        let mut enter = false;
+        let mut escape = false;
+        let mut deleting_preedit = false;
+        let mut after_delete = (false, false);
+        for event in events.iter() {
+            match event {
+                egui::Event::Ime(egui::ImeEvent::Preedit { text, .. } | egui::ImeEvent::Commit(text))
+                    if focused && deleting_preedit && text.is_empty() =>
+                {
+                    // The IME can report the deletion itself before the next key arrives.
+                    deleting_preedit = false;
+                    after_delete = (false, false);
+                    ime_owns_frame = false;
+                    accept_keys = true;
+                    enter = false;
+                    escape = false;
+                    app.ui.command_search_composing = false;
+                }
+                egui::Event::Ime(egui::ImeEvent::Preedit { text, .. }) if focused => {
+                    deleting_preedit = false;
+                    after_delete = (false, false);
+                    ime_owns_frame |= app.ui.command_search_composing || !text.is_empty();
+                    app.ui.command_search_composing = !text.is_empty();
+                }
+                egui::Event::Ime(egui::ImeEvent::Commit(_)) if focused => {
+                    deleting_preedit = false;
+                    after_delete = (false, false);
+                    // A standalone commit can carry ordinary text.
+                    ime_owns_frame |= app.ui.command_search_composing;
+                    app.ui.command_search_composing = false;
+                }
+                egui::Event::Paste(text) | egui::Event::Text(text)
+                    if focused
+                        && !text.is_empty()
+                        && !matches!(event, egui::Event::Text(text) if !app.ui.command_search_composing || text == "\n" || text == "\r") =>
+                {
+                    // TextEdit replaces the preedit. Keys after the replacement can act
+                    // on the replacement, even if the preedit started in this frame.
+                    if ime_owns_frame {
+                        enter = false;
+                        escape = false;
+                    }
+                    ime_owns_frame = false;
+                    app.ui.command_search_composing = false;
+                    accept_keys = true;
+                    deleting_preedit = false;
+                    after_delete = (false, false);
+                }
+                egui::Event::Cut if app.ui.command_search_composing => {
+                    deleting_preedit = true;
+                }
+                egui::Event::Key { key: Key::Backspace | Key::Delete, pressed: true, .. } if app.ui.command_search_composing => {
+                    deleting_preedit = true;
+                }
+                egui::Event::Key { key, pressed: true, repeat: false, .. } => {
+                    if accept_keys && !ime_owns_frame {
+                        enter |= *key == Key::Enter;
+                        escape |= *key == Key::Escape;
+                    } else if deleting_preedit {
+                        after_delete.0 |= *key == Key::Enter;
+                        after_delete.1 |= *key == Key::Escape;
+                    }
+                }
+                _ => {}
+            }
+        }
+        (
+            enter && !ime_owns_frame,
+            escape && !ime_owns_frame,
+            deleting_preedit,
+            after_delete,
+            ime_owns_frame || app.ui.command_search_composing,
+        )
+    });
     let t = Tokens::get(ctx);
     let mut keep = true;
     let mut chosen: Option<String> = None;
@@ -1335,9 +1532,14 @@ pub fn command_search(app: &mut RustGisApp, ctx: &egui::Context) {
     let pass = ctx.cumulative_pass_nr();
     let cursor: Option<SearchCursor> = ctx.data(|d| d.get_temp(cursor_id));
     // The arrows are the list's, taken before the text box sees them (it would move its caret).
-    let (down, up) = ctx.input_mut(|i| (i.consume_key(Modifiers::NONE, Key::ArrowDown), i.consume_key(Modifiers::NONE, Key::ArrowUp)));
+    let (down, up) = if ime_owns_keys {
+        (false, false)
+    } else {
+        ctx.input_mut(|i| (i.consume_key(Modifiers::NONE, Key::ArrowDown), i.consume_key(Modifiers::NONE, Key::ArrowUp)))
+    };
     // Ctrl (⌘) and a digit run one of the first ten rows that can run: 1 the first, 0 the tenth.
-    let jump = ctx.input_mut(|i| NUMBER_KEYS.iter().position(|&key| i.consume_key(Modifiers::COMMAND, key)));
+    let jump =
+        if ime_owns_keys { None } else { ctx.input_mut(|i| NUMBER_KEYS.iter().position(|&key| i.consume_key(Modifiers::COMMAND, key))) };
     // Fits small screens: never wider or taller than the window allows.
     let screen = ctx.content_rect();
     let width = (screen.width() - 48.0).clamp(220.0, 520.0);
@@ -1347,13 +1549,34 @@ pub fn command_search(app: &mut RustGisApp, ctx: &egui::Context) {
         ui.horizontal(|ui| {
             let (r, _) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::hover());
             icons::paint(ui.painter(), r, "search", t.text_dim, t.accent);
-            let te = ui.add(
-                egui::TextEdit::singleline(&mut q)
-                    .hint_text(tl!("Search commands — e.g. buffer, basemap, labels"))
-                    .desired_width(width - 56.0)
-                    .frame(egui::Frame::NONE),
-            );
-            te.request_focus();
+            let edit = egui::TextEdit::singleline(&mut q)
+                .id(edit_id)
+                .return_key(None)
+                .event_filter(egui::EventFilter { horizontal_arrows: true, vertical_arrows: true, escape: true, ..Default::default() })
+                .hint_text(tl!("Search commands — e.g. buffer, basemap, labels"))
+                .desired_width(width - 56.0)
+                .frame(egui::Frame::NONE)
+                .show(ui);
+            // A deletion may remove the preedit without a corresponding IME event.
+            // Cursor movement alone can also collapse the range, so require a text edit.
+            if deleting_preedit && edit.response.response.changed() && edit.state.cursor.char_range().is_some_and(|range| range.is_empty())
+            {
+                enter |= after_delete.0;
+                escape |= after_delete.1;
+                app.ui.command_search_composing = false;
+            }
+            let edit = edit.response.response;
+            // Clicking or dragging in TextEdit switches its cursor to a regular
+            // selection, even when no IME event arrives to clear the preedit.
+            if edit.clicked() || edit.dragged() || (edit.hovered() && ui.input(|i| i.pointer.any_pressed())) {
+                app.ui.command_search_composing = false;
+            }
+            // The modal starts with an invisible sizing pass. Request focus only when
+            // the edit is interactive and unfocused, since a request can interrupt IME.
+            if edit.enabled() && !ctx.memory(|m| m.has_focus(edit_id)) {
+                app.ui.command_search_composing = false;
+                edit.request_focus();
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let (r, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
                 if resp.hovered() {
@@ -1445,6 +1668,10 @@ pub fn command_search(app: &mut RustGisApp, ctx: &egui::Context) {
             if !command_available(id, cfg!(target_arch = "wasm32")) {
                 continue;
             }
+            // A pane of an extension that is off isn't offered (#1752).
+            if crate::extensionsui::hidden(app, id) {
+                continue;
+            }
             // Only a shell with a touch interface (a phone's) has one to go back to.
             if id == "ui.touchInterface" && app.touch.is_none() {
                 continue;
@@ -1473,10 +1700,8 @@ pub fn command_search(app: &mut RustGisApp, ctx: &egui::Context) {
         };
         let row = step_row(row, runnable, down, up);
         ui.ctx().data_mut(|d| d.insert_temp(cursor_id, SearchCursor { query: q.clone(), row, pass }));
-        // The modal's area starts from its last size, so after a short result list the scroll
-        // area would get only that room back (egui's 64 px floor): ask for the full height
-        // whenever the list scrolls. A few hits still shrink the palette to fit.
-        egui::ScrollArea::vertical().max_height(list_h).min_scrolled_height(list_h).show(ui, |ui| {
+        // Keep the search field and IME candidate anchor stable as results change.
+        egui::ScrollArea::vertical().max_height(list_h).min_scrolled_height(list_h).auto_shrink([true, false]).show(ui, |ui| {
             let row_w = ui.available_width();
             // The number keys' column: as wide as the widest, so the hints line up.
             let number_w = NUMBER_KEYS
@@ -1547,13 +1772,12 @@ pub fn command_search(app: &mut RustGisApp, ctx: &egui::Context) {
                     app.ui.shortcut_editor.filter = id.clone();
                     keep = false;
                 }
-                let enter = picked && ui.input(|i| i.key_pressed(Key::Enter));
-                if resp.clicked() || enter || jumped {
+                if resp.clicked() || (picked && enter) || jumped {
                     chosen = Some(id.clone());
                 }
             }
         });
-        if ui.input(|i| i.key_pressed(Key::Escape)) {
+        if escape {
             keep = false;
         }
     });
@@ -1586,8 +1810,12 @@ pub fn command_search(app: &mut RustGisApp, ctx: &egui::Context) {
             let _ = app.run_by_user(&id, Value::Null);
         }
     }
+    ctx.with_plugin::<CommandSearchEscape, _>(|input| input.open = keep);
     if keep {
         app.ui.command_search = Some(q);
+    } else {
+        ctx.memory_mut(|m| m.surrender_focus(edit_id));
+        app.ui.command_search_composing = false;
     }
 }
 
@@ -1674,6 +1902,7 @@ pub fn about(app: &mut RustGisApp, ctx: &egui::Context) {
                         .keymap
                         .grouped()
                         .into_iter()
+                        .filter(|(command, ..)| !crate::extensionsui::hidden(app, command))
                         .map(|(command, params, keys)| {
                             let keys: Vec<String> = keys.into_iter().map(|c| c.shown(ctx)).collect();
                             (keys.join(" / "), crate::keymap::label(app, command, params))
@@ -1751,11 +1980,24 @@ pub fn notices(app: &mut RustGisApp, ctx: &egui::Context) {
     }
     ctx.request_repaint_after(std::time::Duration::from_millis(250));
     let screen = ctx.content_rect();
-    let mut y = screen.max.y - 40.0;
-    for toast in app.map.toasts.iter_mut().rev().take(3) {
+    // A shell with its own interface has its bars below the map, the work strip's Cancel among
+    // them: the toasts stand at the map's foot, clear of them, each on the one before by its own
+    // height, as many of the last three as the map above has room for (the newest always, at the
+    // top when a tall sheet leaves the map none).
+    let over_map = app.chrome.and(app.map.view_rect).map(|(map, _)| map.max.y);
+    let mut y = over_map.unwrap_or(screen.max.y).max(screen.min.y + 84.0) - 40.0;
+    for (i, toast) in app.map.toasts.iter_mut().rev().take(3).enumerate() {
         // Keyed by the notice, not the slot, so a selection stays with its text as toasts come and go.
-        let shown = egui::Area::new(egui::Id::unique(("toast", toast.id)))
-            .fixed_pos(pos2(screen.max.x - 380.0, y - 44.0))
+        let id = egui::Id::unique(("toast", toast.id));
+        // Its height when last drawn (a one-line toast's before it is measured): an older one that
+        // wouldn't fit below the top waits for room, as the window would push it down over the rest.
+        let height = egui::AreaState::load(ctx, id).and_then(|a| a.size).map_or(44.0, |s| s.y);
+        if i > 0 && y - height < screen.min.y {
+            break;
+        }
+        let shown = egui::Area::new(id)
+            .pivot(egui::Align2::LEFT_BOTTOM)
+            .fixed_pos(pos2(screen.max.x - 380.0, y))
             .order(egui::Order::Tooltip)
             .show(ctx, |ui| {
                 egui::Frame::NONE
@@ -1776,7 +2018,7 @@ pub fn notices(app: &mut RustGisApp, ctx: &egui::Context) {
         if shown.response.contains_pointer() {
             toast.at = now;
         }
-        y -= 52.0;
+        y = shown.response.rect.min.y - 8.0;
     }
 }
 

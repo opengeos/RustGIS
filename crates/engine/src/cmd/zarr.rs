@@ -415,7 +415,7 @@ pub fn pick_variable(store: &zarr::Store, sel: &mut zarr::Selection) -> Result<(
 #[cfg(not(target_arch = "wasm32"))]
 fn crs_lost(r: &mut raster::Raster, text: Option<&str>, store: &zarr::Store, variable: &str) {
     if let Some(note) = text.and_then(|t| zarr::typed_crs_note(store, variable, r, t))
-        && !r.lost.contains(&note)
+        && !r.lost.says(&note)
     {
         r.lost.push(note);
     }
@@ -547,7 +547,7 @@ pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
             let mut layer = if sel.window.is_some() {
                 r.source = Some(full.clone());
                 let tif = zarr::write_project_slice(&r).map_err(|e| e.to_string())?;
-                let mut layer = RasterLayer::from_bytes(r, format!("{}.tif", store_name(&full)), tif);
+                let mut layer = RasterLayer::from_written(r, format!("{}.tif", store_name(&full)), tif);
                 layer.path = Some(full);
                 layer
             } else {
@@ -579,7 +579,7 @@ pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
             // The writer refuses systems its keys cannot preserve, as for a directory window or
             // a slice handed over by the UI.
             let tif = zarr::write_project_slice(&r).map_err(|e| e.to_string())?;
-            let mut layer = RasterLayer::from_bytes(r, format!("{}.tif", store_name(&u)), tif);
+            let mut layer = RasterLayer::from_written(r, format!("{}.tif", store_name(&u)), tif);
             layer.subdataset = Some(sel.label());
             // The coordinate system given for a store that doesn't say, kept as a folder's slice
             // keeps it, so a time series read from the layer finds it.
@@ -1835,7 +1835,7 @@ impl ReduceRun {
         let mut unwritten = 0usize;
         // What reading the slices said (a shift the store's system doesn't apply, …), once each:
         // the summary is in their grid, so it is said of it too.
-        let mut lost: Vec<String> = Vec::new();
+        let mut lost: Vec<rustgis_data::loss::Note> = Vec::new();
         for &i in &self.steps {
             if cancel.load(Ordering::Relaxed) {
                 return Err("cancelled".into());
@@ -1904,7 +1904,7 @@ impl ReduceRun {
             raster::Raster::new(&self.name, first.0, first.1, vec![out], first.2, first.3, None, raster::ColorHint::Gray, "Float32")
                 .map_err(|e| e.to_string())?;
         r.source = Some(self.root.clone());
-        r.lost = lost;
+        r.lost = lost.into();
         Ok(r)
     }
 }
@@ -2025,7 +2025,7 @@ fn reduce(s: &mut Session, p: &Value) -> CmdResult {
         let run = reduce_start(s, p)?;
         let r = run.run(&std::sync::atomic::AtomicBool::new(false), &std::sync::atomic::AtomicUsize::new(0))?;
         let tif = zarr::write_project_slice(&r).map_err(|e| e.to_string())?;
-        let mut layer = RasterLayer::from_bytes(r, format!("{}.tif", store_name(&run.root)), tif);
+        let mut layer = RasterLayer::from_written(r, format!("{}.tif", store_name(&run.root)), tif);
         layer.subdataset = None;
         let mut out = super::raster::add_raster(s, &run.name, layer)?;
         out["steps"] = serde_json::json!(run.total());

@@ -229,7 +229,7 @@ pub(crate) fn arrow_scroll_area<R>(
     area: egui::ScrollArea,
     tips: [&str; 2],
     add: impl FnOnce(&mut Ui) -> R,
-) {
+) -> egui::Id {
     // egui sets a scroll area's offset only as it is built, so a click moves it on the next frame.
     // It is asked for once, on a frame egui keeps: a discarded one doesn't move the area, and asking
     // on every frame would pin the area there against the wheel.
@@ -250,6 +250,7 @@ pub(crate) fn arrow_scroll_area<R>(
         ui.data_mut(|d| d.insert_temp(key, x));
         ui.ctx().request_repaint();
     }
+    scroll.id
 }
 
 /// The collapse button at the right of the tab strip.
@@ -1863,19 +1864,22 @@ fn analysis_groups(app: &mut RustGisApp, ui: &mut Ui) {
             });
         });
     });
-    group(ui, "AI", |ui| {
-        big(
-            ui,
-            app,
-            "assistant",
-            "AI\nAssistant",
-            "Ask about your data, or tell the assistant what to do with the map.",
-            "ui.pane.assistant",
-            Value::Null,
-            app.ui.right == Some(RightPane::Assistant),
-            false,
-        );
-    });
+    // The AI Assistant extension's (#1752).
+    if !crate::extensionsui::hidden(app, "ui.pane.assistant") {
+        group(ui, "AI", |ui| {
+            big(
+                ui,
+                app,
+                "assistant",
+                "AI\nAssistant",
+                "Ask about your data, or tell the assistant what to do with the map.",
+                "ui.pane.assistant",
+                Value::Null,
+                app.ui.right == Some(RightPane::Assistant),
+                false,
+            );
+        });
+    }
     group(ui, "Portal", |ui| {
         for (kind, icon, label, desc) in [
             ("feature", "buffer", "Feature\nAnalysis", "Tools that analyse features."),
@@ -2466,16 +2470,18 @@ fn view_tab(app: &mut RustGisApp, ui: &mut Ui) {
             );
         });
         col(ui, |ui| {
-            small(
-                ui,
-                app,
-                "assistant",
-                "AI Assistant",
-                "Show or hide the AI Assistant.",
-                "ui.pane.assistant",
-                Value::Null,
-                app.ui.right == Some(RightPane::Assistant),
-            );
+            if !crate::extensionsui::hidden(app, "ui.pane.assistant") {
+                small(
+                    ui,
+                    app,
+                    "assistant",
+                    "AI Assistant",
+                    "Show or hide the AI Assistant.",
+                    "ui.pane.assistant",
+                    Value::Null,
+                    app.ui.right == Some(RightPane::Assistant),
+                );
+            }
             small(
                 ui,
                 app,
@@ -3651,6 +3657,8 @@ fn layout_groups(app: &mut RustGisApp, ui: &mut Ui) {
                     ui.close();
                 }
             }
+            let layers = crate::textform::StatLayer::of(&layout, &app.session.project.maps);
+            crate::textform::stat_menu(ui, &layers, |token| add(app, json!({"kind": "dynamicText", "text": token})));
         });
         if big(ui, app, "picture", "Picture", "Add a PNG or JPEG picture to the page.", "ui.layoutPicture", Value::Null, false, false)
             .clicked()
@@ -6882,6 +6890,35 @@ mod tests {
             assert_eq!(label, *name, "{id}");
             assert!(!about.is_empty(), "{id}");
         }
+    }
+
+    /// Publish › Text › Dynamic Text › Layer statistic adds a text holding the token picked, from
+    /// the layers of the first frame's map (#3036); a layout with no frame has no such section.
+    #[test]
+    fn publish_dynamic_text_adds_a_layer_statistic() {
+        use rustgis_engine::map::layout::ElementKind;
+        let mut app = RustGisApp::with_sample();
+        app.run("layout.new", json!({"name": "Figures"})).unwrap();
+        let li = app.session.active_layout.unwrap();
+        let before = app.session.project.layouts[li].elements.len();
+        let mut h = tab_harness(app, layout_groups);
+        for step in ["Dynamic Text", "Layer statistic", "Cities", "Count  {count:Cities}"] {
+            h.get_by_label(step).click();
+            h.run();
+        }
+        let elements = &h.state().session.project.layouts[li].elements;
+        assert_eq!(elements.len(), before + 1);
+        assert!(matches!(&elements.last().unwrap().kind, ElementKind::Text { text, .. } if text == "{count:Cities}"));
+        assert_eq!(h.state().layout.selected, Some(elements.last().unwrap().id));
+        assert!(h.query_by_label("Layer statistic").is_none(), "the menu closes");
+
+        let frame = h.state().session.project.layouts[li].first_frame().unwrap();
+        h.state_mut().run("layout.removeElement", json!({"layout": li, "element": frame})).unwrap();
+        h.run();
+        h.get_by_label("Dynamic Text").click();
+        h.run();
+        assert!(h.query_by_label_contains("Map scale").is_some(), "the menu is open");
+        assert!(h.query_by_label("Layer statistic").is_none(), "no frame, no layers");
     }
 
     /// New Layout › Publication Layout › a sheet › a style makes that sheet in that style, titled
