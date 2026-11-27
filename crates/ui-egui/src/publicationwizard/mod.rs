@@ -36,6 +36,14 @@ pub enum Step {
     Review,
 }
 
+/// Why `layout.publication` draws no place for a field's text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LeftOut {
+    NoSources,
+    NoReference,
+    NotEditorial,
+}
+
 /// A text field of the wizard that takes a layer statistic.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Field {
@@ -204,15 +212,7 @@ impl Draft {
     /// for a section left out (no sources, no reference), and the column's only on an editorial
     /// sheet, the one style that draws it.
     fn headings_sent(&self) -> Vec<&str> {
-        let given = |i: usize| {
-            let drawn = match i {
-                0 => lines(&self.sources).next().is_some(),
-                1 => !self.no_reference,
-                2 => self.editorial(),
-                _ => true,
-            };
-            drawn && !self.headings[i].trim().is_empty()
-        };
+        let given = |i: usize| self.left_out(Field::Heading(i)).is_none() && !self.headings[i].trim().is_empty();
         let Some(last) = (0..self.headings.len()).rev().find(|&i| given(i)) else { return Vec::new() };
         (0..=last)
             .map(|i| if given(i) { self.headings[i].trim() } else { PUBLICATION_HEADINGS.get(i).copied().unwrap_or_default() })
@@ -221,6 +221,23 @@ impl Draft {
 
     fn editorial(&self) -> bool {
         self.style == "editorial"
+    }
+
+    /// Why the sheet has no place for `field`'s text, if it hasn't: what is sent, what the review
+    /// says isn't used and which boxes are off all follow from this.
+    fn left_out(&self, field: Field) -> Option<LeftOut> {
+        match field {
+            Field::Heading(0) if lines(&self.sources).next().is_none() => Some(LeftOut::NoSources),
+            Field::Reference | Field::Heading(1) if self.no_reference => Some(LeftOut::NoReference),
+            Field::Heading(2) if !self.editorial() => Some(LeftOut::NotEditorial),
+            _ => None,
+        }
+    }
+
+    /// Whether `field`'s box is switched off or not shown. The sources' heading stays on with no
+    /// sources, which may be typed after it.
+    fn off(&self, field: Field) -> bool {
+        field == Field::Author && self.no_author || matches!(self.left_out(field), Some(LeftOut::NoReference | LeftOut::NotEditorial))
     }
 
     fn field_mut(&mut self, field: Field) -> &mut String {
@@ -252,13 +269,7 @@ impl Draft {
     /// Adds a layer statistic to the field last focused on `own`'s step, or to `own` where none was
     /// or that one is off now; one that would take the field past the limit isn't added.
     fn add_statistic(&mut self, token: &str, own: Field) {
-        let on = |f: Field| match f {
-            Field::Author => !self.no_author,
-            Field::Reference | Field::Heading(1) => !self.no_reference,
-            Field::Heading(2) => self.editorial(),
-            _ => true,
-        };
-        let field = self.targets[own.slot()].filter(|&f| on(f)).unwrap_or(own);
+        let field = self.targets[own.slot()].filter(|&f| !self.off(f)).unwrap_or(own);
         let text = self.field_mut(field);
         if text.chars().count() + token.chars().count() > MAX_PUBLICATION_TEXT {
             self.refused = Some(field);
@@ -290,7 +301,7 @@ fn statistic_menu(ui: &mut egui::Ui, d: &mut Draft, map: &Map, own: Field) {
 /// done unseen.
 fn limit_note(ui: &mut egui::Ui, d: &mut Draft, fields: &[Field]) {
     let refused = d.refused.is_some_and(|f| f.step() == d.step);
-    if refused || fields.iter().any(|&f| d.field_mut(f).chars().count() >= MAX_PUBLICATION_TEXT) {
+    if refused || fields.iter().any(|&f| !d.off(f) && d.field_mut(f).chars().count() >= MAX_PUBLICATION_TEXT) {
         let note = i18n::fmt("Each field takes at most {limit} characters.", &[("limit", &MAX_PUBLICATION_TEXT.to_string())]);
         ui.label(egui::RichText::new(note).small().weak());
     }

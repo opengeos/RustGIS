@@ -33,7 +33,7 @@ pub(super) fn texts_step(ui: &mut egui::Ui, d: &mut Draft, map: &Map) {
         let label = ui.label(tl!("Credit line"));
         let author = ui
             .add_enabled(
-                !d.no_author,
+                !d.off(Field::Author),
                 egui::TextEdit::singleline(&mut d.author)
                     .hint_text(default_credit())
                     .char_limit(MAX_PUBLICATION_TEXT)
@@ -50,14 +50,7 @@ pub(super) fn texts_step(ui: &mut egui::Ui, d: &mut Draft, map: &Map) {
         }
     });
     statistic_menu(ui, d, map, Field::Note);
-    let mut fields = vec![Field::Title, Field::Subtitle, Field::Note];
-    if !d.no_author {
-        fields.push(Field::Author);
-    }
-    if d.editorial() {
-        fields.push(Field::Heading(2));
-    }
-    limit_note(ui, d, &fields);
+    limit_note(ui, d, &[Field::Title, Field::Subtitle, Field::Note, Field::Author, Field::Heading(2)]);
 }
 
 #[cfg(test)]

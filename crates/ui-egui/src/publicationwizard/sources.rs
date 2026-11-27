@@ -4,25 +4,21 @@ use super::*;
 /// The sources step: the sources, the cartographic reference and their headings.
 pub(super) fn sources_step(ui: &mut egui::Ui, d: &mut Draft, map: &Map) {
     egui::Grid::new("publication_wizard_sources").num_columns(2).spacing(egui::vec2(8.0, 8.0)).show(ui, |ui| {
-        list(ui, d, tl!("Sources"), Field::Sources, "", 3, true);
-        heading(ui, d, tl!("Sources heading"), 0, true);
-        let on = !d.no_reference;
-        list(ui, d, tl!("Reference"), Field::Reference, &PUBLICATION_DEFAULT_REFERENCE.join("\n"), 2, on);
+        list(ui, d, tl!("Sources"), Field::Sources, "", 3);
+        heading(ui, d, tl!("Sources heading"), 0);
+        list(ui, d, tl!("Reference"), Field::Reference, &PUBLICATION_DEFAULT_REFERENCE.join("\n"), 2);
         ui.label("");
         ui.checkbox(&mut d.no_reference, tl!("No cartographic reference"));
         ui.end_row();
-        heading(ui, d, tl!("Reference heading"), 1, !d.no_reference);
+        heading(ui, d, tl!("Reference heading"), 1);
     });
     statistic_menu(ui, d, map, Field::Sources);
-    let mut fields = vec![Field::Sources, Field::Heading(0)];
-    if !d.no_reference {
-        fields.extend([Field::Reference, Field::Heading(1)]);
-    }
-    limit_note(ui, d, &fields);
+    limit_note(ui, d, &[Field::Sources, Field::Heading(0), Field::Reference, Field::Heading(1)]);
 }
 
 /// A box taking one entry per line, with a note where it holds more than the command takes.
-fn list(ui: &mut egui::Ui, d: &mut Draft, label: &str, field: Field, hint: &str, rows: usize, on: bool) {
+fn list(ui: &mut egui::Ui, d: &mut Draft, label: &str, field: Field, hint: &str, rows: usize) {
+    let on = !d.off(field);
     let caption = ui.label(label);
     let edit = egui::TextEdit::multiline(d.field_mut(field))
         .hint_text(hint)
@@ -41,8 +37,9 @@ fn list(ui: &mut egui::Ui, d: &mut Draft, label: &str, field: Field, hint: &str,
 }
 
 /// A section's heading, the command's own as its hint.
-fn heading(ui: &mut egui::Ui, d: &mut Draft, label: &str, at: usize, on: bool) {
+fn heading(ui: &mut egui::Ui, d: &mut Draft, label: &str, at: usize) {
     let field = Field::Heading(at);
+    let on = !d.off(field);
     let caption = ui.label(label);
     let edit = egui::TextEdit::singleline(d.field_mut(field))
         .hint_text(PUBLICATION_HEADINGS.get(at).copied().unwrap_or_default())
@@ -322,6 +319,42 @@ mod tests {
         for sent in ["Fontes", "Base", "About"] {
             assert!(h.query_by_label(sent).is_some(), "{sent}");
         }
+    }
+
+    /// Over every way a section is left out, a heading typed is either sent or said not to be
+    /// used: never neither, never both.
+    #[test]
+    fn every_typed_heading_is_sent_or_said_not_to_be_used() {
+        for sources in ["", "IBGE"] {
+            for no_reference in [false, true] {
+                for style in ["classic", "editorial"] {
+                    let mut h = at(Step::Review, |d| {
+                        d.headings = ["H0".into(), "H1".into(), "H2".into()];
+                        (d.sources, d.no_reference, d.style) = (sources.into(), no_reference, style.into());
+                    });
+                    h.run_steps(2);
+                    let sent = wizard(&h).params()["headings"].clone();
+                    for i in 0..3 {
+                        let typed = format!("H{i}");
+                        let is_sent = sent.as_array().is_some_and(|a| a.iter().any(|v| v == typed.as_str()));
+                        let said = h.query_by_label_contains(&format!("{typed} (not used")).is_some();
+                        assert_ne!(is_sent, said, "{typed}: sources {sources:?}, no reference {no_reference}, {style}");
+                        assert_eq!(h.query_by_label(&typed).is_some(), is_sent, "{typed} listed as it is sent");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Reference lines typed and then switched off are said not to be used.
+    #[test]
+    fn the_review_says_reference_lines_switched_off_arent_used() {
+        let said = "(none; the lines typed aren't used)";
+        let mut h = at(Step::Review, |d| d.no_reference = true);
+        assert!(h.query_by_label(said).is_none(), "nothing typed, nothing lost");
+        h.state_mut().dialogs.publication.as_mut().unwrap().reference = "UTM 23S".into();
+        h.run_steps(4);
+        assert!(h.query_by_label(said).is_some());
     }
 
     /// Create puts the sources, the reference and the heading given on the sheet, and Undo takes

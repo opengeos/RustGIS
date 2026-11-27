@@ -28,33 +28,17 @@ pub(super) fn review_step(ui: &mut egui::Ui, d: &Draft) {
         row(tl!("Note"), or_none(&d.note));
         let sources = lines(&d.sources).collect::<Vec<_>>().join("\n");
         row(tl!("Sources"), or_none(&sources));
-        let heading = |i: usize, or: &str| {
-            let given = d.headings[i].trim();
-            if given.is_empty() { or.to_string() } else { given.to_string() }
-        };
-        // A heading typed for a section left out isn't sent: said, not dropped unseen.
-        let typed_at = |i: usize| Some(d.headings[i].trim()).filter(|h| !h.is_empty());
-        if !sources.is_empty() {
-            row(tl!("Sources heading"), heading(0, PUBLICATION_HEADINGS[0]));
-        } else if let Some(h) = typed_at(0) {
-            row(tl!("Sources heading"), i18n::fmt("{heading} (not used: no sources)", &[("heading", h)]));
-        }
+        heading_row(&mut row, d, 0, tl!("Sources heading"), PUBLICATION_HEADINGS[0]);
         let typed = lines(&d.reference).collect::<Vec<_>>().join("\n");
-        if d.no_reference {
-            row(tl!("Reference"), none.to_string());
-            if let Some(h) = typed_at(1) {
-                row(tl!("Reference heading"), i18n::fmt("{heading} (not used: no reference)", &[("heading", h)]));
-            }
-        } else {
-            let default = tl!("The default: projection, datum and graticule, filled in on the sheet");
-            row(tl!("Reference"), if typed.is_empty() { default.to_string() } else { typed });
-            row(tl!("Reference heading"), heading(1, PUBLICATION_HEADINGS[1]));
-        }
-        if d.editorial() {
-            row(tl!("Column heading"), heading(2, none));
-        } else if let Some(h) = typed_at(2) {
-            row(tl!("Column heading"), i18n::fmt("{heading} (not used: not an editorial sheet)", &[("heading", h)]));
-        }
+        let reference = match d.left_out(Field::Reference) {
+            Some(_) if typed.is_empty() => none.to_string(),
+            Some(_) => tl!("(none; the lines typed aren't used)").to_string(),
+            None if typed.is_empty() => tl!("The default: projection, datum and graticule, filled in on the sheet").to_string(),
+            None => typed,
+        };
+        row(tl!("Reference"), reference);
+        heading_row(&mut row, d, 1, tl!("Reference heading"), PUBLICATION_HEADINGS[1]);
+        heading_row(&mut row, d, 2, tl!("Column heading"), none);
         let credit = if d.no_author {
             none.to_string()
         } else if d.author.trim().is_empty() {
@@ -69,6 +53,21 @@ pub(super) fn review_step(ui: &mut egui::Ui, d: &Draft) {
     if d.figure() {
         figure_note(ui);
     }
+}
+
+/// A heading's row: the one typed, or `or` for the command's; for a section left out, none, but
+/// one typed there is said not to be used rather than dropped unseen.
+fn heading_row(row: &mut impl FnMut(&str, String), d: &Draft, at: usize, label: &str, or: &str) {
+    let typed = d.headings[at].trim();
+    let value = match d.left_out(Field::Heading(at)) {
+        None if typed.is_empty() => or.to_string(),
+        None => typed.to_string(),
+        Some(_) if typed.is_empty() => return,
+        Some(LeftOut::NoSources) => i18n::fmt("{heading} (not used: no sources)", &[("heading", typed)]),
+        Some(LeftOut::NoReference) => i18n::fmt("{heading} (not used: no reference)", &[("heading", typed)]),
+        Some(LeftOut::NotEditorial) => i18n::fmt("{heading} (not used: not an editorial sheet)", &[("heading", typed)]),
+    };
+    row(label, value);
 }
 
 #[cfg(test)]
