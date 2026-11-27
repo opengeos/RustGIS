@@ -137,6 +137,8 @@ struct Numbers {
     /// How many of `count` are whole numbers, and how many of those are past 2^53.
     ints: usize,
     big: usize,
+    /// Of those, the ones a decimal can't hold, so rounded however the others add up.
+    inexact: usize,
     sum: f64,
     wide_sum: WideSum,
     all: Welford,
@@ -169,9 +171,10 @@ impl Numbers {
     fn add_whole(&mut self, i: i64) {
         self.add_float(i as f64);
         self.ints += 1;
-        // Past 2^53, a whole number a decimal still holds exactly (2^54) isn't rounded.
-        if i.unsigned_abs() > EXACT_IN_F64 && (i as f64) as i128 != i128::from(i) {
+        if i.unsigned_abs() > EXACT_IN_F64 {
             self.big += 1;
+            // One a decimal still holds exactly (2^54) is rounded only as the sum adds it up.
+            self.inexact += usize::from((i as f64) as i128 != i128::from(i));
         }
         self.isum += i128::from(i);
         self.imin = Some(self.imin.map_or(i, |m| m.min(i)));
@@ -349,14 +352,20 @@ fn gather(ds: &Dataset, t: &Target) -> Result<Done, String> {
         }
         // Whole numbers added up exactly unless the column also holds decimals, which add them as
         // decimals: the whole numbers past 2^53 are then rounded.
-        if !whole && n.big > 0 {
+        if !whole && n.inexact > 0 {
             notices.push(Note::loss(
                 LossCode::ChangedRounded,
                 format!(
                     "{}: {} whole number(s) in '{}' past 2^53 are rounded in the statistics, because the column also holds decimals",
-                    t.layer, n.big, f.name
+                    t.layer, n.inexact, f.name
                 ),
             ));
+        } else if !whole && n.big > 0 {
+            // Each is held exactly, so whether a sum or mean is rounded depends on the others: said, plain.
+            notices.push(Note::plain(format!(
+                "{}: {} whole number(s) in '{}' past 2^53 are added as decimals, because the column also holds decimals, so the statistics may be rounded",
+                t.layer, n.big, f.name
+            )));
         }
         if !overflowed.is_empty() {
             notices.push(Note::loss(
