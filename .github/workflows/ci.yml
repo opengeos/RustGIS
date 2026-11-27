@@ -101,6 +101,7 @@ jobs:
           # The page names the release profile (`web`, fat LTO: a quarter of an hour), which would
           # outrank --cargo-profile; this throwaway checkout drops it to package the dev build.
           sed -i 's/ data-cargo-profile="web"//' apps/rustgis-web/index.html
+          if grep -q 'data-cargo-profile=' apps/rustgis-web/index.html; then echo "::error::apps/rustgis-web/index.html still names a Cargo profile" >&2; exit 1; fi
           (cd apps/rustgis-web && "$RUNNER_TEMP/bin/trunk" build --locked --cargo-profile dev)
           cargo xtask web-pwa dist/web
           node apps/rustgis-web/smoke/run.mjs --dist dist/web --chrome "$(command -v google-chrome)"

@@ -20,7 +20,7 @@ import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve, normalize, extname, dirname } from "node:path";
+import { join, resolve, normalize, extname, dirname, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const args = process.argv.slice(2);
@@ -71,9 +71,15 @@ for (const [name, text] of Object.entries(inputs)) writeFileSync(join(work, name
 const TYPES = { ".html": "text/html", ".js": "text/javascript", ".wasm": "application/wasm", ".json": "application/json",
   ".webmanifest": "application/manifest+json", ".txt": "text/plain", ".css": "text/css", ".svg": "image/svg+xml", ".png": "image/png" };
 const server = createServer((req, res) => {
-  const path = normalize(decodeURIComponent(new URL(req.url, "http://x").pathname)).replace(/^\/+/, "");
+  let path;
+  try {
+    path = normalize(decodeURIComponent(new URL(req.url, "http://x").pathname)).replace(/^\/+/, "");
+  } catch {
+    res.writeHead(400).end();
+    return;
+  }
   const file = join(dist, path || "index.html");
-  if (!file.startsWith(dist) || !existsSync(file) || !statSync(file).isFile()) {
+  if (!file.startsWith(dist + sep) || !existsSync(file) || !statSync(file).isFile()) {
     res.writeHead(404).end();
     return;
   }
@@ -90,6 +96,10 @@ const browser = spawn(chrome, [
   "--no-default-browser-check", "--no-sandbox", "--window-size=1400,900", "--use-angle=swiftshader",
   "--enable-unsafe-swiftshader", "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1", "about:blank",
 ], { stdio: ["ignore", "ignore", "ignore", "pipe", "pipe"] });
+browser.on("error", (e) => {
+  console.error(`smoke: FAILED: could not start ${chrome}: ${e.message}`);
+  process.exit(1);
+});
 const exited = new Promise((ok) => browser.on("exit", ok));
 
 // The DevTools protocol: JSON messages, each ended by a NUL byte, on file descriptors 3 and 4.
@@ -269,14 +279,23 @@ try {
   const parcelLayer = added.project.maps[0].layers.find((l) => l.name === "parcels");
   if (parcelLayer?.dataset?.features?.length !== 12) failures.push(`parcels has ${parcelLayer?.dataset?.features?.length} features, not 12`);
 
+  // Move Down moves the active layer: the last one added, zoning, on top (the shell reads picked
+  // files in order). These commands run in the frame that takes the key, so one save shows each.
   step("Move Down from Command Search, then Undo and Redo");
   const order = (p) => layerNames(p);
+  const want = JSON.stringify(["parcels", "zoning"]);
+  if (layers !== JSON.stringify(["zoning", "parcels"])) throw new Error(`Add Data left the layers ${layers}, not zoning on top`);
+  const after = async (what, expected) => {
+    const saved = await save();
+    if (order(saved.project) !== expected) throw new Error(`${what}: the layers are ${order(saved.project)}, not ${expected}`);
+    return saved;
+  };
   await search("Move Down");
-  const moved = await saveUntil("Move Down", (p) => order(p) !== layers);
+  await after("Move Down", want);
   await press("z", true);
-  await saveUntil("Undo", (p) => order(p) === layers);
+  await after("Undo", layers);
   await press("y", true);
-  const redone = await saveUntil("Redo", (p) => order(p) === order(moved.project));
+  const redone = await after("Redo", want);
 
   step("a fresh page opens the saved project, which saves the same");
   await start();
