@@ -54,8 +54,9 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
     layout is `Publication`. A figure goes from its size to its map and the review, as it takes no
     style, texts or accent. A field left empty is left out (for the credit line, the reference and
     the headings, the command's default applies); the title is the exception: empty, it means no
-    title. A layout the command refuses is said, and the wizard stays
-    open.
+    title. A layout the command refuses is said, and the wizard stays open. The window can be
+    resized. Its steps are listed on the left, and a click goes to one; a narrow screen leaves the
+    list out, and the heading still says which step this is.
   - **The map**: the `extent` given (or the view) fitted north-up, without tilt, at a round scale,
     two significant figures, rounded up so it still fits within the strips the graticule's labels
     take inside the frame. A graticule's step follows the extent (2° for a state, 15′ for a city),
