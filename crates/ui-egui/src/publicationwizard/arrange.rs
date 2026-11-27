@@ -82,6 +82,10 @@ fn corner_labels() -> [&'static str; 4] {
     [tl_raw!("Top left"), tl_raw!("Top right"), tl_raw!("Bottom left"), tl_raw!("Bottom right")]
 }
 
+/// The locator and the legend, by their place in [`Homes`]: what a column style keeps in its
+/// column.
+const IN_COLUMN: [usize; 2] = [0, 2];
+
 /// The surrounds' names, in [`Homes`]'s order.
 fn surround_labels() -> [&'static str; 4] {
     [tl_raw!("Locator"), tl_raw!("North arrow"), tl_raw!("Legend"), tl_raw!("Scale bar")]
@@ -116,16 +120,26 @@ pub(super) fn arrange_step(ui: &mut egui::Ui, s: &Session, d: &mut Draft) {
         let from = d.arrangement.held(s).ok().flatten().unwrap_or_else(|| favourite_homes(s));
         d.arrangement = Arrangement::Custom(from);
     }
+    // The styles with a column keep the locator and legend in it (`cmd/layout/publication`), so
+    // those two take no corner.
+    let column = !d.figure() && publication_style_has_column(&d.style);
+    let cornered = |surround: usize| !(column && IN_COLUMN.contains(&surround));
     if let Arrangement::Custom(homes) = &mut d.arrangement {
-        corner_pickers(ui, homes);
+        corner_pickers(ui, homes, cornered);
     }
     if let Ok(Some(homes)) = d.arrangement.held(s) {
         ui.add_space(4.0);
         egui::Grid::new("publication_wizard_corners").num_columns(2).spacing(egui::vec2(24.0, 6.0)).show(ui, |ui| {
             for (corner, name) in corner_labels().into_iter().enumerate() {
-                if let Some(surround) = homes.iter().position(|&h| h == corner) {
-                    let values = [("corner", name), ("surround", surround_labels()[surround])];
-                    ui.group(|ui| ui.label(i18n::fmt("{corner}: {surround}", &values)));
+                match homes.iter().position(|&h| h == corner).filter(|&s| cornered(s)) {
+                    Some(surround) => {
+                        let values = [("corner", name), ("surround", surround_labels()[surround])];
+                        ui.group(|ui| ui.label(i18n::fmt("{corner}: {surround}", &values)));
+                    }
+                    // Its cell is kept, so the others stay at their side.
+                    None => {
+                        ui.label("");
+                    }
                 }
                 if corner % 2 == 1 {
                     ui.end_row();
@@ -133,8 +147,7 @@ pub(super) fn arrange_step(ui: &mut egui::Ui, s: &Session, d: &mut Draft) {
             }
         });
     }
-    // The styles with a column keep the locator and legend in it (`cmd/layout/publication`).
-    if !d.figure() && publication_style_has_column(&d.style) {
+    if column {
         let note = tl!("The locator and legend sit in this style's column: only the north arrow and scale bar take these corners.");
         ui.label(egui::RichText::new(note).small().weak());
     }
@@ -146,26 +159,29 @@ pub(super) fn arrange_step(ui: &mut egui::Ui, s: &Session, d: &mut Draft) {
 }
 
 /// A corner for each surround; one picked that another has swaps the two, so each keeps a corner
-/// of its own.
-fn corner_pickers(ui: &mut egui::Ui, homes: &mut Homes) {
+/// of its own. A surround that takes no corner on this sheet has its picker off, still showing the
+/// one it holds for the sheets and the favourite where it does.
+fn corner_pickers(ui: &mut egui::Ui, homes: &mut Homes, cornered: impl Fn(usize) -> bool) {
     egui::Grid::new("publication_wizard_custom").num_columns(2).spacing(egui::vec2(8.0, 6.0)).show(ui, |ui| {
         for (surround, name) in surround_labels().into_iter().enumerate() {
             let label = ui.label(i18n::display(name));
             let corners = corner_labels();
-            egui::ComboBox::from_id_salt(("publication_wizard_corner", surround))
-                .selected_text(i18n::display(corners[homes[surround]]))
-                .width(field_width(ui))
-                .show_ui(ui, |ui| {
-                    for (corner, name) in corners.into_iter().enumerate() {
-                        if ui.selectable_label(homes[surround] == corner, i18n::display(name)).clicked()
-                            && let Some(other) = homes.iter().position(|&h| h == corner)
-                        {
-                            homes.swap(surround, other);
+            ui.add_enabled_ui(cornered(surround), |ui| {
+                egui::ComboBox::from_id_salt(("publication_wizard_corner", surround))
+                    .selected_text(i18n::display(corners[homes[surround]]))
+                    .width(field_width(ui))
+                    .show_ui(ui, |ui| {
+                        for (corner, name) in corners.into_iter().enumerate() {
+                            if ui.selectable_label(homes[surround] == corner, i18n::display(name)).clicked()
+                                && let Some(other) = homes.iter().position(|&h| h == corner)
+                            {
+                                homes.swap(surround, other);
+                            }
                         }
-                    }
-                })
-                .response
-                .labelled_by(label.id);
+                    })
+                    .response
+                    .labelled_by(label.id);
+            });
             ui.end_row();
         }
     });
@@ -446,5 +462,33 @@ mod tests {
         }
         let h = creating(Arrangement::Named("mirrored".into()), |d| d.make_favourite = false);
         assert!(!said(&h), "unticked");
+    }
+
+    /// On a column style the locator and legend have no corner: the grid lists neither and their
+    /// pickers are off; the north arrow and scale bar keep theirs. Elsewhere all four have one.
+    #[test]
+    fn column_styles_give_no_corner_to_the_locator_and_legend() {
+        for (style, size, column) in [
+            ("classic", "a4", false),
+            ("panel", "a4", true),
+            ("editorial", "a4", true),
+            ("modular", "a4", true),
+            ("panel", "figure-1col", false),
+        ] {
+            let h = placement(|app| {
+                let d = app.dialogs.publication.as_mut().unwrap();
+                (d.style, d.size, d.arrangement) = (style.into(), size.into(), Arrangement::Custom([0, 1, 2, 3]));
+            });
+            for (surround, corner, free) in [
+                ("Locator", "Top left", !column),
+                ("North arrow", "Top right", true),
+                ("Legend", "Bottom left", !column),
+                ("Scale bar", "Bottom right", true),
+            ] {
+                assert_eq!(shown(&h, &format!("{corner}: {surround}")), free, "{style} {size}: {surround} in the grid");
+                let off = h.get_by_role_and_label(Role::ComboBox, surround).accesskit_node().is_disabled();
+                assert_eq!(off, !free, "{style} {size}: {surround}'s picker");
+            }
+        }
     }
 }
