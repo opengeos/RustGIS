@@ -382,7 +382,7 @@ pub fn unread_dates_note(fields: &[crate::Field], counts: &[usize]) -> Option<cr
         let kind = match f.ty {
             crate::FieldType::Boolean => "yes/no values",
             crate::FieldType::Integer | crate::FieldType::Double => "numbers",
-            // A text field counts dates a mixed column held ([`crate::sheets`]), and a blob.
+            // A text field counts dates a mixed column held ([`crate::sheets`]).
             crate::FieldType::Text | crate::FieldType::Date | crate::FieldType::DateTime => "dates",
         };
         if !kinds.contains(&kind) {

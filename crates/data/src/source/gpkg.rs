@@ -1591,7 +1591,9 @@ fn value(v: ValueRef<'_>, ty: FieldType, unread: &mut Vec<usize>, rounded: Optio
         (ValueRef::Text(t), FieldType::Text) => Value::Text(String::from_utf8_lossy(t).into_owned()),
         (ValueRef::Text(t), FieldType::Boolean) => super::yes_no_text(&String::from_utf8_lossy(t), unread, k),
         (ValueRef::Text(t), ty) => super::number_text(&String::from_utf8_lossy(t), ty, unread, k),
-        // A blob isn't a value an attribute column holds.
+        // A blob in a text column is its text, as SQLite stores text either way.
+        (ValueRef::Blob(b), FieldType::Text) => Value::Text(String::from_utf8_lossy(b).into_owned()),
+        // A blob isn't a value another attribute column holds.
         (ValueRef::Blob(_), _) => {
             super::unread_date(unread, k);
             Value::Null

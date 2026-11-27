@@ -4136,15 +4136,18 @@ fn geopackage_values_that_dont_fit_a_number_field_are_said() {
     c.execute("ALTER TABLE t ADD COLUMN big NUMERIC", []).unwrap();
     c.execute("UPDATE t SET big = 9007199254740993 WHERE fid = 1", []).unwrap();
     c.execute("UPDATE t SET big = 5 WHERE fid = 2", []).unwrap();
+    // A blob in a text column is its text: nothing lost, nothing said.
+    c.execute("ALTER TABLE t ADD COLUMN name TEXT", []).unwrap();
+    c.execute("UPDATE t SET name = x'6869' WHERE fid = 3", []).unwrap();
     c.execute("UPDATE t SET pop = 'n/a', area = 'n/a' WHERE fid = 2", []).unwrap();
     c.execute("UPDATE t SET pop = x'00ff', area = x'00' WHERE fid = 3", []).unwrap();
     c.execute("UPDATE t SET pop = '', area = '<Null>' WHERE fid = 4", []).unwrap();
     drop(c);
     for (values, said) in read() {
-        assert_eq!(values[0], [Value::Int(1), Value::Float(1.5), Value::Float(9_007_199_254_740_992.0)]);
-        assert_eq!(values[1], [Value::Null, Value::Null, Value::Float(5.0)]);
-        assert_eq!(values[2], [Value::Null, Value::Null, Value::Null]);
-        assert_eq!(values[3], [Value::Null, Value::Null, Value::Null]);
+        assert_eq!(values[0], [Value::Int(1), Value::Float(1.5), Value::Float(9_007_199_254_740_992.0), Value::Null]);
+        assert_eq!(values[1], [Value::Null, Value::Null, Value::Float(5.0), Value::Null]);
+        assert_eq!(values[2], [Value::Null, Value::Null, Value::Null, Value::Text("hi".into())]);
+        assert_eq!(values[3], [Value::Null, Value::Null, Value::Null, Value::Null]);
         let dropped = Some(crate::loss::LossCode::DroppedValue);
         let rounded = Some(crate::loss::LossCode::ChangedRounded);
         assert_eq!(
