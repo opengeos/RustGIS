@@ -135,8 +135,13 @@ pub fn poll(app: &mut RustGisApp) {
             st.matched = v.get("matched").and_then(Value::as_u64).unwrap_or(0);
             st.next = v.get("next").and_then(Value::as_u64);
             st.records.extend(v.get("records").and_then(Value::as_array).into_iter().flatten().cloned());
-            st.notes.extend(refused.map(|_| service::AREA_UNNAMED.to_string()));
-            st.notes.extend(v.get("notes").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(String::from));
+            // A note about the words is the same on every page: each is listed once.
+            let page = v.get("notes").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str);
+            for note in refused.map(|_| service::AREA_UNNAMED).into_iter().chain(page) {
+                if !st.notes.iter().any(|n| n == note) {
+                    st.notes.push(note.to_string());
+                }
+            }
             // More asks for the area as this page's was read.
             if let Some(crs) = v.get("bboxCrs") {
                 st.asked["bboxCrs"] = crs.clone();
@@ -199,6 +204,13 @@ fn records(app: &mut RustGisApp, ui: &mut egui::Ui) {
     let list = crate::sourcespane::connections_snapshot(app);
     let st = &app.ui.csw;
     if st.records.is_empty() && st.matched == 0 {
+        // Nothing matched, but how the search was asked is still said.
+        if !st.notes.is_empty() {
+            ui.separator();
+        }
+        for n in &st.notes {
+            ui.label(egui::RichText::new(n).small().weak());
+        }
         return;
     }
     ui.separator();
@@ -426,5 +438,58 @@ mod tests {
             let st = &app.ui.csw;
             assert_eq!((st.error.as_deref(), st.records.len(), &st.notes), (None, 2, &said));
         }
+    }
+
+    /// A note about the words (a control character left out) is the same on every page: More
+    /// doesn't list it again.
+    #[test]
+    fn a_note_about_the_words_is_listed_once_over_pages() {
+        const PAGE: &str = r#"<csw:GetRecordsResponse xmlns:csw="http://www.opengis.net/cat/csw/2.0.2" xmlns:dc="http://purl.org/dc/elements/1.1/"><csw:SearchResults numberOfRecordsMatched="40" nextRecord="21"><csw:Record><dc:title>Roads</dc:title></csw:Record></csw:SearchResults></csw:GetRecordsResponse>"#;
+        let _turn = crate::fetching::turn();
+        cache::set_fetcher_with_origin(move |url, ceiling, done, _| {
+            let origin = Origin::with_observed_reach(cache::split_download_limit(&url).0, ceiling).unwrap();
+            done(Ok(cache::Fetched { bytes: PAGE.into(), origin }));
+        });
+        let mut app = RustGisApp::new(rustgis_engine::Session::new(rustgis_engine::Project::default()));
+        app.run("ui.addService", json!({"url": "https://csw-words.example/csw", "type": "csw", "query": "ro\u{7}ads"})).unwrap();
+        poll(&mut app);
+        let said = vec!["control characters left out of the words searched for: 1".to_string()];
+        assert_eq!((app.ui.csw.records.len(), &app.ui.csw.notes), (1, &said));
+        search(&mut app, 21);
+        poll(&mut app);
+        assert_eq!((app.ui.csw.records.len(), &app.ui.csw.notes), (2, &said));
+    }
+
+    /// A search that matched nothing still says how it was asked: the area asked for again without
+    /// its system is shown with no records (#2889).
+    #[test]
+    fn a_search_that_matched_nothing_shows_its_notes() {
+        use egui_kittest::kittest::Queryable;
+        const REFUSED: &str = "<ows:ExceptionReport xmlns:ows='o'><ows:Exception><ows:ExceptionText>no such system</ows:ExceptionText></ows:Exception></ows:ExceptionReport>";
+        const NONE: &str = r#"<csw:GetRecordsResponse xmlns:csw="http://www.opengis.net/cat/csw/2.0.2"><csw:SearchResults numberOfRecordsMatched="0" nextRecord="0"/></csw:GetRecordsResponse>"#;
+        let _turn = crate::fetching::turn();
+        cache::set_fetcher_with_origin(move |url, ceiling, done, _| {
+            let body = if url.contains("CRS84") { REFUSED } else { NONE };
+            let origin = Origin::with_observed_reach(cache::split_download_limit(&url).0, ceiling).unwrap();
+            done(Ok(cache::Fetched { bytes: body.into(), origin }));
+        });
+        let mut app = RustGisApp::new(rustgis_engine::Session::new(rustgis_engine::Project::default()));
+        app.session.run("map.zoomToExtent", &json!({"extent": [-43, -21, -42, -20]})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_max_steps(16).build_ui_state(
+            |ui, app: &mut RustGisApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        h.state_mut()
+            .run("ui.addService", json!({"url": "https://csw-nothing.example/csw", "type": "csw", "query": "roads", "bbox": "view"}))
+            .unwrap();
+        h.run_steps(4);
+        let st = &h.state().ui.csw;
+        assert_eq!((st.error.as_deref(), st.records.len(), st.matched), (None, 0, 0));
+        assert_eq!(st.notes, [service::AREA_UNNAMED.to_string()]);
+        assert!(h.query_by_label(service::AREA_UNNAMED).is_some(), "the note isn't shown");
     }
 }
