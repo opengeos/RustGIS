@@ -175,8 +175,7 @@ pub(in crate::cmd::layout) fn say_legend_fit(s: &mut Session, li: usize, id: u32
     };
     let measured = if fit == LegendFit::Manual {
         let n = rustgis_map::layout::legend_columns_in_range(columns);
-        crate::render::layout::legend_sizes_asked_mm(map, at, &asked)
-            .map(|sizes| (n, overflows(sizes.get(n.saturating_sub(1)).copied().unwrap_or_default(), room)))
+        crate::render::layout::legend_size_asked_mm(map, at, &asked, n).map(|size| (n, overflows(size, room)))
     } else {
         crate::render::layout::legend_fitted_mm(map, at, &asked, (columns, fit), room).map(|f| (f.columns, (f.too_wide, f.too_tall)))
     };

@@ -1216,17 +1216,32 @@ pub fn legend_sizes_asked_mm(map: &mut Map, scale: f64, asked: &LegendAsked) -> 
 /// larger `N` doesn't build.
 fn sizes_asked_mm<const N: usize>(map: &mut Map, scale: f64, asked: &LegendAsked) -> Option<[(f64, f64); N]> {
     const { assert!(N <= MAX_LEGEND_COLUMNS) };
+    asked_measures(map, scale, asked, |m| std::array::from_fn(|i| measure_mm(m, i + 1)))
+}
+
+/// [`legend_sizes_asked_mm`] in `columns` columns alone (taken into range as a legend takes them,
+/// [`legend_columns_in_range`]), in mm: what a legend laid out in them needs, no other column
+/// count measured.
+pub fn legend_size_asked_mm(map: &mut Map, scale: f64, asked: &LegendAsked, columns: usize) -> Option<(f64, f64)> {
+    let columns = legend_columns_in_range(columns);
+    asked_measures(map, scale, asked, |m| measure_mm(m, columns))
+}
+
+/// The rows of the legend `asked` ([`asked_rows`]) measured at its text size, given to `with`.
+fn asked_measures<T>(map: &mut Map, scale: f64, asked: &LegendAsked, with: impl FnOnce(Measured<'_, '_>) -> T) -> Option<T> {
     let size = legend_size(asked.text_size);
-    let mm = 25.4 / 96.0;
     asked_rows(map, scale, asked, |rows| {
         let sides = symbol_sides(rows, scale);
         let sizes = RowSizes::of(rows, &sides, size);
-        let m = Measured::new(rows, &sides, &sizes);
-        std::array::from_fn(|i| {
-            let (width, height) = measure(m, i + 1);
-            (f64::from(width) * mm, f64::from(height) * mm)
-        })
+        with(Measured::new(rows, &sides, &sizes))
     })
+}
+
+/// [`measure`] of `m` in `columns` columns, in mm.
+fn measure_mm(m: Measured, columns: usize) -> (f64, f64) {
+    let mm = 25.4 / 96.0;
+    let (width, height) = measure(m, columns);
+    (f64::from(width) * mm, f64::from(height) * mm)
 }
 
 /// The columns and text size the legend `asked` of `map` at the renderer's scale denominator

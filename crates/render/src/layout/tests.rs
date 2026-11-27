@@ -2452,6 +2452,30 @@ fn a_legend_measured_in_fewer_columns_lays_out_no_more() {
     assert_eq!(three[..], six[..3]);
 }
 
+/// A legend measured in its own columns, as a manual legend's notice measures it, lays its rows out
+/// in that one column count alone (where main laid out three), and gives the size the measure in
+/// one to six gives for it; a count out of range is taken into range as the legend takes it.
+#[test]
+fn a_legend_measured_in_its_own_columns_lays_out_only_those() {
+    let mut map = rows_map(50);
+    let asked = LegendAsked {
+        all_classes: true,
+        hide_other: false,
+        show_no_data: false,
+        layer_names: true,
+        text_size: 9.0,
+        exclude: &[],
+        labels: &NO_LABELS,
+    };
+    let six = legend_sizes_asked_mm(&mut map, 1e6, &asked).unwrap();
+    for (columns, laid_in) in [(0, 1), (1, 1), (2, 2), (3, 3), (6, 6), (9, 6)] {
+        LAYOUTS_MEASURED.set(Some(Vec::new()));
+        let size = legend_size_asked_mm(&mut map, 1e6, &asked, columns).unwrap();
+        assert_eq!(LAYOUTS_MEASURED.take().unwrap_or_default(), [laid_in], "{columns}");
+        assert_eq!(Some(&size), six.get(laid_in - 1), "{columns}");
+    }
+}
+
 /// A legend shows a layer under the label it gives it, by the layer's name in any case (#1654):
 /// a plain layer's row and a classed layer's heading; it measures and draws the label, so its
 /// size follows it. A layer it gives no label, or a blank one, shows its name.
