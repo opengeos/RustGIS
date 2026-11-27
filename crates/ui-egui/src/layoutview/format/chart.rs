@@ -1,6 +1,14 @@
 //! A chart's Format rows.
 
 use super::*;
+use crate::RustGisApp;
+use crate::widgets::Dragged;
+use egui::Ui;
+use rustgis_engine::map::layout::{
+    ChartOrder, Element, ElementKind, Layout, MAX_CHART_BARS, MAX_CHART_DECIMALS, Orientation, TextAlign, chart_stack_refusal,
+};
+use rustgis_engine::map::report::StatKind;
+use serde_json::{Value, json};
 
 /// A chart's rows in the grid.
 pub(super) fn chart_rows(

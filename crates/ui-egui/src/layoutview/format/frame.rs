@@ -1,6 +1,14 @@
 //! A map frame's Format rows, its grid, extent indicator and border.
 
 use super::*;
+use crate::RustGisApp;
+use crate::widgets::Dragged;
+use egui::{Ui, vec2};
+use rustgis_engine::map::layout::{
+    CoordFormat, Element, ElementKind, Grid, GridKind, GridStyle, Layout, MAX_FRAME_SCALE, MAX_GRID_WIDTH, MAX_TICK_MM, MIN_FRAME_SCALE,
+    Orientation,
+};
+use serde_json::{Value, json};
 
 /// A map frame's grid options; `set` sends the changed ones (`false` removes the grid).
 fn grid_properties(app: &mut RustGisApp, ui: &mut Ui, grid: Option<&Grid>, id: u32, set: &dyn Fn(&mut RustGisApp, Value)) {

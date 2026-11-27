@@ -1,6 +1,11 @@
 //! Snapping, guides and rulers.
 
 use super::*;
+use crate::RustGisApp;
+use crate::theme::{Tokens, regular};
+use egui::{Align2, Pos2, Rect, Stroke, Ui, pos2, vec2};
+use rustgis_engine::map::layout::{Element, Layout};
+use serde_json::json;
 
 /// The lines a dragged element snaps to (mm): the page's edges and centre, the guides, and the
 /// other visible elements' edges and centres; vertical lines (x), then horizontal (y).

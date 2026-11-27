@@ -1,6 +1,10 @@
 //! Pointer and keyboard interaction with the page.
 
 use super::*;
+use crate::RustGisApp;
+use egui::{CursorIcon, Pos2, Rect, Ui};
+use rustgis_engine::map::layout::{ElementKind, Layout, MAX_FRAME_SCALE, MIN_FRAME_SCALE, PT_PER_MM, frame_camera};
+use serde_json::json;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Drag {

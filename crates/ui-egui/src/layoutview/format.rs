@@ -11,12 +11,22 @@ mod table;
 mod text;
 
 use super::*;
+use crate::RustGisApp;
+use crate::theme::{Tokens, semibold};
+use crate::widgets::Dragged;
 use chart::*;
 use colorbar::*;
+use egui::{Color32, Ui, vec2};
 use frame::*;
 use legend::*;
 use north::*;
+use rustgis_engine::map::layout::{
+    Background, ElementKind, INK, LAYOUT_TEXT_SIZE, Layout, MAX_BACKGROUND_PADDING, MAX_BACKGROUND_RADIUS, MAX_BACKGROUND_WIDTH,
+    Orientation,
+};
+use rustgis_engine::map::symbology::Dash;
 use scalebar::*;
+use serde_json::{Value, json};
 use shapes::*;
 use table::*;
 use text::*;

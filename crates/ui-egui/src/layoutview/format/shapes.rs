@@ -1,6 +1,11 @@
 //! A rectangle's, ellipse's and line's Format rows.
 
 use super::*;
+use crate::RustGisApp;
+use crate::widgets::Dragged;
+use egui::Ui;
+use rustgis_engine::map::layout::{Element, ElementKind, LineHead, line_angle};
+use serde_json::{Value, json};
 
 /// A rectangle's or ellipse's rows in the grid.
 pub(super) fn shape_rows(app: &mut RustGisApp, ui: &mut Ui, li: usize, e: &Element, update: &dyn Fn(&mut RustGisApp, Value)) {

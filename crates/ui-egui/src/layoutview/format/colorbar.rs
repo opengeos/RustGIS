@@ -1,6 +1,11 @@
 //! A colorbar's Format rows.
 
 use super::*;
+use crate::RustGisApp;
+use crate::widgets::Dragged;
+use egui::Ui;
+use rustgis_engine::map::layout::{Element, ElementKind, Layout, MAX_COLORBAR_TICKS, Orientation, TickSide};
+use serde_json::{Value, json};
 
 /// A colorbar's rows in the grid.
 pub(super) fn colorbar_rows(

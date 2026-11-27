@@ -1,6 +1,9 @@
 //! A north arrow's Format rows.
 
-use super::*;
+use crate::RustGisApp;
+use egui::Ui;
+use rustgis_engine::map::layout::{ArrowStyle, Element, ElementKind};
+use serde_json::{Value, json};
 
 /// A north arrow's rows in the grid.
 pub(super) fn north_arrow_rows(app: &mut RustGisApp, ui: &mut Ui, e: &Element, update: &dyn Fn(&mut RustGisApp, Value)) {

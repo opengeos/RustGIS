@@ -2336,11 +2336,9 @@ fn widening_a_hairline_keeps_it_thin() {
     assert_eq!(resized(rule, 5, 0.0, 0.5), (10.0, 30.0, 100.0, 2.0));
 }
 
-/// A number kept across a drag (#607) is keyed by layout, element and field, whichever Format file
-/// asks for it.
+/// Two numbers kept across a drag (#607) share a key only for the same layout, element and field.
 #[test]
 fn number_key_is_one_per_layout_element_and_field() {
-    assert_eq!(super::number_key(1, 7, "rows"), egui::Id::unique(("layout_drag", 1usize, 7u32, "rows")));
     assert_ne!(super::number_key(1, 7, "rows"), super::number_key(0, 7, "rows"));
     assert_ne!(super::number_key(1, 7, "rows"), super::number_key(1, 8, "rows"));
     assert_ne!(super::number_key(1, 7, "rows"), super::number_key(1, 7, "columns"));

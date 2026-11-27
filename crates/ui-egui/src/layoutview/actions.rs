@@ -1,6 +1,9 @@
 //! Duplicate, Delete and Arrange, from the Format pane and the element's menu.
 
-use super::*;
+use crate::RustGisApp;
+use egui::Ui;
+use rustgis_engine::map::layout::{Arrange, ElementKind, Layout};
+use serde_json::json;
 
 /// Duplicate and Delete, under the properties: a locked element can be copied (the copy isn't
 /// locked) but not deleted, nor a frame with a locked surround. Then the drawing order: Bring to

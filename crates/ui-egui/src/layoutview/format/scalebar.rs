@@ -1,6 +1,14 @@
 //! A scale bar's Format rows.
 
 use super::*;
+use crate::RustGisApp;
+use crate::widgets::Dragged;
+use egui::Ui;
+use rustgis_engine::map::layout::{
+    Element, ElementKind, Layout, MAX_SCALE_BEFORE_ZERO, MAX_SCALE_DECIMALS, MAX_SCALE_DIVISIONS, MAX_SCALE_SUBDIVISIONS, ScaleBarFit,
+    ScaleBarStyle, ScaleLabelPosition, ScaleUnits, UnitLabelPosition,
+};
+use serde_json::{Value, json};
 
 /// A scale bar's rows in the grid.
 pub(super) fn scale_bar_rows(

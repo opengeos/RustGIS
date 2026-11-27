@@ -1,6 +1,9 @@
 //! The selected element's resize and rotation handles.
 
 use super::*;
+use crate::RustGisApp;
+use egui::{CursorIcon, Pos2, Rect, pos2};
+use rustgis_engine::map::layout::{ElementKind, Layout, line_angle};
 
 /// A resize handle's drawn size, and how near (points) the pointer picks one up.
 pub(super) const HANDLE: f32 = 10.0;

@@ -1,6 +1,11 @@
 //! A layout text's Format rows.
 
 use super::*;
+use crate::RustGisApp;
+use crate::widgets::Dragged;
+use egui::Ui;
+use rustgis_engine::map::layout::{Element, ElementKind, Layout};
+use serde_json::{Value, json};
 
 /// A text's own rows in the grid: its turn.
 pub(super) fn text_rows(app: &mut RustGisApp, ui: &mut Ui, li: usize, e: &Element, update: &dyn Fn(&mut RustGisApp, Value)) {
