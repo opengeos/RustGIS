@@ -361,3 +361,26 @@ fn headline_figures_never_squeeze_the_map_away() {
         assert!(e.contains("no room"), "{profile}: {e}");
     }
 }
+
+/// The kicker is drawn in capitals whatever its tokens fill in, and its box is sized for them
+/// (#3126).
+#[test]
+fn a_kickers_tokens_are_drawn_in_capitals_and_measured_so() {
+    use rustgis_map::layout::TextCase;
+    let name = "illicit little filly ".repeat(6);
+    let mut s = world();
+    s.run("map.rename", &json!({"name": name})).unwrap();
+    let kicker = |s: &mut Session, text: &str| {
+        edge(s, json!({"profile": "a5-portrait", "kicker": text})).unwrap();
+        named(last(s), "Kicker").clone()
+    };
+    let (token, typed) = (kicker(&mut s, "{map}"), kicker(&mut s, name.trim_end()));
+    for e in [&token, &typed] {
+        let ElementKind::Text { case, .. } = &e.kind else { panic!() };
+        assert_eq!(*case, TextCase::Upper);
+    }
+    assert!((token.h - typed.h).abs() < 1e-6, "{} {}", token.h, typed.h);
+    let stat = kicker(&mut s, "{count:Countries} countries");
+    let ElementKind::Text { text, case, .. } = &stat.kind else { panic!() };
+    assert_eq!((text.as_str(), *case), ("{count:Countries} COUNTRIES", TextCase::Upper));
+}

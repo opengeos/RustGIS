@@ -577,8 +577,9 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
                             // As the renderer spaces them: 1.33 points of the drawing per point of spacing.
                             let added = spacing * 1.33 / rustgis_map::layout::PT_PER_MM;
                             let t = capitals(&fill(t));
+                            // Measured as drawn: what its tokens fill in is in capitals too.
                             let width = |x: &str| {
-                                let x = drawn(x);
+                                let x = drawn(x).to_uppercase();
                                 crate::render::report::width_mm(&x, pt as f32, true) + x.chars().count() as f64 * added
                             };
                             // As `broken`: a text with the map's name or a layer statistic is kept
@@ -592,8 +593,10 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
                             };
                             let kh = lines.lines.len() as f64 * pitch(pt) + 1.0 * k;
                             let mut kind = pub_text(lines, pt, accent, true, TextAlign::Left);
-                            if let ElementKind::Text { letter_spacing, .. } = &mut kind {
-                                *letter_spacing = spacing;
+                            // The stored text is in capitals but for its tokens, which the case
+                            // covers (#3126).
+                            if let ElementKind::Text { letter_spacing, case, .. } = &mut kind {
+                                (*letter_spacing, *case) = (spacing, TextCase::Upper);
                             }
                             around.push(("Kicker".into(), (x0, y, iw, kh), kind));
                             y += kh;
