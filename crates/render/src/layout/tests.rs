@@ -2307,6 +2307,53 @@ fn adjust_size_shrinks_a_legend_picture() {
     assert!(fit_legend(&rows, (1, LegendFit::Manual), room, (1e6, 9.0)).too_tall);
 }
 
+/// A fit judges a legend's width in the columns the page draws it in. Six rows of one height,
+/// the second and third with long labels, in a box two rows tall: as even as they go in two
+/// columns (three and three) both long labels share the first column, but too tall for its box
+/// the legend is drawn in columns filled in turn to its height (two, then four), where each column
+/// holds a long label. In a box narrower than that and wider than the even split, two columns
+/// close up when drawn, so the fit stays in one, and set to two it says they are too wide. It
+/// fails if a fit measured a too-tall candidate's width in columns the page doesn't draw.
+#[test]
+fn a_fits_width_is_measured_in_the_columns_it_draws() {
+    let small = rustgis_map::Symbol { size: 4.0, stroke_width: 0.0, ..rustgis_map::Symbol::default_for(GeometryType::Point, 0) };
+    let long = "a label long enough to widen its column";
+    // Listed in their names' order.
+    let names = ["s0".to_string(), format!("s1, {long}"), format!("s2, {long}"), "s3".into(), "s4".into(), "s5".into()];
+    let map = classed_point_map(names.into_iter().map(|n| (n, small)).collect(), small);
+    let rows = legend_rows(&map, None, &LegendOptions { hide_other: true, ..opts(false) });
+    let at = (1e6, 1.0);
+    assert_eq!(row_kinds(&rows), ["Class"; 6]);
+    assert_eq!(balanced_at(&rows, 6, at).1, LEGEND_ROW, "rows of one height");
+    let room_h = 2.0 * LEGEND_ROW;
+    let width = |starts: &[usize]| column_parts(&rows, starts).map(|part| widest_at(part, at)).sum::<f32>() + LEGEND_COLUMN_GAP;
+    let even = balanced_at(&rows, 2, at).0;
+    let drawn = flow_at(&rows, 2, room_h, at).0;
+    assert_eq!((even.as_slice(), drawn.as_slice()), ([0, 3].as_slice(), [0, 2].as_slice()));
+    let (even_w, drawn_w) = (width(&even), width(&drawn));
+    assert!(even_w + 2.0 < drawn_w, "{even_w} {drawn_w}");
+    let room = ((even_w + drawn_w) / 2.0, room_h);
+    assert!(widest_at(&rows, at) < room.0, "one column fits across");
+    let f = fit_legend(&rows, (1, LegendFit::AdjustColumns), room, (1e6, 9.0));
+    assert_eq!((f.columns, f.too_wide, f.too_tall), (1, false, true), "{f:?}");
+    let f = fit_legend(&rows, (2, LegendFit::AdjustColumns), room, (1e6, 9.0));
+    assert_eq!((f.columns, f.too_wide, f.too_tall), (2, true, true), "{f:?}");
+    // As drawn: the fitted legend set to two columns is the manual legend of two.
+    let fitted = drawn_legend(&map, room, (2, LegendFit::AdjustColumns));
+    assert!(fitted.data() == drawn_legend(&map, room, (2, LegendFit::Manual)).data());
+}
+
+/// [`drawn`] for a legend of `map` with no layer names nor its other values.
+fn drawn_legend(map: &Map, (w, h): (f32, f32), (columns, fit): (usize, LegendFit)) -> Pixmap {
+    let mut pm = Pixmap::new(600, 600).unwrap();
+    pm.fill(tiny_skia::Color::WHITE);
+    let opts = LegendOptions { hide_other: true, ..opts(false) };
+    crate::canvas::with_canvas(&mut pm, |c| {
+        legend_missing(c, Rect::from_xywh(0.0, 0.0, w, h).unwrap(), map, ("", columns, fit), None, opts, INK, 1.0);
+    });
+    pm
+}
+
 /// Legends with nothing to list, a box shorter than its title or no room at all draw and fit
 /// without a panic, a NaN or a loop: nothing to list fits, rows with no room are cut and say so.
 #[test]

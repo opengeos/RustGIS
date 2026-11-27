@@ -305,7 +305,7 @@ impl<'m, 'a> Measured<'m, 'a> {
         Measured { rows, sides: cut(self.sides), heights: cut(self.heights), texts: cut(self.texts), size: self.size }
     }
 
-    /// The rows of each column, from where they start, with their measures ([`column_parts`]).
+    /// The rows of each column, from where they start, with their measures.
     fn parts(self, starts: &[usize]) -> impl Iterator<Item = Self> {
         column_ranges(starts, self.rows.len()).map(move |range| self.part(range))
     }
@@ -352,6 +352,7 @@ pub(super) fn balanced(m: Measured, columns: usize) -> (Vec<usize>, f32) {
 }
 
 /// The rows of each column, from where they start.
+#[cfg(test)]
 pub(super) fn column_parts<'r, 'a>(rows: &'r [LegendRow<'a>], starts: &'r [usize]) -> impl Iterator<Item = &'r [LegendRow<'a>]> {
     column_ranges(starts, rows.len()).map(|range| rows.get(range).unwrap_or_default())
 }
@@ -648,7 +649,7 @@ pub(super) const LEGEND_FIT_STEP_PT: f64 = 0.25;
 
 /// The columns and text size [`fit_legend`] draws a legend's rows at, and whether its rows are
 /// still wider or taller than its room there.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(super) struct Fitted {
     /// 1 to [`MAX_LEGEND_COLUMNS`].
     pub(super) columns: usize,
@@ -657,9 +658,9 @@ pub(super) struct Fitted {
     pub(super) size: f32,
     /// In points, within [`LAYOUT_TEXT_SIZE`].
     pub(super) text_size: f64,
-    /// How tall its tallest column is with its rows as even as they go ([`balanced`]), in points:
-    /// the height the drawing lays the rows out in, within the room.
-    tallest: f32,
+    /// The row each column starts at as the page draws them ([`drawn_starts`]), which its width
+    /// is measured in: the drawing lays its rows out in these.
+    starts: Vec<usize>,
     pub(super) too_wide: bool,
     pub(super) too_tall: bool,
 }
@@ -668,7 +669,7 @@ impl Fitted {
     /// A fit's verdict alone, for a test of what is listed.
     #[cfg(test)]
     pub(super) fn verdict(columns: usize, too_wide: bool, too_tall: bool) -> Fitted {
-        Fitted { columns, size: 1.0, text_size: 9.0, tallest: 0.0, too_wide, too_tall }
+        Fitted { columns, size: 1.0, text_size: 9.0, starts: vec![0], too_wide, too_tall }
     }
 
     /// Neither wider nor taller than its room.
@@ -686,10 +687,12 @@ pub(super) fn beyond(measured: f32, room: f32, size: f32) -> bool {
 
 /// The one rule for the columns and text size a legend's `rows` are drawn at in a room of
 /// `room_w` × `room_h` points (what its box leaves under its title), from its `columns` and its
-/// `text_size` in points, at 1:`scale`. A candidate is measured as [`legend_sizes_asked_mm`]
-/// measures a legend ([`measure`]): its rows as even as they go in that many columns, side by side
-/// with their gaps; it fits when it is neither wider nor taller than the room by more than a
-/// thousandth of a row.
+/// `text_size` in points, at 1:`scale`. A candidate is measured as the page draws it: its
+/// tallest column with its rows as even as they go in that many columns ([`balanced`]), and its
+/// width in the columns its rows are then laid in within the room ([`drawn_starts`]), side by side
+/// with their gaps ([`across`]); it fits when it is neither wider nor taller than the room by more
+/// than a thousandth of a row. Too tall, its columns are filled in turn to the room's height, so
+/// its width is that of those columns, not of the even ones.
 ///
 /// - Manual (and a value that is no fit): the columns and size as set.
 /// - adjustSize: in the columns set, the largest that fits of `text_size` and the sizes a quarter
@@ -731,7 +734,8 @@ fn fit_measured(
         LegendFit::Manual | LegendFit::Invalid => trials.at(n, text_size),
         LegendFit::AdjustSize => largest_fitting(text_size, |pt| {
             let f = trials.at(n, pt);
-            (f, f.fits())
+            let fits = f.fits();
+            (f, fits)
         }),
         LegendFit::AdjustColumns => trials.columns_at(n, text_size).0,
         LegendFit::AdjustColumnsAndSize => largest_fitting(text_size, |pt| trials.columns_at(n, pt)),
@@ -751,16 +755,20 @@ struct Trials<'m, 'a> {
 }
 
 impl Trials<'_, '_> {
-    /// The rows in `columns` columns at `pt` points, measured as the page lays them out
-    /// ([`measure`]).
+    /// The rows in `columns` columns at `pt` points, measured as the page draws them: as tall as
+    /// their even columns ([`balanced`]), as wide as the columns they are laid in within the room
+    /// ([`drawn_starts`]).
     fn at(&mut self, columns: usize, pt: f64) -> Fitted {
         let size = legend_size(pt);
         let sizes = self.take(size);
-        let (width, tallest) = measure(Measured::new(self.rows, self.sides, &sizes), columns);
+        let m = Measured::new(self.rows, self.sides, &sizes);
+        let tallest = balanced(m, columns).1;
+        let starts = drawn_starts(m, columns, tallest, self.room.1);
+        let width = across(m, &starts);
         self.sizes.push(sizes);
         let listed = !self.rows.is_empty();
         let (too_wide, too_tall) = (listed && beyond(width, self.room.0, size), listed && beyond(tallest, self.room.1, size));
-        Fitted { columns, size, text_size: pt, tallest, too_wide, too_tall }
+        Fitted { columns, size, text_size: pt, starts, too_wide, too_tall }
     }
 
     /// The rows' measures at `size` times the default: those made before, else made now.
@@ -775,10 +783,11 @@ impl Trials<'_, '_> {
     /// else `n`; and whether it fits.
     fn columns_at(&mut self, n: usize, pt: f64) -> (Fitted, bool) {
         let first = self.at(n, pt);
-        let mut across = (!first.too_wide).then_some(first);
         if first.fits() {
             return (first, true);
         }
+        // The most beyond `n` that fit across; `n` itself when none does, whether or not it does.
+        let mut across = None;
         for c in n + 1..=MAX_LEGEND_COLUMNS {
             let f = self.at(c, pt);
             if f.fits() {
@@ -822,6 +831,19 @@ fn largest_fitting(text_size: f64, mut try_at: impl FnMut(f64) -> (Fitted, bool)
     best
 }
 
+/// The row each column of the rows `m` in `columns` columns starts at as the page draws them: as
+/// even as they go when that is no taller than `room_h` points, the `tallest` of those even columns
+/// ([`balanced`]); else each filled in turn to `room_h`, the last rows left out ([`flow`]).
+pub(super) fn drawn_starts(m: Measured, columns: usize, tallest: f32, room_h: f32) -> Vec<usize> {
+    flow(m, columns, tallest.min(room_h)).0
+}
+
+/// How wide the rows `m` are in the columns starting at `starts`, side by side with their gaps, in
+/// points: the widest of each column ([`widest`]).
+pub(super) fn across(m: Measured, starts: &[usize]) -> f32 {
+    m.parts(starts).map(widest).sum::<f32>() + LEGEND_COLUMN_GAP * m.size * starts.len().saturating_sub(1) as f32
+}
+
 /// A legend's rows `m` laid into at most `columns` columns as evenly as they go ([`balanced`]): how
 /// wide they are side by side with their gaps, and how tall the tallest, in points.
 pub(super) fn measure(m: Measured, columns: usize) -> (f32, f32) {
@@ -832,9 +854,7 @@ pub(super) fn measure(m: Measured, columns: usize) -> (f32, f32) {
         }
     });
     let (starts, height) = balanced(m, columns);
-    let gap = LEGEND_COLUMN_GAP * m.size * starts.len().saturating_sub(1) as f32;
-    let width: f32 = m.parts(&starts).map(widest).sum::<f32>() + gap;
-    (width, height)
+    (across(m, &starts), height)
 }
 
 /// The rows of the legend of a frame's map. With `drawn` (from [`shown_legends`]) it shows what the
@@ -952,33 +972,35 @@ pub(super) fn legend_missing(
     let (rows, missing) = legend_rows_missing(map, drawn, &opts);
     let sides = symbol_sides(&rows, opts.scale);
     let room_h = (r.bottom() - y) / ppp;
-    // As set; or the columns and size a fit picks, its rows measured at that size already.
-    let (opts, columns, sizes, tallest, fitted) = match fit.kept() {
+    // As set; or the columns and size a fit picks, its rows measured at that size already and laid
+    // in the columns its width was measured in.
+    let (opts, columns, sizes, starts, fitted) = match fit.kept() {
         LegendFit::Manual | LegendFit::Invalid => {
             let columns = legend_columns_in_range(columns);
             let sizes = RowSizes::of(&rows, &sides, opts.size);
-            let tallest = balanced(Measured::new(&rows, &sides, &sizes), columns).1;
-            (opts, columns, sizes, tallest, None)
+            let m = Measured::new(&rows, &sides, &sizes);
+            let starts = drawn_starts(m, columns, balanced(m, columns).1, room_h);
+            (opts, columns, sizes, starts, None)
         }
         _ => {
             let (fitted, sizes) = fit_measured(&rows, &sides, (columns, fit), (r.width() / ppp, room_h), opts.text_size);
-            (LegendOptions { size: fitted.size, text_size: fitted.text_size, ..opts }, fitted.columns, sizes, fitted.tallest, Some(fitted))
+            let starts = fitted.starts.clone();
+            (LegendOptions { size: fitted.size, text_size: fitted.text_size, ..opts }, fitted.columns, sizes, starts, Some(fitted))
         }
     };
     let m = Measured::new(&rows, &sides, &sizes);
-    let starts = flow(m, columns, tallest.min(room_h)).0;
     let gap = LEGEND_COLUMN_GAP * opts.size;
-    let across = (m.parts(&starts).map(widest).sum::<f32>() + gap * (starts.len() - 1) as f32) * ppp;
+    let across = across(m, &starts) * ppp;
     let close_up = if across > r.width() { r.width() / across } else { 1.0 };
     let mut x = r.x();
-    for (k, (part, measured)) in column_parts(&rows, &starts).zip(m.parts(&starts)).enumerate() {
+    for (k, part) in m.parts(&starts).enumerate() {
         // The last has the rest of the box's width.
-        let right = if k + 1 < starts.len() { x + widest(measured) * ppp * close_up } else { r.right() };
+        let right = if k + 1 < starts.len() { x + widest(part) * ppp * close_up } else { r.right() };
         let Some(column) = Rect::from_ltrb(x, y, right, r.bottom()) else { break };
         // The room left of it that holds nothing: none at the box's edge, the gap between columns
         // as drawn after it.
         let lead = if k == 0 { 0.0 } else { gap * ppp * close_up };
-        legend_column(pm, column, part, (columns > 1, lead), map, &opts, ink, ppp);
+        legend_column(pm, column, part.rows, (columns > 1, lead), map, &opts, ink, ppp);
         x = right + gap * ppp * close_up;
     }
     (missing, fitted)
