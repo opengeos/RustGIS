@@ -179,9 +179,9 @@ fn field_width(ui: &egui::Ui) -> f32 {
 /// The wizard's width, where the screen has room for it.
 const WIDTH: f32 = 380.0;
 
-/// The height every step takes: the style step's six styles and their descriptions, with room
+/// The height every step takes: the style step's seven styles and their descriptions, with room
 /// for the rounding a high-density screen adds to each line.
-const STEP_HEIGHT: f32 = 320.0;
+const STEP_HEIGHT: f32 = 365.0;
 
 /// Shows the wizard while it is open; Create runs `layout.publication` as the menu does, and the
 /// wizard stays open on a layout the command refuses.
