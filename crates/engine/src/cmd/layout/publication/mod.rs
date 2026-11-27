@@ -1423,7 +1423,7 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
                     let reading =
                         s.map_mut().sync_sources_in(&lonlat, own.as_ref(), render_scale, true, &rustgis_data::query::Env::default());
                     let here_context = if tried == asked_scale { context.clone() } else { context_at(s, centred, tried) };
-                    let here = if (reading && legend.is_some()) || (tried != asked_scale && pictures_pending(s, render_scale)) {
+                    let here = if reading || (tried != asked_scale && pictures_pending(s, render_scale)) {
                         unknown_at.get_or_insert(tried);
                         None
                     } else if tried == asked_scale {

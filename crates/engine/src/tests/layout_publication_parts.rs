@@ -497,3 +497,37 @@ fn a_publication_legend_lists_the_layers_asked_to_leave_out_first() {
     assert!(out.len() > 1, "a context layer too: {out:?}");
     assert_eq!(out[0], name);
 }
+
+#[test]
+fn a_publication_without_a_legend_still_waits_for_a_layer_before_moving_the_map() {
+    // Land drawn by classes filling the frame leaves the colorbar's box no free room, so the search
+    // runs.
+    let ring = json!([[[-30.0, -30.0], [40.0, -30.0], [40.0, 40.0], [-30.0, 40.0], [-30.0, -30.0]]]);
+    let land = temp("land.geojson");
+    let tif = temp("scale.tif");
+    let fc = json!({"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {"k": "a"}, "geometry": {"type": "Polygon", "coordinates": ring}}]});
+    std::fs::write(&land, fc.to_string()).unwrap();
+    std::fs::write(&tif, rustgis_data::raster::cog::example(256, 128)).unwrap();
+    let mut s = Session::new(Project::default());
+    for path in [&land, &tif] {
+        s.run("layer.addData", &json!({"path": path.display().to_string()})).unwrap();
+    }
+    let name = s.map().layers.iter().find(|l| l.raster.is_none()).unwrap().name.clone();
+    s.run("layer.symbology", &json!({"layer": name, "type": "unique", "field": "k"})).unwrap();
+    // A raster read in place from a host that never answers: still reading throughout.
+    let host = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = format!("http://{}/depth.tif", host.local_addr().unwrap());
+    let mut raster = rustgis_map::raster::RasterLayer::opening_in_place(address);
+    raster.style.renderer = rustgis_map::raster::RasterRenderer::Colormap;
+    s.map_mut().add_raster("Depth".to_string(), raster);
+    // The land over the ramp, which keeps its colorbar from under it.
+    s.run("layer.move", &json!({"layer": name, "to": 0})).unwrap();
+    let p = json!({"profile": "a4-portrait", "extent": [0, 0, 20, 20], "author": "", "locator": "none", "legend": "none"});
+    let r = s.run("layout.publication", &p).unwrap();
+    for file in [land, tif] {
+        let _ = std::fs::remove_file(file);
+    }
+    assert!(find(&s, "Colorbar").is_some(), "{r}");
+    assert!(r["warnings"].to_string().contains("a layer there is still reading"), "{r}");
+    assert_eq!((r["mapShift"][0].as_f64(), r["veiled"].as_bool()), (Some(0.0), Some(false)), "{r}");
+}
