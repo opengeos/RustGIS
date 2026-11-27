@@ -123,7 +123,8 @@ pub struct Run {
     /// changed the project. A change makes a state no other change has, so the history finds the
     /// run's own step by it, even after an Undo and another edit from the same state before.
     pub after: Option<u64>,
-    /// What the run worked on, as its parameters name it (a layer, a table, a file).
+    /// What the run worked on, as its parameters name it (a layer, a table, an input or a map;
+    /// never a file path), redacted as a message is.
     pub target: Option<String>,
 }
 

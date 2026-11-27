@@ -1952,7 +1952,9 @@ impl Session {
             self.runs = self.runs.wrapping_add(1);
             let run = rustgis_data::diagnostics::Run {
                 id: self.runs,
-                command: id.to_string(),
+                // The registered command's own id, never the text asked for: an unknown one could
+                // hold anything, a login included.
+                command: source.unwrap_or("unknown command").to_string(),
                 before: self.state,
                 after: None,
                 target: run_target(params),
