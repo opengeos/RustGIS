@@ -83,6 +83,11 @@ mod tests {
         crate::textform::StatLayer::of_map(h.state().session.map()).first().expect("a vector layer").name.clone()
     }
 
+    /// What is said of a statistic that didn't fit its field.
+    fn refusal() -> String {
+        format!("The statistic wasn't added: each field takes at most {MAX_PUBLICATION_TEXT} characters.")
+    }
+
     /// Insert Statistic › the first layer › Count.
     fn insert_count(h: &mut Wizard) -> String {
         let name = layer(h);
@@ -214,7 +219,7 @@ mod tests {
     fn a_refused_statistic_stays_said_after_editing_the_other_step() {
         let full = "x".repeat(MAX_PUBLICATION_TEXT - 3);
         let mut h = at(Step::Sources, |d| (d.headings[0], d.targets[1]) = (full, Some(Field::Heading(0))));
-        let limit = format!("Each field takes at most {MAX_PUBLICATION_TEXT} characters.");
+        let limit = refusal();
         insert_count(&mut h);
         click(&mut h, "Back");
         h.get_by_label("Subtitle").focus();
@@ -229,7 +234,7 @@ mod tests {
     /// sources step's one said.
     #[test]
     fn a_statistic_on_one_step_leaves_the_others_refusal_said() {
-        let limit = format!("Each field takes at most {MAX_PUBLICATION_TEXT} characters.");
+        let limit = refusal();
         for note_full in [false, true] {
             let full = "x".repeat(MAX_PUBLICATION_TEXT - 3);
             let mut h = at(Step::Sources, |d| {
@@ -274,7 +279,7 @@ mod tests {
         let full = "x".repeat(MAX_PUBLICATION_TEXT - 3);
         // A one-line field: a box this full of text would push the menu out of the step's view.
         let mut h = at(Step::Sources, |d| (d.headings[0], d.targets[1]) = (full.clone(), Some(Field::Heading(0))));
-        let limit = format!("Each field takes at most {MAX_PUBLICATION_TEXT} characters.");
+        let limit = refusal();
         assert!(h.query_by_label(&limit).is_none());
         insert_count(&mut h);
         assert_eq!(wizard(&h).headings[0], full);

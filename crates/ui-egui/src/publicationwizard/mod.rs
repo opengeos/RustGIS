@@ -305,10 +305,15 @@ fn statistic_menu(ui: &mut egui::Ui, d: &mut Draft, map: &Map, own: Field) {
 /// The boxes take no more, cut a longer paste to fit and refuse a statistic past it: said, not
 /// done unseen.
 fn limit_note(ui: &mut egui::Ui, d: &mut Draft, fields: &[Field]) {
-    if d.refused[d.step.slot()] || fields.iter().any(|&f| !d.off(f) && d.field_mut(f).chars().count() >= MAX_PUBLICATION_TEXT) {
-        let note = i18n::fmt("Each field takes at most {limit} characters.", &[("limit", &MAX_PUBLICATION_TEXT.to_string())]);
-        ui.label(egui::RichText::new(note).small().weak());
-    }
+    let limit = [("limit", &*MAX_PUBLICATION_TEXT.to_string())];
+    let note = if d.refused[d.step.slot()] {
+        i18n::fmt("The statistic wasn't added: each field takes at most {limit} characters.", &limit)
+    } else if fields.iter().any(|&f| !d.off(f) && d.field_mut(f).chars().count() >= MAX_PUBLICATION_TEXT) {
+        i18n::fmt("Each field takes at most {limit} characters.", &limit)
+    } else {
+        return;
+    };
+    ui.label(egui::RichText::new(note).small().weak());
 }
 
 /// A colour as `layout.publication` takes it: `#RRGGBB`.
