@@ -225,6 +225,28 @@ mod tests {
         assert!(h.query_by_label(&limit).is_some());
     }
 
+    /// Each step keeps its own refusal: a statistic added or refused on the texts step leaves the
+    /// sources step's one said.
+    #[test]
+    fn a_statistic_on_one_step_leaves_the_others_refusal_said() {
+        let limit = format!("Each field takes at most {MAX_PUBLICATION_TEXT} characters.");
+        for note_full in [false, true] {
+            let full = "x".repeat(MAX_PUBLICATION_TEXT - 3);
+            let mut h = at(Step::Sources, |d| {
+                (d.headings[0], d.targets[1]) = (full.clone(), Some(Field::Heading(0)));
+                if note_full {
+                    (d.subtitle, d.targets[0]) = (full.clone(), Some(Field::Subtitle));
+                }
+            });
+            insert_count(&mut h);
+            click(&mut h, "Back");
+            insert_count(&mut h);
+            assert_eq!(h.query_by_label(&limit).is_some(), note_full, "the texts step says only its own");
+            click(&mut h, "Next");
+            assert!(h.query_by_label(&limit).is_some(), "note full: {note_full}");
+        }
+    }
+
     /// With nothing edited on the step it goes to the note, or to the sources on their step, a
     /// field edited on another step left alone.
     #[test]

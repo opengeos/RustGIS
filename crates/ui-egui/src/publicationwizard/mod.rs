@@ -36,6 +36,14 @@ pub enum Step {
     Review,
 }
 
+impl Step {
+    /// Where [`Draft`] keeps what each of the two steps with text fields has of its own: the
+    /// texts step's at 0, the sources step's at 1.
+    fn slot(self) -> usize {
+        usize::from(self == Step::Sources)
+    }
+}
+
 /// Why `layout.publication` draws no place for a field's text.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LeftOut {
@@ -63,11 +71,6 @@ impl Field {
             Field::Title | Field::Subtitle | Field::Note | Field::Author | Field::Heading(2) => Step::Texts,
             Field::Sources | Field::Reference | Field::Heading(_) => Step::Sources,
         }
-    }
-
-    /// Where [`Draft::targets`] keeps its step's last field.
-    fn slot(self) -> usize {
-        usize::from(self.step() == Step::Sources)
     }
 }
 
@@ -103,10 +106,11 @@ pub struct Draft {
     /// is left to the command.
     pub headings: [String; 3],
     /// The field the cursor was last in on the texts step and on the sources step, which a layer
-    /// statistic added there goes to ([`Field::slot`]).
+    /// statistic added there goes to ([`Step::slot`]).
     targets: [Option<Field>; 2],
-    /// The field the last statistic didn't fit in, said until its step's text changes.
-    refused: Option<Field>,
+    /// Whether the last statistic added on each of those steps didn't fit its field, said until
+    /// that step's text changes or one fits there.
+    refused: [bool; 2],
     /// The style's colour, or `None` for the style's own.
     pub accent: Option<egui::Color32>,
     /// The colour last picked, which the swatch comes back with when the box is ticked again.
@@ -134,7 +138,7 @@ impl Draft {
             no_reference: false,
             headings: Default::default(),
             targets: [None; 2],
-            refused: None,
+            refused: [false; 2],
             accent: None,
             picked: None,
         }
@@ -259,24 +263,25 @@ impl Draft {
     /// its step's refusal note when its text changes.
     fn edited(&mut self, r: &egui::Response, field: Field) {
         if r.has_focus() {
-            self.targets[field.slot()] = Some(field);
+            self.targets[field.step().slot()] = Some(field);
         }
-        if r.changed() && self.refused.is_some_and(|f| f.step() == field.step()) {
-            self.refused = None;
+        if r.changed() {
+            self.refused[field.step().slot()] = false;
         }
     }
 
     /// Adds a layer statistic to the field last focused on `own`'s step, or to `own` where none was
     /// or that one is off now; one that would take the field past the limit isn't added.
     fn add_statistic(&mut self, token: &str, own: Field) {
-        let field = self.targets[own.slot()].filter(|&f| !self.off(f)).unwrap_or(own);
+        let slot = own.step().slot();
+        let field = self.targets[slot].filter(|&f| !self.off(f)).unwrap_or(own);
         let text = self.field_mut(field);
         if text.chars().count() + token.chars().count() > MAX_PUBLICATION_TEXT {
-            self.refused = Some(field);
+            self.refused[slot] = true;
             return;
         }
         text.push_str(token);
-        self.refused = None;
+        self.refused[slot] = false;
         self.title_typed |= field == Field::Title;
     }
 }
@@ -300,8 +305,7 @@ fn statistic_menu(ui: &mut egui::Ui, d: &mut Draft, map: &Map, own: Field) {
 /// The boxes take no more, cut a longer paste to fit and refuse a statistic past it: said, not
 /// done unseen.
 fn limit_note(ui: &mut egui::Ui, d: &mut Draft, fields: &[Field]) {
-    let refused = d.refused.is_some_and(|f| f.step() == d.step);
-    if refused || fields.iter().any(|&f| !d.off(f) && d.field_mut(f).chars().count() >= MAX_PUBLICATION_TEXT) {
+    if d.refused[d.step.slot()] || fields.iter().any(|&f| !d.off(f) && d.field_mut(f).chars().count() >= MAX_PUBLICATION_TEXT) {
         let note = i18n::fmt("Each field takes at most {limit} characters.", &[("limit", &MAX_PUBLICATION_TEXT.to_string())]);
         ui.label(egui::RichText::new(note).small().weak());
     }
