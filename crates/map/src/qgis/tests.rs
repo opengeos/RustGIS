@@ -6,12 +6,12 @@ use crate::symbology::{Glyph, LabelPlacement, LineCap, LineMark, Marker, Placeme
 
 /// [`super::read_project`] given no image file (the tests of raster image markers give theirs).
 fn read_project(text: &str, dir: &str, report: &mut Report) -> Result<Project, String> {
-    super::read_project(text, dir, &mut |_| Err("whose image file doesn't open"), report)
+    super::read_project(text, dir, &mut |_| Err(super::IMAGE_UNOPENED), report)
 }
 
 /// [`super::read_style`] given no image file and no folder.
 fn read_style(text: &str, layer: &str, report: &mut Report) -> Result<Style, String> {
-    super::read_style(text, layer, "", &mut |_| Err("whose image file doesn't open"), report)
+    super::read_style(text, layer, "", &mut |_| Err(super::IMAGE_UNOPENED), report)
 }
 
 const PROJECT: &str = r#"<!DOCTYPE qgis PUBLIC 'http://mrcc.com/qgis.dtd' 'SYSTEM'>
@@ -1405,7 +1405,7 @@ fn marker_symbols_of_several_layers_carry_over_as_marks_turned_by_their_field() 
 }
 
 const SVG_COLOURS: &str = "SVG markers whose colours the style sets, which RustGIS doesn't apply yet, drawn as circles";
-const SVG_LIBRARY: &str = "SVG markers whose file isn't beside the project (or is one of QGIS's own SVG library, which RustGIS doesn't include), drawn as circles";
+const SVG_LIBRARY: &str = "SVG markers whose file isn't beside the project or style (or is one of QGIS's own SVG library, which RustGIS doesn't include), drawn as circles";
 
 /// An SVG marker layer showing `file`, 4 mm wide, with `extra` settings.
 fn svg_marker(file: &str, extra: &str) -> String {

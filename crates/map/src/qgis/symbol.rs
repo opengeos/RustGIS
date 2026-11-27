@@ -1,7 +1,7 @@
 //! QGIS symbols (`<symbol type="fill|line|marker">`) as a RustGIS [`Symbol`], and a line's
 //! symbol layers as stacked [`LineStroke`]s. A symbol layer RustGIS has no match for is drawn
-//! as near as it can (a pattern fill as a tint of its colour, an SVG marker as a circle in its
-//! colour) or left out, and noted.
+//! as near as it can (a pattern fill as a tint of its colour, an SVG marker whose colours the style
+//! sets as a circle in its colour) or left out, and noted.
 
 use roxmltree::Node;
 
@@ -1056,9 +1056,9 @@ fn marker_image(class: &str, p: &[(String, String)], from_expression: bool, laye
             return Some(image);
         }
         // QGIS names its own library's SVGs relative to that library, which RustGIS doesn't bring; a
-        // file missing beside the project looks the same, so the note covers both.
+        // file missing beside the project or style looks the same, so the note covers both.
         Some(Err(why)) if svg && why == super::IMAGE_UNOPENED && !file.starts_with("file:") && super::is_relative(file) => {
-            "whose file isn't beside the project (or is one of QGIS's own SVG library, which RustGIS doesn't include)".to_string()
+            "whose file isn't beside the project or style (or is one of QGIS's own SVG library, which RustGIS doesn't include)".to_string()
         }
         Some(Err(why)) => why.clone(),
         None => "past the images an import reads".to_string(),

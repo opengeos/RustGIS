@@ -2053,7 +2053,7 @@ fn notify_report(s: &mut Session, report: &Report) {
 type StyleRead = Result<(qgis::Style, Report), String>;
 
 /// Reads and parses the style file `p` names (or gives) for the layer called `layer`: its raster
-/// image markers' relative files start from the style file's folder.
+/// and SVG image markers' relative files start from the style file's folder.
 fn read_style_file(p: &Value, layer: &str) -> StyleRead {
     let text = qgis_text(p)?;
     rustgis_data::progress::check().map_err(|e| e.to_string())?;
