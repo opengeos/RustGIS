@@ -812,6 +812,18 @@ fn terrain(s: &mut Session, p: &Value) -> CmdResult {
         }
         return Err(e);
     }
+    // And its water's bed (#2434): the map draws no bed with two layers of its name.
+    if let Some(l) = t.block.as_ref().and_then(|b| b.water.as_ref()).and_then(|w| w.bed.as_ref())
+        && m.layers.iter().filter(|o| o.name.eq_ignore_ascii_case(l)).count() > 1
+    {
+        let e = format!(
+            "more than one layer is called '{l}': give the block's water bed a name of its own, then try again (Terrain stays as it was)"
+        );
+        if let Some(old) = old_terrain {
+            m.view.terrain = Some(old);
+        }
+        return Err(e);
+    }
     // The water a block's walls cut (#2317), when this call sets the block or the terrain's water
     // (a block kept from before is checked against new water too): the terrain's water, and the
     // depth field a numeric field of its layer. How many of the polygons its definition query

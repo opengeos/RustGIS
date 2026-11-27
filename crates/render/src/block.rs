@@ -1736,12 +1736,15 @@ pub(crate) fn draw_walls(
                 let steps = (t1 > t0).then_some(0..=WATER_STEPS).into_iter().flatten();
                 let steps = steps.map(|i| t0 + (t1 - t0) * f64::from(i) / f64::from(WATER_STEPS));
                 // The bed's samples within the stretch's part of the run, by binary search: those
-                // with a height, and without a depth to fall back on those without one too, where
-                // the water stops (with one, the depth's floor is sampled there as without a bed).
+                // with a height; without a depth to fall back on those without one too, where the
+                // water stops; and with one those without one next to one with, where the floor
+                // steps to the depth's (elsewhere it is sampled as without a bed).
                 let (blo, bhi) = (ca + span * t0, ca + span * t1);
                 let (blo, bhi) = (blo.min(bhi), blo.max(bhi));
-                let beds = wr.bed.get(wr.bed.partition_point(|p| p.0 < blo)..wr.bed.partition_point(|p| p.0 <= bhi)).unwrap_or_default();
-                let beds = beds.iter().filter(|p| t1 > t0 && (p.1.is_some() || wr.fallback.is_none())).map(|p| (p.0 - ca) / span);
+                let has = |i: Option<usize>| i.and_then(|i| wr.bed.get(i)).is_some_and(|p| p.1.is_some());
+                let keep = |i: usize| has(Some(i)) || wr.fallback.is_none() || has(i.checked_sub(1)) || has(Some(i + 1));
+                let range = wr.bed.partition_point(|p| p.0 < blo)..wr.bed.partition_point(|p| p.0 <= bhi);
+                let beds = range.filter(|&i| t1 > t0 && keep(i)).filter_map(|i| wr.bed.get(i)).map(|p| (p.0 - ca) / span);
                 for t in steps.chain(beds) {
                     let m = Coord::new(ends[0].x + (ends[1].x - ends[0].x) * t, ends[0].y + (ends[1].y - ends[0].y) * t);
                     let along = b.along(side, m);
@@ -3129,6 +3132,34 @@ mod tests {
         assert_eq!(r.floor_at(b.along(key, at), at), None);
         let at = Coord::new(150.0, -1000.0);
         assert!(r.floor_at(b.along(key, at), at).is_some());
+    }
+
+    #[test]
+    fn the_floor_steps_to_the_depth_at_the_beds_last_sample_with_no_height() {
+        // #2434: a bed 300 m deep east of x 160 only, the depth 2.5 m elsewhere: the bed's samples
+        // (every 20 m from the shore at −300) have no height up to x 160 and one from x 180, the
+        // wall's samples (every 25 m) none between x 150 and 175. The floor up to x 160 is the
+        // depth's, so the wall shows just under the level at x 155, not water reaching down
+        // towards the bed's floor at x 175.
+        let deep = |x: f64, _: f64| if x > 160.0 { 300.0 } else { f32::NAN };
+        let (m, b, g, res) = lake_over_bed(Some(2.5), deep);
+        let water = water_runs(&m, &b, &g, res, 1.0, &Default::default());
+        let [r] = &water[0][..] else { panic!("one stretch of water on the south side") };
+        let key = b.side(0).0;
+        let floor = |x: f64| {
+            let at = Coord::new(x, -1000.0);
+            r.floor_at(b.along(key, at), at)
+        };
+        assert!((floor(160.0).unwrap() - 995.0).abs() < 1e-6 && (floor(180.0).unwrap() - 600.0).abs() < 1e-3);
+        let (pm, at) = south_wall(&m, &b, &g, res, &water);
+        let (plain, _) = south_wall(&m, &b, &g, res, &(0..b.sides()).map(|_| Vec::new()).collect());
+        let pixel = |pm: &Pixmap, x: f64, metres: f64| {
+            let (px, py) = at(x, metres);
+            pm.pixel(px, py).expect("in the picture").demultiply()
+        };
+        assert!(is_water(pixel(&pm, 200.0, 950.0), r.color), "{:?}", pixel(&pm, 200.0, 950.0));
+        let gap = pixel(&pm, 155.0, 950.0);
+        assert!(!is_water(gap, r.color) && gap == pixel(&plain, 160.0, 950.0), "{gap:?}");
     }
 
     #[test]

@@ -18563,6 +18563,12 @@ fn a_block_water_bed_is_said_where_it_cant_be_read() {
     s.run("layer.rename", &json!({"layer": id, "name": bed})).unwrap();
     let notes: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
     assert!(notes.iter().any(|t| t.contains(&format!("reference(s) already name '{bed}'"))), "{notes:?}");
+    // With two layers of that name the map draws no bed: a block update is refused, the terrain as
+    // it was, though the first of them is a raster over the block.
+    let before = s.map().view.terrain.clone();
+    let e = s.run("map.terrain", &json!({"block": {"extent": null}})).unwrap_err();
+    assert!(e.contains(&format!("more than one layer is called '{bed}'")) && e.contains("Terrain stays as it was"), "{e}");
+    assert_eq!(s.map().view.terrain, before);
 }
 
 /// A terrain's water on a layer read a view at a time (#2305), which `map.terrain` refuses: the
