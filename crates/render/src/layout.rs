@@ -3210,6 +3210,8 @@ impl LegendRow<'_> {
     /// The side of the square its point symbol takes at 1:`scale`, in points, as far as its marks
     /// reach ([`point_marks::reach`]); 0 for any other row. No larger than a legend picture.
     fn symbol_side(&self, scale: f64) -> f32 {
+        #[cfg(test)]
+        tests::SYMBOL_SIDES.with(|n| n.set(n.get() + 1));
         let (LegendRow::Plain(l, _) | LegendRow::Class(l, _)) = self else { return 0.0 };
         if l.geometry_type() != GeometryType::Point {
             return 0.0;
@@ -3226,34 +3228,114 @@ impl LegendRow<'_> {
     /// hold its point symbol.
     fn height(&self, scale: f64, size: f32) -> f32 {
         match self {
-            LegendRow::Picture(p) => picture_size(p).1 * size,
-            _ => (LEGEND_ROW * size).max(self.symbol_side(scale)),
+            LegendRow::Picture(_) => self.height_beside(0.0, size),
+            _ => self.height_beside(self.symbol_side(scale), size),
         }
     }
 
-    /// Its width beside a column of swatches `column` points wide ([`swatch_column`]) in a legend
-    /// `size` times the default, in points.
-    fn width(&self, column: f32, size: f32) -> f32 {
+    /// [`LegendRow::height`], its point symbol `side` points across ([`LegendRow::symbol_side`]).
+    fn height_beside(&self, side: f32, size: f32) -> f32 {
         match self {
-            LegendRow::Plain(_, name) => column + LEGEND_INDENT * size + text::measure(name, LEGEND_NAME_PT * size, false),
-            LegendRow::Head(name) => text::measure(name, LEGEND_NAME_PT * size, true),
-            LegendRow::Class(_, en) => column + LEGEND_LABEL_INDENT * size + text::measure(&en.label, LEGEND_LABEL_PT * size, false),
+            LegendRow::Picture(p) => picture_size(p).1 * size,
+            _ => (LEGEND_ROW * size).max(side),
+        }
+    }
+
+    /// How wide its name or label is in a legend `size` times the default, in points; 0 for a
+    /// picture, which has none.
+    fn text_width(&self, size: f32) -> f32 {
+        let (shown, pt, bold) = match self {
+            LegendRow::Plain(_, name) => (*name, LEGEND_NAME_PT * size, false),
+            LegendRow::Head(name) => (*name, LEGEND_NAME_PT * size, true),
+            LegendRow::Class(_, en) => (en.label.as_str(), LEGEND_LABEL_PT * size, false),
+            LegendRow::Picture(_) => return 0.0,
+        };
+        #[cfg(test)]
+        tests::TEXT_MEASURES.with(|n| n.set(n.get() + 1));
+        text::measure(shown, pt, bold)
+    }
+
+    /// Its width beside a column of swatches `column` points wide ([`swatch_column`]) in a legend
+    /// `size` times the default, its text `text` points wide ([`LegendRow::text_width`]), in points.
+    fn width(&self, column: f32, size: f32, text: f32) -> f32 {
+        match self {
+            LegendRow::Plain(..) => column + LEGEND_INDENT * size + text,
+            LegendRow::Head(_) => text,
+            LegendRow::Class(..) => column + LEGEND_LABEL_INDENT * size + text,
             LegendRow::Picture(p) => (LEGEND_INDENT + picture_size(p).0) * size,
         }
     }
 }
 
-/// Rows at 1:`scale` in a legend `size` times the default laid into at most `columns` columns
-/// `limit` points high: the row each column starts at, and whether they all fit. A layer's name
-/// stays with the row under it; a row taller than `limit` has a column to itself, and the last
-/// column takes what is left.
-fn flow(rows: &[LegendRow], columns: usize, limit: f32, (scale, size): (f64, f32)) -> (Vec<usize>, bool) {
+/// The side of each of a legend's `rows`' point symbols at 1:`scale` ([`LegendRow::symbol_side`]),
+/// which no text size or column count changes, so it is measured once a legend.
+fn symbol_sides(rows: &[LegendRow], scale: f64) -> Vec<f32> {
+    rows.iter().map(|row| row.symbol_side(scale)).collect()
+}
+
+/// A legend's rows measured at a size `size` times the default ([`legend_size`]), in points, in
+/// their order: each row's height and the width of its text, made once a size.
+struct RowSizes {
+    size: f32,
+    heights: Vec<f32>,
+    texts: Vec<f32>,
+}
+
+impl RowSizes {
+    /// `rows` beside their point symbols' `sides` ([`symbol_sides`]), measured at `size` times the
+    /// default.
+    fn of(rows: &[LegendRow], sides: &[f32], size: f32) -> Self {
+        let heights = rows.iter().zip(sides).map(|(row, &side)| row.height_beside(side, size)).collect();
+        let texts = rows.iter().map(|row| row.text_width(size)).collect();
+        RowSizes { size, heights, texts }
+    }
+}
+
+/// A legend's rows with their measures at one size: their point symbols' sides
+/// ([`symbol_sides`]), their heights and their texts' widths ([`RowSizes`]). [`flow`],
+/// [`balanced`], [`widest`] and [`measure`] take a row's size only from these, so the drawing and
+/// the fit lay rows out by the one rule, and every column count tried at a size reuses its
+/// measures. Each slice is as long as the rows.
+#[derive(Clone, Copy)]
+struct Measured<'m, 'a> {
+    rows: &'m [LegendRow<'a>],
+    sides: &'m [f32],
+    heights: &'m [f32],
+    texts: &'m [f32],
+    /// How many times the default the rows are measured at ([`legend_size`]).
+    size: f32,
+}
+
+impl<'m, 'a> Measured<'m, 'a> {
+    /// `rows` beside their point symbols' `sides`, with their `sizes` at one size.
+    fn new(rows: &'m [LegendRow<'a>], sides: &'m [f32], sizes: &'m RowSizes) -> Self {
+        Measured { rows, sides, heights: &sizes.heights, texts: &sizes.texts, size: sizes.size }
+    }
+
+    /// Its rows in `range`, with their measures.
+    fn part(self, range: std::ops::Range<usize>) -> Self {
+        let cut = |v: &'m [f32]| v.get(range.clone()).unwrap_or_default();
+        let rows = self.rows.get(range.clone()).unwrap_or_default();
+        Measured { rows, sides: cut(self.sides), heights: cut(self.heights), texts: cut(self.texts), size: self.size }
+    }
+
+    /// The rows of each column, from where they start, with their measures ([`column_parts`]).
+    fn parts(self, starts: &[usize]) -> impl Iterator<Item = Self> {
+        column_ranges(starts, self.rows.len()).map(move |range| self.part(range))
+    }
+}
+
+/// The rows `m` laid into at most `columns` columns `limit` points high: the row each column
+/// starts at, and whether they all fit. A layer's name stays with the row under it; a row taller
+/// than `limit` has a column to itself, and the last column takes what is left.
+fn flow(m: Measured, columns: usize, limit: f32) -> (Vec<usize>, bool) {
     // A thousandth of a row's slack, as the rows have when drawn.
-    let limit = limit + LEGEND_ROW * size * 1e-3;
+    let limit = limit + LEGEND_ROW * m.size * 1e-3;
+    let rows = m.rows;
     let (mut starts, mut used, mut fits, mut i) = (vec![0], 0.0f32, true, 0);
     while i < rows.len() {
         let end = if matches!(rows[i], LegendRow::Head(_)) { (i + 2).min(rows.len()) } else { i + 1 };
-        let part: f32 = rows[i..end].iter().map(|row| row.height(scale, size)).sum();
+        let part: f32 = m.heights.get(i..end).unwrap_or_default().iter().copied().sum();
         if used > 0.0 && used + part > limit && starts.len() < columns {
             starts.push(i);
             used = 0.0;
@@ -3265,34 +3347,38 @@ fn flow(rows: &[LegendRow], columns: usize, limit: f32, (scale, size): (f64, f32
     (starts, fits)
 }
 
-/// The rows at 1:`scale` in a legend `size` times the default laid into at most `columns` columns
-/// as evenly as they go: where each starts ([`flow`]), and the height of the tallest, in points.
-fn balanced(rows: &[LegendRow], columns: usize, at: (f64, f32)) -> (Vec<usize>, f32) {
-    let (scale, size) = at;
-    let total: f32 = rows.iter().map(|row| row.height(scale, size)).sum();
+/// The rows `m` laid into at most `columns` columns as evenly as they go: where each starts
+/// ([`flow`]), and the height of the tallest, in points.
+fn balanced(m: Measured, columns: usize) -> (Vec<usize>, f32) {
+    let total: f32 = m.heights.iter().copied().sum();
     let (mut low, mut high) = (total / columns as f32, total);
     for _ in 0..24 {
         let middle = (low + high) / 2.0;
-        if flow(rows, columns, middle, at).1 {
+        if flow(m, columns, middle).1 {
             high = middle;
         } else {
             low = middle;
         }
     }
-    let starts = flow(rows, columns, high, at).0;
-    let tallest = column_parts(rows, &starts).map(|part| part.iter().map(|row| row.height(scale, size)).sum()).fold(0.0f32, f32::max);
+    let starts = flow(m, columns, high).0;
+    let tallest = m.parts(&starts).map(|part| part.heights.iter().copied().sum()).fold(0.0f32, f32::max);
     (starts, tallest)
 }
 
 /// The rows of each column, from where they start.
 fn column_parts<'r, 'a>(rows: &'r [LegendRow<'a>], starts: &'r [usize]) -> impl Iterator<Item = &'r [LegendRow<'a>]> {
-    starts.iter().enumerate().map(|(k, &start)| &rows[start..starts.get(k + 1).copied().unwrap_or(rows.len())])
+    column_ranges(starts, rows.len()).map(|range| rows.get(range).unwrap_or_default())
 }
 
-/// The widest of a column's `rows` at 1:`scale` in a legend `size` times the default, in points.
-fn widest(rows: &[LegendRow], at: (f64, f32)) -> f32 {
-    let column = swatch_column(rows, at);
-    rows.iter().map(|row| row.width(column, at.1)).fold(0.0, f32::max)
+/// Where each column's rows run, from where they start, the last to the `len`th row.
+fn column_ranges(starts: &[usize], len: usize) -> impl Iterator<Item = std::ops::Range<usize>> {
+    starts.iter().enumerate().map(move |(k, &start)| start..starts.get(k + 1).copied().unwrap_or(len))
+}
+
+/// The widest of a column's rows `m`, in points.
+fn widest(m: Measured) -> f32 {
+    let column = swatch_column(m.sides.iter().copied(), m.size);
+    m.rows.iter().zip(m.texts).map(|(row, &text)| row.width(column, m.size, text)).fold(0.0, f32::max)
 }
 
 /// The stacked strokes a legend's class row draws: its class's own, else its layer's, as
@@ -3307,10 +3393,11 @@ fn row_fills<'a>(l: &'a rustgis_map::Layer, en: &'a LegendEntry) -> &'a [rustgis
     if en.fills.is_empty() { &l.fill_layers } else { &en.fills }
 }
 
-/// The width of a legend's column of swatches at 1:`scale` in a legend `size` times the default,
-/// in points: it grows to hold the widest point symbol, so the labels line up.
-fn swatch_column(rows: &[LegendRow], (scale, size): (f64, f32)) -> f32 {
-    rows.iter().map(|row| row.symbol_side(scale)).fold(LEGEND_SWATCH * size, f32::max)
+/// The width of a legend's column of swatches beside point symbols `sides` points across
+/// ([`LegendRow::symbol_side`]) in a legend `size` times the default, in points: it grows to hold
+/// the widest point symbol, so the labels line up.
+fn swatch_column(sides: impl IntoIterator<Item = f32>, size: f32) -> f32 {
+    sides.into_iter().fold(LEGEND_SWATCH * size, f32::max)
 }
 
 /// A legend picture's size in points (a pixel a point).
@@ -3506,8 +3593,25 @@ struct Fitted {
     size: f32,
     /// In points, within [`LAYOUT_TEXT_SIZE`].
     text_size: f64,
+    /// How tall its tallest column is with its rows as even as they go ([`balanced`]), in points:
+    /// the height the drawing lays the rows out in, within the room.
+    tallest: f32,
     too_wide: bool,
     too_tall: bool,
+}
+
+impl Fitted {
+    /// Neither wider nor taller than its room.
+    fn fits(&self) -> bool {
+        !self.too_wide && !self.too_tall
+    }
+}
+
+/// Whether a legend's rows `measured` points across or down, `size` times the default, take more
+/// than `room` points by more than a thousandth of a row: a measure that is no number never fits.
+#[expect(clippy::neg_cmp_op_on_partial_ord, reason = "a measure that is no number compares as neither, and is to count as not fitting")]
+fn beyond(measured: f32, room: f32, size: f32) -> bool {
+    !(measured <= room + LEGEND_ROW * size * 1e-3)
 }
 
 /// The one rule for the columns and text size a legend's `rows` are drawn at in a room of
@@ -3529,35 +3633,85 @@ struct Fitted {
 /// A fitted legend is drawn as a manual legend of the columns and size returned, and `too_wide`
 /// and `too_tall` say what still doesn't fit there. A room that is no number or below 0 is no room;
 /// no rows always fit. At most 11 sizes are tried ([`largest_fitting`]), in at most
-/// [`MAX_LEGEND_COLUMNS`] columns each: 66 measures, whatever is asked.
+/// [`MAX_LEGEND_COLUMNS`] columns each: 66 layouts, whatever is asked. The rows' point symbols are
+/// measured once, and their heights and texts once a size tried ([`Trials`]).
 fn fit_legend(
     rows: &[LegendRow],
     (columns, fit): (usize, LegendFit),
     (room_w, room_h): (f32, f32),
     (scale, text_size): (f64, f64),
 ) -> Fitted {
+    fit_measured(rows, &symbol_sides(rows, scale), (columns, fit), (room_w, room_h), text_size).0
+}
+
+/// [`fit_legend`] of `rows` beside their point symbols' `sides` ([`symbol_sides`]), and the rows'
+/// measures at the size it picks, which the drawing lays them out by.
+fn fit_measured(
+    rows: &[LegendRow],
+    sides: &[f32],
+    (columns, fit): (usize, LegendFit),
+    (room_w, room_h): (f32, f32),
+    text_size: f64,
+) -> (Fitted, RowSizes) {
     let safe = |v: f32| if v.is_nan() { 0.0 } else { v.max(0.0) };
-    let (room_w, room_h) = (safe(room_w), safe(room_h));
     let n = legend_columns_in_range(columns);
     let text_size = layout_text_in_range(text_size, LEGEND_TEXT_PT);
-    let at = |c: usize, pt: f64| {
-        let size = legend_size(pt);
-        let (width, tallest) = measure(rows, c, (scale, size));
-        let slack = LEGEND_ROW * size * 1e-3;
-        let listed = !rows.is_empty();
-        Fitted { columns: c, size, text_size: pt, too_wide: listed && width > room_w + slack, too_tall: listed && tallest > room_h + slack }
+    let mut trials = Trials { rows, sides, room: (safe(room_w), safe(room_h)), sizes: Vec::new() };
+    let fitted = match fit.kept() {
+        LegendFit::Manual | LegendFit::Invalid => trials.at(n, text_size),
+        LegendFit::AdjustSize => largest_fitting(text_size, |pt| {
+            let f = trials.at(n, pt);
+            (f, f.fits())
+        }),
+        LegendFit::AdjustColumns => trials.columns_at(n, text_size).0,
+        LegendFit::AdjustColumnsAndSize => largest_fitting(text_size, |pt| trials.columns_at(n, pt)),
     };
-    let fits = |f: &Fitted| !f.too_wide && !f.too_tall;
-    // From the columns set up: the fewest that fit, else the most that fit across, else those set.
-    let columns_at = |pt: f64| {
-        let first = at(n, pt);
+    let sizes = trials.take(fitted.size);
+    (fitted, sizes)
+}
+
+/// What [`fit_measured`] tries a legend's rows at: the rows, their point symbols' sides, the room
+/// they have (a number, 0 or more), and their measures at each size tried so far, which every
+/// column count tried at that size shares.
+struct Trials<'m, 'a> {
+    rows: &'m [LegendRow<'a>],
+    sides: &'m [f32],
+    room: (f32, f32),
+    sizes: Vec<RowSizes>,
+}
+
+impl Trials<'_, '_> {
+    /// The rows in `columns` columns at `pt` points, measured as the page lays them out
+    /// ([`measure`]).
+    fn at(&mut self, columns: usize, pt: f64) -> Fitted {
+        let size = legend_size(pt);
+        let sizes = self.take(size);
+        let (width, tallest) = measure(Measured::new(self.rows, self.sides, &sizes), columns);
+        self.sizes.push(sizes);
+        let listed = !self.rows.is_empty();
+        let (too_wide, too_tall) = (listed && beyond(width, self.room.0, size), listed && beyond(tallest, self.room.1, size));
+        Fitted { columns, size, text_size: pt, tallest, too_wide, too_tall }
+    }
+
+    /// The rows' measures at `size` times the default: those made before, else made now.
+    fn take(&mut self, size: f32) -> RowSizes {
+        match self.sizes.iter().position(|s| s.size.to_bits() == size.to_bits()) {
+            Some(k) => self.sizes.swap_remove(k),
+            None => RowSizes::of(self.rows, self.sides, size),
+        }
+    }
+
+    /// From `n` columns up at `pt` points: the fewest that fit, else the most that fit across,
+    /// else `n`; and whether it fits.
+    fn columns_at(&mut self, n: usize, pt: f64) -> (Fitted, bool) {
+        let first = self.at(n, pt);
         let mut across = (!first.too_wide).then_some(first);
-        if fits(&first) {
+        if first.fits() {
             return (first, true);
         }
         for c in n + 1..=MAX_LEGEND_COLUMNS {
-            let f = at(c, pt);
-            if fits(&f) {
+            let f = self.at(c, pt);
+            if f.fits() {
                 return (f, true);
             }
             if !f.too_wide {
@@ -3565,15 +3719,6 @@ fn fit_legend(
             }
         }
         (across.unwrap_or(first), false)
-    };
-    match fit.kept() {
-        LegendFit::Manual | LegendFit::Invalid => at(n, text_size),
-        LegendFit::AdjustSize => largest_fitting(text_size, |pt| {
-            let f = at(n, pt);
-            (f, fits(&f))
-        }),
-        LegendFit::AdjustColumns => columns_at(text_size).0,
-        LegendFit::AdjustColumnsAndSize => largest_fitting(text_size, columns_at),
     }
 }
 
@@ -3582,7 +3727,7 @@ fn fit_legend(
 /// `try_at` says fits, else the least. The list holds at most 385 sizes, `text_size` being in range,
 /// and is halved, so `try_at` is asked at most 11 times. Each answer is one `try_at` measured, so a
 /// size called fitting fits.
-fn largest_fitting(text_size: f64, try_at: impl Fn(f64) -> (Fitted, bool)) -> Fitted {
+fn largest_fitting(text_size: f64, mut try_at: impl FnMut(f64) -> (Fitted, bool)) -> Fitted {
     let least = *LAYOUT_TEXT_SIZE.start();
     let most_steps = ((*LAYOUT_TEXT_SIZE.end() - least) / LEGEND_FIT_STEP_PT).ceil();
     let first = try_at(text_size);
@@ -3607,13 +3752,12 @@ fn largest_fitting(text_size: f64, try_at: impl Fn(f64) -> (Fitted, bool)) -> Fi
     best
 }
 
-/// A legend's `rows` at 1:`scale`, `size` times the default, laid into at most `columns` columns
-/// as evenly as they go ([`balanced`]): how wide they are side by side with their gaps, and how tall
-/// the tallest, in points.
-fn measure(rows: &[LegendRow], columns: usize, (scale, size): (f64, f32)) -> (f32, f32) {
-    let (starts, height) = balanced(rows, columns, (scale, size));
-    let gap = LEGEND_COLUMN_GAP * size * starts.len().saturating_sub(1) as f32;
-    let width: f32 = column_parts(rows, &starts).map(|part| widest(part, (scale, size))).sum::<f32>() + gap;
+/// A legend's rows `m` laid into at most `columns` columns as evenly as they go ([`balanced`]): how
+/// wide they are side by side with their gaps, and how tall the tallest, in points.
+fn measure(m: Measured, columns: usize) -> (f32, f32) {
+    let (starts, height) = balanced(m, columns);
+    let gap = LEGEND_COLUMN_GAP * m.size * starts.len().saturating_sub(1) as f32;
+    let width: f32 = m.parts(&starts).map(widest).sum::<f32>() + gap;
     (width, height)
 }
 
@@ -3706,7 +3850,8 @@ fn legend_rows_missing<'a>(
 /// so that none is left out for it: long labels run into the next, and the last column's past the
 /// box, as a long label does in one column. A `fit` other than manual first picks the columns and
 /// text size its rows are drawn at in the room the title leaves ([`fit_legend`]); the title keeps
-/// the legend's own size, and the rows are then drawn as a manual legend of those.
+/// the legend's own size, and the rows are then drawn as a manual legend of those. Either way its
+/// rows' point symbols are measured once, and their heights and texts once a size.
 fn legend_missing(
     pm: &mut Canvas,
     r: Rect,
@@ -3725,18 +3870,30 @@ fn legend_missing(
         y += line * LEGEND_TITLE_ROWS;
     }
     let (rows, missing) = legend_rows_missing(map, drawn, &opts);
-    let fitted = fit_legend(&rows, (columns, fit), (r.width() / ppp, (r.bottom() - y) / ppp), (opts.scale, opts.text_size));
-    let opts = LegendOptions { size: fitted.size, ..opts };
-    let columns = fitted.columns;
-    let at = (opts.scale, opts.size);
-    let starts = flow(&rows, columns, balanced(&rows, columns, at).1.min((r.bottom() - y) / ppp), at).0;
+    let sides = symbol_sides(&rows, opts.scale);
+    let room_h = (r.bottom() - y) / ppp;
+    // As set; or the columns and size a fit picks, its rows measured at that size already.
+    let (opts, columns, sizes, tallest) = match fit.kept() {
+        LegendFit::Manual | LegendFit::Invalid => {
+            let columns = legend_columns_in_range(columns);
+            let sizes = RowSizes::of(&rows, &sides, opts.size);
+            let tallest = balanced(Measured::new(&rows, &sides, &sizes), columns).1;
+            (opts, columns, sizes, tallest)
+        }
+        _ => {
+            let (fitted, sizes) = fit_measured(&rows, &sides, (columns, fit), (r.width() / ppp, room_h), opts.text_size);
+            (LegendOptions { size: fitted.size, text_size: fitted.text_size, ..opts }, fitted.columns, sizes, fitted.tallest)
+        }
+    };
+    let m = Measured::new(&rows, &sides, &sizes);
+    let starts = flow(m, columns, tallest.min(room_h)).0;
     let gap = LEGEND_COLUMN_GAP * opts.size;
-    let across = (column_parts(&rows, &starts).map(|part| widest(part, at)).sum::<f32>() + gap * (starts.len() - 1) as f32) * ppp;
+    let across = (m.parts(&starts).map(widest).sum::<f32>() + gap * (starts.len() - 1) as f32) * ppp;
     let close_up = if across > r.width() { r.width() / across } else { 1.0 };
     let mut x = r.x();
-    for (k, part) in column_parts(&rows, &starts).enumerate() {
+    for (k, (part, measured)) in column_parts(&rows, &starts).zip(m.parts(&starts)).enumerate() {
         // The last has the rest of the box's width.
-        let right = if k + 1 < starts.len() { x + widest(part, at) * ppp * close_up } else { r.right() };
+        let right = if k + 1 < starts.len() { x + widest(measured) * ppp * close_up } else { r.right() };
         let Some(column) = Rect::from_ltrb(x, y, right, r.bottom()) else { break };
         // The room left of it that holds nothing: none at the box's edge, the gap between columns
         // as drawn after it.
@@ -3777,7 +3934,7 @@ fn legend_column(
     let mut y = r.y();
     let size = opts.size;
     let line = LEGEND_ROW * size * ppp;
-    let sw = swatch_column(rows, (opts.scale, size)) * ppp;
+    let sw = swatch_column(rows.iter().map(|row| row.symbol_side(opts.scale)), size) * ppp;
     // A line's or polygon's swatch, across the column of swatches.
     let across = LEGEND_SWATCH * size * ppp;
     let mut rows = rows.iter().peekable();
@@ -3961,8 +4118,11 @@ pub fn legend_sizes_asked_mm(map: &mut Map, scale: f64, asked: &LegendAsked) -> 
     let size = legend_size(asked.text_size);
     let mm = 25.4 / 96.0;
     asked_rows(map, scale, asked, |rows| {
+        let sides = symbol_sides(rows, scale);
+        let sizes = RowSizes::of(rows, &sides, size);
+        let m = Measured::new(rows, &sides, &sizes);
         std::array::from_fn(|i| {
-            let (width, height) = measure(rows, i + 1, (scale, size));
+            let (width, height) = measure(m, i + 1);
             (f64::from(width) * mm, f64::from(height) * mm)
         })
     })
@@ -5662,6 +5822,41 @@ pub(crate) fn pin_mismatches(what: &str, got: &[(String, u64)], pinned: &[u64]) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    thread_local! {
+        /// How often [`LegendRow::symbol_side`] measured a row on this thread, and
+        /// [`LegendRow::text_width`] a row's name or label: what a legend's layout costs, counted.
+        pub(super) static SYMBOL_SIDES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+        pub(super) static TEXT_MEASURES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    /// `rows` at 1:`scale`, measured at `size` times the default as the drawing measures them
+    /// ([`Measured`]), given to `with`.
+    fn measured<T>(rows: &[LegendRow], (scale, size): (f64, f32), with: impl FnOnce(Measured) -> T) -> T {
+        let sides = symbol_sides(rows, scale);
+        let sizes = RowSizes::of(rows, &sides, size);
+        with(Measured::new(rows, &sides, &sizes))
+    }
+
+    /// [`flow`] of `rows` measured at `at` ([`measured`]).
+    fn flow_at(rows: &[LegendRow], columns: usize, limit: f32, at: (f64, f32)) -> (Vec<usize>, bool) {
+        measured(rows, at, |m| flow(m, columns, limit))
+    }
+
+    /// [`balanced`] of `rows` measured at `at` ([`measured`]).
+    fn balanced_at(rows: &[LegendRow], columns: usize, at: (f64, f32)) -> (Vec<usize>, f32) {
+        measured(rows, at, |m| balanced(m, columns))
+    }
+
+    /// [`widest`] of `rows` measured at `at` ([`measured`]).
+    fn widest_at(rows: &[LegendRow], at: (f64, f32)) -> f32 {
+        measured(rows, at, widest)
+    }
+
+    /// [`measure`] of `rows` measured at `at` ([`measured`]).
+    fn measure_at(rows: &[LegendRow], columns: usize, at: (f64, f32)) -> (f32, f32) {
+        measured(rows, at, |m| measure(m, columns))
+    }
 
     /// A chart element of layer "t" on frame 1, with `extra` keys (its field among them).
     fn chart_kind(extra: serde_json::Value) -> ElementKind {
@@ -7367,16 +7562,16 @@ mod tests {
         };
         let rows = legend_rows(&map, None, &opts());
         assert_eq!(rows.len(), 32);
-        assert_eq!(balanced(&rows, 1, (1e6, 1.0)), (vec![0], 32.0 * LEGEND_ROW));
-        assert_eq!(balanced(&rows, 2, (1e6, 1.0)), (vec![0, 16], 16.0 * LEGEND_ROW));
-        assert_eq!(balanced(&rows, 3, (1e6, 1.0)).1, 11.0 * LEGEND_ROW);
-        assert_eq!(balanced(&[], 3, (1e6, 1.0)), (vec![0], 0.0));
+        assert_eq!(balanced_at(&rows, 1, (1e6, 1.0)), (vec![0], 32.0 * LEGEND_ROW));
+        assert_eq!(balanced_at(&rows, 2, (1e6, 1.0)), (vec![0, 16], 16.0 * LEGEND_ROW));
+        assert_eq!(balanced_at(&rows, 3, (1e6, 1.0)).1, 11.0 * LEGEND_ROW);
+        assert_eq!(balanced_at(&[], 3, (1e6, 1.0)), (vec![0], 0.0));
         // Too short for them all: each filled in turn, and the last holds what fits of the rest.
-        let (starts, fits) = flow(&rows, 3, 5.0 * LEGEND_ROW, (1e6, 1.0));
+        let (starts, fits) = flow_at(&rows, 3, 5.0 * LEGEND_ROW, (1e6, 1.0));
         assert_eq!((starts, fits), (vec![0, 5, 10], false));
         // A layer's name isn't left at the foot of a column; the last, with none under it, can be.
         let heads = [LegendRow::Head("a"), LegendRow::Head("b"), LegendRow::Head("c"), LegendRow::Head("d"), LegendRow::Head("e")];
-        assert_eq!(flow(&heads, 3, 3.0 * LEGEND_ROW, (1e6, 1.0)), (vec![0, 2], true));
+        assert_eq!(flow_at(&heads, 3, 3.0 * LEGEND_ROW, (1e6, 1.0)), (vec![0, 2], true));
 
         let sizes = legend_sizes_mm(&mut map, 1e6, true, false, (&[], &NO_LABELS)).unwrap();
         let row = f64::from(LEGEND_ROW) * 25.4 / 96.0;
@@ -7421,7 +7616,7 @@ mod tests {
 
     /// The widest class label of `rows`, in points.
     fn widest_label(rows: &[LegendRow]) -> f32 {
-        rows.iter().map(|row| row.width(0.0, 1.0) - 12.0).fold(0.0, f32::max)
+        rows.iter().map(|row| row.width(0.0, 1.0, row.text_width(1.0)) - 12.0).fold(0.0, f32::max)
     }
 
     /// A point layer in Unique Values, for a legend's rows.
@@ -7461,9 +7656,9 @@ mod tests {
             text_size: 9.0,
         };
         let rows = legend_rows(&map, None, &opts());
-        let (starts, _) = flow(&rows, 2, LEGEND_ROW, (1e6, 1.0));
+        let (starts, _) = flow_at(&rows, 2, LEGEND_ROW, (1e6, 1.0));
         assert_eq!(starts, vec![0, 2]);
-        let first = widest(column_parts(&rows, &starts).next().unwrap(), (1e6, 1.0));
+        let first = widest_at(column_parts(&rows, &starts).next().unwrap(), (1e6, 1.0));
         let drawn_in_first = |columns: usize| {
             let mut pm = Pixmap::new(300, 15).unwrap();
             pm.fill(tiny_skia::Color::WHITE);
@@ -7499,20 +7694,21 @@ mod tests {
         assert!(tall > 2.0 * LEGEND_ROW, "{tall}");
         // The name and the two large symbols, then the eight small ones: counted row by row, these
         // would be split at the middle.
-        let (starts, height) = balanced(&rows, 2, (1e6, 1.0));
+        let (starts, height) = balanced_at(&rows, 2, (1e6, 1.0));
         assert_eq!(starts, vec![0, 3], "{height}");
         assert_eq!(height, 8.0 * LEGEND_ROW);
         let parts: Vec<_> = column_parts(&rows, &starts).collect();
         assert!(
-            widest(parts[1], (1e6, 1.0)) < widest(parts[0], (1e6, 1.0)) - 20.0,
+            widest_at(parts[1], (1e6, 1.0)) < widest_at(parts[0], (1e6, 1.0)) - 20.0,
             "{} and {}",
-            widest(parts[0], (1e6, 1.0)),
-            widest(parts[1], (1e6, 1.0))
+            widest_at(parts[0], (1e6, 1.0)),
+            widest_at(parts[1], (1e6, 1.0))
         );
         // In one column, the small rows' labels line up with the large symbols' as before.
         assert_eq!(
-            widest(&rows, (1e6, 1.0)),
-            widest(parts[0], (1e6, 1.0)).max(swatch_column(&rows, (1e6, 1.0)) + 12.0 + widest_label(parts[1]))
+            widest_at(&rows, (1e6, 1.0)),
+            widest_at(parts[0], (1e6, 1.0))
+                .max(swatch_column(rows.iter().map(|row| row.symbol_side(1e6)), 1.0) + 12.0 + widest_label(parts[1]))
         );
     }
 
@@ -7590,7 +7786,7 @@ mod tests {
         assert!(f.text_size < 9.0 && f.text_size >= 4.0 && (f.text_size * 4.0).fract() == 0.0, "{}", f.text_size);
         assert_eq!((f.columns, f.too_wide, f.too_tall), (1, false, false));
         assert_eq!(f.size, legend_size(f.text_size));
-        let at = |pt: f64| balanced(&rows, 1, (1e6, legend_size(pt))).1;
+        let at = |pt: f64| balanced_at(&rows, 1, (1e6, legend_size(pt))).1;
         assert!(at(f.text_size) <= room.1 + 1e-3 && at(f.text_size + 0.25) > room.1, "the largest that fits");
         // Manual keeps its size and is cut.
         let m = fit_legend(&rows, (1, LegendFit::Manual), room, (1e6, 9.0));
@@ -7618,7 +7814,7 @@ mod tests {
     fn adjust_columns_and_size_adds_columns_before_shrinking() {
         let map = rows_map(32);
         let rows = legend_rows(&map, None, &opts(true));
-        let two_across = 2.0 * widest(&rows, (1e6, 1.0)) + LEGEND_COLUMN_GAP + 1.0;
+        let two_across = 2.0 * widest_at(&rows, (1e6, 1.0)) + LEGEND_COLUMN_GAP + 1.0;
         let roomy = fit_legend(&rows, (1, LegendFit::AdjustColumnsAndSize), (600.0, 12.0 * LEGEND_ROW), (1e6, 9.0));
         assert_eq!((roomy.columns, roomy.text_size, roomy.too_tall, roomy.too_wide), (3, 9.0, false, false), "columns, at its own size");
         let narrow = fit_legend(&rows, (1, LegendFit::AdjustColumnsAndSize), (two_across, 12.0 * LEGEND_ROW), (1e6, 9.0));
@@ -7630,7 +7826,7 @@ mod tests {
         // The largest size at which some columns fit: a quarter point more, none does.
         let up = narrow.text_size + LEGEND_FIT_STEP_PT;
         let fits = |c: usize| {
-            let (w, h) = measure(&rows, c, (1e6, legend_size(up)));
+            let (w, h) = measure_at(&rows, c, (1e6, legend_size(up)));
             w <= two_across && h <= 12.0 * LEGEND_ROW
         };
         assert!(!(1..=MAX_LEGEND_COLUMNS).any(fits), "{up} points fit in some columns");
@@ -7647,13 +7843,13 @@ mod tests {
     fn legend_columns_never_draw_over_each_other() {
         let map = rows_map(32);
         let rows = legend_rows(&map, None, &opts(true));
-        let one_across = widest(&rows, (1e6, 1.0)) + 1.0;
+        let one_across = widest_at(&rows, (1e6, 1.0)) + 1.0;
         let f = fit_legend(&rows, (1, LegendFit::AdjustColumns), (one_across, 5.0 * LEGEND_ROW), (1e6, 9.0));
         assert_eq!((f.columns, f.too_wide, f.too_tall), (1, false, true));
         // Shrunk to the least size it takes the most columns that fit across there, and no more.
         let f = fit_legend(&rows, (1, LegendFit::AdjustColumnsAndSize), (one_across, 5.0 * LEGEND_ROW), (1e6, 9.0));
         assert_eq!((f.text_size, f.too_wide, f.too_tall), (4.0, false, true), "{f:?}");
-        let across = |c: usize| measure(&rows, c, (1e6, legend_size(4.0))).0 <= one_across;
+        let across = |c: usize| measure_at(&rows, c, (1e6, legend_size(4.0))).0 <= one_across;
         assert!(across(f.columns) && (f.columns + 1..=MAX_LEGEND_COLUMNS).all(|c| !across(c)), "{f:?}");
         // The columns a fit adds, as drawn, sit side by side within the box: no ink in the gaps
         // between them (a pixel either side aside, for the letters' edges), ink in each.
@@ -7661,10 +7857,10 @@ mod tests {
         let f = fit_legend(&rows, (1, LegendFit::AdjustColumns), room, (1e6, 9.0));
         assert_eq!((f.columns, f.too_wide, f.too_tall), (3, false, false));
         let pm = drawn(&map, room, (1, LegendFit::AdjustColumns), 9.0);
-        let (starts, _) = balanced(&rows, 3, (1e6, 1.0));
+        let (starts, _) = balanced_at(&rows, 3, (1e6, 1.0));
         let mut x = 0.0;
         for (k, part) in column_parts(&rows, &starts).enumerate() {
-            let right = x + widest(part, (1e6, 1.0));
+            let right = x + widest_at(part, (1e6, 1.0));
             assert!(ink_in(&pm, x as u32..right as u32), "column {k} drawn");
             assert!(!ink_in(&pm, right as u32 + 2..(right + LEGEND_COLUMN_GAP) as u32 - 1), "the gap after column {k}");
             x = right + LEGEND_COLUMN_GAP;
@@ -7745,7 +7941,7 @@ mod tests {
     fn a_fitted_legend_draws_as_a_manual_legend_of_its_fitted_size() {
         let map = rows_map(32);
         let rows = legend_rows(&map, None, &opts(true));
-        let two_across = 2.0 * widest(&rows, (1e6, 1.0)) + LEGEND_COLUMN_GAP + 1.0;
+        let two_across = 2.0 * widest_at(&rows, (1e6, 1.0)) + LEGEND_COLUMN_GAP + 1.0;
         let tall = 12.0 * LEGEND_ROW;
         let boxes = [
             (LegendFit::AdjustSize, (130.0, 20.0 * LEGEND_ROW)),
@@ -7858,7 +8054,7 @@ mod tests {
         let row = f64::from(LEGEND_ROW) * mm;
         let two_across = {
             let map = rows_map(32);
-            f64::from(2.0 * widest(&legend_rows(&map, None, &opts(true)), (1e6, 1.0)) + LEGEND_COLUMN_GAP + 1.0) * mm
+            f64::from(2.0 * widest_at(&legend_rows(&map, None, &opts(true)), (1e6, 1.0)) + LEGEND_COLUMN_GAP + 1.0) * mm
         };
         let asked = LegendAsked {
             all_classes: true,
@@ -7937,11 +8133,11 @@ mod tests {
         let rows = legend_rows(&map, None, &opts(true));
         assert_eq!(row_kinds(&rows), ["Head", "Picture"]);
         // A box 70 percent as tall as the legend at 9 points.
-        let manual = measure(&rows, 1, (1e6, legend_size(9.0)));
+        let manual = measure_at(&rows, 1, (1e6, legend_size(9.0)));
         let room = (500.0, 0.7 * manual.1);
         let f = fit_legend(&rows, (1, LegendFit::AdjustSize), room, (1e6, 9.0));
         assert!(f.text_size < 9.0 && f.text_size >= 4.0 && !f.too_tall && !f.too_wide, "{f:?}");
-        let fitted = measure(&rows, 1, (1e6, f.size));
+        let fitted = measure_at(&rows, 1, (1e6, f.size));
         assert!(fitted.1 < manual.1 && fitted.1 <= room.1 + 1e-3, "{} against {} in {}", fitted.1, manual.1, room.1);
         assert!(rows[1].height(1e6, f.size) < rows[1].height(1e6, legend_size(9.0)), "the picture itself is smaller");
         // As set it is cut.
@@ -7972,6 +8168,11 @@ mod tests {
                     );
                 }
             }
+            // A measure that is no number never fits, whatever the room.
+            for room in [0.0, 100.0, f32::INFINITY] {
+                assert!(beyond(f32::NAN, room, 1.0), "{fit:?} {room}");
+            }
+            assert!(!beyond(100.0, 100.0, 1.0) && beyond(101.0, 100.0, 1.0), "{fit:?}");
             // Drawn in a 0.1 mm box, and in a box shorter than its title.
             for (w, h, title) in [(0.1, 0.1, ""), (40.0, 2.0, "Legend"), (0.1, 0.1, "Legend")] {
                 let (page, mut maps, _) = fit_page(rows_map(8), (w, h), (1, fit), (title, 9.0));
@@ -7987,11 +8188,66 @@ mod tests {
     fn a_legend_takes_up_to_six_columns() {
         let map = rows_map(32);
         let rows = legend_rows(&map, None, &opts(true));
-        assert_eq!(balanced(&rows, 6, (1e6, 1.0)).1, 6.0 * LEGEND_ROW);
+        assert_eq!(balanced_at(&rows, 6, (1e6, 1.0)).1, 6.0 * LEGEND_ROW);
         let mut map = map;
         let sizes = legend_sizes_mm(&mut map, 1e6, true, false, (&[], &NO_LABELS)).unwrap();
         assert!(sizes.windows(2).all(|w| w[0].0 < w[1].0 && w[0].1 >= w[1].1), "{sizes:?}");
         assert_eq!(sizes.len(), MAX_LEGEND_COLUMNS);
+    }
+
+    /// The calls to [`LegendRow::symbol_side`] and [`LegendRow::text_width`] `run` makes on this
+    /// thread.
+    fn legend_calls(run: impl FnOnce()) -> (usize, usize) {
+        SYMBOL_SIDES.set(0);
+        TEXT_MEASURES.set(0);
+        run();
+        (SYMBOL_SIDES.get(), TEXT_MEASURES.get())
+    }
+
+    /// What laying out a legend of 5,000 rows costs, counted in calls, never timed: a manual
+    /// legend does no more than before fits existed, and a fit measures each row's point symbol
+    /// once and its text once a size it tries, whatever the columns it tries there. It fails if a
+    /// manual legend went through the fit, or a fit measured its rows again for each column count.
+    #[test]
+    fn a_legends_rows_are_measured_once_a_size() {
+        let r = 5_000;
+        let map = rows_map(r);
+        let rows = legend_rows(&map, None, &opts(true));
+        assert_eq!(rows.len(), r);
+        assert!(!rows.iter().any(|row| matches!(row, LegendRow::Picture(_))), "every row has a text");
+        // Manual, in one column in a box ten rows tall at the default size. The drawing measures
+        // the R rows' symbols once (`symbol_sides`) and their texts once (`RowSizes::of`); then
+        // `legend_column`, as before, takes its swatch column from every row's symbol (R) and
+        // each row's height until one passes the box: ten drawn and the eleventh, 11. Before fits,
+        // the same drawing called `symbol_side` through `LegendRow::height` and `swatch_column`:
+        // `balanced` R for its total, 24 R for its 24 `flow`s, R for the last `flow` and R for
+        // the tallest column (27 R); the drawing's own `flow` R; `widest` over the one column, R
+        // for its swatches and R texts; and `legend_column` R + 11: 30 R + 11 symbols, R texts.
+        let manual = legend_calls(|| {
+            let mut pm = Pixmap::new(300, 150).unwrap();
+            crate::canvas::with_canvas(&mut pm, |c| {
+                legend(c, Rect::from_xywh(0.0, 0.0, 300.0, 10.0 * LEGEND_ROW).unwrap(), &map, ("", 1), None, opts(true), 1.0);
+            });
+        });
+        assert_eq!(manual, (2 * r + 11, r));
+        assert!(manual.0 <= 30 * r + 11 && manual.1 <= r, "no more than before fits: {manual:?}");
+        // adjustColumnsAndSize in a box it can never fit: 9 points fits in no columns, nor does 4,
+        // so `largest_fitting` stops after those two sizes, six column counts each. The symbols
+        // are measured once (R), the texts once a size (2 R), not once a layout tried: before,
+        // each of those 12 layouts measured every symbol 28 times and every text once.
+        let never = legend_calls(|| {
+            let f = fit_legend(&rows, (1, LegendFit::AdjustColumnsAndSize), (10.0, 10.0), (1e6, 9.0));
+            assert!(f.too_wide && f.too_tall && f.text_size == 4.0, "{f:?}");
+        });
+        assert_eq!(never, (r, 2 * r));
+        // From 100 points in a box that six columns fill at 4: the halving runs its course, 11
+        // sizes at most (`largest_fitting`), the symbols still measured once.
+        let room = measure_at(&rows, MAX_LEGEND_COLUMNS, (1e6, legend_size(4.0)));
+        let halved = legend_calls(|| {
+            let f = fit_legend(&rows, (1, LegendFit::AdjustColumnsAndSize), (room.0 + 1.0, room.1), (1e6, 100.0));
+            assert!(f.fits() && f.text_size < 100.0, "{f:?}");
+        });
+        assert!(halved.0 == r && halved.1 > 2 * r && halved.1 <= 11 * r, "{halved:?}");
     }
 
     /// A legend shows a layer under the label it gives it, by the layer's name in any case (#1654):
