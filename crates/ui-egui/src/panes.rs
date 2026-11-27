@@ -963,6 +963,39 @@ fn paste_label(app: &RustGisApp) -> &'static str {
     }
 }
 
+/// Copies layers (`layer.copy` with `params`) and puts their names on the clipboard as text, one a
+/// line: a paste elsewhere gives the names, and a Paste key in the layer list can tell whether the
+/// layers are still the last thing copied ([`pastes_copied_layers`]). A copy with no layer in it
+/// (an empty group) leaves the clipboard alone. Whether they were copied.
+pub(crate) fn copy_layers(app: &mut RustGisApp, params: Value) -> bool {
+    let Ok(copied) = app.run("layer.copy", params) else { return false };
+    let names: Vec<&str> = copied["layers"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+    let names = names.join("\n");
+    app.ui.layers_copied_as = (!names.trim().is_empty()).then(|| names.clone());
+    if app.ui.layers_copied_as.is_some() {
+        app.ui.copy_out = Some(names);
+    }
+    true
+}
+
+/// Whether a Paste key in the layer list, with `text` on the clipboard, pastes the copied layers:
+/// while the clipboard still holds what the last copy of layers put there (line ends aside, which
+/// a clipboard may change). Features or text copied since are the newer copy.
+pub(crate) fn pastes_copied_layers(app: &RustGisApp, text: &str) -> bool {
+    let lines = |text: &str| text.lines().map(str::trim_end).filter(|line| !line.is_empty()).map(str::to_owned).collect::<Vec<_>>();
+    app.session.layer_clipboard.is_some() && app.ui.layers_copied_as.as_deref().is_some_and(|names| lines(names) == lines(text))
+}
+
+/// Where `layer.paste` puts the copies when they are pasted on layer `id`: above it, or at the
+/// top of its group.
+pub(crate) fn paste_above(app: &RustGisApp, id: u32) -> Value {
+    let m = app.session.map();
+    match m.group_of(id) {
+        Some(g) => json!({"group": g.id}),
+        None => json!({"to": m.layer_index(id).unwrap_or(0)}),
+    }
+}
+
 /// A button pasting the copied layers (#491) on top of the map in view, off while none are.
 fn paste_layers_button(app: &mut RustGisApp, ui: &mut Ui) {
     if ui.add_enabled(app.session.layer_clipboard.is_some(), egui::Button::new(paste_label(app))).clicked() {
@@ -1411,7 +1444,7 @@ fn layer_group_row(
             }
             ui.separator();
             if ui.button(tl!("Copy Group")).clicked() {
-                let _ = app.run("layer.copy", json!({"group": group.id}));
+                copy_layers(app, json!({"group": group.id}));
                 ui.close();
             }
             if ui.add_enabled(app.session.layer_clipboard.is_some(), egui::Button::new(paste_label(app))).clicked() {
@@ -2567,15 +2600,11 @@ fn layer_menu(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, reorder: bool) {
     ui.separator();
     // Whole layers (#491): pasted on a layer, the copies go above it, or at the top of its group.
     if ui.button(tl!("Copy Layer")).clicked() {
-        let _ = app.run("layer.copy", json!({"layer": l.id}));
+        copy_layers(app, json!({"layer": l.id}));
         ui.close();
     }
     if ui.add_enabled(app.session.layer_clipboard.is_some(), egui::Button::new(paste_label(app))).clicked() {
-        let m = app.session.map();
-        let at = match m.group_of(l.id) {
-            Some(g) => json!({"group": g.id}),
-            None => json!({"to": m.layer_index(l.id).unwrap_or(0)}),
-        };
+        let at = paste_above(app, l.id);
         let _ = app.run("layer.paste", at);
         ui.close();
     }
