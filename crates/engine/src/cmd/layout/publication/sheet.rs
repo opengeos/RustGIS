@@ -118,8 +118,7 @@ impl Style {
     }
 
     /// The accent colour when none is given: a deep blue, green or brown (a poster's page), or an
-    /// edge sheet's brick red, strong on a light paper and fainter on a dark one, where `"accent"`
-    /// picks a lighter one.
+    /// edge sheet's brick red, the same on a light paper and on a dark one.
     pub(in crate::cmd::layout) fn accent(self) -> Rgba {
         match self {
             Style::Classic => Rgba::rgb(0x2B, 0x26, 0x20),
