@@ -244,7 +244,7 @@ pub(super) fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li:
                 // A legend's, colorbar's, table's or chart's ink (#2257), on and off as a background
                 // is: off is the default dark grey, which isn't the same as a dark grey ink (a table
                 // keeps its white cells only without one). Turned on, it starts white over a dark
-                // background and dark grey otherwise, so its text never disappears.
+                // colour and dark grey otherwise (`first_ink`), so its text never disappears.
                 if e.kind.takes_ink() {
                     let ink = e.kind.ink();
                     let input_label = ui.label(tl!("Ink"));
@@ -388,10 +388,10 @@ pub(super) fn first_ink(layout: &Layout, e: &Element) -> rustgis_engine::map::Rg
     let page = layout.paper.unwrap_or(rustgis_engine::map::Rgba::rgb(0xFF, 0xFF, 0xFF));
     let under = layout.elements.iter().take_while(|u| u.id != e.id).filter(|u| u.visible);
     let fills = under.flat_map(|u| fills_at(u, centre)).chain(e.background.map(|b| b.fill));
-    let shown = fills.fold(Color32::from_rgb(page.r(), page.g(), page.b()), |under, fill| {
+    let shown = fills.fold(Color32::from_rgb(page.r(), page.g(), page.b()), |below, fill| {
         let a = u16::from(fill.a());
         let over = |c: u8, under: u8| u8::try_from((u16::from(c) * a + u16::from(under) * (255 - a)) / 255).unwrap_or(u8::MAX);
-        Color32::from_rgb(over(fill.r(), under.r()), over(fill.g(), under.g()), over(fill.b(), under.b()))
+        Color32::from_rgb(over(fill.r(), below.r()), over(fill.g(), below.g()), over(fill.b(), below.b()))
     });
     let white = rustgis_engine::map::Rgba::rgb(0xFF, 0xFF, 0xFF);
     if crate::theme::contrast(shown, Color32::WHITE) > crate::theme::contrast(shown, crate::theme::c32(INK)) { white } else { INK }
