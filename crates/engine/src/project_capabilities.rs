@@ -188,13 +188,14 @@ const COMMAND_CAPABILITIES: &[(&str, CommandCheck)] = &[
 
 /// A saved `layout.publication` that leaves out or sets up its grid, scale bar or north arrow
 /// (#3094): an older reader ignores `grid` and `scaleBar`, making the default sheet, and refuses
-/// a `northArrow` object. `null` and an object giving nothing ask for the default.
+/// any `northArrow` object. `null`, and a grid or scale bar object giving nothing, ask for the
+/// default.
 fn command_sets_publication_parts(id: &str, params: &Value) -> bool {
     let sets = |v: &Value| v.as_object().is_none_or(|o| o.values().any(|v| !v.is_null()));
     match id {
         "layout.publication" => {
             ["grid", "scaleBar"].into_iter().any(|k| params.get(k).is_some_and(|v| !v.is_null() && sets(v)))
-                || params.get("northArrow").is_some_and(|v| v.is_object() && sets(v))
+                || params.get("northArrow").is_some_and(Value::is_object)
         }
         "script.run" => params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, command_sets_publication_parts)),
         _ => false,

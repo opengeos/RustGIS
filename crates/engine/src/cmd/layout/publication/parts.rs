@@ -29,10 +29,10 @@ const NORTH_ARROW_KEYS: &[&str] = &["show", "style", "fill", "outline"];
 /// not in `keys` is refused.
 fn options(key: &str, v: &Value, keys: &[&str]) -> Result<Option<Value>, String> {
     let Some(given) = v.as_object() else { return Ok(None) };
-    let given: serde_json::Map<String, Value> = given.iter().filter(|(_, v)| !v.is_null()).map(|(k, v)| (k.clone(), v.clone())).collect();
     if let Some(other) = given.keys().find(|k| !keys.contains(&k.as_str())) {
         return Err(format!("{key} takes no \"{other}\" (it reads {})", keys.join(", ")));
     }
+    let given: serde_json::Map<String, Value> = given.iter().filter(|(_, v)| !v.is_null()).map(|(k, v)| (k.clone(), v.clone())).collect();
     Ok(Some(Value::Object(given)))
 }
 

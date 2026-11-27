@@ -174,6 +174,7 @@ fn a_publication_part_given_wrong_is_refused_and_nothing_is_made() {
     for (parts, said) in [
         (json!({"grid": {"style": "wavy"}}), "unknown grid style"),
         (json!({"grid": {"foo": 1}}), "grid takes no \"foo\""),
+        (json!({"grid": {"stepp": null}}), "grid takes no \"stepp\""),
         (json!({"grid": 5}), "grid is \"none\""),
         (json!({"grid": true}), "grid is \"none\""),
         (json!({"scaleBar": {"units": "parsecs"}}), "unknown units"),
@@ -209,11 +210,12 @@ fn a_saved_publication_that_sets_a_part_requires_its_capability() {
         json!({"northArrow": {"style": "star"}}),
         // Any object: an older reader refuses one.
         json!({"northArrow": {"show": "auto"}}),
+        json!({"northArrow": {}}),
+        json!({"northArrow": {"show": null}}),
     ] {
         assert!(requires(params.clone()), "{params}");
     }
-    for params in [json!({}), json!({"grid": null, "scaleBar": {}}), json!({"northArrow": "always"}), json!({"northArrow": {"show": null}})]
-    {
+    for params in [json!({}), json!({"grid": null, "scaleBar": {}}), json!({"northArrow": "always"}), json!({"northArrow": null})] {
         assert!(!requires(params.clone()), "{params}");
     }
 }
