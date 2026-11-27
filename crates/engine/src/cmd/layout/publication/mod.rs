@@ -1859,7 +1859,16 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
         let bar_need = bar.as_deref().map_or(0.0, |title| colorbar_mm(title, iw));
         let bar_fit = colorbar_fit(bar_need, ih, ch + bar_gap, over_map);
         let rows_h = (ih - bar_fit - if bar.is_some() { bar_gap } else { 0.0 }).max(0.0);
-        warnings.extend(legend_fit_warnings(LegendFit::Manual, legend_cols, overflows((cw, ch), (iw, rows_h))));
+        let (mut too_wide, too_tall) = overflows((cw, ch), (iw, rows_h));
+        // A title wider than the box is named: the width past it is the title's, unless the rows
+        // are wider still.
+        let title = legend.as_ref().map(|l| l.title.as_str()).filter(|t| ch > 0.0 && !t.is_empty());
+        let title_w = title.map_or(0.0, |t| crate::render::layout::legend_title_width_mm(t, legend_pt));
+        if title_w > iw + LEGEND_FIT_MM {
+            warnings.push("the legend's title is wider than its box: shorten it".into());
+            too_wide &= cw > title_w + LEGEND_FIT_MM;
+        }
+        warnings.extend(legend_fit_warnings(LegendFit::Manual, legend_cols, (too_wide, too_tall)));
         let short = bar_need > bar_fit + LEGEND_FIT_MM;
         // In a column the colorbar takes the column's width, as its rows do.
         if let Some(layer) = bar.as_deref().filter(|_| (base_w > iw + LEGEND_FIT_MM && !legend_in_column) || short) {

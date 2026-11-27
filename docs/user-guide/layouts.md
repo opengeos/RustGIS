@@ -158,7 +158,8 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
   - **Legend**: `"legend": "none"` leaves it out, and a raster's colorbar keeps its box.
     `{"title": "Key", "columns": 2, "exclude": ["Rivers"]}` gives it a title (its box grows to
     hold it), a fixed number of columns (1 to 6; otherwise the placement picks 1 to 3) and layers
-    to leave out besides the context ones. An unknown layer or key is refused.
+    to leave out besides the context ones. A title wider than the box is said in a warning. An
+    unknown layer or key is refused.
   - **Legend box**: over the map, the legend's box is left clear where the map shows nothing under
     it but its light plain paper or water: no layer, label, context layer, basemap shape or graticule
     line, no web tiles, and no veil. Dark basemaps keep a white backing so the dark legend text

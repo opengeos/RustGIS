@@ -453,3 +453,16 @@ fn the_publication_legend_fixture_opens_and_keeps_its_requirement() {
     let fixture = crate::Project::from_json(include_str!("../../../../schema/fixtures/layout_publication_legend.rgis")).unwrap();
     assert_eq!(serde_json::to_value(&fixture).unwrap()["requires"], json!(["layout-publication-legend"]));
 }
+
+#[test]
+fn a_publication_legend_title_wider_than_its_box_is_named() {
+    let long = "A very long legend title ".repeat(8);
+    for (columns, style) in [(1, "classic"), (2, "classic"), (1, "panel")] {
+        let (_, r) = sheet(json!({"legend": {"title": long, "columns": columns}, "style": style}));
+        let said = r["warnings"].to_string();
+        assert!(said.contains("the legend's title is wider than its box: shorten it"), "{columns} {style}: {said}");
+        assert!(!said.contains("columns are wider") && !said.contains("ends of long labels"), "{columns} {style}: {said}");
+    }
+    let (_, r) = sheet(json!({"legend": {"title": "Key"}}));
+    assert!(!r["warnings"].to_string().contains("wider than its box"), "{}", r["warnings"]);
+}
