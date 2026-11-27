@@ -909,7 +909,7 @@ fn network_share(file: &str) -> bool {
 
 /// Reads the images of the raster image and SVG markers under `root` (a project or a style), each
 /// `imageFile` once (a file once for each spelling of its path from the folder: a leading `./` is
-/// dropped, so `./a.png` and `a.png` are one), into the report for [`raster_image`]: a `base64:`
+/// dropped, so `./a.png` and `a.png` are one), into the report for [`marker_image`]: a `base64:`
 /// one as it is, a file's through `read` (relative to `dir`; a `file:` address is the file it names).
 /// One at a web address isn't fetched, nor one on a network share (`\\host\share`, `//host/share`,
 /// `file://host/share`), nor one kept inside a `.qgz`
@@ -1055,9 +1055,10 @@ fn marker_image(class: &str, p: &[(String, String)], from_expression: bool, laye
             }
             return Some(image);
         }
-        // QGIS names its own library's SVGs relative to that library, which RustGIS doesn't bring.
+        // QGIS names its own library's SVGs relative to that library, which RustGIS doesn't bring; a
+        // file missing beside the project looks the same, so the note covers both.
         Some(Err(why)) if svg && why == super::IMAGE_UNOPENED && !file.starts_with("file:") && super::is_relative(file) => {
-            "whose file isn't beside the project (QGIS's own SVG library isn't part of RustGIS)".to_string()
+            "whose file isn't beside the project (or is one of QGIS's own SVG library, which RustGIS doesn't include)".to_string()
         }
         Some(Err(why)) => why.clone(),
         None => "past the images an import reads".to_string(),

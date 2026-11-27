@@ -65,9 +65,9 @@ pub struct Report {
     #[serde(skip)]
     closing: HashMap<(NoteKind, Option<LossCode>), usize>,
     /// Raster image and SVG markers' images by their path (`imageFile`, `name`), read before the
-    /// symbols showing them (`symbol::read_images`): each kept image, or why it isn't drawn. Carried
-    /// here because every symbol reader already takes the report; passing them
-    /// beside it would add a parameter to each reader and to each of their callers.
+    /// symbols showing them (`symbol::read_images`): each kept image, or why it isn't drawn.
+    /// Carried here because every symbol reader already takes the report; passing them beside it
+    /// would add a parameter to each reader and to each of their callers.
     #[serde(skip)]
     images: HashMap<String, Result<symbol::MarkerImage, String>>,
 }

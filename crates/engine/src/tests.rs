@@ -6494,7 +6494,7 @@ fn a_qgis_project_opens_as_a_map_and_a_qgis_style_styles_a_layer() {
         <maplayer type="raster" hasScaleBasedVisibilityFlag="1" minScale="100000" maxScale="1000"><id>w</id><datasource>url=https://wms.example/wms&amp;layers=a</datasource><layername>Web</layername><provider>wms</provider>
         <pipe><rasterrenderer opacity="0.5" type="singlebandcolordata"/></pipe><blendMode>6</blendMode></maplayer></projectlayers></qgis>"#;
     let mut report = rustgis_map::qgis::Report::default();
-    let project = rustgis_map::qgis::read_project(web, "", &mut |_| Err("whose image file doesn't open"), &mut report).unwrap();
+    let project = rustgis_map::qgis::read_project(web, "", &mut |_| Err(rustgis_map::qgis::IMAGE_UNOPENED), &mut report).unwrap();
     let mut w = world();
     let before = w.active_layer;
     w.active_layer = w.map().layers.iter().map(|l| l.id).find(|id| Some(*id) != before);

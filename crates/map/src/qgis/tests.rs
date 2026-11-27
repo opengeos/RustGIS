@@ -1405,8 +1405,7 @@ fn marker_symbols_of_several_layers_carry_over_as_marks_turned_by_their_field() 
 }
 
 const SVG_COLOURS: &str = "SVG markers whose colours the style sets, which RustGIS doesn't apply yet, drawn as circles";
-const SVG_LIBRARY: &str =
-    "SVG markers whose file isn't beside the project (QGIS's own SVG library isn't part of RustGIS), drawn as circles";
+const SVG_LIBRARY: &str = "SVG markers whose file isn't beside the project (or is one of QGIS's own SVG library, which RustGIS doesn't include), drawn as circles";
 
 /// An SVG marker layer showing `file`, 4 mm wide, with `extra` settings.
 fn svg_marker(file: &str, extra: &str) -> String {
