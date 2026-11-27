@@ -1048,12 +1048,16 @@ pub(crate) fn water_runs(map: &Map, b: &Block, ground: &Ground, res: f64, scale:
     let Some(layer) = crate::terrain::walls_layer(map, &tw.layer) else { return out };
     crate::note_held_read(layer);
     let field = bw.field.as_deref().and_then(|f| layer.dataset.field_index(f));
-    // The bed's raster, while a layer of that name holds one (#2434): else the depth alone.
-    let bed = bw.bed.as_deref().and_then(|n| {
+    // The bed's raster, while a layer of that name holds one (#2434): else the depth alone, and
+    // a layer of that name that isn't a raster (renamed or added to it) said.
+    let named = bw.bed.as_deref().and_then(|n| {
         let mut named = map.layers.iter().filter(|l| l.name.eq_ignore_ascii_case(n));
-        let l = named.next().filter(|_| named.next().is_none())?;
-        Some((l.name.as_str(), l.raster.as_ref()?.data.as_ref()?))
+        named.next().filter(|_| named.next().is_none())
     });
+    if let Some(l) = named.filter(|l| l.raster.is_none()) {
+        crate::approximations::bed_not_raster(&l.name);
+    }
+    let bed = named.and_then(|l| Some((l.name.as_str(), l.raster.as_ref()?.data.as_ref()?)));
     let cut = layer_cut(layer, b, true, bed, env);
     // Styled at the view centre's drawing scale, as the water layer is drawn on the surface.
     let styler = layer.styler_with(env.at_scale(Some(scale)));
@@ -3207,6 +3211,21 @@ mod tests {
         assert!(frame(Some("nenhuma"), dipping).data() == plain.data(), "a bed layer that isn't there");
         assert!(frame(Some("batimetria"), |_, _| f32::NAN).data() == plain.data(), "a bed with no heights");
         assert!(frame(Some("batimetria"), dipping).data() != plain.data(), "a bed with heights");
+    }
+
+    #[test]
+    fn a_bed_named_by_a_layer_that_isnt_a_raster_is_said() {
+        // #2434: the bed's raster gone and a polygon layer given its name (a rename, or one added):
+        // the walls show the depth's basin as without a bed, and the frame says why.
+        let (mut m, b, g, res) = lake_over_bed(Some(50.0), dipping);
+        m.layers.retain(|l| l.name != "batimetria");
+        m.add_dataset(rustgis_data::Dataset::new("batimetria", rustgis_data::GeometryType::Polygon, Vec::new()));
+        let before = crate::approximations::keep();
+        let water = water_runs(&m, &b, &g, res, 1.0, &Default::default());
+        let said = crate::approximations::take();
+        crate::approximations::restore(before);
+        assert!(!water[0].is_empty(), "the depth's water");
+        assert!(said.iter().any(|t| t.contains("batimetria") && t.contains("isn't a raster layer")), "{said:?}");
     }
 
     #[test]

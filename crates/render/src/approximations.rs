@@ -338,6 +338,17 @@ pub(crate) fn bed_unread(name: &str, n: usize, bodies: usize) {
     );
 }
 
+/// Notes a block's water bed (#2434) named by a layer `name` that isn't a raster (renamed or
+/// added to the bed's name): the walls read no bed from it.
+pub(crate) fn bed_not_raster(name: &str) {
+    note(
+        format!("{name} bed layer"),
+        format!(
+            "{name}: the block's water bed isn't a raster layer, so the walls show the water down to its depth or field (none without either) until a raster layer of that name is there"
+        ),
+    );
+}
+
 /// What to say of a block diagram whose `share` (0 to 1) of the ground it read for its base
 /// had no height (off the DEM, the DEM's nodata, an elevation tile that failed), taken as 0
 /// ([`crate::terrain::Block::without_height_notice`]).
