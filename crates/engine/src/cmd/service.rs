@@ -41,7 +41,7 @@ pub fn commands() -> Vec<C> {
             r#"{"url": "a WCS address", "type"?: "wcs", "layer": "the coverage's name", "text"?: "the capabilities document, when already fetched", "documents"?: "additional fetched documents, as service.layers", "source_url"?: "the listed coverage's source_url", "describe"?: "its DescribeCoverage answer, when already fetched", "bbox"?: [west, south, east, north] | "view" (the default) | "full", "connection"?: "the saved web-service connection id whose login the request uses", "anonymous"?: boolean (never use a saved login for the coverage or its description)} → the GetCoverage address of a GeoTIFF (layer.addUrl adds it), its area in longitude/latitude, and "coverageCrs": the coverage's own system when it is asked in it (as layer.addUrl takes it, for an answer that doesn't say its system)"#,
         ),
         C::new("catalog.search", "Search Catalogue", "Home › Add", catalog_search).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Network)).view().params(
-            r#"{"url": "a catalogue's CSW address", "query"?: "words anywhere in the records", "bbox"?: [west, south, east, north] | "view" (none by default), "start"?: "the first record's position (a page's next)", "bboxCrs"?: "CRS84" | "none" (how the area's coordinate system is named to the catalogue; by default CRS84, and none when the catalogue answers that with an exception; the answer's bboxCrs says which was read, to give with its next page), "text"?: "the GetRecords answer, when already fetched", "connection"?: "as service.layers"} → records with their service and download links (service.add or layer.addUrl add them; a link with "fromDocument": true came from a catalogue read from the internet: give layer.addUrl that too)"#,
+            r#"{"url": "a catalogue's CSW address", "query"?: "words anywhere in the records", "bbox"?: [west, south, east, north] | "view" (none by default; one across the antimeridian isn't asked for, which a note says), "start"?: "the first record's position (a page's next)", "bboxCrs"?: "CRS84" | "none" (how the area's coordinate system is named to the catalogue; by default CRS84, and none when the catalogue answers that with an exception to a request RustGIS makes (a supplied text isn't asked again); the answer's bboxCrs says which was read, to give with its next page), "text"?: "the GetRecords answer, when already fetched", "connection"?: "as service.layers"} → records with their service and download links (service.add or layer.addUrl add them; a link with "fromDocument": true came from a catalogue read from the internet: give layer.addUrl that too)"#,
         ),
     ];
     commands.extend(group::commands());
@@ -1860,6 +1860,10 @@ fn coverage(s: &mut Session, p: &Value) -> CmdResult {
 /// Said when the records read are those of an area asked for without its coordinate system.
 pub const AREA_UNNAMED: &str = "the catalogue answered with an exception when the area's coordinate system was named (CRS84), so it was asked again without it, longitude first";
 
+/// Said when an area across the antimeridian was given: it isn't asked for ([`search_area`]).
+pub const AREA_ACROSS_ANTIMERIDIAN: &str =
+    "the area crosses the antimeridian, which the catalogue isn't asked for: the whole catalogue is searched";
+
 /// The notes `catalog.search` gives about its words alone, the same on every page of a search:
 /// control characters left out and words cut.
 pub fn words_notes(query: &str) -> Vec<String> {
@@ -1995,6 +1999,9 @@ pub(super) fn catalog_search_read(s: &mut Session, p: &Value, read: Option<Reach
         }
     };
     notes.extend(words_notes(ps(p, "query").unwrap_or("")));
+    if p.get("bbox").is_some_and(|b| !b.is_null()) && search_area(s, p)?.is_none() {
+        notes.push(AREA_ACROSS_ANTIMERIDIAN.to_string());
+    }
     let mut dropped = 0usize;
     let records: Vec<Value> = page
         .records

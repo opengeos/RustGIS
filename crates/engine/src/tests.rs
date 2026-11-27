@@ -27574,6 +27574,22 @@ fn a_catalogue_refusing_crs84_is_asked_for_the_area_without_it() {
     assert_eq!(said, ["control characters left out of the words searched for: 1", "the words are cut to 200 characters; left out: 52"]);
 }
 
+/// An area across the antimeridian isn't asked for, so the whole catalogue is searched, and the
+/// answer says so; an area on one side says nothing of it.
+#[test]
+fn a_catalogue_area_across_the_antimeridian_is_said_to_be_left_out() {
+    const PAGE: &str = r#"<csw:GetRecordsResponse xmlns:csw="http://www.opengis.net/cat/csw/2.0.2"><csw:SearchResults numberOfRecordsMatched="443" nextRecord="21"/></csw:GetRecordsResponse>"#;
+    let mut s = Session::new(Project::default());
+    let search = |s: &mut Session, area: Value| {
+        s.run("catalog.search", &json!({"url": "https://cat.example.org/csw", "query": "solos", "bbox": area, "text": PAGE})).unwrap()
+    };
+    let v = search(&mut s, json!([170, -20, -170, -10]));
+    assert!(!v["request"].as_str().unwrap_or_default().contains("BoundingBox"), "{v}");
+    assert_eq!((v.get("bboxCrs"), &v["notes"]), (None, &json!([crate::cmd::service::AREA_ACROSS_ANTIMERIDIAN])), "{v}");
+    let v = search(&mut s, json!([-43, -21, -42, -20]));
+    assert!(v["request"].as_str().unwrap_or_default().contains("BoundingBox") && v.get("notes").is_none(), "{v}");
+}
+
 /// A KMZ's ground overlays become raster layers kept in the project; a KML whose picture is a web
 /// address or outside its folder says so.
 #[test]
