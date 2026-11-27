@@ -62,13 +62,13 @@ fn explain(code: Option<&str>) -> Result<(), String> {
     let Some(id) = code else {
         for code in LossCode::ALL {
             let spec = code.spec();
-            println!("{:<28} {}", spec.id, spec.meaning);
+            out!("{:<28} {}", spec.id, spec.meaning);
         }
         return Ok(());
     };
     let code = LossCode::from_id(id).ok_or_else(|| format!("explain {id}: not a loss code (`rustgis-cli explain` lists them)"))?;
     let spec = code.spec();
-    println!("{}: {}\n\n{}\n\nWhat to do: {}\n\nMore: {}", spec.id, spec.kind.id(), spec.meaning, spec.action, code.doc_url());
+    out!("{}: {}\n\n{}\n\nWhat to do: {}\n\nMore: {}", spec.id, spec.kind.id(), spec.meaning, spec.action, code.doc_url());
     Ok(())
 }
 
@@ -1065,11 +1065,23 @@ fn cli() -> ExitCode {
             print(&out);
             Ok(())
         }
-        "explain" => match args.get(1..).unwrap_or_default() {
-            [] => explain(None),
-            [code] if !code.starts_with("--") => explain(Some(code)),
-            _ => Err("explain takes one loss code, or none to list them all".into()),
-        },
+        "explain" => {
+            // The common options (`--threads 2`, `--use-saved-secrets`) are taken, and their values.
+            let mut words = Vec::new();
+            let mut rest = args.iter().skip(1);
+            while let Some(arg) = rest.next() {
+                if VALUE_FLAGS.contains(&arg.as_str()) {
+                    rest.next();
+                } else if !arg.starts_with("--") {
+                    words.push(arg.as_str());
+                }
+            }
+            match words.as_slice() {
+                [] => explain(None),
+                [code] => explain(Some(code)),
+                _ => Err("explain takes one loss code, or none to list them all".into()),
+            }
+        }
         "skills" => skills(&args),
         "mcp-register" => mcp_register(&args),
         "commands" => {

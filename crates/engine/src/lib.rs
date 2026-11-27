@@ -2039,7 +2039,9 @@ impl Session {
         }));
         self.diagnostic_source = previous;
         if let Some(run) = previous_run {
-            if let Some(ended) = &self.run {
+            // Undo makes no step of its own: it moves back one, so "before" it isn't a step to take
+            // back. Redo's step is its own, and undoing it returns to before it.
+            if let Some(ended) = self.run.as_ref().filter(|_| id != "edit.undo") {
                 self.diagnostics.finish_run(ended.id, self.state);
             }
             self.run = run;
@@ -3713,19 +3715,21 @@ impl Session {
         self.redo.iter().rev().map(|step| step.2)
     }
 
-    /// How many Undo steps take back the change that left the project in the state `after` (a
-    /// message's [`Run::after`](rustgis_data::diagnostics::Run)), with the changes made since:
-    /// `None` when the history no longer holds that change. A change makes a state no other has,
-    /// so an edit made after undoing it, from the same state before, isn't taken for it.
-    pub fn undo_steps_back_past(&self, after: u64) -> Option<usize> {
-        if self.undo.is_empty() {
-            return None;
-        }
-        if self.state == after {
-            return Some(1);
-        }
-        // The step after the change keeps the state the change left.
-        self.undo.iter().rposition(|step| step.4 == after).map(|i| self.undo.len() - i + 1).filter(|n| *n <= self.undo.len())
+    /// How many Undo steps take back the change of a run that went from the state `before` to
+    /// `after` (a message's [`Run`](rustgis_data::diagnostics::Run)), with the changes made since:
+    /// `None` when the history no longer holds that change as a step of its own. A change makes a
+    /// state no other has, so an edit made after undoing it, from the same state before, isn't taken
+    /// for it; and the step Undo lands on must be `before`, so a run whose step was merged into an
+    /// earlier one, or that made no step, isn't taken back past that earlier command.
+    pub fn undo_steps_back_past(&self, before: u64, after: u64) -> Option<usize> {
+        let steps = if self.state == after {
+            1
+        } else {
+            // The step after the change keeps the state the change left.
+            self.undo.len() - self.undo.iter().rposition(|step| step.4 == after)? + 1
+        };
+        let landing = self.undo.len().checked_sub(steps)?;
+        (self.undo.get(landing)?.4 == before).then_some(steps)
     }
 
     /// Identifies the current position and the history it belongs to. Editing and then undoing

@@ -266,6 +266,8 @@ impl History {
     /// which are the newest ones with a run.
     pub fn finish_run(&self, id: u64, after: u64) {
         let mut state = lock(&self.0);
+        // A changed record: a snapshot taken before it shows the run as unfinished.
+        state.generation = state.generation.wrapping_add(1);
         for record in state.records.iter_mut().rev() {
             match &mut record.run {
                 Some(run) if run.id == id => run.after = Some(after),

@@ -93,28 +93,30 @@ fn run_heading(ui: &mut Ui, app: &mut RustGisApp, record: &Record, t: &Tokens) {
         if let Some(target) = &run.target {
             ui.label(RichText::new(crate::i18n::fmt("on {target}", &[("target", target.as_str())])).color(t.text_dim));
         }
-        ui.label(RichText::new(time(record.timestamp_ms)).small().monospace().color(t.text_dim));
     });
-    // Only a run that changed the project, whose change is still in the history.
-    let steps = run.after.filter(|after| *after != run.before).and_then(|after| app.session.undo_steps_back_past(after));
-    if let Some(steps) = steps {
-        let hover = if steps == 1 {
-            tl!("Takes back this command's changes").to_string()
-        } else {
-            crate::i18n::fmt("Takes back this command's changes and the {n} after it", &[("n", &(steps - 1).to_string())])
-        };
-        // One history jump at a time: Undo History's own, or another message's.
-        let free = app.ui.history_jump.is_none();
-        if ui.add_enabled(free, egui::Button::new(tl!("Undo to before this")).small()).on_hover_text(hover).clicked() {
-            app.ui.history_jump = Some(crate::chrome::HistoryJump::undo(app.session.history_position(), steps));
-            ui.ctx().request_repaint();
+    // Only a run that changed the project, whose change is still a step of its own in the history.
+    let steps = run.after.filter(|after| *after != run.before).and_then(|after| app.session.undo_steps_back_past(run.before, after));
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new(time(record.timestamp_ms)).small().monospace().color(t.text_dim));
+        if let Some(steps) = steps {
+            let hover = if steps == 1 {
+                tl!("Takes back this command's changes").to_string()
+            } else {
+                crate::i18n::fmt("Takes back this command's changes and the {n} after it", &[("n", &(steps - 1).to_string())])
+            };
+            // One history jump at a time: Undo History's own, or another message's.
+            let free = app.ui.history_jump.is_none();
+            if ui.add_enabled(free, egui::Button::new(tl!("Undo to before this")).small()).on_hover_text(hover).clicked() {
+                app.ui.history_jump = Some(crate::chrome::HistoryJump::undo(app.session.history_position(), steps));
+                ui.ctx().request_repaint();
+            }
         }
-    }
+    });
 }
 
 /// One entry, laid out as a compiler message: its severity, and its loss code when it reports lost
-/// data; the message; then what the code means (`note`) and what to do (`help`), from text built
-/// into the app so they read offline, with the guide's entry for more. A message no command said
+/// data; the message; then what the code means and what to do, from text built into the app so
+/// they read offline, with the guide's entry for more. A message no command said
 /// shows its time and source itself (`standalone`).
 fn entry(ui: &mut Ui, record: &Record, t: &Tokens, standalone: bool, open_url: &mut Option<String>) {
     // Literal labels, so each is found and translated with the interface's other strings.
@@ -153,17 +155,25 @@ fn entry(ui: &mut Ui, record: &Record, t: &Tokens, standalone: bool, open_url: &
     ui.add(egui::Label::new(&record.message).wrap().selectable(true));
     if let Some(code) = record.loss {
         let spec = code.spec();
-        let line = |ui: &mut Ui, label: &str, text: &str| {
-            ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new(label).small().strong().color(t.text_dim));
-                ui.add(egui::Label::new(RichText::new(text).small()).wrap());
+        // What the code means and what to do, in a quiet inset under the message.
+        egui::Frame::NONE
+            .fill(t.pane_header)
+            .stroke(egui::Stroke::new(1.0, t.border))
+            .corner_radius(egui::CornerRadius::same(4))
+            .inner_margin(egui::Margin::symmetric(8, 6))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                for (heading, text) in
+                    [(tl!("What happened"), crate::i18n::t(spec.meaning)), (tl!("What to do"), crate::i18n::t(spec.action))]
+                {
+                    ui.label(RichText::new(heading).small().strong().color(t.text_dim));
+                    ui.add(egui::Label::new(RichText::new(text).small()).wrap());
+                    ui.add_space(4.0);
+                }
+                if ui.link(RichText::new(tl!("More in the guide")).small()).on_hover_text(code.doc_url()).clicked() {
+                    *open_url = Some(code.doc_url());
+                }
             });
-        };
-        line(ui, tl!("= note:"), crate::i18n::t(spec.meaning));
-        line(ui, tl!("= help:"), crate::i18n::t(spec.action));
-        if ui.link(RichText::new(tl!("More in the guide")).small()).on_hover_text(code.doc_url()).clicked() {
-            *open_url = Some(code.doc_url());
-        }
     }
     if !record.details.is_empty() || record.network.is_some() {
         egui::CollapsingHeader::new(tl!("Technical details")).show(ui, |ui| {

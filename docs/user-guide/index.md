@@ -127,12 +127,12 @@ or search for **Messages** in Command Search (`ui.pane.diagnosticLog`). This tro
 history is separate from **Help › Diagnostic Monitor**, which still shows performance metrics.
 
 Messages are collected even while the pane is closed. The newest entries appear first. A
-command's messages sit under its name, what it worked on (a layer or table) and a UTC time; a
-message no command said shows its own time and source (such as Network).
+command's messages sit under its name, what it worked on (a layer or table) and the UTC time of its
+latest message; a message no command said shows its own time and source (such as Network).
 
 A message that reports lost data is laid out like a compiler's: its severity and
-[loss code](loss-codes.md) (`Warning [changed.truncated] data changed`), the message, then a
-**note** on what the code means and a **help** line on what to do. Both are built into RustGIS, so
+[loss code](loss-codes.md) (`Warning [changed.truncated] data changed`), the message, then
+**What happened** and **What to do** for that code. Both are built into RustGIS, so
 they read offline; **More in the guide** opens the code's entry. **Undo to before this** takes
 the project back to before that command, and the changes after it, while Undo still reaches it. Expand **Technical
 details** for failed requests: their address, method, observed HTTP status and duration when
