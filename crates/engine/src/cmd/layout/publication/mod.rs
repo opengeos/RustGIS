@@ -600,9 +600,12 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
                             let kh = lines.lines.len() as f64 * pitch(pt) + 1.0 * k;
                             let mut kind = pub_text(lines, pt, accent, true, TextAlign::Left);
                             // The stored text is in capitals but for its tokens, which the case
-                            // covers (#3126).
-                            if let ElementKind::Text { letter_spacing, case, .. } = &mut kind {
-                                (*letter_spacing, *case) = (spacing, TextCase::Upper);
+                            // covers (#3126). Without one, no case: a saved project asks for none.
+                            if let ElementKind::Text { text, letter_spacing, case, .. } = &mut kind {
+                                *letter_spacing = spacing;
+                                if text.contains('{') {
+                                    *case = TextCase::Upper;
+                                }
                             }
                             around.push(("Kicker".into(), (x0, y, iw, kh), kind));
                             y += kh;

@@ -350,13 +350,15 @@ fn headline_figures_never_squeeze_the_map_away() {
     let long = "a figure's value that takes many lines of its column ".repeat(30);
     for profile in ["a5-landscape", "a5-portrait", "a0-portrait"] {
         let mut s = world();
-        edge(&mut s, json!({"profile": profile, "figures": [{"value": "1", "label": long}]}))
-            .map(|_| {
+        // A long label either leaves the map its room (a large sheet) or is refused.
+        match edge(&mut s, json!({"profile": profile, "figures": [{"value": "1", "label": long}]})) {
+            Ok(_) => {
                 let l = last(&s);
                 assert!(named(l, "Map Frame").h >= 40.0 * l.width.min(l.height) / 210.0, "{profile}");
                 assert_figures(l, 1, profile);
-            })
-            .unwrap_or_else(|e| assert!(e.contains("no room"), "{profile}: {e}"));
+            }
+            Err(e) => assert!(e.contains("no room"), "{profile}: {e}"),
+        }
         let e = edge(&mut s, json!({"profile": profile, "figures": [{"value": long}]})).unwrap_err();
         assert!(e.contains("no room") && e.contains("figures"), "{profile}: {e}");
     }
@@ -375,10 +377,13 @@ fn a_kickers_tokens_are_drawn_in_capitals_and_measured_so() {
         named(last(s), "Kicker").clone()
     };
     let (token, typed) = (kicker(&mut s, "{map}"), kicker(&mut s, name.trim_end()));
-    for e in [&token, &typed] {
-        let ElementKind::Text { case, .. } = &e.kind else { panic!() };
-        assert_eq!(*case, TextCase::Upper);
-    }
+    let case_of = |e: &Element| match &e.kind {
+        ElementKind::Text { case, .. } => *case,
+        k => panic!("{k:?}"),
+    };
+    // A text with no token is stored in capitals and needs no case, so asks no more of a reader.
+    assert_eq!((case_of(&token), case_of(&typed)), (TextCase::Upper, TextCase::None));
+    assert_eq!(case_of(&kicker(&mut s, "{crs}")), TextCase::Upper);
     assert!((token.h - typed.h).abs() < 1e-6, "{} {}", token.h, typed.h);
     let stat = kicker(&mut s, "{count:Countries} countries");
     let ElementKind::Text { text, case, .. } = &stat.kind else { panic!() };
