@@ -135,10 +135,13 @@ pub fn poll(app: &mut RustGisApp) {
             st.matched = v.get("matched").and_then(Value::as_u64).unwrap_or(0);
             st.next = v.get("next").and_then(Value::as_u64);
             st.records.extend(v.get("records").and_then(Value::as_array).into_iter().flatten().cloned());
-            // A note about the words is the same on every page: each is listed once.
+            // A note about the words, or about the area asked for again, is the same on every page:
+            // it is listed once. Any other counts what its own page left out, so each is kept.
+            let same = service::words_notes(p.get("query").and_then(Value::as_str).unwrap_or(""));
             let page = v.get("notes").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str);
             for note in refused.map(|_| service::AREA_UNNAMED).into_iter().chain(page) {
-                if !st.notes.iter().any(|n| n == note) {
+                let repeats = note == service::AREA_UNNAMED || same.iter().any(|s| s == note);
+                if !(repeats && st.notes.iter().any(|n| n == note)) {
                     st.notes.push(note.to_string());
                 }
             }
@@ -458,6 +461,32 @@ mod tests {
         search(&mut app, 21);
         poll(&mut app);
         assert_eq!((app.ui.csw.records.len(), &app.ui.csw.notes), (2, &said));
+    }
+
+    /// A note that counts what one page left out is said for every page, even when two pages
+    /// leave out as many: More keeps both, so nothing is under-counted.
+    #[test]
+    fn a_note_counting_a_pages_links_is_kept_for_every_page() {
+        const PAGE: &str = r#"<csw:GetRecordsResponse xmlns:csw="http://www.opengis.net/cat/csw/2.0.2" xmlns:dc="http://purl.org/dc/elements/1.1/"><csw:SearchResults numberOfRecordsMatched="40" nextRecord="21"><csw:Record><dc:title>Roads</dc:title><dc:URI protocol="OGC:WMS">http://10.0.0.4/wms</dc:URI><dc:URI protocol="OGC:WFS">http://10.0.0.5/wfs</dc:URI></csw:Record></csw:SearchResults></csw:GetRecordsResponse>"#;
+        let _turn = crate::fetching::turn();
+        cache::set_fetcher_with_origin(move |url, ceiling, done, _| {
+            let origin = Origin::with_observed_reach(cache::split_download_limit(&url).0, ceiling).unwrap();
+            done(Ok(cache::Fetched { bytes: PAGE.into(), origin }));
+        });
+        let mut app = RustGisApp::new(rustgis_engine::Session::new(rustgis_engine::Project::default()));
+        // Held to the internet: links to the local network are left out.
+        app.run(
+            "ui.addService",
+            json!({"url": "https://csw-links.example/csw", "type": "csw", "query": "ro\u{7}ads", "fromDocument": true}),
+        )
+        .unwrap();
+        poll(&mut app);
+        let words = "control characters left out of the words searched for: 1".to_string();
+        let links = "2 links point to addresses RustGIS won't fetch for a catalogue on the web and are left out".to_string();
+        assert_eq!((app.ui.csw.records.len(), &app.ui.csw.notes), (1, &vec![words.clone(), links.clone()]));
+        search(&mut app, 21);
+        poll(&mut app);
+        assert_eq!((app.ui.csw.records.len(), &app.ui.csw.notes), (2, &vec![words, links.clone(), links]));
     }
 
     /// A search that matched nothing still says how it was asked: the area asked for again without

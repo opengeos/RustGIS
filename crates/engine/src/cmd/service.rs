@@ -1860,6 +1860,20 @@ fn coverage(s: &mut Session, p: &Value) -> CmdResult {
 /// Said when the records read are those of an area asked for without its coordinate system.
 pub const AREA_UNNAMED: &str = "the catalogue answered with an exception when the area's coordinate system was named (CRS84), so it was asked again without it, longitude first";
 
+/// The notes `catalog.search` gives about its words alone, the same on every page of a search:
+/// control characters left out and words cut.
+pub fn words_notes(query: &str) -> Vec<String> {
+    let (_, unwritable, cut) = rustgis_data::ogc::search_words(query);
+    let mut notes = Vec::new();
+    if unwritable > 0 {
+        notes.push(format!("control characters left out of the words searched for: {unwritable}"));
+    }
+    if cut > 0 {
+        notes.push(format!("the words are cut to {} characters; left out: {cut}", rustgis_data::ogc::MAX_SEARCH_WORDS));
+    }
+    notes
+}
+
 /// The area `catalog.search` asks for, if any. A box across the antimeridian isn't asked for: the
 /// whole catalogue is searched.
 fn search_area(s: &Session, p: &Value) -> Result<Option<[f64; 4]>, String> {
@@ -1980,13 +1994,7 @@ pub(super) fn catalog_search_read(s: &mut Session, p: &Value, read: Option<Reach
             }
         }
     };
-    let (_, unwritable, cut) = rustgis_data::ogc::search_words(ps(p, "query").unwrap_or(""));
-    if unwritable > 0 {
-        notes.push(format!("control characters left out of the words searched for: {unwritable}"));
-    }
-    if cut > 0 {
-        notes.push(format!("the words are cut to {} characters; left out: {cut}", rustgis_data::ogc::MAX_SEARCH_WORDS));
-    }
+    notes.extend(words_notes(ps(p, "query").unwrap_or("")));
     let mut dropped = 0usize;
     let records: Vec<Value> = page
         .records
