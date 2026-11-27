@@ -694,7 +694,8 @@ fn run_target(params: &Value) -> Option<String> {
     if name.is_empty() {
         return None;
     }
-    let name = rustgis_data::diagnostics::redact(name);
+    // As a message is: addresses, credentials and the values of the logins in use masked.
+    let name = Session::redacted(name).into_string();
     let mut cut: String = name.chars().take(80).collect();
     if cut.len() < name.len() {
         cut.push('…');

@@ -43,3 +43,25 @@ fn a_commands_messages_remember_its_run_and_undo_reaches_back_past_it() {
     s.notify("said by the app", false);
     assert!(s.diagnostics.records().last().is_some_and(|r| r.run.is_none()));
 }
+
+#[test]
+fn a_runs_target_masks_a_login_in_use() {
+    let mut s = Session::new(Project::default());
+    let id = s
+        .run(
+            "connection.new",
+            &json!({"kind": "wms", "name": "Run", "address": "https://run-target.example.invalid", "auth": "header", "keyName": "X-Key"}),
+        )
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let secret = "RGSYNTH_run_target_key";
+    s.run("connection.login", &json!({"id": id, "apiKey": secret})).unwrap();
+    // A layer named with the key: the command fails, and its message keeps the run's target.
+    let _ = s.run("layer.zoomTo", &json!({"layer": format!("roads {secret}")}));
+    let run = s.diagnostics.records().into_iter().rev().find_map(|r| r.run).expect("the failure's run");
+    let target = run.target.expect("a target");
+    assert!(!target.contains(secret), "{target}");
+    assert!(target.starts_with("roads "), "{target}");
+}
