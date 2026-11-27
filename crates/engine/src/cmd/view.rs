@@ -836,13 +836,18 @@ fn terrain(s: &mut Session, p: &Value) -> CmdResult {
             let n = if bw.depth.is_some() { 0 } else { l.dataset.features.column(i).enumerate().filter(missing).count() };
             Ok((n > 0).then(|| (n, l.name.clone(), f.clone())))
         })();
-        // Its bed (#2434), when this call gives the block's water: overlapping the block's box
-        // once the raster's data is there (one still being read draws what it overlaps, the
-        // walls falling back to the depth elsewhere). A bed kept from before whose layer went
-        // isn't refused: its removal was said, and a layer of that name brings it back.
+        // Its bed (#2434), when this call sets the block (its box can move off a bed it keeps):
+        // overlapping the block's box once the raster's data is there (a bed still being read
+        // gives no floor until it is, the walls showing the depth or field meanwhile). A bed kept
+        // from before whose layer went, or no longer is a raster, isn't refused: that was said,
+        // and a raster layer of that name brings it back.
         let checked = checked.and_then(|n| {
-            let Some(bed) = bw.bed.as_deref().filter(|_| given("water")) else { return Ok(n) };
-            let l = m.layer_by_name(bed).ok_or_else(|| format!("no layer '{bed}' (the block's water bed){kept}"))?;
+            let Some(bed) = bw.bed.as_deref().filter(|_| block.is_some()) else { return Ok(n) };
+            let layer = m.layer_by_name(bed);
+            if !given("water") && layer.is_none_or(|l| l.raster.is_none()) {
+                return Ok(n);
+            }
+            let l = layer.ok_or_else(|| format!("no layer '{bed}' (the block's water bed){kept}"))?;
             let raster = l.raster.as_ref().ok_or_else(|| format!("'{bed}' isn't a raster layer (the block's water bed){kept}"))?;
             let boxed = t.block.as_ref().and_then(|b| b.extent.or(own)).or_else(|| dem_box.as_ref().and_then(|d| d.1));
             if let (Some(data), Some([x0, y0, x1, y1])) = (raster.data.as_ref(), boxed) {

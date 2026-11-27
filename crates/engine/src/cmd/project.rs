@@ -451,6 +451,35 @@ fn reset(s: &mut Session, p: Project) {
             false,
         ),
     }
+    // A block's water bed (#2434) that is missing, isn't a raster layer or shares its name with
+    // another layer gives no floor (`block::water_runs` reads it as the terrain command takes it):
+    // said, and kept, so a raster layer of that name brings it back.
+    let unread: Vec<String> = s
+        .project
+        .maps
+        .iter()
+        .filter_map(|m| {
+            let bed = m.view.terrain.as_ref()?.block.as_ref()?.water.as_ref()?.bed.as_ref()?;
+            let mut named = m.layers.iter().filter(|l| l.name.eq_ignore_ascii_case(bed));
+            let read = named.next().filter(|l| l.raster.is_some()).is_some() && named.next().is_none();
+            (!read).then(|| format!("{} ('{bed}')", m.name))
+        })
+        .collect();
+    match unread.as_slice() {
+        [] => {}
+        [one] => s.notify(
+            format!("{one}: the block's water bed is missing, isn't a raster layer, or shares its name with another layer, so its walls show the water down to its depth or field (none without either)"),
+            false,
+        ),
+        _ => s.notify(
+            format!(
+                "{} block diagrams have a water bed that is missing, isn't a raster layer, or shares its name with another layer, so their walls show the water down to its depth or field (none without either): {}",
+                unread.len(),
+                unread.join(", ")
+            ),
+            false,
+        ),
+    }
     // Water on a layer read a view at a time (#2305), which `map.terrain` refuses, would come
     // from the rows the view holds (the map draws none from it): dropped and said, as the project
     // opens.
@@ -548,7 +577,11 @@ fn reset(s: &mut Session, p: Project) {
         [] => {}
         [(map, field, layer, d, bed)] => {
             let (key, mut args) = match (d, bed) {
-                (Some(d), _) => (
+                (Some(d), Some(bed)) => (
+                    "{map}: the block's water depth field '{field}' isn't a numeric field of '{layer}', so its walls show the bed '{bed}' where it has heights and the water {depth} m deep elsewhere",
+                    vec![("bed", lit(bed)), ("depth", d.to_string().into())],
+                ),
+                (Some(d), None) => (
                     "{map}: the block's water depth field '{field}' isn't a numeric field of '{layer}', so its walls show all the water {depth} m deep",
                     vec![("depth", d.to_string().into())],
                 ),
@@ -568,7 +601,11 @@ fn reset(s: &mut Session, p: Project) {
             let maps = NoticeText::list(depths.iter().map(|(map, field, layer, d, bed)| {
                 let args = [("map", lit(map)), ("field", lit(field)), ("layer", lit(layer))];
                 match (d, bed) {
-                    (Some(d), _) => NoticeText::format(
+                    (Some(d), Some(bed)) => NoticeText::format(
+                        "{map} ('{field}' of '{layer}', its walls showing the bed '{bed}' where it has heights and the water {depth} m deep elsewhere)",
+                        args.into_iter().chain([("bed", lit(bed)), ("depth", d.to_string().into())]),
+                    ),
+                    (Some(d), None) => NoticeText::format(
                         "{map} ('{field}' of '{layer}', its walls showing all the water {depth} m deep)",
                         args.into_iter().chain([("depth", d.to_string().into())]),
                     ),

@@ -18490,6 +18490,81 @@ fn terrain_block_water_bed_is_a_raster_over_the_block() {
     assert_eq!(kept(&s).as_deref(), Some("fundo"));
 }
 
+/// A block's water bed (#2434) that can't be read is said as a project opens; the notices for a
+/// lost depth field name the bed when there is one; a block moved off a kept bed is refused; and a
+/// rename giving another layer the bed's name is counted among the references it makes ambiguous.
+#[test]
+fn a_block_water_bed_is_said_where_it_cant_be_read() {
+    use base64::Engine;
+    use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster, geotiff};
+    // A project saved with a bed and no layers at all: its bed can't be read, said; the name kept.
+    let saved = Project::from_json(include_str!("../../../schema/fixtures/terrain_block_water_bed_v2.rgis")).unwrap();
+    let mut opened = Session::new(Project::default());
+    crate::cmd::project::reset_to(&mut opened, saved);
+    assert!(opened.notices.iter().any(|n| n.text.contains("('batimetria'): the block's water bed is missing")), "{:?}", opened.notices);
+    let bed_of =
+        |s: &Session| s.map().view.terrain.as_ref().and_then(|t| t.block.as_ref()).and_then(|b| b.water.clone()).and_then(|w| w.bed);
+    assert_eq!(bed_of(&opened).as_deref(), Some("batimetria"));
+    let mut s = Session::new(Project::default());
+    s.run("layer.addDataBytes", &json!({"fileName": "dem.tif", "data": dem_b64()})).unwrap();
+    let dem = s.map().layers.iter().find(|l| l.is_raster()).map(|l| l.name.clone()).unwrap();
+    // Beds of 150 m: one over the whole DEM, one over its east quarter, one 10° east of it.
+    for (name, lon, cols) in [("batimetria.tif", 10.0, 40), ("leste.tif", 10.03, 10), ("longe.tif", 20.0, 40)] {
+        let gt = GeoTransform { origin_x: lon, origin_y: 45.04, pixel_width: 0.001, pixel_height: -0.001 };
+        let r =
+            Raster::new("bed", cols, 40, vec![vec![150.0; cols as usize * 40]], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
+        let data = base64::engine::general_purpose::STANDARD.encode(geotiff::write(&r, 0).unwrap());
+        s.run("layer.addDataBytes", &json!({"fileName": name, "data": data})).unwrap();
+    }
+    let named = |s: &Session, start: &str| s.map().layers.iter().find(|l| l.name.starts_with(start)).map(|l| l.name.clone()).unwrap();
+    let (bed, east, far) = (named(&s, "batimetria"), named(&s, "leste"), named(&s, "longe"));
+    let lake = json!([[[10.01, 45.01], [10.03, 45.01], [10.03, 45.03], [10.01, 45.03], [10.01, 45.01]]]);
+    let lakes = json!({"type": "FeatureCollection", "features": [
+        {"type": "Feature", "properties": {"nome": "a", "prof": 4.0}, "geometry": {"type": "Polygon", "coordinates": lake}},
+    ]});
+    let data = base64::engine::general_purpose::STANDARD.encode(lakes.to_string().as_bytes());
+    s.run("layer.addDataBytes", &json!({"fileName": "lagos.geojson", "data": data})).unwrap();
+    let lagos = named(&s, "lagos");
+    // The same project with its bed there opens without a word about it.
+    s.run("map.terrain", &json!({"layer": dem, "water": {"layer": lagos}, "block": {"water": {"bed": east}}})).unwrap();
+    let mut opened = Session::new(Project::default());
+    crate::cmd::project::reset_to(&mut opened, s.project.clone());
+    assert!(!opened.notices.iter().any(|n| n.text.contains("water bed")), "{:?}", opened.notices);
+    // A block moved off a bed it keeps is refused, the terrain as it was.
+    let merc = |lon: f64, lat: f64| rustgis_geom::lonlat_to_merc(rustgis_geom::Coord::new(lon, lat));
+    let (a, z) = (merc(10.002, 45.002), merc(10.02, 45.02));
+    let before = s.map().view.terrain.clone();
+    let e = s.run("map.terrain", &json!({"block": {"extent": [a.x, a.y, z.x, z.y]}})).unwrap_err();
+    assert!(e.contains("doesn't overlap") && e.contains(&east) && e.contains("Terrain stays as it was"), "{e}");
+    assert_eq!(s.map().view.terrain, before);
+    // A depth field lost with a depth and a bed: the bed still gives the floor where it has heights.
+    s.run("map.terrain", &json!({"block": {"water": {"bed": bed, "depth": 5, "field": "prof"}}})).unwrap();
+    let mut wrong = s.project.clone();
+    if let Some(w) = wrong.maps[0].view.terrain.as_mut().and_then(|t| t.block.as_mut()).and_then(|b| b.water.as_mut()) {
+        w.field = Some("nome".into());
+    }
+    let mut opened = Session::new(Project::default());
+    crate::cmd::project::reset_to(&mut opened, wrong);
+    let said = |notes: &[String]| {
+        notes.iter().any(|t| t.contains("'nome'") && t.contains(&format!("bed '{bed}'")) && t.contains("5 m deep elsewhere"))
+    };
+    let notes: Vec<String> = opened.notices.iter().map(|n| n.text.clone()).collect();
+    assert!(said(&notes), "{notes:?}");
+    let mark = s.notice_mark();
+    s.run("edit.deleteField", &json!({"layer": lagos, "field": "prof"})).unwrap();
+    let notes: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+    assert!(
+        notes.iter().any(|t| t.contains("prof") && t.contains(&format!("bed '{bed}'")) && t.contains("5 m deep elsewhere")),
+        "{notes:?}"
+    );
+    // Another layer renamed to the bed's name: the bed is among the references the rename makes ambiguous.
+    let id = s.map().layer_by_name(&far).map(|l| l.id).unwrap();
+    let mark = s.notice_mark();
+    s.run("layer.rename", &json!({"layer": id, "name": bed})).unwrap();
+    let notes: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+    assert!(notes.iter().any(|t| t.contains(&format!("reference(s) already name '{bed}'"))), "{notes:?}");
+}
+
 /// A terrain's water on a layer read a view at a time (#2305), which `map.terrain` refuses: the
 /// map draws no water from the view's rows, and a project naming it opens without it, said.
 #[test]

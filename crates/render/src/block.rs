@@ -1735,12 +1735,13 @@ pub(crate) fn draw_walls(
                 let (t0, t1) = (u.min(v).max(0.0), u.max(v).min(1.0));
                 let steps = (t1 > t0).then_some(0..=WATER_STEPS).into_iter().flatten();
                 let steps = steps.map(|i| t0 + (t1 - t0) * f64::from(i) / f64::from(WATER_STEPS));
-                // The bed's samples with a height within the stretch's part of the run, by binary
-                // search (where it has none, the depth's floor is sampled as without a bed).
+                // The bed's samples within the stretch's part of the run, by binary search: those
+                // with a height, and without a depth to fall back on those without one too, where
+                // the water stops (with one, the depth's floor is sampled there as without a bed).
                 let (blo, bhi) = (ca + span * t0, ca + span * t1);
                 let (blo, bhi) = (blo.min(bhi), blo.max(bhi));
                 let beds = wr.bed.get(wr.bed.partition_point(|p| p.0 < blo)..wr.bed.partition_point(|p| p.0 <= bhi)).unwrap_or_default();
-                let beds = beds.iter().filter(|p| t1 > t0 && p.1.is_some()).map(|p| (p.0 - ca) / span);
+                let beds = beds.iter().filter(|p| t1 > t0 && (p.1.is_some() || wr.fallback.is_none())).map(|p| (p.0 - ca) / span);
                 for t in steps.chain(beds) {
                     let m = Coord::new(ends[0].x + (ends[1].x - ends[0].x) * t, ends[0].y + (ends[1].y - ends[0].y) * t);
                     let along = b.along(side, m);
@@ -3175,5 +3176,51 @@ mod tests {
         assert!(frame(Some("nenhuma"), dipping).data() == plain.data(), "a bed layer that isn't there");
         assert!(frame(Some("batimetria"), |_, _| f32::NAN).data() == plain.data(), "a bed with no heights");
         assert!(frame(Some("batimetria"), dipping).data() != plain.data(), "a bed with heights");
+    }
+
+    #[test]
+    fn a_bed_still_being_read_draws_the_walls_as_without_one() {
+        // #2434: a bed layer whose data hasn't come yet gives the depth's basin, as no bed does,
+        // and says nothing (its frame is drawn again when the data lands).
+        let (mut m, b, g, res) = lake_over_bed(Some(50.0), dipping);
+        let plain = {
+            let mut m = m.clone();
+            if let Some(w) = m.view.terrain.as_mut().and_then(|t| t.block.as_mut()).and_then(|b| b.water.as_mut()) {
+                w.bed = None;
+            }
+            south_wall(&m, &b, &g, res, &water_runs(&m, &b, &g, res, 1.0, &Default::default())).0
+        };
+        if let Some(r) = m.layers.iter_mut().find(|l| l.name == "batimetria").and_then(|l| l.raster.as_mut()) {
+            r.data = None;
+        }
+        let before = crate::approximations::keep();
+        let water = water_runs(&m, &b, &g, res, 1.0, &Default::default());
+        let said = crate::approximations::take();
+        crate::approximations::restore(before);
+        assert!(said.is_empty(), "{said:?}");
+        assert!(south_wall(&m, &b, &g, res, &water).0.data() == plain.data());
+    }
+
+    #[test]
+    fn a_bed_without_heights_between_two_mesh_steps_breaks_the_water() {
+        // #2434: with no depth to fall back on, the bed's one sample without a height lies between
+        // two of the mesh's steps (every 25 m along the 100 m stretches), whose nearer samples have
+        // heights: the water still stops there.
+        let (m, b, g, res) = lake_over_bed(None, dipping);
+        let mut water = water_runs(&m, &b, &g, res, 1.0, &Default::default());
+        let key = b.side(0).0;
+        let along = |x: f64| b.along(key, Coord::new(x, -1000.0));
+        let [r] = &mut water[0][..] else { panic!("one stretch of water on the south side") };
+        r.bed = (-15..=15).map(|k| f64::from(k) * 20.0 - 10.0).map(|x| (along(x), (x != 10.0).then_some(940.0))).collect();
+        r.bed.sort_by(|p, q| p.0.total_cmp(&q.0));
+        let floor = |x: f64| r.floor_at(along(x), Coord::new(x, -1000.0));
+        assert_eq!((floor(0.0), floor(10.0), floor(25.0)), (Some(940.0), None, Some(940.0)));
+        let color = r.color;
+        let (pm, at) = south_wall(&m, &b, &g, res, &water);
+        let (px, py) = at(10.0, 970.0);
+        let c = pm.pixel(px, py).expect("in the picture").demultiply();
+        assert!(!is_water(c, color), "{c:?}");
+        let (px, py) = at(-100.0, 970.0);
+        assert!(is_water(pm.pixel(px, py).expect("in the picture").demultiply(), color));
     }
 }

@@ -1560,7 +1560,13 @@ fn delete_field(s: &mut Session, p: &Json) -> CmdResult {
         && bw.field.as_deref().is_some_and(|f| f.eq_ignore_ascii_case(&removed))
     {
         let note = match (bw.depth, bw.bed.clone()) {
-            (Some(d), _) => {
+            (Some(d), Some(bed)) => {
+                bw.field = None;
+                format!(
+                    "Block: its water's depths came from the deleted field {removed}, so its walls show the bed '{bed}' where it has heights and the water {d} m deep elsewhere"
+                )
+            }
+            (Some(d), None) => {
                 bw.field = None;
                 format!("Block: its water's depths came from the deleted field {removed}, so its walls show all of it {d} m deep")
             }

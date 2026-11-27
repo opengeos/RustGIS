@@ -214,8 +214,10 @@ depth or the `"depth"`, with the ramp, as without a bed, and no water without ei
 says along how many stretches and in how many water bodies. The bed alone is enough, without a
 depth or field. The water's shading runs from the level to the deepest point of each stretch.
 `map.terrain` refuses a bed that isn't a raster layer, or whose footprint misses the block's box
-(checked once its data is there), before the terrain changes. The bed is kept by name and follows
-its renames; removing it says the walls fall back to the depth or field meanwhile. A bed deeper
+(checked once its data is there; a bed still being read gives no floor until it is), before the
+terrain changes, and so a new box for the block that moves it off the bed it keeps. The bed is
+kept by name and follows its renames; removing it says the walls fall back to the depth or field
+meanwhile, and so does a project that opens without it. A bed deeper
 than the block's base is drawn at the base: give the block a larger `"depth"`. Only the walls show
 the bed: the ground over the water stays flat at its level. Saved projects require
 `terrain-block-water-bed`.
