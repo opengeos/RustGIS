@@ -1921,10 +1921,10 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                         let input_label = ui.label(tl!("Fit"));
                         let current = fit.kept();
                         egui::ComboBox::from_id_salt(("legend_fit", id))
-                            .selected_text(fit_label(current))
+                            .selected_text(tl!(current.label()))
                             .show_ui(ui, |ui| {
                                 for v in LegendFit::ALL {
-                                    if ui.selectable_label(current == v, fit_label(v)).clicked() && current != v {
+                                    if ui.selectable_label(current == v, tl!(v.label())).clicked() && current != v {
                                         update(app, json!({"fit": v.code()}));
                                     }
                                 }
@@ -3129,17 +3129,6 @@ fn first_ink(background: Option<&Background>, page: rustgis_engine::map::Rgba) -
     let shown = Color32::from_rgb(over(fill.r(), page.r()), over(fill.g(), page.g()), over(fill.b(), page.b()));
     let white = rustgis_engine::map::Rgba::rgb(0xFF, 0xFF, 0xFF);
     if crate::theme::contrast(shown, Color32::WHITE) > crate::theme::contrast(shown, crate::theme::c32(INK)) { white } else { INK }
-}
-
-/// A legend's fit as the Format pane writes it, in the words of [`LegendFit::label`] (which the
-/// command line and the docs use), each one here so it is translated.
-fn fit_label(fit: LegendFit) -> &'static str {
-    match fit.kept() {
-        LegendFit::Manual | LegendFit::Invalid => tl!("Manual"),
-        LegendFit::AdjustSize => tl!("Shrink the text"),
-        LegendFit::AdjustColumns => tl!("Add columns"),
-        LegendFit::AdjustColumnsAndSize => tl!("Add columns, then shrink the text"),
-    }
 }
 
 /// A row of a layout element's text size in points, within [`LAYOUT_TEXT_SIZE`], labelled `label`
@@ -4973,14 +4962,23 @@ mod tests {
         assert_eq!(set(h.state()).0, LegendFit::AdjustSize);
         assert_eq!(h.state().session.undo_depth(), depth + 1, "one step");
         assert_eq!(shown_fit(&h).as_deref(), Some("Shrink the text"));
+        pick(&mut h, "Add columns");
+        assert_eq!(set(h.state()).0, LegendFit::AdjustColumns);
+        assert_eq!(h.state().session.undo_depth(), depth + 2);
+        assert_eq!(shown_fit(&h).as_deref(), Some("Add columns"));
+        // Manual again, picked while another fit is set: a change, so one step.
+        pick(&mut h, "Manual");
+        assert_eq!(set(h.state()).0, LegendFit::Manual);
+        assert_eq!(h.state().session.undo_depth(), depth + 3);
+        assert_eq!(shown_fit(&h).as_deref(), Some("Manual"));
         pick(&mut h, "Add columns, then shrink the text");
         assert_eq!(set(h.state()).0, LegendFit::AdjustColumnsAndSize);
-        assert_eq!(h.state().session.undo_depth(), depth + 2);
+        assert_eq!(h.state().session.undo_depth(), depth + 4);
         assert_eq!(shown_fit(&h).as_deref(), Some("Add columns, then shrink the text"));
         h.get_by_role_and_label(Role::CheckBox, "Layer names").click();
         h.run_steps(3);
         assert_eq!(set(h.state()).1, LayerNames::Hidden);
-        assert_eq!(h.state().session.undo_depth(), depth + 3);
+        assert_eq!(h.state().session.undo_depth(), depth + 5);
         assert_eq!(names_ticked(&h), Some(Toggled::False));
         // Past the most columns, set as assistive technology does: kept at six, in one step.
         let (node, tree) = h.get_by_role_and_label(Role::SpinButton, "Columns").accesskit_node().locate();
@@ -4992,7 +4990,7 @@ mod tests {
         }));
         h.run_steps(3);
         assert_eq!(set(h.state()), (LegendFit::AdjustColumnsAndSize, LayerNames::Hidden, 6));
-        assert_eq!(h.state().session.undo_depth(), depth + 4);
+        assert_eq!(h.state().session.undo_depth(), depth + 6);
         h.state_mut().run("edit.undo", json!({})).unwrap();
         assert_eq!(set(h.state()), (LegendFit::AdjustColumnsAndSize, LayerNames::Hidden, 1), "one step undoes the columns alone");
     }
