@@ -14,8 +14,8 @@ pub(super) fn review_step(ui: &mut egui::Ui, d: &Draft) {
         };
         row(tl!("Size"), size_label(&d.size));
         if d.figure() {
-            // A figure draws a reference of its own, so the figure note's "caption" doesn't cover
-            // one set on a sheet.
+            // The figure note sends a sheet's texts to the caption. Its reference doesn't go there
+            // (the figure draws the default one), so it is said here.
             let unused = if d.no_reference {
                 Some(tl!("\"No cartographic reference\" isn't used: a figure takes the default reference"))
             } else {
