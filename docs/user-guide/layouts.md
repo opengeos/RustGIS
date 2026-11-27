@@ -374,14 +374,15 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
     time, down to 4 points, until they fit; **Add columns** (`"adjustColumns"`) adds columns, up to
     six, until they fit, never more than fit across the box, so columns never run into each other
     because a column was added; **Add columns, then shrink the text** (`"adjustColumnsAndSize"`)
-    adds columns first. Under a fit, **Text size** is the size the text shrinks from and
-    **Columns** the fewest columns it starts at; both stay settable. The title keeps its size, and
-    point symbols keep the size the map draws them at (a row is never shorter than its symbol), but
-    a web layer's legend picture and the length and height of line and polygon swatches shrink
-    with the text. A fitted legend is drawn just as a manual one of the size and columns it fitted
-    to, in the layout view and every export, and it fits itself again on every draw, so when the
-    map's layers change it follows them. A legend that can't fit even at 4 points or in the most
-    columns its box takes says so, naming what it tried; one that fits says nothing.
+    adds columns first. Under a fit, **Text size** is the size the text shrinks from. **Columns**
+    is the fewest columns a fit that adds columns starts at; under **Shrink the text** the rows are
+    laid in exactly the columns set. Both stay settable. The title keeps its size, and point
+    symbols keep the size the map draws them at (a row is never shorter than its symbol), but a web
+    layer's legend picture and the length and height of line and polygon swatches shrink with the
+    text. A fitted legend is drawn just as a manual one of the size and columns it fitted to, in
+    the layout view and every export, and it fits itself again on every draw, so when the map's
+    layers change it follows them. A legend that can't fit even at 4 points or in the most columns
+    its box takes says so, naming what it tried; one that fits says nothing.
   - **Layer names** (`"showLayerNames"`, on by default): off, the name over each layer's classes,
     and over a web layer's legend picture, is left off. A layer drawn in one symbol keeps its name
     beside its swatch, since that is what labels it; classes that carry no label of their own

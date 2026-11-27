@@ -24,9 +24,9 @@ description: Make a printable page layout — map frame, title, legend, north ar
    `"subdivisions"` (0–10), `"divisionsBeforeZero"` (0–2), `"labelPosition"` (`"above"`, `"below"`), `"unitLabel"`
    (text; `""` for none), `"unitLabelPosition"` (`"afterLabels"`, `"afterBar"`, `"above"`, `"below"`), `"decimals"`
    (`"auto"`, the default, or 0–3 fixed with the thousands set apart, as a chart's), `"textSize"` (4–100 pt, its
-   labels' size) and `"fit"` (`"adjustDivisionValue"`, `"adjustDivision"`, `"adjustWidth"`).
-   A `"legend"` can take `"columns"` (1–6), `"fit"` (`"manual"`, `"adjustSize"`, `"adjustColumns"`,
-   `"adjustColumnsAndSize"`: shrink its text or add columns to fit its box) and `"showLayerNames": false`. A `"text"` or `"dynamicText"` can take
+   labels' size) and `"fit"` (`"adjustDivisionValue"`, `"adjustDivision"`, `"adjustWidth"`). A `"legend"` can take
+   `"columns"` (1–6), `"fit"` (`"manual"`, `"adjustSize"`, `"adjustColumns"`, `"adjustColumnsAndSize"`: shrink its
+   text or add columns to fit its box) and `"showLayerNames": false`. A `"text"` or `"dynamicText"` can take
    `"valign"` (`"top"`, `"middle"`, `"bottom"`), `"lineSpacing"` (0.5–3, default 1) and `"case"`
    (`"none"`, `"upper"`, `"lower"`; applied when drawn, the text kept as typed). `"grid"` adds a graticule to the frame
    (`"style": "ticks"` for neatline ticks, `"format": "dms"`, `"edges"`).

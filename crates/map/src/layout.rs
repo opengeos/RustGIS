@@ -4480,9 +4480,9 @@ mod tests {
         serde_json::from_value(serde_json::json!({"Legend": {"frame": 1, "title": "L", "columns": columns}})).unwrap()
     }
 
-    /// A legend's fit and layer names: left out at their defaults, so a legend saved before saves byte
-    /// for byte; written and read back when set; and a hand-edited value of the wrong kind or not a name
-    /// loads as the default, counted. Four to six columns are kept now.
+    /// A legend's fit and layer names: left out at their defaults, so a legend saved before saves
+    /// byte for byte; written and read back when set; and a hand-edited value of the wrong kind or
+    /// not a name loads as the default, counted. Four to six columns are kept now.
     #[test]
     fn legend_fit_and_layer_names_save_only_when_set_and_load_into_range() {
         use serde_json::json;
