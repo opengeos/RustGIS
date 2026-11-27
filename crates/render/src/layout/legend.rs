@@ -724,12 +724,13 @@ pub(super) fn beyond(measured: f32, room: f32, size: f32) -> bool {
 /// legend measures it a pixel a point, as it always has.
 ///
 /// - Manual (and a value that is no fit): the columns and size as set.
-/// - adjustSize: in the columns set, the largest that fits of `text_size` and the sizes a quarter
-///   point apart below it down to [`LAYOUT_TEXT_SIZE`]'s least; else that least.
+/// - adjustSize: in the columns set, the size [`largest_fitting`] finds among `text_size` and the
+///   sizes a quarter point apart below it down to [`LAYOUT_TEXT_SIZE`]'s least (the largest that
+///   fits, as a rule); else that least.
 /// - adjustColumns: at `text_size`, the fewest columns from those set up to [`MAX_LEGEND_COLUMNS`]
 ///   that fit; else the most whose width still fits across (those set when none does), so a fit
 ///   never adds a column the box hasn't the width for.
-/// - adjustColumnsAndSize: the largest of those sizes at which some of those columns fit, in the
+/// - adjustColumnsAndSize: the size found the same way at which some of those columns fit, in the
 ///   fewest that do; else the least size, in the most columns that fit across at it.
 ///
 /// A fitted legend is drawn as a manual legend of the columns and size returned, and `too_wide`
@@ -832,10 +833,13 @@ impl Trials<'_, '_> {
 }
 
 /// Of `text_size` and the sizes a step ([`LEGEND_FIT_STEP_PT`]) apart below it down to
-/// [`LAYOUT_TEXT_SIZE`]'s least (that least the last, where the steps skip it), the largest that
-/// `try_at` says fits, else the least. The list holds at most 385 sizes, `text_size` being in range,
-/// and is halved, so `try_at` is asked at most 11 times. Each answer is one `try_at` measured, so a
-/// size called fitting fits.
+/// [`LAYOUT_TEXT_SIZE`]'s least (that least the last, where the steps skip it), one that `try_at`
+/// says fits, found by halving the list, else the least. That is the largest that fits when a
+/// smaller text fits wherever a larger one does, which holds but for a row moved to another column
+/// by a rounding; then it can be a smaller size that fits, never one that doesn't. The list holds
+/// at most 385 sizes, `text_size` being in range, so `try_at` is asked at most 11 times, where
+/// trying each size in turn would ask up to 385. Each answer is one `try_at` measured, so a size
+/// called fitting fits.
 fn largest_fitting(text_size: f64, mut try_at: impl FnMut(f64) -> (Fitted, bool)) -> Fitted {
     let least = *LAYOUT_TEXT_SIZE.start();
     let most_steps = ((*LAYOUT_TEXT_SIZE.end() - least) / LEGEND_FIT_STEP_PT).ceil();
