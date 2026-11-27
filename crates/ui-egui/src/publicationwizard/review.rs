@@ -14,6 +14,16 @@ pub(super) fn review_step(ui: &mut egui::Ui, d: &Draft) {
         };
         row(tl!("Size"), size_label(&d.size));
         if d.figure() {
+            // A figure draws a reference of its own, so the figure note's "caption" doesn't cover
+            // one set on a sheet.
+            let unused = if d.no_reference {
+                Some(tl!("\"No cartographic reference\" isn't used: a figure takes the default reference"))
+            } else {
+                lines(&d.reference).next().map(|_| tl!("The lines typed aren't used: a figure takes the default reference"))
+            };
+            if let Some(unused) = unused {
+                row(tl!("Reference"), unused.to_string());
+            }
             return;
         }
         let turned = match d.orientation {
