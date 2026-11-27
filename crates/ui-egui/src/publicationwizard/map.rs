@@ -26,46 +26,49 @@ pub(super) fn map_step(ui: &mut egui::Ui, s: &Session, d: &mut Draft) {
     // Create, as it walks the rows under a definition query.
     let framable = || map.layers.iter().rev().filter(|l| !l.extent().is_empty());
     egui::Grid::new("publication_wizard_map").num_columns(2).spacing(egui::vec2(8.0, 8.0)).show(ui, |ui| {
+        // A row for each choice, so the label sits beside the first one.
         ui.label(tl!("Map extent"));
-        ui.vertical(|ui| {
-            if ui.radio(d.area == Area::View, tl!("View")).on_hover_text(tl!("What the map view shows.")).clicked() {
-                d.area = Area::View;
-            }
-            ui.horizontal(|ui| {
-                let picked = match &d.area {
-                    Area::Layer { map: name, id } if *name == map.name => Some(*id),
-                    _ => None,
-                };
-                let top = framable().next().map(|l| l.id);
-                if ui.add_enabled(top.is_some(), egui::RadioButton::new(matches!(d.area, Area::Layer { .. }), tl!("Layer"))).clicked()
-                    && let Some(id) = picked.or(top)
-                {
-                    d.area = Area::Layer { map: map.name.clone(), id };
-                }
-                if let Some(id) = picked {
-                    let shown = framable().find(|l| l.id == id).map_or_else(String::new, |l| l.name.clone());
-                    egui::ComboBox::from_id_salt("publication_wizard_map_layer")
-                        .selected_text(shown)
-                        .width(ui.available_width().min(180.0))
-                        .show_ui(ui, |ui| {
-                            for l in framable() {
-                                if ui.selectable_label(l.id == id, l.name.as_str()).clicked() {
-                                    d.area = Area::Layer { map: map.name.clone(), id: l.id };
-                                }
-                            }
-                        });
-                }
-            });
-            let selection = egui::RadioButton::new(matches!(d.area, Area::Selection { .. }), tl!("Selection"));
-            if ui
-                .add_enabled(map.selection_count() > 0, selection)
-                .on_hover_text(tl!("The selected features."))
-                .on_disabled_hover_text(tl!("Nothing is selected in the map."))
-                .clicked()
+        if ui.radio(d.area == Area::View, tl!("View")).on_hover_text(tl!("What the map view shows.")).clicked() {
+            d.area = Area::View;
+        }
+        ui.end_row();
+        ui.label("");
+        ui.horizontal(|ui| {
+            let picked = match &d.area {
+                Area::Layer { map: name, id } if *name == map.name => Some(*id),
+                _ => None,
+            };
+            let top = framable().next().map(|l| l.id);
+            if ui.add_enabled(top.is_some(), egui::RadioButton::new(matches!(d.area, Area::Layer { .. }), tl!("Layer"))).clicked()
+                && let Some(id) = picked.or(top)
             {
-                d.area = Area::Selection { map: map.name.clone() };
+                d.area = Area::Layer { map: map.name.clone(), id };
+            }
+            if let Some(id) = picked {
+                let shown = framable().find(|l| l.id == id).map_or_else(String::new, |l| l.name.clone());
+                egui::ComboBox::from_id_salt("publication_wizard_map_layer")
+                    .selected_text(shown)
+                    .width(ui.available_width().min(180.0))
+                    .show_ui(ui, |ui| {
+                        for l in framable() {
+                            if ui.selectable_label(l.id == id, l.name.as_str()).clicked() {
+                                d.area = Area::Layer { map: map.name.clone(), id: l.id };
+                            }
+                        }
+                    });
             }
         });
+        ui.end_row();
+        ui.label("");
+        let selection = egui::RadioButton::new(matches!(d.area, Area::Selection { .. }), tl!("Selection"));
+        if ui
+            .add_enabled(map.selection_count() > 0, selection)
+            .on_hover_text(tl!("The selected features."))
+            .on_disabled_hover_text(tl!("Nothing is selected in the map."))
+            .clicked()
+        {
+            d.area = Area::Selection { map: map.name.clone() };
+        }
         ui.end_row();
         let label = ui.label(tl!("Name"));
         ui.add(egui::TextEdit::singleline(&mut d.name).hint_text(DEFAULT_NAME).desired_width(field_width(ui))).labelled_by(label.id);
