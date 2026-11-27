@@ -4,6 +4,8 @@ use super::{
 };
 use crate::RustGisApp;
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect, vec2};
+use rustgis_engine::map::Rgba;
+use rustgis_engine::map::layout::{Background, ElementKind, INK, Layout};
 use serde_json::json;
 use std::{cell::Cell, rc::Rc};
 
@@ -24,26 +26,125 @@ fn frame_approximations_are_said_once_a_kind() {
     assert_eq!(n, 1);
 }
 
+/// A table at (10, 10, 40, 40) mm, centred on (30, 30), on a page of `paper`: the element whose
+/// ink starts, over whatever `under` adds before it and under whatever `over` adds after it.
+fn inked(paper: Rgba, background: Option<Rgba>, under: impl FnOnce(&mut Layout), over: impl FnOnce(&mut Layout)) -> Rgba {
+    let mut layout = Layout::new("Ink", 297.0, 210.0);
+    layout.paper = Some(paper);
+    under(&mut layout);
+    let id = layout.add("Table", (10.0, 10.0, 40.0, 40.0), ElementKind::Table { frame: 1, layer: "Cities".into(), rows: 3, color: None });
+    layout.element_mut(id).unwrap().background = background.map(Background::filled);
+    over(&mut layout);
+    first_ink(&layout, layout.element(id).unwrap())
+}
+
+const PAGE: Rgba = Rgba::rgb(0xFF, 0xFF, 0xFF);
+const NAVY: Rgba = Rgba::rgb(0x0B, 0x1B, 0x2B);
+const DARK: Rgba = Rgba::rgb(0x1E, 0x29, 0x3B);
+const CLEAR: Rgba = Rgba::new(0, 0, 0, 0);
+
+fn rectangle(fill: Rgba) -> ElementKind {
+    ElementKind::Rectangle { fill, outline: INK, width: 0.0, radius: 0.0, dash: None }
+}
+
+fn nothing(_: &mut Layout) {}
+
+/// A rectangle of `fill` covering the whole table.
+fn covering(fill: Rgba) -> impl FnOnce(&mut Layout) {
+    move |l| {
+        l.add("Box", (0.0, 0.0, 100.0, 100.0), rectangle(fill));
+    }
+}
+
 /// Ink starts white only over a dark background, so turning it on never hides the text (#2257).
 #[test]
 fn ink_starts_readable_on_its_background() {
-    use rustgis_engine::map::Rgba;
-    use rustgis_engine::map::layout::{Background, INK};
-    let white = Rgba::rgb(0xFF, 0xFF, 0xFF);
-    let on = |fill: Rgba| first_ink(Some(&Background { fill, ..serde_json::from_value(json!({})).unwrap() }), white);
-    assert_eq!(first_ink(None, white), INK);
-    assert_eq!(on(white), INK);
-    assert_eq!(on(Rgba::rgb(0x1E, 0x29, 0x3B)), white);
+    let on = |fill| inked(PAGE, Some(fill), nothing, nothing);
+    assert_eq!(inked(PAGE, None, nothing, nothing), INK);
+    assert_eq!(on(PAGE), INK);
+    assert_eq!(on(DARK), PAGE);
     // A dark fill seen through mostly: the page shows, so it reads as light.
     assert_eq!(on(Rgba::new(0x1E, 0x29, 0x3B, 0x20)), INK);
-    assert_eq!(on(Rgba::new(0x1E, 0x29, 0x3B, 0xE0)), white);
+    assert_eq!(on(Rgba::new(0x1E, 0x29, 0x3B, 0xE0)), PAGE);
     // On a dark page (#2855): white with no background, or over a fill the page shows through;
     // dark grey over a light fill.
-    let navy = Rgba::rgb(0x0B, 0x1B, 0x2B);
-    let on_navy = |fill: Rgba| first_ink(Some(&Background { fill, ..serde_json::from_value(json!({})).unwrap() }), navy);
-    assert_eq!(first_ink(None, navy), white);
-    assert_eq!(on_navy(Rgba::new(0xFF, 0xFF, 0xFF, 0x20)), white);
-    assert_eq!(on_navy(white), INK);
+    assert_eq!(inked(NAVY, None, nothing, nothing), PAGE);
+    assert_eq!(inked(NAVY, Some(Rgba::new(0xFF, 0xFF, 0xFF, 0x20)), nothing, nothing), PAGE);
+    assert_eq!(inked(NAVY, Some(PAGE), nothing, nothing), INK);
+}
+
+/// The fills shown under an element, in drawing order, decide its starting ink (#2953).
+#[test]
+fn ink_starts_readable_over_the_elements_under_it() {
+    assert_eq!(inked(NAVY, None, covering(PAGE), nothing), INK, "a white box on a dark page");
+    assert_eq!(inked(PAGE, None, covering(DARK), nothing), PAGE, "a dark box on a white page");
+    assert_eq!(inked(PAGE, Some(PAGE), covering(DARK), nothing), INK, "its own background is over the box");
+    assert_eq!(inked(PAGE, None, covering(Rgba::new(0x1E, 0x29, 0x3B, 0x20)), nothing), INK, "the page shows through");
+    let two = |l: &mut Layout| {
+        covering(DARK)(l);
+        covering(PAGE)(l);
+    };
+    assert_eq!(inked(PAGE, None, two, nothing), INK, "the later box is over the earlier one");
+    assert_eq!(inked(PAGE, None, nothing, covering(DARK)), INK, "a box drawn over it isn't under its text");
+    let hidden = |l: &mut Layout| {
+        covering(DARK)(l);
+        l.elements[0].visible = false;
+    };
+    assert_eq!(inked(PAGE, None, hidden, nothing), INK, "a hidden box shows nothing");
+    let aside = |l: &mut Layout| {
+        l.add("Box", (0.0, 0.0, 25.0, 25.0), rectangle(DARK));
+    };
+    assert_eq!(inked(PAGE, None, aside, nothing), INK, "a box short of the centre");
+}
+
+/// An ellipse covers only its own shape, and a background reaches as far as its padding and
+/// turns with its text (#2953).
+#[test]
+fn ink_reads_each_shape_as_drawn() {
+    let ellipse = |rect| {
+        move |l: &mut Layout| {
+            l.add("Ellipse", rect, ElementKind::Ellipse { fill: DARK, outline: INK, width: 0.0, dash: None });
+        }
+    };
+    assert_eq!(inked(PAGE, None, ellipse((0.0, 0.0, 60.0, 60.0)), nothing), PAGE, "the centre is inside");
+    // The centre (30, 30) is in this ellipse's box, near its corner, outside the ellipse.
+    assert_eq!(inked(PAGE, None, ellipse((28.0, 28.0, 60.0, 60.0)), nothing), INK, "only in its box");
+    let padded = |padding| {
+        move |l: &mut Layout| {
+            let id = l.add("Box", (0.0, 0.0, 25.0, 60.0), rectangle(CLEAR));
+            l.element_mut(id).unwrap().background = Some(Background { padding, ..Background::filled(DARK) });
+        }
+    };
+    assert_eq!(inked(PAGE, None, padded(10.0), nothing), PAGE, "reached by the padding");
+    assert_eq!(inked(PAGE, None, padded(0.0), nothing), INK);
+    // 10 by 60 mm centred on (50, 30): turned a quarter, 60 by 10, over (30, 30).
+    let turned = |turn: f64| {
+        move |l: &mut Layout| {
+            let mut kind = ElementKind::text("N", 8.0, INK, false);
+            if let ElementKind::Text { rotation, .. } = &mut kind {
+                *rotation = turn;
+            }
+            let id = l.add("Text", (45.0, 0.0, 10.0, 60.0), kind);
+            l.element_mut(id).unwrap().background = Some(Background::filled(DARK));
+        }
+    };
+    assert_eq!(inked(PAGE, None, turned(90.0), nothing), PAGE, "turned over the centre");
+    assert_eq!(inked(PAGE, None, turned(0.0), nothing), INK);
+}
+
+/// A map or a picture under an element has no one fill to read: the page decides, as before.
+#[test]
+fn ink_reads_no_map_or_picture() {
+    let picture = |l: &mut Layout| {
+        l.add("Picture", (0.0, 0.0, 100.0, 100.0), ElementKind::Picture { image: String::new() });
+    };
+    assert_eq!(inked(PAGE, None, picture, nothing), INK);
+    assert_eq!(inked(NAVY, None, picture, nothing), PAGE);
+    let map = |l: &mut Layout| {
+        let kind = serde_json::from_value(json!({"MapFrame": {"map": "Map", "center": {"x": 0.0, "y": 0.0}, "scale": 1000000.0}}));
+        l.add("Map", (0.0, 0.0, 100.0, 100.0), kind.unwrap());
+    };
+    assert_eq!(inked(NAVY, None, map, nothing), PAGE);
 }
 
 /// In the browser, a page drawn while its frames' tiles were on their way is drawn again as
@@ -1755,6 +1856,90 @@ fn a_legend_leaves_out_the_layers_unticked() {
     h.get_by_role_and_label(Role::CheckBox, "Rivers").click();
     h.run_steps(2);
     assert_eq!(left_out(&h), ["Cities"]);
+}
+
+/// A legend's Fit and Layer names in the Format pane: shown at their defaults on opening and
+/// sending nothing then, each change one undo step, picking the current fit none, and a column
+/// count past six set at six.
+#[test]
+fn a_legends_fit_and_layer_names_are_one_undo_step_each() {
+    use egui::accesskit::{Action, ActionData, ActionRequest, Role, Toggled};
+    use egui_kittest::kittest::{NodeT, Queryable};
+    use rustgis_engine::map::layout::{ElementKind, LayerNames, LegendFit};
+    let mut app = RustGisApp::with_sample();
+    app.run("layout.new", json!({"name": "Key", "template": "map"})).unwrap();
+    let li = app.session.active_layout.unwrap();
+    let legend = app.session.project.layouts[li].elements.iter().find(|e| matches!(e.kind, ElementKind::Legend { .. })).unwrap().id;
+    app.layout.selected = Some(legend);
+    let set = |app: &RustGisApp| match &app.session.project.layouts[li].element(legend).unwrap().kind {
+        ElementKind::Legend { fit, show_layer_names, columns, .. } => (*fit, *show_layer_names, *columns),
+        other => panic!("{other:?}"),
+    };
+    let mut fonts = false;
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 900.0)).build_ui_state(
+        move |ui, app: &mut RustGisApp| {
+            if !fonts {
+                crate::theme::install_fonts(ui.ctx(), &[], None);
+                fonts = true;
+                return;
+            }
+            with_format(app, ui);
+        },
+        app,
+    );
+    let depth = h.state().session.undo_depth();
+    h.run_steps(3);
+    // Opening the pane sends nothing, and shows a plain legend's defaults.
+    assert_eq!(h.state().session.undo_depth(), depth, "opening the pane changed nothing");
+    assert_eq!(set(h.state()), (LegendFit::Manual, LayerNames::Shown, 1));
+    let shown_fit = |h: &egui_kittest::Harness<'_, RustGisApp>| h.get_by_role_and_label(Role::ComboBox, "Fit").value();
+    let names_ticked =
+        |h: &egui_kittest::Harness<'_, RustGisApp>| h.get_by_role_and_label(Role::CheckBox, "Layer names").accesskit_node().toggled();
+    assert_eq!(shown_fit(&h).as_deref(), Some("Manual"));
+    assert_eq!(names_ticked(&h), Some(Toggled::True));
+    let pick = |h: &mut egui_kittest::Harness<'_, RustGisApp>, item: &str| {
+        h.get_by_role_and_label(Role::ComboBox, "Fit").click();
+        h.run_steps(2);
+        h.get_by_label(item).click();
+        h.run_steps(3);
+    };
+    pick(&mut h, "Manual");
+    assert_eq!(h.state().session.undo_depth(), depth, "the fit already set is no step");
+    pick(&mut h, "Shrink the text");
+    assert_eq!(set(h.state()).0, LegendFit::AdjustSize);
+    assert_eq!(h.state().session.undo_depth(), depth + 1, "one step");
+    assert_eq!(shown_fit(&h).as_deref(), Some("Shrink the text"));
+    pick(&mut h, "Add columns");
+    assert_eq!(set(h.state()).0, LegendFit::AdjustColumns);
+    assert_eq!(h.state().session.undo_depth(), depth + 2);
+    assert_eq!(shown_fit(&h).as_deref(), Some("Add columns"));
+    // Manual again, picked while another fit is set: a change, so one step.
+    pick(&mut h, "Manual");
+    assert_eq!(set(h.state()).0, LegendFit::Manual);
+    assert_eq!(h.state().session.undo_depth(), depth + 3);
+    assert_eq!(shown_fit(&h).as_deref(), Some("Manual"));
+    pick(&mut h, "Add columns, then shrink the text");
+    assert_eq!(set(h.state()).0, LegendFit::AdjustColumnsAndSize);
+    assert_eq!(h.state().session.undo_depth(), depth + 4);
+    assert_eq!(shown_fit(&h).as_deref(), Some("Add columns, then shrink the text"));
+    h.get_by_role_and_label(Role::CheckBox, "Layer names").click();
+    h.run_steps(3);
+    assert_eq!(set(h.state()).1, LayerNames::Hidden);
+    assert_eq!(h.state().session.undo_depth(), depth + 5);
+    assert_eq!(names_ticked(&h), Some(Toggled::False));
+    // Past the most columns, set as assistive technology does: kept at six, in one step.
+    let (node, tree) = h.get_by_role_and_label(Role::SpinButton, "Columns").accesskit_node().locate();
+    h.event(egui::Event::AccessKitActionRequest(ActionRequest {
+        action: Action::SetValue,
+        target_tree: tree,
+        target_node: node,
+        data: Some(ActionData::NumericValue(9.0)),
+    }));
+    h.run_steps(3);
+    assert_eq!(set(h.state()), (LegendFit::AdjustColumnsAndSize, LayerNames::Hidden, 6));
+    assert_eq!(h.state().session.undo_depth(), depth + 6);
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    assert_eq!(set(h.state()), (LegendFit::AdjustColumnsAndSize, LayerNames::Hidden, 1), "one step undoes the columns alone");
 }
 
 /// The layout view with the Format pane beside it, as the app draws them: after following

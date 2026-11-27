@@ -279,6 +279,12 @@ without its own (#2557). A saved `layout.update` that gives a frame a `border` o
 too, since an older reader warns that it ignores the key; `"border": null` only gives the default
 back and needs nothing. A saved `layout.import` whose `text` has such a frame requires it as well.
 
+Projects with section lines on a map frame (`sections`) require `layout-section`, so an older
+reader refuses them instead of drawing the frame without them and saving it again so (#2863). A
+saved `layout.addElement` of a section requires it too, and so does a `layout.update` with a
+`section` object, which an older reader warns that it ignores. A saved `layout.import` whose `text`
+has such a frame requires it as well.
+
 Projects with a legend, a scale bar or a grid whose text isn't its default size (`text_size` on
 a legend, 9 points by default, or on a scale bar, 8; `label_size` on a frame's grid, 8) require
 `layout-text-size`, so an older reader refuses them instead of drawing that text at the default
@@ -288,6 +294,15 @@ a scale bar `textSize`, or a grid `labelSize`, of another size requires it too, 
 nothing. A saved `layout.update` isn't told which element it changes, so any `textSize` but
 `null` requires it there. A saved `layout.import` whose `text` has such an element requires it
 as well.
+
+Projects with a legend that fits its box by shrinking its text or adding columns, that leaves its
+layer names off, or that has more than three columns (`fit`, `show_layer_names`, `columns` on a
+legend element) require `layout-legend-fit`, so an older reader refuses them instead of drawing
+the legend at its size, its names shown and in three columns, and saving it again without them.
+Saved `layout.addElement` and `layout.update` commands that set one require it too;
+`"fit": "manual"`, `"showLayerNames": true`, three columns or fewer, `null`, and a scale bar's own
+`fit` values need nothing. A saved `layout.import` whose `text` has such a legend requires it as
+well, and a layout file (`.rgislayout`) with one lists it in its header.
 
 Projects with a scale bar that has subdivisions, divisions before zero, labels below, a unit
 label of its own or placed elsewhere, decimals or a fit other than the defaults
@@ -341,6 +356,17 @@ files require `crs-wkt` when a saved system's definition doesn't place points as
 transformation the definition can't hold, or no definition. An older reader refuses those
 instead of misplacing the layer. Others need nothing: an older reader opens them by the
 definition and, saving them again, drops only the WKT.
+
+A saved `layout.publication` that leaves out or sets up a part of the sheet (`grid` or
+`scaleBar` as `"none"` or an object that gives something, or `northArrow` as any object, #3094)
+requires `layout-publication-parts`, so an older reader refuses it instead of making the default
+sheet or failing on the object. `null`, a `grid` or `scaleBar` of `{}`, and the north arrow given
+as the text `"auto"`, `"always"` or `"none"` need nothing.
+
+A saved `layout.publication` that leaves out or sets up its legend (`legend` as `"none"` or an
+object that gives something, #3095) requires `layout-publication-legend`, so an older reader
+refuses it instead of making the default legend. `null`, a `legend` of `{}`, a blank `title` and
+an empty `exclude` need nothing.
 
 ## New dependencies
 

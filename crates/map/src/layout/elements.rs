@@ -15,6 +15,10 @@ pub enum ElementKind {
         shape: FrameShape,
         #[serde(default)]
         grid: Option<Grid>,
+        /// The section lines drawn over the frame (#2863). Left out with none, so layouts saved
+        /// before keep their bytes.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        sections: Vec<Section>,
         /// Another frame whose extent this one outlines (an extent indicator).
         #[serde(default)]
         extent_of: Option<u32>,
@@ -114,7 +118,9 @@ pub enum ElementKind {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         exclude: Vec<String>,
         /// The columns its rows are laid in, 1 to [`MAX_LEGEND_COLUMNS`], under its title: as even
-        /// as they can be, a layer's name staying with the row under it.
+        /// as they can be, a layer's name staying with the row under it. Under a fit that adds
+        /// columns ([`LegendFit::AdjustColumns`], [`LegendFit::AdjustColumnsAndSize`]), the fewest
+        /// it starts from.
         #[serde(default = "one_column", skip_serializing_if = "is_one_column")]
         columns: usize,
         /// The label it shows for a layer instead of the layer's name, by the layer's name (any
@@ -132,6 +138,15 @@ pub enum ElementKind {
         /// and left out then, so layouts saved before keep their bytes.
         #[serde(default = "legend_text_pt", skip_serializing_if = "is_legend_text_pt")]
         text_size: f64,
+        /// How its rows are fitted into its box: in its columns and at its text size as set
+        /// (manual), or with its text shrunk, columns added, or both. Left out when manual, so
+        /// layouts saved before keep their bytes.
+        #[serde(default, skip_serializing_if = "LegendFit::is_manual")]
+        fit: LegendFit,
+        /// Whether it shows each layer's name over the layer's classes. Left out when shown, so
+        /// layouts saved before keep their bytes.
+        #[serde(default, skip_serializing_if = "LayerNames::is_shown")]
+        show_layer_names: LayerNames,
     },
     /// The colour scale of a raster layer in a frame's map: a gradient bar for a stretch, steps
     /// for classes, a block per value for unique values and colour tables (#326).
@@ -403,6 +418,16 @@ impl ElementKind {
         valign.kept() != TextVAlign::Top || case.kept() != TextCase::None || line_spacing_in_range(*line_spacing) != LINE_SPACING
     }
 
+    /// Whether this is a legend whose fit is not manual, whose layer names are left off, or whose
+    /// columns are more than [`LEGEND_COLUMNS_BEFORE_FIT`], once brought into range as
+    /// [`Layout::clamp`] does: what a layout file needs a newer reader for.
+    pub fn legend_uses_fit(&self) -> bool {
+        let ElementKind::Legend { fit, show_layer_names, columns, .. } = self else {
+            return false;
+        };
+        !fit.is_manual() || !show_layer_names.is_shown() || legend_columns_in_range(*columns) > LEGEND_COLUMNS_BEFORE_FIT
+    }
+
     /// Whether this is a scale bar with any of the details set: subdivisions, divisions before
     /// zero, a label or unit label placement, a unit label, decimals or a fit. Its text size
     /// isn't one: [`ElementKind::has_custom_text_size`] tells that.
@@ -533,6 +558,11 @@ impl ElementKind {
     pub fn has_custom_border(&self) -> bool {
         matches!(self, ElementKind::MapFrame { border_color, border_width, .. }
             if !is_frame_border_color(border_color) || !is_frame_border_width(border_width))
+    }
+
+    /// Whether it is a map frame with section lines (#2863).
+    pub fn has_sections(&self) -> bool {
+        matches!(self, ElementKind::MapFrame { sections, .. } if !sections.is_empty())
     }
 
     /// The map frame this element belongs to.

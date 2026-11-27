@@ -844,6 +844,7 @@ fn elements_add_hit_and_remove_with_surrounds() {
             scale: 1e8,
             shape: FrameShape::Rectangle,
             grid: None,
+            sections: Vec::new(),
             extent_of: None,
             extent_color: INDICATOR_COLOR,
             extent_width: INDICATOR_WIDTH,
@@ -889,6 +890,110 @@ fn a_legends_text_size_defaults_and_is_kept_in_range() {
     let saved = serde_json::to_string(&big).unwrap();
     assert!(saved.contains(r#""text_size":100.0"#), "{saved}");
     assert_eq!(serde_json::from_str::<Layout>(&saved).unwrap(), big);
+}
+
+/// A legend of `columns` columns, as a file would hold it, otherwise plain.
+fn legend_with_columns(columns: usize) -> ElementKind {
+    serde_json::from_value(serde_json::json!({"Legend": {"frame": 1, "title": "L", "columns": columns}})).unwrap()
+}
+
+/// A legend's fit and layer names: left out at their defaults, so a legend saved before saves
+/// byte for byte; written and read back when set; and a hand-edited value of the wrong kind or
+/// not a name loads as the default, counted. Four to six columns are kept now.
+#[test]
+fn legend_fit_and_layer_names_save_only_when_set_and_load_into_range() {
+    use serde_json::json;
+    for plain in [
+        r#"{"Legend":{"frame":1,"title":"L","all_classes":false,"hide_other":false}}"#,
+        r#"{"Legend":{"frame":1,"title":"","all_classes":true,"hide_other":true,"show_no_data":true,"exclude":["a"],"columns":3,"labels":{"a":"A"},"color":[1,2,3,255],"text_size":12.0}}"#,
+    ] {
+        let k: ElementKind = serde_json::from_str(plain).unwrap();
+        assert_eq!(serde_json::to_string(&k).unwrap(), plain);
+        assert!(!k.legend_uses_fit());
+    }
+    let plain: ElementKind = serde_json::from_str(r#"{"Legend":{"frame":1,"title":"L","all_classes":false,"hide_other":false}}"#).unwrap();
+    let plain_json = serde_json::to_string(&plain).unwrap();
+    let mut set = plain.clone();
+    if let ElementKind::Legend { fit, show_layer_names, .. } = &mut set {
+        (*fit, *show_layer_names) = (LegendFit::AdjustColumnsAndSize, LayerNames::Hidden);
+    }
+    let s = serde_json::to_string(&set).unwrap();
+    assert!(s.ends_with(r#""hide_other":false,"fit":"adjustColumnsAndSize","show_layer_names":false}}"#), "{s}");
+    assert_eq!(serde_json::from_str::<ElementKind>(&s).unwrap(), set);
+    assert!(set.legend_uses_fit());
+    for (name, f) in [(" ADJUSTSIZE ", LegendFit::AdjustSize), ("adjustColumns", LegendFit::AdjustColumns), ("Manual", LegendFit::Manual)] {
+        assert_eq!(LegendFit::from_name(name), Some(f), "{name}");
+    }
+    assert_eq!((LegendFit::from_name("adjustFrame"), LegendFit::from_name("adjustWidth")), (None, None));
+    assert_eq!(LegendFit::ALL.len(), 4);
+    for f in LegendFit::ALL {
+        assert_eq!(LegendFit::from_name(f.code()), Some(f), "{f:?}");
+    }
+    assert_eq!(LegendFit::ALL.map(LegendFit::label), ["Manual", "Shrink the text", "Add columns", "Add columns, then shrink the text"]);
+    assert_eq!((LegendFit::Invalid.kept(), LayerNames::Invalid.kept()), (LegendFit::Manual, LayerNames::Shown));
+    assert!(LayerNames::Invalid.shown() && LayerNames::from_shown(true).shown() && !LayerNames::from_shown(false).shown());
+    // An unclamped marker writes as the default, and needs nothing: byte for byte the plain one.
+    for (f, n) in
+        [(LegendFit::Invalid, LayerNames::Invalid), (LegendFit::Invalid, LayerNames::Shown), (LegendFit::Manual, LayerNames::Invalid)]
+    {
+        let mut odd = plain.clone();
+        if let ElementKind::Legend { fit, show_layer_names, .. } = &mut odd {
+            (*fit, *show_layer_names) = (f, n);
+        }
+        assert_eq!(serde_json::to_string(&odd).unwrap(), plain_json, "{f:?} {n:?}");
+        assert!(!odd.legend_uses_fit(), "{f:?} {n:?}");
+    }
+    // A hand-edited layout.
+    let extras = [
+        json!({"fit": "adjustFrame"}),                                // 2: manual, said
+        json!({"fit": 7}),                                            // 3: manual, said
+        json!({"fit": ["adjustSize"]}),                               // 4: manual, said
+        json!({"show_layer_names": "no"}),                            // 5: shown, said
+        json!({"show_layer_names": 0}),                               // 6: shown, said
+        json!({"columns": 5}),                                        // 7: kept, not said
+        json!({"columns": 9}),                                        // 8: 6, said
+        json!({"fit": " adjustcolumns ", "show_layer_names": false}), // 9: kept, not said
+        json!({"fit": null, "show_layer_names": null}),               // 10: defaults, not said
+    ];
+    let frame = json!({"id": 1, "name": "f", "x": 0, "y": 0, "w": 100, "h": 100,
+        "kind": {"MapFrame": {"map": "M", "center": {"x": 0, "y": 0}, "scale": 1e6}}});
+    let elements: Vec<_> = std::iter::once(frame)
+        .chain(extras.iter().enumerate().map(|(i, extra)| {
+            let mut legend = json!({"frame": 1, "title": "L", "all_classes": false, "hide_other": false});
+            legend.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            json!({"id": i + 2, "name": "l", "x": 0, "y": 0, "w": 50, "h": 50, "kind": {"Legend": legend}})
+        }))
+        .collect();
+    let mut l: Layout = serde_json::from_value(json!({"name": "x", "width": 297, "height": 210, "elements": elements})).unwrap();
+    let repairs = l.clamp();
+    let got = |id| match &l.element(id).unwrap().kind {
+        ElementKind::Legend { fit, show_layer_names, columns, .. } => (*fit, *show_layer_names, *columns),
+        k => panic!("{k:?}"),
+    };
+    use {LayerNames as N, LegendFit as F};
+    let want = [
+        (2, (F::Manual, N::Shown, 1)),
+        (3, (F::Manual, N::Shown, 1)),
+        (4, (F::Manual, N::Shown, 1)),
+        (5, (F::Manual, N::Shown, 1)),
+        (6, (F::Manual, N::Shown, 1)),
+        (7, (F::Manual, N::Shown, 5)),
+        (8, (F::Manual, N::Shown, 6)),
+        (9, (F::AdjustColumns, N::Hidden, 1)),
+        (10, (F::Manual, N::Shown, 1)),
+    ];
+    for (id, b) in want {
+        assert_eq!(got(id), b, "{id}");
+    }
+    assert_eq!((repairs.elements_adjusted, repairs.elements_cut), (6, 0));
+    let saved = serde_json::to_string(&l).unwrap();
+    assert!(
+        !saved.contains("adjustFrame") && saved.matches("\"fit\"").count() == 1 && saved.matches("show_layer_names").count() == 1,
+        "{saved}"
+    );
+    // Columns past the three a reader without the capability lays need it.
+    assert!(legend_with_columns(4).legend_uses_fit() && !legend_with_columns(3).legend_uses_fit());
+    assert!(legend_with_columns(MAX_LEGEND_COLUMNS).legend_uses_fit() && !legend_with_columns(0).legend_uses_fit());
 }
 
 #[test]
@@ -1193,6 +1298,7 @@ fn mgrs_labels_need_a_wgs84_utm_zone() {
                 scale: 25_000.0,
                 shape: FrameShape::Rectangle,
                 grid: Some(Grid { crs: crs.map(Into::into), kind, ..g.clone() }),
+                sections: Vec::new(),
                 extent_of: None,
                 extent_color: INDICATOR_COLOR,
                 extent_width: INDICATOR_WIDTH,
@@ -1548,6 +1654,49 @@ fn inks_are_saved_and_read_back() {
     assert_eq!(back, l);
     let mut text = ElementKind::text("t", 12.0, Rgba::rgb(0, 0, 0), false);
     assert!(!text.takes_ink() && text.ink_mut().is_none(), "a text's colour is its own option");
+}
+
+/// A frame's section lines (#2863): not written when none, read back as saved, and a hostile
+/// file's brought into range, a blank or repeated name given a free letter, with what was cut
+/// counted; a repaired frame needs nothing more.
+#[test]
+fn section_lines_are_saved_and_repaired() {
+    let frame = |sections: &str| -> Layout {
+        let text = format!(
+            r#"{{"name":"x","width":100,"height":100,"elements":[{{"id":1,"name":"f","x":0,"y":0,"w":50,"h":50,
+            "kind":{{"MapFrame":{{"map":"M","center":{{"x":0,"y":0}},"scale":1000000{sections}}}}}}}]}}"#
+        );
+        serde_json::from_str(&text).unwrap_or_else(|e| panic!("{e}"))
+    };
+    let held = |l: &Layout| match &l.elements[0].kind {
+        ElementKind::MapFrame { sections, .. } => sections.clone(),
+        _ => panic!("a map frame"),
+    };
+    let mut l = frame("");
+    assert!(!serde_json::to_string(&l).unwrap().contains("sections"), "none is not written");
+    assert!(l.clamp().is_empty() && !l.elements[0].kind.has_sections());
+    let one =
+        |name: &str| format!(r#"{{"name":"{name}","line":{{"Vertical":{{"x":1,"y":2}}}},"color":[1,2,3,255],"width":2,"dash":[4,2]}}"#);
+    let mut l = frame(&format!(r#","sections":[{}]"#, one("B")));
+    assert!(l.clamp().is_empty() && l.elements[0].kind.has_sections());
+    assert_eq!(held(&l)[0].line, SectionLine::Vertical(Coord::new(1.0, 2.0)));
+    assert_eq!(serde_json::from_str::<Layout>(&serde_json::to_string(&l).unwrap()).unwrap(), l);
+    // Spaces round a name are trimmed, which adjusts the frame; nothing of the name is cut.
+    let padded = format!("  {}  ", "n".repeat(MAX_SECTION_NAME));
+    let mut l = frame(&format!(r#","sections":[{}]"#, one(&padded)));
+    let repairs = l.clamp();
+    assert_eq!((repairs.elements_adjusted, repairs.elements_cut, held(&l)[0].name.as_str()), (1, 0, padded.trim()));
+    let hostile = r#"{"name":" a ","line":{"Horizontal":{"x":1e300,"y":-200}},"color":[0,0,0,255],"width":1e9}"#;
+    let long = "n".repeat(50);
+    let list = [hostile.to_string(), one("A"), one(""), one(&long)].into_iter().chain((0..40).map(|i| one(&format!("s{i}"))));
+    let mut l = frame(&format!(r#","sections":[{}]"#, list.collect::<Vec<_>>().join(",")));
+    let repairs = l.clamp();
+    assert_eq!((repairs.elements_adjusted, repairs.elements_cut), (1, 1));
+    let s = held(&l);
+    assert_eq!(s.len(), MAX_SECTIONS);
+    assert_eq!((s[0].name.as_str(), s[0].line.at(), s[0].width), ("a", Coord::new(-180.0, -90.0), SECTION_WIDTHS.1));
+    assert_eq!((s[1].name.as_str(), s[2].name.as_str(), s[3].name.len()), ("B", "C", MAX_SECTION_NAME), "the first A keeps its name");
+    assert!(l.clamp().is_empty(), "a repaired frame needs nothing more");
 }
 
 /// A text's block alignment, line spacing and case: left out of the file at their defaults, so a

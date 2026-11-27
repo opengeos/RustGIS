@@ -1514,6 +1514,7 @@ fn search_action(id: &str) -> Option<SearchAction> {
         "task.save" => SaveItem("task"),
         "share.exportMap" => Command("ui.exportMap"),
         "share.exportLayer" => Command("ui.exportLayer"),
+        "share.exportTable" => Command("ui.exportTable"),
         "share.exportRaster" => Command("ui.exportRaster"),
         "gp.run" => Command("ui.gp.open"),
         "gp.package" => SaveItem("gpPackage"),
@@ -1529,6 +1530,7 @@ fn search_action(id: &str) -> Option<SearchAction> {
         "raster.process" => Workflow("process"),
         "raster.editPixels" => Workflow("pixels"),
         "raster.measure" => Workflow("mensuration"),
+        "raster.mosaic" => Workflow("mosaic"),
         "analysis.suitability" => Workflow("suitability"),
         "analysis.viewshed" => Workflow("visibility"),
         "analysis.lineOfSight" => Workflow("lineOfSight"),
@@ -1587,6 +1589,9 @@ fn search_disabled(app: &RustGisApp, id: &str) -> Option<&'static str> {
     }
     if let Some(reason) = search_platform_disabled(id, cfg!(target_arch = "wasm32")) {
         return Some(reason);
+    }
+    if id == "share.exportTable" && app.session.project.tables.is_empty() {
+        return Some("the project has no standalone tables");
     }
     why_disabled(app, id).or_else(|| {
         (search_action(id).is_none() && app.session.registry.get(id).is_some_and(rustgis_engine::CommandSpec::needs_input))
@@ -2217,7 +2222,7 @@ pub fn notices(app: &mut RustGisApp, ctx: &egui::Context) {
     let t = Tokens::get(ctx);
     let now = ctx.input(|i| i.time);
     toast_new_notices(app, now);
-    app.map.toasts.retain(|toast| now - toast.at < if toast.error { 6.0 } else { 3.0 });
+    app.map.toasts.retain(|toast| toast.live(now));
     if app.map.toasts.is_empty() {
         return;
     }
@@ -2421,6 +2426,14 @@ mod tests {
         assert!(super::search_disabled(&app, "layer.definitionQuery").is_none(), "offered for a feature layer");
     }
 
+    /// Command Search's Mosaic Rasters opens its Workflows section (#2907) rather than being greyed
+    /// for the inputs it needs.
+    #[test]
+    fn mosaic_rasters_opens_its_section() {
+        assert!(matches!(search_action("raster.mosaic"), Some(SearchAction::Workflow("mosaic"))));
+        assert!(super::search_disabled(&RustGisApp::with_sample(), "raster.mosaic").is_none());
+    }
+
     /// Past the 200 notices the session keeps, each new notice it holds still makes one toast (#1755).
     #[test]
     fn each_kept_notice_makes_one_toast_past_the_200th() {
@@ -2443,6 +2456,17 @@ mod tests {
         let texts: Vec<&str> = app.map.toasts.iter().map(|t| t.text.as_str()).collect();
         assert_eq!(texts, ["batch 0", "batch 1", "batch 2"]);
         assert!(app.map.toasts.iter().all(|t| t.error));
+    }
+
+    /// Command Search runs Export Table through its dialog, once there is a table to export.
+    #[test]
+    fn command_search_offers_export_table_for_a_standalone_table() {
+        use rustgis_engine::data::{Dataset, GeometryType};
+        let mut app = crate::RustGisApp::with_sample();
+        assert!(matches!(search_action("share.exportTable"), Some(SearchAction::Command("ui.exportTable"))));
+        assert_eq!(super::search_disabled(&app, "share.exportTable"), Some("the project has no standalone tables"));
+        app.session.project.add_table(Dataset::new("totals", GeometryType::None, vec![]));
+        assert_eq!(super::search_disabled(&app, "share.exportTable"), None);
     }
 
     #[test]

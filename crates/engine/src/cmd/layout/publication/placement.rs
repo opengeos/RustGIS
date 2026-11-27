@@ -1,5 +1,7 @@
 //! Where a publication layout's surrounds go over or beside the map.
 
+use rustgis_map::layout::MAX_LEGEND_COLUMNS;
+
 /// The surrounds a publication layout places in the map frame's corners.
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum Surround {
@@ -36,6 +38,12 @@ pub(crate) fn legend_room(
     }
     Some((w.min(room_w.max(MIN_LEGEND_MM)), h.min(room_h.max(MIN_LEGEND_MM))))
 }
+
+/// The most columns `layout.publication` lays its legend in: the three it always chose among, so
+/// raising [`MAX_LEGEND_COLUMNS`] for the legends' fits leaves the layouts it makes as they were. It
+/// measures its legend in those alone ([`crate::render::layout::legend_sizes_in_columns_mm`]).
+pub(super) const PUBLICATION_LEGEND_COLUMNS: usize = 3;
+const _: () = assert!(PUBLICATION_LEGEND_COLUMNS <= MAX_LEGEND_COLUMNS);
 
 /// Whether a publication legend laid out in more columns beats it in fewer, each as the share of it
 /// shown and the area (mm²) the surrounds leave over the drawing: it shows more of itself, or as
@@ -106,20 +114,22 @@ pub(crate) fn veil_panel(
     // The locator and the arrow side by side, with a gap between them only when both are there.
     let between = if locator.is_some() && arrow.is_some() { gap } else { 0.0 };
     let top = (locator.map_or(0.0, |side| side + between) + aw, locator.unwrap_or(0.0).max(ah));
-    // The gap over the scale bar only when something sits above it.
-    let lead = if top.1 > 0.0 { gap } else { 0.0 };
+    // The gap over the scale bar only when there is one and something sits above it.
+    let lead = if top.1 > 0.0 && scale.1 > 0.0 { gap } else { 0.0 };
     let group = (top.0.max(scale.0), top.1 + lead + scale.1);
-    let beside = legend.0 + gap + group.0 <= bw && legend.1.max(group.1) <= bh;
-    let over = legend.0.max(group.0) <= bw && legend.1 + gap + group.1 <= bh;
+    // Nothing to keep the legend apart from, without a surround to group.
+    let apart = if group.0 > 0.0 || group.1 > 0.0 { gap } else { 0.0 };
+    let beside = legend.0 + apart + group.0 <= bw && legend.1.max(group.1) <= bh;
+    let over = legend.0.max(group.0) <= bw && legend.1 + apart + group.1 <= bh;
     if !beside && !over {
         return None;
     }
     let (legend_at, group_at) = if beside && (bw >= bh || !over) {
-        let (x, y) = (bx + (bw - legend.0 - gap - group.0) / 2.0, by + (bh - legend.1.max(group.1)) / 2.0);
-        ((x, y), (x + legend.0 + gap, y))
+        let (x, y) = (bx + (bw - legend.0 - apart - group.0) / 2.0, by + (bh - legend.1.max(group.1)) / 2.0);
+        ((x, y), (x + legend.0 + apart, y))
     } else {
-        let (x, y) = (bx + (bw - legend.0.max(group.0)) / 2.0, by + (bh - legend.1 - gap - group.1) / 2.0);
-        ((x, y + group.1 + gap), (x, y))
+        let (x, y) = (bx + (bw - legend.0.max(group.0)) / 2.0, by + (bh - legend.1 - apart - group.1) / 2.0);
+        ((x, y + group.1 + apart), (x, y))
     };
     Some((
         (legend_at.0, legend_at.1, legend.0, legend.1),
