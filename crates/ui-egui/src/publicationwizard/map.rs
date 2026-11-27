@@ -1,14 +1,17 @@
 //! The wizard's map step.
 use super::*;
 use crate::dialogs::MapOwner;
+use rustgis_engine::map::Layer;
 
 /// Which area the map frame shows.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Area {
     /// The view, left to `layout.publication`.
     View,
-    /// The features a layer shows (hidden or not): the layer's id, in the map it was picked in.
-    Layer { map: MapOwner, id: u32 },
+    /// The features a layer shows (hidden or not), in the map it was picked in. The layer by its
+    /// [`Layer::instance_id`](rustgis_engine::map::Layer::instance_id): Undo hands its map-local
+    /// id to the next layer added.
+    Layer { map: MapOwner, layer: u64 },
     /// The selected features of the map it was picked in.
     Selection { map: MapOwner },
 }
@@ -16,7 +19,8 @@ pub enum Area {
 /// The name `layout.publication` gives when none is: data, not translated.
 pub(super) const DEFAULT_NAME: &str = "Publication";
 
-/// A side sent for an extent with none along it (a point, a straight line), in degrees.
+/// What a side with no length (a point, a straight line) is widened to, in degrees; on the ±180 or
+/// ±90 edge half of it is cut off again.
 const MIN_SIDE: f64 = 0.01;
 
 /// The map step: the area the map frame shows and the layout's name.
@@ -35,31 +39,31 @@ pub(super) fn map_step(ui: &mut egui::Ui, s: &Session, d: &mut Draft) {
         ui.label("");
         ui.horizontal(|ui| {
             let picked = match &d.area {
-                Area::Layer { map: owner, id } if owner.holds(s) => Some(*id),
+                Area::Layer { map: owner, layer } if owner.holds(s) => Some(*layer),
                 _ => None,
             };
-            let top = framable().next().map(|l| l.id);
-            let layer = ui.add_enabled(top.is_some(), egui::RadioButton::new(picked.is_some(), tl!("Layer")));
-            if layer.clicked()
-                && let Some(id) = picked.or(top)
+            let top = framable().next().map(Layer::instance_id);
+            let radio = ui.add_enabled(top.is_some(), egui::RadioButton::new(picked.is_some(), tl!("Layer")));
+            if radio.clicked()
+                && let Some(layer) = picked.or(top)
             {
-                d.area = Area::Layer { map: MapOwner::of(s), id };
+                d.area = Area::Layer { map: MapOwner::of(s), layer };
             }
-            if let Some(id) = picked {
-                let shown = framable().find(|l| l.id == id).map_or_else(|| tl!("(none)").to_string(), |l| l.name.clone());
+            if let Some(picked) = picked {
+                let shown = framable().find(|l| l.instance_id() == picked).map_or_else(|| tl!("(none)").to_string(), |l| l.name.clone());
                 egui::ComboBox::from_id_salt("publication_wizard_map_layer")
                     .selected_text(shown)
                     .width(ui.available_width().min(180.0))
                     .truncate()
                     .show_ui(ui, |ui| {
                         for l in framable() {
-                            if ui.selectable_label(l.id == id, l.name.as_str()).clicked() {
-                                d.area = Area::Layer { map: MapOwner::of(s), id: l.id };
+                            if ui.selectable_label(l.instance_id() == picked, l.name.as_str()).clicked() {
+                                d.area = Area::Layer { map: MapOwner::of(s), layer: l.instance_id() };
                             }
                         }
                     })
                     .response
-                    .labelled_by(layer.id);
+                    .labelled_by(radio.id);
             }
         });
         ui.end_row();
@@ -86,11 +90,11 @@ pub(super) fn map_step(ui: &mut egui::Ui, s: &Session, d: &mut Draft) {
 pub(super) fn area_label(s: &Session, area: &Area) -> String {
     match area {
         Area::View => tl!("The view").to_string(),
-        Area::Layer { map, id } => s
+        Area::Layer { map, layer } => s
             .map()
             .layers
             .iter()
-            .find(|l| l.id == *id && map.holds(s))
+            .find(|l| l.instance_id() == *layer && map.holds(s))
             .map_or_else(|| tl!("(none)").to_string(), |l| i18n::fmt("Layer: {layer}", &[("layer", &l.name)])),
         Area::Selection { map } if map.holds(s) => tl!("Selected features").to_string(),
         Area::Selection { .. } => tl!("(none)").to_string(),
@@ -123,10 +127,10 @@ pub(super) fn area_extent(s: &Session, area: &Area) -> Result<Option<[f64; 4]>, 
         Area::Layer { map: owner, .. } | Area::Selection { map: owner } if !owner.holds(s) => {
             return Err(tl!("The map was switched or renamed since the map extent was picked: pick it again.").to_string());
         }
-        Area::Layer { id, .. } => map
+        Area::Layer { layer, .. } => map
             .layers
             .iter()
-            .find(|l| l.id == *id)
+            .find(|l| l.instance_id() == *layer)
             .ok_or_else(|| tl!("The layer picked is no longer in the map: pick the map extent again.").to_string())?
             .shown_extent(),
         Area::Selection { .. } => {
@@ -174,10 +178,10 @@ mod tests {
         app.run("layer.definitionQuery", json!({"layer": "Cities", "where": "pop_max > 10000000"})).unwrap();
         let (id, shown, all) = {
             let l = app.session.map().layers.iter().find(|l| l.name == "Cities").unwrap();
-            (l.id, l.shown_extent(), l.extent())
+            (l.instance_id(), l.shown_extent(), l.extent())
         };
         assert_ne!(shown, all, "the query narrows it");
-        assert_eq!(area_extent(&app.session, &Area::Layer { map: map.clone(), id }), Ok(framed(shown)));
+        assert_eq!(area_extent(&app.session, &Area::Layer { map: map.clone(), layer: id }), Ok(framed(shown)));
         app.run("select.byAttributes", json!({"layer": "Cities", "where": "name = 'Tokyo'"})).unwrap();
         let selected = app.session.map().selection_extent();
         let got = area_extent(&app.session, &Area::Selection { map }).unwrap();
@@ -191,8 +195,8 @@ mod tests {
     fn an_area_gone_is_refused() {
         let mut app = app();
         let map = MapOwner::of(&app.session);
-        let id = app.session.map().layers.iter().find(|l| l.name == "Rivers").unwrap().id;
-        let layer = Area::Layer { map: map.clone(), id };
+        let id = app.session.map().layers.iter().find(|l| l.name == "Rivers").unwrap().instance_id();
+        let layer = Area::Layer { map: map.clone(), layer: id };
         let selection = Area::Selection { map };
         assert_eq!(area_extent(&app.session, &selection), Err("Nothing is selected: pick the map extent again.".to_string()));
         app.run("layer.remove", json!({"layer": "Rivers"})).unwrap();
@@ -219,9 +223,9 @@ mod tests {
         assert!(h.get_by_role_and_label(Role::RadioButton, "Selection").accesskit_node().is_disabled());
         h.get_by_role_and_label(Role::RadioButton, "Layer").click();
         h.run_steps(4);
-        let top = h.state().session.map().layers.first().unwrap().id;
+        let top = h.state().session.map().layers.first().unwrap().instance_id();
         assert_eq!(h.state().session.map().layers[0].name, "Cities", "the layer drawn on top");
-        assert!(matches!(area(&h), Area::Layer { id, .. } if id == top), "{:?}", area(&h));
+        assert!(matches!(area(&h), Area::Layer { layer, .. } if layer == top), "{:?}", area(&h));
         h.state_mut().run("select.byAttributes", json!({"layer": "Cities", "where": "name = 'Tokyo'"})).unwrap();
         h.run_steps(2);
         h.get_by_role_and_label(Role::RadioButton, "Selection").click();
@@ -238,8 +242,8 @@ mod tests {
             open(&mut app);
             let map = MapOwner::of(&app.session);
             app.run("select.byAttributes", json!({"layer": "Cities", "where": "name = 'Tokyo'"})).unwrap();
-            let id = app.session.map().layers.last().unwrap().id;
-            let area = if layer { Area::Layer { map, id } } else { Area::Selection { map } };
+            let id = app.session.map().layers.last().unwrap().instance_id();
+            let area = if layer { Area::Layer { map, layer: id } } else { Area::Selection { map } };
             app.run("map.rename", json!({"name": "Renamed"})).unwrap();
             assert_eq!(area_label(&app.session, &area), "(none)", "layer: {layer}");
             let d = app.dialogs.publication.as_mut().unwrap();
@@ -259,7 +263,7 @@ mod tests {
         let mut app = app();
         let map = app.session.map().name.clone();
         let owner = MapOwner::of(&app.session);
-        let areas = [Area::Layer { map: owner.clone(), id: 1 }, Area::Selection { map: owner }];
+        let areas = [Area::Layer { map: owner.clone(), layer: 1 }, Area::Selection { map: owner }];
         app.run("project.new", json!({})).unwrap();
         app.run("map.rename", json!({"name": map})).unwrap();
         assert_eq!(app.session.map().name, map);
@@ -278,15 +282,35 @@ mod tests {
         let long = "A layer with a very long name ".repeat(6);
         app.run("layer.rename", json!({"layer": "Cities", "name": long})).unwrap();
         let map = MapOwner::of(&app.session);
-        let id = app.session.map().layers.first().unwrap().id;
+        let (id, instance) = app.session.map().layers.first().map(|l| (l.id, l.instance_id())).unwrap();
         let d = app.dialogs.publication.as_mut().unwrap();
-        (d.area, d.step) = (Area::Layer { map, id }, Step::Map);
+        (d.area, d.step) = (Area::Layer { map, layer: instance }, Step::Map);
         let mut h = harness_sized(app, egui::vec2(420.0, 600.0));
         let list = h.get_by_role(Role::ComboBox).rect();
         assert!(list.right() <= 420.0, "the list runs to {}", list.right());
         h.state_mut().run("layer.remove", json!({"layer": id})).unwrap();
         h.run_steps(4);
         assert_eq!(h.get_by_role(Role::ComboBox).accesskit_node().value().as_deref(), Some("(none)"));
+    }
+
+    /// Undo gives a layer's id to the next one added: a pick of the layer undone is refused, not
+    /// moved to the new one.
+    #[test]
+    fn a_pick_isnt_passed_to_a_layer_that_reuses_its_id() {
+        let mut app = app();
+        app.run("layer.copy", json!({"layer": "Rivers"})).unwrap();
+        app.run("layer.paste", json!({})).unwrap();
+        let (id, layer) = (app.session.map().layers[0].id, app.session.map().layers[0].instance_id());
+        let area = Area::Layer { map: MapOwner::of(&app.session), layer };
+        app.run("edit.undo", Value::Null).unwrap();
+        app.run("layer.copy", json!({"layer": "Lakes"})).unwrap();
+        app.run("layer.paste", json!({})).unwrap();
+        assert_eq!(app.session.map().layers[0].id, id, "the id is reused");
+        assert_eq!(area_label(&app.session, &area), "(none)");
+        assert_eq!(
+            area_extent(&app.session, &area),
+            Err("The layer picked is no longer in the map: pick the map extent again.".to_string())
+        );
     }
 
     /// Create frames the layer picked and names the layout as typed; a figure takes both too.
