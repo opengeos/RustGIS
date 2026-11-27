@@ -5265,6 +5265,7 @@ fn qgis_import_codes_only_the_notes_that_lose_data() {
     };
     let layers = [
         layer("Unsupported", "not-a-provider", "x"),
+        r#"<maplayer type="vector"><id>Unnamed</id><layername>Unnamed</layername><datasource>x</datasource></maplayer>"#.to_string(),
         layer("Heights", "memory", "PointZ?crs=EPSG:4326&amp;field=a:string"),
         layer("Arcs", "memory", "CompoundCurve?crs=EPSG:4326&amp;field=a:string"),
     ]
@@ -5277,6 +5278,7 @@ fn qgis_import_codes_only_the_notes_that_lose_data() {
         notes.iter().find(|n| n["layer"] == layer && n["text"].as_str().unwrap().contains(text)).map(|n| n["loss"].as_str())
     };
     assert_eq!(json_loss("Unsupported", "RustGIS doesn't read"), Some(Some("dropped.feature")));
+    assert_eq!(json_loss("Unnamed", "RustGIS doesn't read"), Some(Some("dropped.feature")), "a vector layer naming no provider");
     // A memory layer opens empty, so its Z values and curves held no data: plain.
     assert_eq!(json_loss("Heights", "Z and M"), Some(None));
     assert_eq!(json_loss("Arcs", "curves read as lines"), Some(None));

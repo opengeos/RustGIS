@@ -730,9 +730,9 @@ fn add_layer(
         Source::Other { provider } => {
             // A layer of no provider (an annotation layer, a group layer) is told by its kind.
             let what = if provider.is_empty() { format!("{} layers", layer.kind) } else { format!("{provider} sources") };
-            // A layer of no provider (an annotation or group layer) holds no data; any other
-            // layer's data is left out.
-            if provider.is_empty() {
+            // An annotation or group layer holds no data; any other layer's data is left out,
+            // with or without a provider named.
+            if matches!(layer.kind.as_str(), "annotation" | "group") {
                 report.skipped(name, format!("the layer: RustGIS doesn't read QGIS's {what}"));
             } else {
                 report.lost(name, NoteKind::Skipped, LossCode::DroppedFeature, format!("the layer: RustGIS doesn't read QGIS's {what}"));
