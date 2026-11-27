@@ -2,6 +2,54 @@
 
 use super::*;
 
+/// A chart as a page drew it ([`drawn_charts`]): its element's id and the data it read.
+pub type DrawnChart = (u32, rustgis_map::layout::ChartData);
+
+thread_local! {
+    /// While [`drawn_charts`] runs on this thread: the charts drawn, each with each data once.
+    static DRAWN: std::cell::RefCell<Option<Vec<DrawnChart>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Ends the list [`drawn_charts`] opened when dropped, even by a panic.
+struct DrawnList(bool);
+
+impl Drop for DrawnList {
+    fn drop(&mut self) {
+        if self.0 {
+            DRAWN.set(None);
+        }
+    }
+}
+
+/// `f`, and the charts the pages it drew on this thread drew, each once for each data it was
+/// drawn with (a map series draws a chart a page), in the order first drawn: what an export says
+/// of them, from the rows each page read, which a streamed layer holds only as it is drawn. A
+/// call inside another lists nothing and leaves its charts to the outer one.
+pub fn drawn_charts<T>(f: impl FnOnce() -> T) -> (T, Vec<DrawnChart>) {
+    let opened = DRAWN.with_borrow_mut(|d| {
+        let none = d.is_none();
+        if none {
+            *d = Some(Vec::new());
+        }
+        none
+    });
+    let _list = DrawnList(opened);
+    let out = f();
+    let listed = if opened { DRAWN.with_borrow_mut(Option::take).unwrap_or_default() } else { Vec::new() };
+    (out, listed)
+}
+
+/// Lists the chart `id` drawn with `data`, while [`drawn_charts`] runs.
+pub(super) fn drawn_chart(id: u32, data: &rustgis_map::layout::ChartData) {
+    DRAWN.with_borrow_mut(|d| {
+        if let Some(listed) = d
+            && !listed.iter().any(|(i, drawn)| *i == id && drawn == data)
+        {
+            listed.push((id, data.clone()));
+        }
+    });
+}
+
 /// A bar chart of `data`'s bars ([`ElementKind::chart_data`]) drawn as `look` says, its title,
 /// labels and values in `dark`, its values with a decimal comma when `comma`. With a negative
 /// value, bars run either way from a zero line (#2487). Stacked, each bar is drawn as its
