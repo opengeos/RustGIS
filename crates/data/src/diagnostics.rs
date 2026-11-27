@@ -45,6 +45,8 @@ pub enum Filter {
     Warnings,
     Info,
     Network,
+    /// Messages that report lost data, with a loss code.
+    Losses,
 }
 
 impl Filter {
@@ -56,6 +58,7 @@ impl Filter {
             Self::Info => record.severity == Severity::Info,
             // The note that further servers' absences go unlisted belongs with the absences.
             Self::Network => record.network.is_some() || record.source == "Network",
+            Self::Losses => record.loss.is_some(),
         }
     }
 }
@@ -98,8 +101,23 @@ pub struct Record {
     pub message: String,
     pub details: String,
     pub network: Option<Network>,
-    /// The loss the message reports, if any: the pane links to its entry in the guide.
+    /// The loss the message reports, if any: the pane explains it and links to its entry in the guide.
     pub loss: Option<crate::loss::LossCode>,
+    /// The command run that said it, when a command did.
+    pub run: Option<Run>,
+}
+
+/// One run of a command, as the messages it said remember it: the pane groups them by it and can
+/// take the project back to before it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Run {
+    /// Counts the session's runs, so the messages of one run are told from the next one's.
+    pub id: u64,
+    /// The project's state before the run ([`Session::history_position`] in the engine): Undo
+    /// returns to it while it is still in the history.
+    pub before: u64,
+    /// What the run worked on, as its parameters name it (a layer, a table, a file).
+    pub target: Option<String>,
 }
 
 #[derive(Default)]
@@ -207,13 +225,21 @@ impl History {
             details: bounded(details, MAX_DETAILS_BYTES),
             network: None,
             loss: None,
+            run: None,
         });
     }
 
     /// [`History::push`] for a message already through [`redact`] (a notice the session redacted
     /// for its status bar): it is only bounded, so a notice isn't redacted again for each copy.
     /// Only a [`Redacted`], which `redact` alone makes, gets this path.
-    pub fn push_redacted(&self, severity: Severity, source: &str, message: &Redacted, loss: Option<crate::loss::LossCode>) {
+    pub fn push_redacted(
+        &self,
+        severity: Severity,
+        source: &str,
+        message: &Redacted,
+        loss: Option<crate::loss::LossCode>,
+        run: Option<Run>,
+    ) {
         self.retain(Record {
             id: 0,
             timestamp_ms: timestamp_ms(),
@@ -223,6 +249,7 @@ impl History {
             details: String::new(),
             network: None,
             loss,
+            run,
         });
     }
 
@@ -326,6 +353,7 @@ impl Capture {
                     details: String::new(),
                     network: None,
                     loss: None,
+                    run: None,
                 },
             );
             guard.absences_overflow_said = Some(id);
@@ -344,6 +372,7 @@ impl Capture {
             details: String::new(),
             network: Some(Network { url, method: known_method(method), status: Some(status), duration_ms: None, kind: NetworkKind::Http }),
             loss: None,
+            run: None,
         };
         let id = store(&mut guard, record);
         guard.absences_said.push((server, id));
@@ -384,6 +413,7 @@ impl Capture {
             details: bounded(details, MAX_DETAILS_BYTES),
             network: Some(network),
             loss: None,
+            run: None,
         };
         let mut state = lock(&state);
         if once
@@ -1828,7 +1858,7 @@ mod tests {
     fn text_already_redacted_is_only_bounded() {
         let history = History::default();
         let long = "word ".repeat(1000);
-        history.push_redacted(Severity::Info, "Application", &Redacted::new(&long), None);
+        history.push_redacted(Severity::Info, "Application", &Redacted::new(&long), None, None);
         history.push(Severity::Info, "Application", &long, "");
         let records = history.records();
         assert_eq!(records[0].message, records[1].message);
@@ -1841,13 +1871,14 @@ mod tests {
     fn a_loss_keeps_its_code_and_the_report_gives_its_guide_entry() {
         let history = History::default();
         let code = crate::loss::LossCode::DroppedRing;
-        history.push_redacted(Severity::Warning, "layer.addData", &Redacted::new("1 ring left out"), Some(code));
-        history.push_redacted(Severity::Info, "layer.addData", &Redacted::new("added"), None);
+        history.push_redacted(Severity::Warning, "layer.addData", &Redacted::new("1 ring left out"), Some(code), None);
+        history.push_redacted(Severity::Info, "layer.addData", &Redacted::new("added"), None, None);
         let records = history.records();
         assert_eq!(records.iter().map(|r| r.loss).collect::<Vec<_>>(), [Some(code), None]);
         let report = history.report(Filter::All);
         assert!(report.contains("Loss: dropped.ring (https://rustgis.app/user-guide/loss-codes/#dropped.ring)"), "{report}");
         assert_eq!(report.matches("Loss: ").count(), 1, "{report}");
+        assert_eq!(records.iter().filter(|r| Filter::Losses.matches(r)).count(), 1);
     }
 
     #[test]
