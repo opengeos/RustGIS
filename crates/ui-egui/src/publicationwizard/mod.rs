@@ -194,9 +194,10 @@ fn field_width(ui: &egui::Ui) -> f32 {
     ui.available_width().min(260.0)
 }
 
-/// The size the window opens at, where the screen has room for it: tall enough for the tallest
-/// step in English (the style step's seven styles, their outlines and descriptions), with room for
-/// the rounding a high-density screen adds to each line.
+/// The size the window opens at, tall enough for the tallest step in English (the style step's
+/// seven styles, their outlines and descriptions), with room for the rounding a high-density
+/// screen adds to each line. A narrower screen narrows it (`dialog_width`); on a shorter one
+/// egui's window limits its height to the screen.
 const SIZE: egui::Vec2 = egui::vec2(600.0, 515.0);
 
 /// The smallest size it can be dragged to.
