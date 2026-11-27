@@ -1117,7 +1117,7 @@ fn every_corpus_file_reads() {
         use base64::Engine;
         let b64 = match source.strip_prefix("base64:") {
             Some(b64) => b64.to_string(),
-            None => base64::engine::general_purpose::STANDARD.encode(std::fs::read(source).map_err(|_| "whose image file doesn't open")?),
+            None => base64::engine::general_purpose::STANDARD.encode(std::fs::read(source).map_err(|_| super::IMAGE_UNOPENED)?),
         };
         Ok((b64, 0.5))
     };
@@ -1536,8 +1536,23 @@ fn svg_markers_rustgis_cant_draw_are_circles_in_their_colour_and_say_why() {
         ["SVG markers whose image has more pixels than 2048 × 2048, drawn as circles"]
     );
     // One whose colours the style sets, however the parameter is written.
-    for body in [r#"<path fill="param(fill) #ff0000"/>"#, r#"<path style="fill: PARAM(Fill)"/>"#] {
+    for body in [
+        r#"<path fill="param(fill) #ff0000"/>"#,
+        r#"<path style="fill: PARAM(Fill)"/>"#,
+        r#"<style>path { fill: param(fill) }</style><path/>"#,
+    ] {
         assert_eq!(circle("a.svg", "/styles", &mut svg_reader(body)), [SVG_COLOURS], "{body}");
+    }
+    // `param(` where it sets nothing leaves the SVG its own colours.
+    for body in
+        [r##"<!-- Example: param(fill) --><path fill="#ff0000"/>"##, r#"<title>param(fill)</title><desc>param(outline)</desc><path/>"#]
+    {
+        let mut report = Report::default();
+        let s =
+            super::read_style(&marker_qml("1", &svg_marker("a.svg", "")), "Pins", "/styles", &mut svg_reader(body), &mut report).unwrap();
+        let Some(Renderer::Single(sym)) = &s.renderer else { panic!("{:?}", s.renderer) };
+        assert!(matches!(sym.marker, Marker::Picture(_)), "{body}: {:?}", report.notes);
+        assert!(report.notes.is_empty(), "{body}: {:?}", report.notes);
     }
     // The same file as a raster image marker's draws as it is.
     let both = format!("{}{}", raster_marker("a.svg", ""), svg_marker("a.svg", ""));
@@ -1761,7 +1776,7 @@ fn raster_image_markers_that_cant_be_drawn_are_circles_saying_why() {
     let mut asked = Vec::new();
     let mut read = |source: &str| {
         asked.push(source.to_string());
-        if source.ends_with("gone.png") { Err("whose image file doesn't open") } else { Ok(("QUJD".to_string(), 1.0)) }
+        if source.ends_with("gone.png") { Err(super::IMAGE_UNOPENED) } else { Ok(("QUJD".to_string(), 1.0)) }
     };
     let cases = [
         ("", "raster image markers with no image, drawn as circles"),

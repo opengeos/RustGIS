@@ -908,9 +908,10 @@ fn network_share(file: &str) -> bool {
 }
 
 /// Reads the images of the raster image and SVG markers under `root` (a project or a style), each
-/// `imageFile` once (a file once for each spelling of its path from the folder: a leading `./` is
-/// dropped, so `./a.png` and `a.png` are one), into the report for [`marker_image`]: a `base64:`
-/// one as it is, a file's through `read` (relative to `dir`; a `file:` address is the file it names).
+/// `imageFile` or SVG `name` once (a file once for each spelling of its path from the folder: a
+/// leading `./` is dropped, so `./a.png` and `a.png` are one), into the report for
+/// [`marker_image`]: a `base64:` one as it is, a file's through `read` (relative to `dir`; a
+/// `file:` address is the file it names).
 /// One at a web address isn't fetched, nor one on a network share (`\\host\share`, `//host/share`,
 /// `file://host/share`), nor one kept inside a `.qgz`
 /// (`attachment:`); one relative to no folder (or to a drive's working folder) isn't looked
@@ -1022,11 +1023,20 @@ fn image_file_key(class: &str) -> Option<&'static str> {
     }
 }
 
-/// Whether the image `b64` holds QGIS's `param(…)`, written in any letter case.
+/// Whether the image `b64` is an SVG leaving colours to the style: QGIS's `param(…)`, written in
+/// any letter case, in an attribute's value or a `<style>` sheet. One in a comment, a title or other
+/// text sets nothing. A raster image's bytes aren't text, so they aren't parsed.
 fn sets_colours(b64: &str) -> bool {
     use base64::Engine;
-    let bytes = base64::engine::general_purpose::STANDARD.decode(b64);
-    bytes.is_ok_and(|b| b.windows(6).any(|w| w.eq_ignore_ascii_case(b"param(")))
+    let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(b64) else { return false };
+    let Ok(text) = std::str::from_utf8(&bytes) else { return false };
+    // As the check that kept the image read it: a DTD's text entities expanded.
+    let opts = roxmltree::ParsingOptions { allow_dtd: true, nodes_limit: super::MAX_NODES, ..Default::default() };
+    let Ok(doc) = rustgis_data::xml::parse(text, opts) else { return false };
+    let param = |s: &str| s.as_bytes().windows(6).any(|w| w.eq_ignore_ascii_case(b"param("));
+    doc.descendants().any(|n| {
+        n.attributes().any(|a| param(a.value())) || n.tag_name().name() == "style" && n.children().any(|c| c.text().is_some_and(param))
+    })
 }
 
 /// The image of a raster image or SVG marker layer `class` (read before the symbols:
