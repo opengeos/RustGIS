@@ -415,30 +415,48 @@ fn a_browser_export_not_taken_is_not_said_to_be_exported() {
 }
 
 /// A queued download dropped by a later failure, or by another project replacing its own, is
-/// said: the desktop would have written the file by then. A run that keeps it says nothing.
+/// said, an export's and a tool output's each in a notice of its own: the desktop would have
+/// written the file by then, and a tool's run is recorded only once its file is delivered. A run
+/// that keeps them says nothing.
 #[test]
-fn a_browser_export_dropped_before_its_download_is_said() {
+fn a_browser_download_dropped_before_it_is_offered_is_said() {
     let export = "share.exportTable {\"table\": \"Totals\", \"path\": \"totals.csv\"}";
-    for (then, why) in [
-        ("map.zoomFull", None),
-        ("no.suchCommand", Some("as the command that made them failed")),
-        ("project.new", Some("as another project replaced theirs first")),
-    ] {
+    let tool = "gp.run {\"tool\": \"rasterToPmtiles\", \"params\": {\"input\": \"Dem\", \"minZoom\": 0, \"maxZoom\": 0}}";
+    let expected = |queued: &[&str], why: &str| {
+        let mut notices = Vec::new();
+        if queued.contains(&export) {
+            notices.push(format!("1 export(s) not downloaded, {why}: totals.csv"));
+        }
+        if queued.contains(&tool) {
+            notices.push(format!(
+                "1 tool output file(s) not downloaded, {why}, so their runs aren't in the geoprocessing history: Dem.pmtiles"
+            ));
+        }
+        notices
+    };
+    let dropped = |s: &Session, mark: u64| -> Vec<String> { said(s, mark).into_iter().filter(|n| n.contains("not downloaded")).collect() };
+    for queued in [&[export][..], &[tool], &[export, tool]] {
+        for (then, why) in [
+            ("map.zoomFull", None),
+            ("no.suchCommand", Some("as the command that made them failed")),
+            ("project.new", Some("as another project replaced theirs first")),
+        ] {
+            let files = Files::new();
+            let mut s = session(&files, true);
+            let mark = s.notice_mark();
+            let ran = s.run("script.run", &json!({"script": format!("{}\n{then}", queued.join("\n"))}));
+            assert_eq!(ran.is_ok(), then != "no.suchCommand", "{ran:?}");
+            let notices = why.map(|why| expected(queued, why)).unwrap_or_default();
+            assert_eq!(dropped(&s, mark), notices, "{queued:?}, {then}");
+            assert_eq!(s.take_gp_files().len(), if why.is_none() { queued.len() } else { 0 }, "{queued:?}, {then}");
+            assert!(s.project.gp_history.is_empty(), "no run is recorded before delivery");
+        }
+        // Replaced by itself, between the command and the frame that would offer the file.
         let files = Files::new();
         let mut s = session(&files, true);
+        s.run("script.run", &json!({"script": queued.join("\n")})).unwrap();
         let mark = s.notice_mark();
-        let ran = s.run("script.run", &json!({"script": format!("{export}\n{then}")}));
-        assert_eq!(ran.is_ok(), then != "no.suchCommand", "{ran:?}");
-        let dropped: Vec<String> = said(&s, mark).into_iter().filter(|n| n.contains("not downloaded")).collect();
-        let expected = why.map(|why| format!("1 export(s) not downloaded, {why}: totals.csv"));
-        assert_eq!(dropped, expected.into_iter().collect::<Vec<_>>(), "{then}");
-        assert_eq!(s.take_gp_files().len(), usize::from(why.is_none()), "{then}");
+        s.run("project.new", &json!({})).unwrap();
+        assert_eq!(dropped(&s, mark), expected(queued, "as another project replaced theirs first"), "{queued:?}");
     }
-    // Replaced by itself, between the export and the frame that would offer it.
-    let files = Files::new();
-    let mut s = session(&files, true);
-    s.run("share.exportTable", &json!({"table": "Totals", "path": "totals.csv"})).unwrap();
-    let mark = s.notice_mark();
-    s.run("project.new", &json!({})).unwrap();
-    assert!(said(&s, mark).iter().any(|n| n == "1 export(s) not downloaded, as another project replaced theirs first: totals.csv"));
 }

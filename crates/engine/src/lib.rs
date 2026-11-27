@@ -1803,12 +1803,25 @@ impl Session {
         self.file_outputs.iter().any(|file| file.id == id && file.is_export())
     }
 
-    /// Says which exports among queued `files` are dropped, and `why`: the desktop would have
-    /// written their files by now.
-    fn say_dropped_exports<'a>(&mut self, files: impl IntoIterator<Item = &'a cmd::gp::PendingFile>, why: &str) {
-        let names: Vec<String> = files.into_iter().filter(|file| file.is_export()).map(|file| file.file_name.clone()).collect();
-        if !names.is_empty() {
-            self.notify(format!("{} export(s) not downloaded, {why}: {}", names.len(), listed(&names)), true);
+    /// Says which queued downloads among `files` are dropped, and `why`: the exports in one
+    /// notice (the desktop would have written their files by now), the tools' file outputs in
+    /// another (a run is recorded only once its file is delivered, so these go unrecorded).
+    fn say_dropped_downloads<'a>(&mut self, files: impl IntoIterator<Item = &'a cmd::gp::PendingFile>, why: &str) {
+        let (exports, tools): (Vec<_>, Vec<_>) = files.into_iter().partition(|file| file.is_export());
+        let names = |files: Vec<&cmd::gp::PendingFile>| files.iter().map(|file| file.file_name.clone()).collect::<Vec<_>>();
+        let (exports, tools) = (names(exports), names(tools));
+        if !exports.is_empty() {
+            self.notify(format!("{} export(s) not downloaded, {why}: {}", exports.len(), listed(&exports)), true);
+        }
+        if !tools.is_empty() {
+            self.notify(
+                format!(
+                    "{} tool output file(s) not downloaded, {why}, so their runs aren't in the geoprocessing history: {}",
+                    tools.len(),
+                    listed(&tools)
+                ),
+                true,
+            );
         }
     }
 
@@ -2603,7 +2616,7 @@ impl Session {
                 std::mem::take(&mut self.file_outputs).into_iter().partition(|file| file_outputs.contains(&file.id));
             self.file_outputs = kept;
             dropped.append(&mut opened_files);
-            self.say_dropped_exports(&dropped, "as the command that made them failed");
+            self.say_dropped_downloads(&dropped, "as the command that made them failed");
         }
         let quiet = std::mem::take(&mut self.quiet_failure);
         if let Err(e) = &res
@@ -2614,7 +2627,7 @@ impl Session {
         // The command, and those it ran, are done: a replaced project stays replaced.
         if self.depth == 0 {
             if let Some(replaced) = self.put_aside.take() {
-                self.say_dropped_exports(&replaced.file_outputs, "as another project replaced theirs first");
+                self.say_dropped_downloads(&replaced.file_outputs, "as another project replaced theirs first");
             }
             self.published_syncs.clear();
             // Frame maintenance and some policy adapters run a guard without command dispatch.
@@ -3732,7 +3745,7 @@ impl Session {
     /// front end setting up how the project starts): what [`PutAside`] holds, dropped.
     pub fn clear_history(&mut self) {
         let replaced = self.take_project_state();
-        self.say_dropped_exports(&replaced.file_outputs, "as another project replaced theirs first");
+        self.say_dropped_downloads(&replaced.file_outputs, "as another project replaced theirs first");
         self.undo_memory.clear();
         self.project_starts = self.project_starts.wrapping_add(1);
         // A state of its own: undo back past a replacement made within a command (a task's step)

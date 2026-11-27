@@ -89,8 +89,10 @@ Script pane, the Assistant or a plugin) downloads the file under the name the pa
 the commands finish: `share.exportLayer`, `share.exportTable`, `share.exportMap`,
 `share.exportRaster` (a raster layer), `layout.export`, `report.export` and `data.convert`. A
 folder in the path isn't used, and a `.shp` path downloads a `.zip` of the Shapefile's files; a
-notice says each. At most 8 files, 256 MiB in all, can wait to be downloaded, and those of a script
-that then fails, or of a project replaced before they are offered, are dropped with a notice.
+notice says each. At most 8 files, 256 MiB in all, can wait to be downloaded (a geoprocessing
+tool's file output waits the same way), and those of a script that then fails, or of a project
+replaced before they are offered, are dropped with a notice. A tool output dropped this way leaves
+its run out of the geoprocessing history.
 `share.exportLayer` and `data.convert` read a layer read in place whole for such a download, up to
 256 MiB of features; past that, select the features you need and export a layer made from them with
 **Make Layer From Selected Features**, or use the desktop app. They don't read a layer added by its
