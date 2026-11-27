@@ -533,7 +533,7 @@ pub struct UnfittedLegend {
 
 thread_local! {
     /// While [`unfitted_legends`] runs on this thread: the fitted legends drawn that still don't
-    /// fit, each element once.
+    /// fit, each element once for each way it didn't.
     static UNFITTED: std::cell::RefCell<Option<Vec<UnfittedLegend>>> = const { std::cell::RefCell::new(None) };
 }
 
@@ -549,7 +549,9 @@ impl Drop for UnfittedList {
 }
 
 /// `f`, and the legends under a fit other than manual that the pages it drew on this thread drew
-/// still wider or taller than their boxes, each element once, the first time it was: what an
+/// still wider or taller than their boxes, each element once for each way it was (too wide, too
+/// tall or both: a map series draws a legend a page, and it can fail differently on two), the
+/// first time it was, with the columns of that page: what an
 /// export says of them, as setting the fit said it, since a fit can stop succeeding after it is
 /// set (a layer added to its map, its frame's scale changed, a legend picture arrived). A manual
 /// legend is never listed. A call inside another lists nothing and leaves its legends to the
@@ -573,7 +575,7 @@ pub fn unfitted_legends<T>(f: impl FnOnce() -> T) -> (T, Vec<UnfittedLegend>) {
 pub(super) fn unfitted((id, name): (u32, &str), fit: LegendFit, fitted: &Fitted) {
     UNFITTED.with_borrow_mut(|u| {
         if let Some(listed) = u
-            && !listed.iter().any(|l| l.id == id)
+            && !listed.iter().any(|l| (l.id, l.too_wide, l.too_tall) == (id, fitted.too_wide, fitted.too_tall))
         {
             listed.push(UnfittedLegend {
                 id,
@@ -663,6 +665,12 @@ pub(super) struct Fitted {
 }
 
 impl Fitted {
+    /// A fit's verdict alone, for a test of what is listed.
+    #[cfg(test)]
+    pub(super) fn verdict(columns: usize, too_wide: bool, too_tall: bool) -> Fitted {
+        Fitted { columns, size: 1.0, text_size: 9.0, tallest: 0.0, too_wide, too_tall }
+    }
+
     /// Neither wider nor taller than its room.
     pub(super) fn fits(&self) -> bool {
         !self.too_wide && !self.too_tall

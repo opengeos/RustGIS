@@ -2413,6 +2413,22 @@ fn a_legends_rows_are_measured_once_a_size() {
     assert!(halved.0 == r && halved.1 > 2 * r && halved.1 <= 11 * r, "{halved:?}");
 }
 
+/// A fitted legend that doesn't fit is listed once for each way it doesn't: a map series draws it
+/// a page, where it can be too wide on one and too tall on another, and both are said; the same
+/// way on a second page is not said again, and its columns are the first page's.
+#[test]
+fn a_fitted_legend_is_listed_once_for_each_way_it_does_not_fit() {
+    let fit = LegendFit::AdjustColumns;
+    let ((), listed) = legend::unfitted_legends(|| {
+        legend::unfitted((7, "Key"), fit, &legend::Fitted::verdict(2, true, false));
+        legend::unfitted((7, "Key"), fit, &legend::Fitted::verdict(3, true, false));
+        legend::unfitted((7, "Key"), fit, &legend::Fitted::verdict(1, false, true));
+        legend::unfitted((8, "Other"), fit, &legend::Fitted::verdict(1, false, true));
+    });
+    let said: Vec<_> = listed.iter().map(|l| (l.id, l.columns, l.too_wide, l.too_tall)).collect();
+    assert_eq!(said, [(7, 2, true, false), (7, 1, false, true), (8, 1, false, true)]);
+}
+
 /// A legend measured in one to three columns lays its rows out in those three column counts
 /// alone, and gives the very sizes the measure in one to six gives for them; the measure in one
 /// to six lays them out in each of the six once.
