@@ -590,6 +590,8 @@ mod tests {
     fn the_window_opens_at_its_size_and_keeps_a_smallest_one() {
         let mut app = app();
         open(&mut app);
+        // Longer than the row: typed texts must not widen the window either.
+        app.dialogs.publication.as_mut().unwrap().sources = "Natural Earth and the national mapping agency ".repeat(4);
         let mut h = harness(app);
         let first = window(&h).size();
         assert!((590.0..=640.0).contains(&first.x) && (430.0..=500.0).contains(&first.y), "opens at {first:?}");
@@ -599,6 +601,13 @@ mod tests {
         let next = h.get_by_role_and_label(Role::Button, "Next").rect();
         assert!(small.contains_rect(next), "Next at {next:?} outside {small:?}");
         assert_eq!(listed(&h).0.len(), 5, "the list stays");
+        // Each step wraps or scrolls inside that size: none makes the window wider or taller.
+        for _ in 0..4 {
+            click(&mut h, "Next");
+            // Within the point a high-density screen's rounding of a wrapped line may add.
+            let now = window(&h).size();
+            assert!((now - small.size()).abs().max_elem() <= 1.0, "{:?}: {now:?}", step(&h));
+        }
     }
 
     /// Made larger, the step's area takes the room: Next goes down with the window and stays
