@@ -26,9 +26,10 @@ const MIN_SIDE: f64 = 0.01;
 /// The map step: the area the map frame shows and the layout's name.
 pub(super) fn map_step(ui: &mut egui::Ui, s: &Session, d: &mut Draft) {
     let map = s.map();
-    // In the map's layer order, top first. A layer's kept extent here; the one it shows is read at
-    // Create, as it walks the rows under a definition query.
-    let framable = || map.layers.iter().filter(|l| !l.extent().is_empty());
+    // In the map's layer order, top first, by what costs nothing a frame: whether it has rows, a
+    // raster or a source. Its places are read at Create ([`Layer::extent`] walks every
+    // longitude/latitude row each time), where one with none to frame is refused.
+    let framable = || map.layers.iter().filter(|l| !l.dataset.features.is_empty() || l.raster.is_some() || l.source.is_some());
     egui::Grid::new("publication_wizard_map").num_columns(2).spacing(egui::vec2(8.0, 8.0)).show(ui, |ui| {
         // A row for each choice, so the label sits beside the first one.
         ui.label(tl!("Map extent"));
@@ -129,8 +130,7 @@ fn framed(e: Extent) -> Option<[f64; 4]> {
 
 /// The `extent` to send for `area`, none for the view; an area that is gone since it was picked is
 /// an error rather than another one framed. Read once, at Create, on the UI thread where
-/// `layout.publication` runs next: a layer under a definition query is walked whole, as is the
-/// selection.
+/// `layout.publication` runs next: it may walk the whole layer, or the whole selection.
 pub(super) fn area_extent(s: &Session, area: &Area) -> Result<Option<[f64; 4]>, String> {
     let map = s.map();
     let extent = match area {
@@ -160,6 +160,7 @@ mod tests {
     use super::*;
     use egui::accesskit::Role;
     use egui_kittest::kittest::{NodeT, Queryable};
+    use rustgis_engine::data::{Dataset, GeometryType};
 
     fn close(got: Option<[f64; 4]>, want: [f64; 4]) {
         let got = got.expect("an extent");
@@ -345,6 +346,26 @@ mod tests {
         h.state_mut().dialogs.publication.as_mut().unwrap().name = " Publication ".into();
         h.run_steps(4);
         assert!(h.query_by_label("Publication (numbered: a layout has that name)").is_some());
+    }
+
+    /// A layer is offered for having rows, its places left unread until Create: one with none to
+    /// frame is refused there; a layer with no rows isn't offered.
+    #[test]
+    fn a_layer_is_offered_by_its_rows_and_its_places_read_at_create() {
+        let mut app = app();
+        open(&mut app);
+        let mut unplaced = Dataset::new("No places", GeometryType::Point, vec![]);
+        unplaced.push(None, vec![]);
+        app.session.map_mut().add_dataset(unplaced);
+        app.session.map_mut().add_dataset(Dataset::new("No rows", GeometryType::Point, vec![]));
+        app.dialogs.publication.as_mut().unwrap().step = Step::Map;
+        let mut h = harness(app);
+        h.get_by_role_and_label(Role::RadioButton, "Layer").click();
+        h.run_steps(4);
+        let state = h.state();
+        let area = state.dialogs.publication.as_ref().unwrap().area.clone();
+        assert_eq!(area_label(&state.session, &area), "Layer: No places");
+        assert_eq!(area_extent(&state.session, &area), Err("There is nothing to frame there: pick another map extent.".to_string()));
     }
 
     /// Create frames the layer picked and names the layout as typed; a figure takes both too.
