@@ -183,9 +183,9 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
     let room_side = if labelled.left || labelled.right { LABEL_ROOM_SIDE * strip_scale } else { 0.0 };
     let room_end = if labelled.top || labelled.bottom { LABEL_ROOM_END * strip_scale } else { 0.0 };
     let reference = reference.unwrap_or_else(|| {
-        let [projection, datum_and_grid] = PUBLICATION_DEFAULT_REFERENCE;
+        let [projection_line, datum_and_grid] = PUBLICATION_DEFAULT_REFERENCE;
         let line = if step.is_some() { datum_and_grid } else { "Datum: {datum}" };
-        vec![projection.into(), line.into()]
+        vec![projection_line.into(), line.into()]
     });
     let step_said = step.map_or_else(|| "—".to_string(), step_text);
     let fill = |t: &str| t.replace("{projection}", &projection).replace("{datum}", &datum).replace("{grid}", &step_said);
