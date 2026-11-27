@@ -316,10 +316,12 @@ pub(crate) fn number_text(
     if v.is_null() && !text.trim().is_empty() && !crate::Value::is_null_marker(text) {
         unread_date(counts, k);
     }
-    // A number a decimal can't hold as written (`9007199254740993`) is rounded: counted in
-    // `rounded` ([`Batch::rounded_dates`]), as a whole number stored past 2^53 is.
+    // A number whose whole-number digits a decimal can't hold (`9007199254740993`) is rounded:
+    // counted in `rounded` ([`Batch::rounded_dates`]), as a whole number stored past 2^53 is. A
+    // fraction past what a decimal holds reads as the nearest decimal, as a stored one does.
+    let trimmed = text.trim().trim_start_matches(['-', '+']);
     if let (crate::Value::Float(_), Some(rounded)) = (&v, rounded)
-        && crate::Value::Text(text.trim().to_string()).rounds_as_double()
+        && crate::query::whole_digits_round(trimmed)
     {
         unread_date(rounded, k);
     }

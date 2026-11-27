@@ -65,6 +65,9 @@ pub struct SavedRows {
     /// the save: the load said those. A row only a trigger touched wasn't read before the save, so
     /// its rounded values are counted even when unchanged, and may be said again.
     pub rounded_dates: Vec<usize>,
+    /// Per supplied field, text read back that isn't valid UTF-8 ([`crate::source::not_utf8_note`]),
+    /// counted as [`SavedRows::rounded_dates`] is.
+    pub not_utf8: Vec<usize>,
 }
 
 /// An existing feature table; its read connection is never reused for writes.
@@ -305,7 +308,7 @@ impl EditTable {
         let mut spatial_changed = !edits.inserts.is_empty() || !edits.deletes.is_empty();
         let mut utc_dates = vec![0usize; fields.len()];
         let mut fine_dates = vec![0usize; fields.len()];
-        let (mut unread_dates, mut rounded_dates) = (Vec::new(), Vec::new());
+        let (mut unread_dates, mut rounded_dates, mut not_utf8) = (Vec::new(), Vec::new(), Vec::new());
         for (f, _) in &edits.updates {
             let row = current.get(&f.id.cast_signed()).ok_or_else(|| self.shape_error())?;
             let mut sets = Vec::new();
@@ -456,11 +459,12 @@ impl EditTable {
                 // before the save, which the load already said; an inserted row, or one only a
                 // trigger touched, wasn't read before, so it is said.
                 let stored = row.get(c).ok_or_else(|| self.shape_error())?;
-                let (mut unread, mut rounded) = (Vec::new(), Vec::new());
-                let read = value(ValueRef::from(stored), field.ty, &mut unread, Some(&mut rounded), &mut Vec::new(), i);
+                let (mut unread, mut rounded, mut bad_text) = (Vec::new(), Vec::new(), Vec::new());
+                let read = value(ValueRef::from(stored), field.ty, &mut unread, Some(&mut rounded), &mut bad_text, i);
                 if before.get(&(k, c)) != Some(stored) {
                     crate::source::add_unread_dates(&mut unread_dates, &unread);
                     crate::source::add_unread_dates(&mut rounded_dates, &rounded);
+                    crate::source::add_unread_dates(&mut not_utf8, &bad_text);
                 }
                 *attr = read;
             }
@@ -521,6 +525,7 @@ impl EditTable {
             fine_dates,
             unread_dates,
             rounded_dates,
+            not_utf8,
         }))
     }
 

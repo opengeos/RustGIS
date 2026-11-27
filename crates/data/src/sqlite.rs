@@ -16,7 +16,21 @@ pub enum Val {
     Int(i64),
     Real(f64),
     Text(String),
+    /// Text whose bytes aren't valid UTF-8, kept as they are: a reader that says so can count it
+    /// ([`Val::text`] reads it with U+FFFD in their place).
+    BadText(Vec<u8>),
     Blob(Vec<u8>),
+}
+
+impl Val {
+    /// The text this holds, a [`Val::BadText`]'s with U+FFFD in place of the bytes that aren't UTF-8.
+    pub fn text(&self) -> Option<std::borrow::Cow<'_, str>> {
+        match self {
+            Val::Text(t) => Some(std::borrow::Cow::Borrowed(t)),
+            Val::BadText(b) => Some(String::from_utf8_lossy(b)),
+            _ => None,
+        }
+    }
 }
 
 /// A column of a table, as its `CREATE TABLE` declares it.
@@ -399,7 +413,14 @@ fn record(p: &[u8]) -> Result<Vec<Val>, String> {
             t => {
                 let n = usize::try_from((t - 12) / 2).map_err(|_| bad("record"))?;
                 let s = p.get(body..body.checked_add(n).ok_or_else(|| bad("record"))?).ok_or_else(|| bad("a record past its payload"))?;
-                (if t % 2 == 0 { Val::Blob(s.to_vec()) } else { Val::Text(String::from_utf8_lossy(s).into_owned()) }, n)
+                (
+                    match (t % 2 == 0, std::str::from_utf8(s)) {
+                        (true, _) => Val::Blob(s.to_vec()),
+                        (false, Ok(text)) => Val::Text(text.to_string()),
+                        (false, Err(_)) => Val::BadText(s.to_vec()),
+                    },
+                    n,
+                )
             }
         };
         body += len;

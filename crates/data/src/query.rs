@@ -834,7 +834,7 @@ fn number_token(t: &str) -> Result<Tok, String> {
 /// written out (`9007199254740993.0`, `1.2345678901234567891e19`) must be held exactly; zeros an
 /// exponent adds past them (`1e307`) weren't written, so only the written digits need holding.
 /// `false` for one that isn't written in digits.
-fn whole_digits_round(t: &str) -> bool {
+pub(crate) fn whole_digits_round(t: &str) -> bool {
     let (mantissa, exp) = match t.split_once(['e', 'E']) {
         Some((m, e)) => match e.parse::<i64>() {
             Ok(e) => (m, e),
@@ -854,7 +854,9 @@ fn whole_digits_round(t: &str) -> bool {
     let written: String = digits.chars().take(point).collect();
     let added = point.saturating_sub(digits.len());
     if added == 0 {
-        !crate::io::double_holds(written.trim_start_matches('0'))
+        // No whole-number digits but zeros (`0.1`): a zero, which every decimal holds.
+        let written = written.trim_start_matches('0');
+        !crate::io::double_holds(if written.is_empty() { "0" } else { written })
     } else {
         !crate::io::double_holds(&format!("{written}e{added}"))
     }

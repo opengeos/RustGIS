@@ -56,10 +56,7 @@ fn get<'a>(row: &'a [(String, Val)], col: &str) -> Option<&'a Val> {
 }
 
 fn text(v: Option<&Val>) -> Option<String> {
-    match v? {
-        Val::Text(s) => Some(s.clone()),
-        _ => None,
-    }
+    v?.text().map(std::borrow::Cow::into_owned)
 }
 
 /// An integer value, exactly (an id, a code).
@@ -119,7 +116,7 @@ pub fn unsupported_table_counts(bytes: Shared) -> Result<Vec<(String, u64)>> {
     let mut invalid = 0u64;
     // Count in place: the contents catalog can be large without materializing its rows.
     db.rows(table, |_, row| {
-        let (Some(Val::Text(kind)), Some(Val::Text(name))) = (row.get(kind_col), row.get(name_col)) else {
+        let (Some(kind), Some(name)) = (row.get(kind_col).and_then(Val::text), row.get(name_col).and_then(Val::text)) else {
             invalid = invalid.saturating_add(1);
             return ControlFlow::Continue(());
         };
@@ -326,15 +323,17 @@ impl GpkgMemSource {
 fn value(v: &Val, ty: FieldType, unread: &mut Vec<usize>, rounded: &mut Vec<usize>, not_utf8: &mut Vec<usize>, k: usize) -> Value {
     match (v, ty) {
         (Val::Null, _) => Value::Null,
-        (v, FieldType::Date | FieldType::DateTime) => {
-            super::gpkg_blob::temporal(if let Val::Text(t) = v { Some(t) } else { None }, ty, unread, Some(rounded), k)
-        }
+        (v, FieldType::Date | FieldType::DateTime) => super::gpkg_blob::temporal(v.text().as_deref(), ty, unread, Some(rounded), k),
         (Val::Int(i), FieldType::Boolean) => Value::Bool(*i != 0),
         (Val::Int(i), FieldType::Double) => super::int_as_double(*i, Some(rounded), k),
         (Val::Int(i), _) => Value::Int(*i),
         (Val::Real(f), FieldType::Integer) if f.fract() == 0.0 && f.abs() < 9e15 => Value::Int(*f as i64),
         (Val::Real(f), _) => Value::Float(*f),
         (Val::Text(t), FieldType::Text) => Value::Text(t.clone()),
+        (Val::BadText(b), FieldType::Text) => super::utf8_text(b, not_utf8, k),
+        // Elsewhere it reads as its text with U+FFFD, which no number, date or yes/no word holds.
+        (Val::BadText(b), FieldType::Boolean) => super::yes_no_text(&String::from_utf8_lossy(b), unread, k),
+        (Val::BadText(b), ty) => super::number_text(&String::from_utf8_lossy(b), ty, unread, Some(rounded), k),
         (Val::Text(t), FieldType::Boolean) => super::yes_no_text(t, unread, k),
         (Val::Text(t), ty) => super::number_text(t, ty, unread, Some(rounded), k),
         // A blob in a text column is its text, as SQLite stores text either way.

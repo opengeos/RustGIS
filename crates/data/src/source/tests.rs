@@ -4139,14 +4139,16 @@ fn geopackage_values_that_dont_fit_a_number_field_are_said() {
     // A blob in a text column is its text: nothing lost, nothing said.
     c.execute("ALTER TABLE t ADD COLUMN name TEXT", []).unwrap();
     c.execute("UPDATE t SET name = x'6869' WHERE fid = 3", []).unwrap();
-    // Bytes that aren't UTF-8 in a text column: read with U+FFFD in their place, and said.
-    c.execute("UPDATE t SET name = x'ff68' WHERE fid = 4", []).unwrap();
+    // Bytes that aren't UTF-8 in a text column, stored as text and as a blob: read with U+FFFD in
+    // their place, and said.
+    c.execute("UPDATE t SET name = CAST(x'ff68' AS TEXT) WHERE fid = 4", []).unwrap();
+    c.execute("UPDATE t SET name = x'ff69' WHERE fid = 1", []).unwrap();
     c.execute("UPDATE t SET pop = 'n/a', area = 'n/a' WHERE fid = 2", []).unwrap();
     c.execute("UPDATE t SET pop = x'00ff', area = x'00' WHERE fid = 3", []).unwrap();
     c.execute("UPDATE t SET pop = '', area = '<Null>' WHERE fid = 4", []).unwrap();
     drop(c);
     for (values, said) in read() {
-        assert_eq!(values[0], [Value::Int(1), Value::Float(1.5), Value::Float(9_007_199_254_740_992.0), Value::Null]);
+        assert_eq!(values[0], [Value::Int(1), Value::Float(1.5), Value::Float(9_007_199_254_740_992.0), Value::Text("\u{FFFD}i".into())]);
         assert_eq!(values[1], [Value::Null, Value::Null, Value::Float(5.0), Value::Null]);
         assert_eq!(values[2], [Value::Null, Value::Null, Value::Null, Value::Text("hi".into())]);
         assert_eq!(values[3], [Value::Null, Value::Null, Value::Null, Value::Text("\u{FFFD}h".into())]);
@@ -4157,7 +4159,7 @@ fn geopackage_values_that_dont_fit_a_number_field_are_said() {
             [
                 ("t: 4 values aren't numbers and were read as empty, in 'pop', 'area'".to_string(), dropped),
                 ("t: 1 whole number was rounded to the nearest decimal number, as a decimal field doesn't keep more than 15 or 16 digits, in 'big'".to_string(), rounded),
-                ("t: 1 text value isn't valid UTF-8 and was read with U+FFFD in place of the bytes that can't be read, in 'name'; a GeoPackage holds its text in UTF-8".to_string(), Some(crate::loss::LossCode::ChangedEncoding)),
+                ("t: 2 text values aren't valid UTF-8 and were read with U+FFFD in place of the bytes that can't be read, in 'name'; a GeoPackage holds its text in UTF-8".to_string(), Some(crate::loss::LossCode::ChangedEncoding)),
             ]
         );
     }
@@ -4175,7 +4177,15 @@ fn number_text_that_rounds_and_text_that_isnt_utf8_are_counted() {
     }
     assert_eq!((unread.as_slice(), rounded.as_slice()), (&[][..], &[3][..]));
     rounded.clear();
-    for (text, ty) in [("2.5", FieldType::Double), ("0.1", FieldType::Double), ("12", FieldType::Integer), ("1e3", FieldType::Double)] {
+    for (text, ty) in [
+        ("2.5", FieldType::Double),
+        ("0.1", FieldType::Double),
+        ("12", FieldType::Integer),
+        ("1e3", FieldType::Double),
+        // A long fraction reads as the nearest decimal: no whole-number digit is lost.
+        ("0.12345678901234567891", FieldType::Double),
+        ("1.00000000000000001", FieldType::Double),
+    ] {
         super::number_text(text, ty, &mut unread, Some(&mut rounded), 0);
     }
     assert!(unread.is_empty() && rounded.is_empty(), "{unread:?} {rounded:?}");

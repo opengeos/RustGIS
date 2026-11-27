@@ -264,6 +264,7 @@ fn save_edits(s: &mut Session, p: &Value) -> CmdResult {
         let utc_dates = saved_rows.utc_dates;
         let fine_dates = saved_rows.fine_dates;
         let rounded_dates = saved_rows.rounded_dates;
+        let not_utf8 = saved_rows.not_utf8;
         let unread_dates = saved_rows.unread_dates;
         let mut stored: std::collections::HashMap<_, _> = saved_rows.features.into_iter().map(|f| (f.id, f)).collect();
         let versions = saved.versions.iter().copied().collect();
@@ -339,6 +340,9 @@ fn save_edits(s: &mut Session, p: &Value) -> CmdResult {
             s.say(note.map_text(|note| format!("{}: {note}, when read back after the save", super::saved_target(&name, table))));
         }
         if let Some(note) = rustgis_data::source::rounded_dates_note(&fields, &rounded_dates) {
+            s.say(note.map_text(|note| format!("{}: {note}, when read back after the save", super::saved_target(&name, table))));
+        }
+        if let Some(note) = rustgis_data::source::not_utf8_note(&fields, &not_utf8, rustgis_data::source::GEOPACKAGE_TEXT) {
             s.say(note.map_text(|note| format!("{}: {note}, when read back after the save", super::saved_target(&name, table))));
         }
         if let Some(note) = rustgis_data::io::utc_dates_note(&fields, &utc_dates, &super::saved_target(&name, table)) {
