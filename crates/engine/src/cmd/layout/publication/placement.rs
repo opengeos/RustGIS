@@ -106,8 +106,8 @@ pub(crate) fn veil_panel(
     // The locator and the arrow side by side, with a gap between them only when both are there.
     let between = if locator.is_some() && arrow.is_some() { gap } else { 0.0 };
     let top = (locator.map_or(0.0, |side| side + between) + aw, locator.unwrap_or(0.0).max(ah));
-    // The gap over the scale bar only when something sits above it.
-    let lead = if top.1 > 0.0 { gap } else { 0.0 };
+    // The gap over the scale bar only when there is one and something sits above it.
+    let lead = if top.1 > 0.0 && scale.1 > 0.0 { gap } else { 0.0 };
     let group = (top.0.max(scale.0), top.1 + lead + scale.1);
     let beside = legend.0 + gap + group.0 <= bw && legend.1.max(group.1) <= bh;
     let over = legend.0.max(group.0) <= bw && legend.1 + gap + group.1 <= bh;
