@@ -618,7 +618,13 @@ pub fn read_project(text: &str, dir: &str, images: &mut ReadImage, report: &mut 
     let maplayers: Vec<Node> =
         child(root, "projectlayers").map(|p| p.children().filter(|c| c.has_tag_name("maplayer")).collect()).unwrap_or_default();
     if maplayers.len() > MAX_LAYERS {
-        report.lost("", NoteKind::Skipped, LossCode::DroppedFeature, format!("layers past the first {MAX_LAYERS}"));
+        // Coded only when a layer left out holds data: a group or annotation layer holds none.
+        let text = format!("layers past the first {MAX_LAYERS}");
+        if maplayers.iter().skip(MAX_LAYERS).any(|ml| !matches!(ml.attribute("type"), Some("group" | "annotation"))) {
+            report.lost("", NoteKind::Skipped, LossCode::DroppedFeature, text);
+        } else {
+            report.skipped("", text);
+        }
     }
     let mut layers: Vec<(Option<usize>, ProjectLayer)> = Vec::new();
     // QGIS group layers (a group drawn as one) whose blending mode RustGIS's groups don't have,
