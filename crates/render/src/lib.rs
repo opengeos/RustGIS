@@ -11540,6 +11540,77 @@ mod tests {
     }
 
     #[test]
+    fn a_polygon_blocks_hole_shows_its_floor_reaching_behind_the_eye_or_round_the_whole_view() {
+        // #2318: flat ground 500 m high cut to a polygon whose hole, 2 km wide, runs from 1 km
+        // north of the view's centre to 8 km south, past the eye of a view tilted 60°. The hole's
+        // southern corners project nowhere; down the well, the centre's floor still shows at the
+        // base in the walls' sandy brown.
+        use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster};
+        let gt = GeoTransform { origin_x: -10_000.0, origin_y: 10_000.0, pixel_width: 20.0, pixel_height: -20.0 };
+        let dem =
+            Raster::new("dem", 1000, 1000, vec![vec![500.0; 1000 * 1000]], gt, Crs::WebMercator, None, ColorHint::Gray, "Float32").unwrap();
+        let mut m = Map::new("Map");
+        m.basemap = rustgis_map::Basemap::Blank;
+        m.add_raster("dem", rustgis_map::RasterLayer::from_path(dem, "dem.tif"));
+        let deg = |x: f64, y: f64| rustgis_geom::merc_to_lonlat(Coord::new(x, y));
+        let rect = |x: f64, s: f64, n: f64| [(-x, s), (x, s), (x, n), (-x, n), (-x, s)].iter().map(|&(x, y)| deg(x, y)).collect::<Vec<_>>();
+        let mut d = Dataset::new("area", GeometryType::Polygon, vec![Field::new("name", FieldType::Text)]);
+        d.push(
+            Some(Geometry::Polygon(vec![vec![rect(3000.0, -9000.0, 3000.0), rect(1000.0, -8000.0, 1000.0)]])),
+            vec![Value::Text("holed".into())],
+        );
+        d.push(
+            Some(Geometry::Polygon(vec![vec![rect(9500.0, -9500.0, 9500.0), rect(8000.0, -8000.0, 8000.0)]])),
+            vec![Value::Text("wide".into())],
+        );
+        m.add_dataset(d);
+        let camera = Camera { center: Coord::new(0.0, 0.0), res: 10.0, bearing: 0.0, pitch: 60.0 };
+        let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera, sky: false };
+        let shape = rustgis_map::view::BlockShape::Polygon { layer: "area".into(), filter: Some("name = 'holed'".into()) };
+        m.view.terrain = Some(rustgis_map::view::Terrain {
+            source: rustgis_map::view::TerrainSource::Layer("dem".into()),
+            exaggeration: 1.0,
+            block: Some(rustgis_map::view::TerrainBlock {
+                extent: None,
+                depth: Some(1000.0),
+                walls: rustgis_map::view::BLOCK_WALLS,
+                walls_layer: None,
+                water: None,
+                shape,
+            }),
+            water: None,
+        });
+        let g = terrain::Ground::of(&m, &camera).expect("terrain");
+        let per_unit = g.per_unit(Coord::new(0.0, 0.0));
+        let base = |x: f64, y: f64| {
+            let (u, v) = camera.ground_px(Coord::new(x, y));
+            camera.project_raised(u, v, -500.0 / per_unit / camera.res, view.width, view.height)
+        };
+        // The hole's southern corners are behind the eye, its northern ones in front of it.
+        assert!(base(-1000.0, -8000.0).is_none() && base(1000.0, -8000.0).is_none());
+        assert!(base(-1000.0, 1000.0).is_some() && base(1000.0, 1000.0).is_some());
+        let floor_at = |m: &mut Map, view: &View| {
+            let r = render(m, view).expect("a frame");
+            let (u, v) = view.camera.ground_px(Coord::new(0.0, 0.0));
+            let p = view.camera.project_raised(u, v, -500.0 / per_unit / view.camera.res, view.width, view.height).expect("in view");
+            r.pixmap.pixel(p.0 as u32, p.1 as u32).expect("in the frame").demultiply()
+        };
+        let sandy = |c: tiny_skia::ColorU8| c.red() > c.green() && c.green() > c.blue() + 8 && c.red() < 140;
+        let floor = floor_at(&mut m, &view);
+        assert!(sandy(floor), "{floor:?}");
+        // Seen nearly from above, wholly inside a hole 16 km across with none of its sides in
+        // view: the floor still shows.
+        if let Some(rustgis_map::view::BlockShape::Polygon { filter, .. }) =
+            m.view.terrain.as_mut().and_then(|t| t.block.as_mut()).map(|b| &mut b.shape)
+        {
+            *filter = Some("name = 'wide'".into());
+        }
+        let camera = Camera { pitch: 10.0, ..camera };
+        let floor = floor_at(&mut m, &View { camera, ..view });
+        assert!(sandy(floor), "{floor:?}");
+    }
+
+    #[test]
     fn a_round_block_cuts_the_ground_to_its_circle_and_stands_its_wall_round_it() {
         // #2318: the circle in a 2 km box over flat ground 500 m high, seen from the south. Below
         // its south-west point stands a wall where the box had ground; past it, by the box's far

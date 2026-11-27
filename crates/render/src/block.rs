@@ -1319,16 +1319,51 @@ pub(crate) fn draw_walls(
     let mut dirty: Option<tiny_skia::Rect> = None;
     // A polygon block's wells: each hole's floor at the base, in the walls' colour as shaded at
     // their foot facing away from the light, drawn first, so the ground and walls in front of it
-    // cover it and it shows only down the well. A hole with no stretch under the ground drawn
-    // isn't in the picture: no floor.
+    // cover it and it shows only down the well, fogged at its nearest stretch. A hole with no
+    // stretch under the ground drawn is in the picture only when the view lies wholly inside it,
+    // its centre in the hole: fogged there (depth 1, [`rustgis_map::Camera::depth_scale`]).
     for sides in b.outline.iter().flat_map(|o| o.hole_sides()) {
         // Each side's stretches by binary search ([`of_side`]), not a scan of all of them.
         let depth = sides.clone().filter_map(|s| u16::try_from(s).ok()).flat_map(|s| of_side(s).iter().map(|e| e.depth));
-        let Some(depth) = depth.min_by(f64::total_cmp) else {
+        let around = || {
+            let c = cam.center;
+            sides.clone().map(|i| b.side(i)).fold(false, |inside, (_, a, z)| {
+                inside ^ ((a.y > c.y) != (z.y > c.y) && c.x < a.x + (c.y - a.y) / (z.y - a.y) * (z.x - a.x))
+            })
+        };
+        let Some(depth) = depth.min_by(f64::total_cmp).or_else(|| around().then_some(1.0)) else {
+            continue;
+        };
+        // Its ring in ground px raised to the base, cut to what stands in front of the eye
+        // ([`rustgis_map::Camera::near_v`]): a corner behind it projects nowhere, and leaving it
+        // out would join its neighbours across the floor. Where an edge crosses the limit, its
+        // place and rise are taken along it. A corner that still projects nowhere: no floor.
+        let raised = |m: Coord| {
+            let (u, v) = cam.ground_px(m);
+            (u, v, (b.base / ground.per_unit(m) / cam.res.max(1e-9)).clamp(-1e7, 1e7))
+        };
+        let ring: Vec<(f64, f64, f64)> = sides.map(|i| raised(b.side(i).1)).collect();
+        let ahead = |p: (f64, f64, f64)| cam.near_v(p.2, h) - p.1;
+        let mut cut = Vec::with_capacity(ring.len() + 2);
+        for (i, &a) in ring.iter().enumerate() {
+            let q = ring[(i + 1) % ring.len()];
+            let (da, dq) = (ahead(a), ahead(q));
+            if da >= 0.0 {
+                cut.push(a);
+            }
+            if (da >= 0.0) != (dq >= 0.0) {
+                let t = da / (da - dq);
+                cut.push((a.0 + (q.0 - a.0) * t, a.1 + (q.1 - a.1) * t, a.2 + (q.2 - a.2) * t));
+            }
+        }
+        let project = |p: &(f64, f64, f64)| {
+            cam.project_raised(p.0, p.1, p.2, w, h).map(|(x, y)| (x * k, y * k)).filter(|p| p.0.is_finite() && p.1.is_finite())
+        };
+        let Some(corners) = cut.iter().map(project).collect::<Option<Vec<_>>>().filter(|c| c.len() >= 3) else {
             continue;
         };
         let mut floor = PathBuilder::new();
-        for (i, p) in sides.filter_map(|i| foot(b.side(i).1)).enumerate() {
+        for (i, p) in corners.into_iter().enumerate() {
             if i == 0 { floor.move_to(pt(p).0, pt(p).1) } else { floor.line_to(pt(p).0, pt(p).1) }
         }
         floor.close();
