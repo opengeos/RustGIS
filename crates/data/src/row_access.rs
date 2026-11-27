@@ -115,7 +115,8 @@ impl Features {
 
     /// [`Features::add_columns`], calling `step` before each row (for progress and Cancel); its
     /// error ends the change there, leaving shared rows as they were and rows of its own with the
-    /// columns in the rows before.
+    /// columns in the rows before. A caller that added the fields first drops the dataset on an
+    /// error, as Add Field's table edit does with its copy.
     ///
     /// Rows another owner shares (an Undo snapshot) are copied once, each at its new length. Copied
     /// first and then grown, every row would take a second allocation and leave the first as a gap
