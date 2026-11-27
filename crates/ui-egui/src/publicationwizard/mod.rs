@@ -195,9 +195,9 @@ fn field_width(ui: &egui::Ui) -> f32 {
 }
 
 /// The size the window opens at, where the screen has room for it: tall enough for the tallest
-/// step in English (the style step's six styles, their outlines and descriptions), with room for
+/// step in English (the style step's seven styles, their outlines and descriptions), with room for
 /// the rounding a high-density screen adds to each line.
-const SIZE: egui::Vec2 = egui::vec2(600.0, 460.0);
+const SIZE: egui::Vec2 = egui::vec2(600.0, 515.0);
 
 /// The smallest size it can be dragged to.
 const MIN_SIZE: egui::Vec2 = egui::vec2(420.0, 360.0);
@@ -596,7 +596,7 @@ mod tests {
         }
     }
 
-    /// It opens about 600 by 460 points, and can't be dragged smaller than about 420 by 360;
+    /// It opens about 600 by 515 points, and can't be dragged smaller than about 420 by 360;
     /// Next stays inside it.
     #[test]
     fn the_window_opens_at_its_size_and_keeps_a_smallest_one() {
@@ -606,7 +606,7 @@ mod tests {
         app.dialogs.publication.as_mut().unwrap().sources = "Natural Earth and the national mapping agency ".repeat(4);
         let mut h = harness(app);
         let first = window(&h).size();
-        assert!((590.0..=640.0).contains(&first.x) && (430.0..=500.0).contains(&first.y), "opens at {first:?}");
+        assert!((590.0..=640.0).contains(&first.x) && (500.0..=555.0).contains(&first.y), "opens at {first:?}");
         resize(&mut h, vec2(-500.0, -400.0));
         let small = window(&h);
         assert!((415.0..=460.0).contains(&small.width()) && (355.0..=420.0).contains(&small.height()), "smallest {small:?}");
