@@ -157,7 +157,8 @@ struct ConversionLoss {
     first: String,
     /// The first layer's note, said as it is when no other layer says the same.
     note: rustgis_data::loss::Note,
-    /// The notes' total, or `None` once any count is unknown; for notes without a tally, unused.
+    /// The notes' total, or `None` once any count is unknown or the total too large to hold; for
+    /// notes without a tally, unused.
     total: Option<u64>,
 }
 
@@ -170,7 +171,7 @@ impl ConversionLoss {
     fn add(&mut self, note: &rustgis_data::loss::Note) {
         self.layers += 1;
         let amount = note.tally.as_ref().and_then(|t| t.count);
-        self.total = self.total.zip(amount).map(|(total, amount)| total.saturating_add(amount));
+        self.total = self.total.zip(amount).and_then(|(total, amount)| total.checked_add(amount));
     }
 
     /// What is said: the first layer's note for one layer; for several, the tally's words with the

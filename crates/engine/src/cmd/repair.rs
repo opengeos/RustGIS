@@ -286,7 +286,10 @@ fn replace_linked(
 fn other_family_only(notes: &rustgis_data::loss::Notes) -> Option<&rustgis_data::loss::Note> {
     use rustgis_data::loss::{Counted, Finder};
     notes.iter().find(|note| {
-        note.tally.as_ref().is_some_and(|t| t.by == Finder::Duckdb && t.counted == Counted::OtherGeometryType && t.count != Some(0))
+        // A definite count: one that is unknown says only that rows may have been left out.
+        note.tally
+            .as_ref()
+            .is_some_and(|t| t.by == Finder::Duckdb && t.counted == Counted::OtherGeometryType && t.count.is_some_and(|n| n > 0))
     })
 }
 

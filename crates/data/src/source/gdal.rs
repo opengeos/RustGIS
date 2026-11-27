@@ -805,7 +805,6 @@ fn placement(fgb: &Path) -> Placement {
     })
 }
 
-/// The notice for a layer converted to longitude/latitude because its system can't be read.
 /// A warning GDAL gave `count` times while converting, in its words. Its integer overflows,
 /// whatever the value, are counted as one kind, so several layers' are said once.
 fn gdal_warning(line: String, count: u64) -> crate::loss::Note {
@@ -815,6 +814,7 @@ fn gdal_warning(line: String, count: u64) -> crate::loss::Note {
     Note::plain(text).with_tally(Tally::new(Finder::Gdal, counted, Some(count)))
 }
 
+/// The notice for a layer converted to longitude/latitude because its system can't be read.
 pub fn in_lonlat_note(layer: &str) -> String {
     in_lonlat_notes(&[layer])
 }
