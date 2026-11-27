@@ -6173,6 +6173,14 @@ impl RustGisApp {
         if let Some(id) = claim {
             self.session.download_continues(id)?;
         }
+        // An effective date for an address that can't be an AIXM message is refused before the
+        // download, not after it.
+        if let Err(e) = rustgis_engine::cmd::layer::check_url_at(p) {
+            if let Some(id) = claim {
+                self.session.download_failed(id);
+            }
+            return Err(e);
+        }
         let still = claim.and_then(|id| self.session.download_still(id));
         rustgis_engine::render::rustgis_tiles::cache::with_optional_still(still, || {
             if p.get("geolibreZarr").and_then(Value::as_bool) == Some(true) {
@@ -6307,10 +6315,15 @@ impl RustGisApp {
             };
             // The request receipt is correlation only; its admitted claim stays outside JSON.
             let mut q = json!({"url": url});
-            for k in ["name", "layer", "crs", "connection", "from"] {
+            for k in ["name", "layer", "crs", "connection", "from", "at"] {
                 if let Some(v) = p.get(k).filter(|v| v.as_str().is_some_and(|s| !s.trim().is_empty())) {
                     q[k] = v.clone();
                 }
+            }
+            // An effective date given as anything but text is passed on, for the command to refuse
+            // rather than the import to go on without it.
+            if let Some(v) = p.get("at").filter(|v| !v.is_null() && !v.is_string()) {
+                q["at"] = v.clone();
             }
             // A PDF's page may be given as a number too (#2336): any other value is passed on as
             // given, for `layer.addDownload` to refuse rather than open the first page.

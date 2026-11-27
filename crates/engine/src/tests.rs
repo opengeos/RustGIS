@@ -26771,6 +26771,108 @@ fn spreadsheets_feeds_landxml_and_polylines() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// An AIXM message through the commands: a layer per kind at the effective date asked, from a
+/// path and from text, an "at" that isn't a date refused, and "at" refused for any other file.
+#[test]
+fn aixm_messages_are_added_at_the_date_asked() {
+    let donlon = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../data/tests/data/donlon-aixm.xml"));
+    let dir = std::env::temp_dir().join(format!("rustgis-aixm-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("donlon.xml");
+    std::fs::write(&path, donlon).unwrap();
+    let mut s = Session::new(Project::default());
+    s.run("layer.addData", &json!({"path": path.display().to_string(), "at": "2026-01-15"})).unwrap();
+    for name in ["donlon Airspace", "donlon DesignatedPoint", "donlon RouteSegment", "donlon AirportHeliport ARP"] {
+        assert!(s.map().layer_by_name(name).is_some(), "no {name}");
+    }
+    // Runways have no geometry of their own: a table of the project.
+    assert!(s.project.tables.iter().any(|t| t.dataset.name == "donlon Runway"));
+    // The same as text, before every feature began: nothing to add, and why.
+    let text = String::from_utf8(donlon.to_vec()).unwrap();
+    let e = s.run("layer.addDataText", &json!({"fileName": "early.xml", "text": text, "at": "2000-01-01"})).unwrap_err();
+    assert!(e.contains("not in force"), "{e}");
+    let e = s.run("layer.addData", &json!({"path": path.display().to_string(), "at": "someday"})).unwrap_err();
+    assert!(e.contains("isn't a date"), "{e}");
+    let gpx = dir.join("track.gpx");
+    std::fs::write(&gpx, r#"<gpx version="1.1"><wpt lat="1" lon="2"><name>W</name></wpt></gpx>"#).unwrap();
+    let e = s.run("layer.addData", &json!({"path": gpx.display().to_string(), "at": "2026-01-15"})).unwrap_err();
+    assert!(e.contains("isn't one"), "{e}");
+    // A single-layer file too, and the bytes of one: refused, never ignored.
+    let geojson = dir.join("roads.geojson");
+    std::fs::write(&geojson, r#"{"type":"FeatureCollection","features":[]}"#).unwrap();
+    let e = s.run("layer.addData", &json!({"path": geojson.display().to_string(), "at": "2026-01-15"})).unwrap_err();
+    assert!(e.contains("isn't one"), "{e}");
+    let e = s.run("layer.addData", &json!({"path": path.display().to_string(), "at": 20260115})).unwrap_err();
+    assert!(e.contains("written as text"), "{e}");
+    let e = s.run("layer.addData", &json!({"path": path.display().to_string(), "crs": "EPSG:3857"})).unwrap_err();
+    assert!(e.contains("names its own system"), "{e}");
+    // A layer picked that isn't the first still gets what the file as a whole says.
+    let later = r#"<message:hasMember><aixm:DesignatedPoint gml:id="f"><gml:identifier codeSpace="urn:uuid:">late</gml:identifier><aixm:timeSlice><aixm:DesignatedPointTimeSlice gml:id="s"><gml:validTime><gml:TimePeriod gml:id="t"><gml:beginPosition>2030-01-01T00:00:00Z</gml:beginPosition><gml:endPosition indeterminatePosition="unknown"/></gml:TimePeriod></gml:validTime><aixm:interpretation>BASELINE</aixm:interpretation><aixm:sequenceNumber>1</aixm:sequenceNumber><aixm:correctionNumber>0</aixm:correctionNumber><aixm:name>LATER</aixm:name></aixm:DesignatedPointTimeSlice></aixm:timeSlice></aixm:DesignatedPoint></message:hasMember>"#;
+    let text = String::from_utf8(donlon.to_vec()).unwrap().replacen("<message:hasMember>", &format!("{later}<message:hasMember>"), 1);
+    let picked = dir.join("picked.xml");
+    std::fs::write(&picked, text).unwrap();
+    s.notices.clear();
+    s.run("layer.addData", &json!({"path": picked.display().to_string(), "layer": "picked Runway", "at": "2026-01-15"})).unwrap();
+    assert!(s.notices.iter().any(|n| n.text.contains("1 feature not in force")), "{:?}", s.notices);
+    // Listed by name at the date asked, as Add Data would add them; "at" refused for any other file
+    // listed, and for an address that can't be a message, before it is opened.
+    let listed = s.run("info.fileLayers", &json!({"path": path.display().to_string(), "at": "2026-01-15"})).unwrap();
+    let names: Vec<&str> = listed["layers"].as_array().unwrap().iter().filter_map(|v| v.as_str()).collect();
+    assert!(names.contains(&"donlon Airspace") && names.contains(&"donlon Runway"), "{names:?}");
+    let csv = dir.join("points.csv");
+    std::fs::write(&csv, "x,y\n1,2\n").unwrap();
+    let e = s.run("info.fileLayers", &json!({"path": csv.display().to_string(), "at": "2026-01-15"})).unwrap_err();
+    assert!(e.contains("isn't one"), "{e}");
+    let e = s.run("layer.addUrl", &json!({"url": "https://example.com/roads.fgb?token=SECRET", "at": "2026-01-15"})).unwrap_err();
+    assert!(e.contains("isn't one") && !e.contains("SECRET"), "{e}");
+    let z = s.run("layer.addUrl", &json!({"url": "https://example.com/a.zip?token=SECRET", "at": "2026-01-15"})).unwrap_err();
+    assert!(z.contains("unzip it") && !z.contains("SECRET"), "{z}");
+    // An answer from an address with no extension is refused without naming its last segment.
+    let id = s.download_started();
+    assert!(s.download_landed(id, br#"{"type":"FeatureCollection","features":[]}"#.to_vec()));
+    let e3 =
+        s.run("layer.addDownload", &json!({"id": id, "url": "https://example.test/api/key-SECRET42", "at": "2026-01-15"})).unwrap_err();
+    assert!(e3.contains("isn't one") && !e3.contains("SECRET42"), "{e3}");
+    // A GeoLibre download is never an AIXM message.
+    for key in ["geolibreProject", "geolibreLayer", "geolibreZarr"] {
+        let id = s.download_started();
+        assert!(s.download_landed(id, b"{}".to_vec()));
+        let mut q = json!({"id": id, "url": "https://example.test/project.json", "at": "2026-01-15"});
+        q[key] = json!(true);
+        let g = s.run("layer.addDownload", &q).unwrap_err();
+        assert!(g.contains("a GeoLibre download isn't one"), "{key}: {g}");
+    }
+    // A window of a GeoTIFF, before it is read.
+    let w = s.run("layer.addUrl", &json!({"url": "https://example.test/download", "bbox": [0, 0, 1, 1], "at": "2026-01-15"})).unwrap_err();
+    assert!(w.contains("doesn't read at"), "{w}");
+    for blank in ["", "  "] {
+        let p = json!({"url": "https://example.test/download", "bbox": [0, 0, 1, 1], "at": blank});
+        assert!(crate::cmd::layer::window_asked(&s, &p).is_ok(), "{blank:?}");
+    }
+    // A service's answer read already: refused, and not held.
+    s.landed_reads.push((
+        7,
+        Box::new((rustgis_data::Dataset::new("pbf", rustgis_data::GeometryType::Point, Vec::new()), rustgis_data::ReadReport::default())),
+    ));
+    let asked = json!({"id": 7, "url": "https://example.test/FeatureServer/0/query", "service": true});
+    let mut dated = asked.clone();
+    dated["at"] = json!("2026-01-15");
+    let e2 = s.run("layer.addDownload", &dated).unwrap_err();
+    assert!(e2.contains("the service's answer isn't one"), "{e2}");
+    assert!(s.landed_reads.is_empty());
+    s.landed_reads.push((
+        7,
+        Box::new((rustgis_data::Dataset::new("pbf", rustgis_data::GeometryType::Point, Vec::new()), rustgis_data::ReadReport::default())),
+    ));
+    let layers = s.map().layers.len();
+    s.run("layer.addDownload", &asked).unwrap();
+    assert!(s.landed_reads.is_empty() && s.map().layers.len() == layers + 1);
+    // An address with no extension found to be a GeoTIFF refuses it too, before it is added.
+    let e = crate::cmd::layer::add_cog(&mut s, &json!({"at": "2026-01-15"}), "https://example.test/download", true).unwrap_err();
+    assert!(e.contains("isn't one"), "{e}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// A raster GDAL reads, added with a coordinate system: the project names the file and the
 /// choice, and opens it again after the conversion cache is cleared. (Runs where GDAL is.)
 #[cfg(not(target_arch = "wasm32"))]
@@ -52684,6 +52786,13 @@ fn a_cog_windows_read_is_apart_from_adding_it() {
     let layers = s.map().layers.len();
     let read = std::thread::spawn(move || read_cog_window(&asked)).join().unwrap().unwrap();
     assert_eq!(s.map().layers.len(), layers, "nothing added yet");
+    // An effective date is for an AIXM message: refused, and not held.
+    let dated = read_cog_window(&window_asked(&s, &p).unwrap()).unwrap();
+    let id = s.download_started();
+    assert!(s.download_landed_window(id, dated));
+    let e = s.run("layer.addDownload", &json!({"id": id, "url": url, "at": "2026-01-15"})).unwrap_err();
+    assert!(e.contains("a window of a GeoTIFF isn't one"), "{e}");
+    assert!(s.landed_windows.is_empty() && s.map().layers.len() == layers);
     let id = s.download_started();
     assert!(s.download_landed_window(id, read));
     let mark = s.notice_mark();

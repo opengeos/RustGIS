@@ -679,11 +679,16 @@ pub(crate) fn add_service_layer(
         Downloaded::Bytes(bytes) => {
             let bytes = features_answer(s, name, url, bytes, bounds);
             let file = file(&bytes)?;
+            super::layer::check_answer_at(p, url, &file, &bytes)?;
             super::raster::add_named_bytes(s, p, file, bytes, zoom)?
         }
         // Read in protocol buffer pages: their positions as the service's system places them, so
         // there are no axes to check.
-        Downloaded::Read(read) => super::layer::add_read(s, p, *read, zoom)?,
+        Downloaded::Read(read) => {
+            // Never an AIXM message, so an effective date is refused.
+            super::layer::check_at(p, "the service's answer", || false)?;
+            super::layer::add_read(s, p, *read, zoom)?
+        }
     };
     mark_service_source(s, &r, url);
     match &drawing {

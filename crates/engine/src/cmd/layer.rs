@@ -21,13 +21,13 @@ pub const MAX_LAYER_NAME: usize = 200;
 pub fn commands() -> Vec<C> {
     vec![
         C::new("layer.addData", "Add Data", "Home › Add", add_data).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files))
-            .params(r#"{"path": string, "name"?: string, "layer"?: "GeoPackage, GDAL, DuckDB or DXF layer, or a PDF's page number (the first when left out or blank)", "paperSpace"?: "bool: a DXF's layout entities too", "blocks"?: "bool: a DXF's block (图块) contents, true by default", "stream"?: "bool: true links the file instead of copying it (read in place, a view at a time; the project keeps its path, not its features), false copies it into the project; left out, decided by its size or feature count", "as"?: "scan" (a TIFF, PNG, JPEG or PDF page, even a photo, a GeoTIFF or a GeoPDF, as a picture with no coordinates), "crs"?: "EPSG:… (or WKT) for Shapefile coordinates (overrides .prj), a CSV, a DXF (which never says), a CityJSON or CityGML model (it replaces the system a model file names; in a zip, it is used for a model naming none RustGIS knows), or a GDAL or DuckDB file that doesn't say (GDAL takes an authority code such as EPSG:2263 or the exact names WGS84, WGS72, NAD27, NAD83, not WKT or a file)", "x"?: "CSV x/longitude column", "y"?: "CSV y/latitude column", "wkt"?: "CSV WKT geometry column", "delimiter"?: ","|";"|"\\t"|"|"}"#),
+            .params(r#"{"path": string, "name"?: string, "layer"?: "GeoPackage, GDAL, DuckDB or DXF layer, or a PDF's page number (the first when left out or blank)", "paperSpace"?: "bool: a DXF's layout entities too", "blocks"?: "bool: a DXF's block (图块) contents, true by default", "stream"?: "bool: true links the file instead of copying it (read in place, a view at a time; the project keeps its path, not its features), false copies it into the project; left out, decided by its size or feature count", "as"?: "scan" (a TIFF, PNG, JPEG or PDF page, even a photo, a GeoTIFF or a GeoPDF, as a picture with no coordinates), "crs"?: "EPSG:… (or WKT) for Shapefile coordinates (overrides .prj), a CSV, a DXF (which never says), a CityJSON or CityGML model (it replaces the system a model file names; in a zip, it is used for a model naming none RustGIS knows), or a GDAL or DuckDB file that doesn't say (GDAL takes an authority code such as EPSG:2263 or the exact names WGS84, WGS72, NAD27, NAD83, not WKT or a file)", "x"?: "CSV x/longitude column", "y"?: "CSV y/latitude column", "wkt"?: "CSV WKT geometry column", "delimiter"?: ","|";"|"\\t"|"|", "at"?: "an AIXM message's effective date (2026-01-15 or 2026-01-15T12:00Z; UTC unless it says): its features as they are then, today when left out"}"#),
         C::new("layer.addPhotos", "Add Photos", "Home › Add", add_photos).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files)).params(
             r#"{"paths"?: [JPEG photo files], "folder"?: "a folder of photos (every JPEG in it)", "name"?: "the layer (default Photos; photos join it when it exists)"}"#,
         ),
         C::new("info.fileLayers", "List Layers in File", "Home › Add › Add Data", file_layers).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files))
             .view()
-            .params(r#"{"path": string, "crs"?: "EPSG:… for a CityJSON model (.city.json, a .json, or in a zip) or a CityGML model (.gml, .xml, or in a zip): it replaces the system a model file names; in a zip, it is used for a model naming none RustGIS knows (as layer.addData)", "link"?: "bool: for a file Add Data can link instead of copying (GeoPackage, GeoParquet, FlatGeobuf, Shapefile, .geojson; desktop), also say how it would take it, as link: linked (what it does without stream; for a .geojson, by its size alone, so Add Data sends the answer, as layer.addData unasked also looks at its count) and copy (whether it can be read whole); it opens the tables, up to the first read in place, so only when asked"}"#),
+            .params(r#"{"path": string, "crs"?: "EPSG:… for a CityJSON model (.city.json, a .json, or in a zip) or a CityGML model (.gml, .xml, or in a zip): it replaces the system a model file names; in a zip, it is used for a model naming none RustGIS knows (as layer.addData)", "link"?: "bool: for a file Add Data can link instead of copying (GeoPackage, GeoParquet, FlatGeobuf, Shapefile, .geojson; desktop), also say how it would take it, as link: linked (what it does without stream; for a .geojson, by its size alone, so Add Data sends the answer, as layer.addData unasked also looks at its count) and copy (whether it can be read whole); it opens the tables, up to the first read in place, so only when asked", "at"?: "an AIXM message's effective date: its layers then (as layer.addData)"}"#),
         C::new("info.fileColumns", "List Columns in File", "Home › Add › Add Data › Delimited Text", file_columns).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files)).view().params(
             r#"{"path": "a delimited text file (CSV, TSV, TXT, DAT, or gzip-compressed text) or a spreadsheet", "delimiter"?: ","|";"|"\\t"|"|", "layer"?: "a spreadsheet's sheet (the first by default)", "crs"?: "EPSG:… (or WKT), as layer.addData: a projected system keeps the columns found by name"}"#,
         ),
@@ -51,14 +51,14 @@ pub fn commands() -> Vec<C> {
             .params(r#"{"layer"?: name|id, "crs": "EPSG:… or WKT; reinterpret native coordinates, without rewriting the source file"}"#),
         C::new("layer.loadAll", "Load All Features", "Layers", load_all).roles(&[]).effects(crate::policy::Effects::NONE).when(need_streamed).params(r#"{"layer"?: name|id}"#),
         C::new("layer.addUrl", "Add Data From URL", "Home › Add › Add Data", add_url).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Network)).params(
-            r#"{"url": "https://…/data.geojson|.csv|.parquet|.fgb|.gpkg|.zip|.shp (its .dbf fetched beside it, and its .shx, .prj and .cpg when there)|.kml|.kmz|.gpx|.tif|.grb|.grib|.grb2|.grib2 (GRIB)|.jp2 (JPEG 2000: desktop, through GDAL) (the format from the address, else the contents) | a .pmtiles archive", "bytes"?: "[first, last]: only these octets of a GRIB file (counted from 0, both included, as HTTP's Range and curl -r write them; at most 64 MB), read as the file (desktop and command line): a record found in its wgrib inventory", "format"?: "grib: with bytes, the address is a GRIB file whatever its name says", "name"?: text, "layer"?: "one layer of a zip, KML or GPX", "zoom"?: "bool: true frames everything added; false keeps the view, even on an empty map; omitted, the first content on an empty map is framed (a GeoParquet, FlatGeobuf or cloud-optimised GeoTIFF read in place likewise; a PMTiles or MBTiles archive ignores zoom and is framed on its bounds unless it covers the whole world)", "x"?, "y"?, "wkt"?, "crs"?, "delimiter"?, "paperSpace"?, "blocks"?, "stream"?, "as"? (as layer.addData), "whole"?: "bool: download a cloud-optimised GeoTIFF whole (as a raster layer) instead of reading it in place (an address without a file name is read in place when its first bytes are a cloud-optimised GeoTIFF)", "cog"?: "bool: the address is a cloud-optimised GeoTIFF whatever its name says (the app's probe found it so)", "bbox"?: "[west, south, east, north] in degrees | "view": a cloud-optimised GeoTIFF's window as a raster layer (desktop and command line), read by range at full resolution, in the file's coordinate system, with its colour table and class names; at most 64 million values (all bands)", "cellSize"?: "with bbox: the coarsest overview whose cells are at most this size is read (the file's units; metres for longitude/latitude, a degree taken as 111.32 km)", "cube"?: "bool: a data cube's file: a tile layer that follows the time slider (stac.addCube adds them), kept one when the project opens again", "start"?, "end"?, "unit"?, "interval"?, "dates"?: "a GeoTIFF address with date placeholders ({date:YYYY}, {YYYY}{MM}{DD}), one file per date: the dates it spans and steps through (as time.set), turning the time slider on", "connection"?: "the id of the saved web-service connection it comes from (as service.add)", "service"?: "bool: a web service's features (an ArcGIS query, OGC API Features items): read in pages as service.add reads them, known by the address as its layers are, and an ArcGIS layer drawn as its description says", "bounds"?: "with service: [west, south, east, north], the layer's longitude/latitude bounds its axes are checked against", "from"?: "the web document address that named url (internal: enforces public-address reach)", "fromDocument"?: bool, "anonymous"?: bool (internal: a plugin-origin download must never adopt a saved login), "coverage"?: bool (a WCS coverage's GetCoverage address, service.coverage's: a GeoTIFF, else the service's error; one that doesn't say its system is read in the one the address asks for), "coverageCrs"?: "EPSG:<code> (with coverage: the system it was asked in, service.coverage's coverageCrs, when the address doesn't say it)", "request"?: "number (internal: the download a plugin command left to the app, #1202)"}"#,
+            r#"{"url": "https://…/data.geojson|.csv|.parquet|.fgb|.gpkg|.zip|.shp (its .dbf fetched beside it, and its .shx, .prj and .cpg when there)|.kml|.kmz|.gpx|.tif|.grb|.grib|.grb2|.grib2 (GRIB)|.jp2 (JPEG 2000: desktop, through GDAL) (the format from the address, else the contents) | a .pmtiles archive", "bytes"?: "[first, last]: only these octets of a GRIB file (counted from 0, both included, as HTTP's Range and curl -r write them; at most 64 MB), read as the file (desktop and command line): a record found in its wgrib inventory", "format"?: "grib: with bytes, the address is a GRIB file whatever its name says", "name"?: text, "layer"?: "one layer of a zip, KML or GPX", "zoom"?: "bool: true frames everything added; false keeps the view, even on an empty map; omitted, the first content on an empty map is framed (a GeoParquet, FlatGeobuf or cloud-optimised GeoTIFF read in place likewise; a PMTiles or MBTiles archive ignores zoom and is framed on its bounds unless it covers the whole world)", "x"?, "y"?, "wkt"?, "crs"?, "delimiter"?, "paperSpace"?, "blocks"?, "stream"?, "as"?, "at"? (as layer.addData), "whole"?: "bool: download a cloud-optimised GeoTIFF whole (as a raster layer) instead of reading it in place (an address without a file name is read in place when its first bytes are a cloud-optimised GeoTIFF)", "cog"?: "bool: the address is a cloud-optimised GeoTIFF whatever its name says (the app's probe found it so)", "bbox"?: "[west, south, east, north] in degrees | "view": a cloud-optimised GeoTIFF's window as a raster layer (desktop and command line), read by range at full resolution, in the file's coordinate system, with its colour table and class names; at most 64 million values (all bands)", "cellSize"?: "with bbox: the coarsest overview whose cells are at most this size is read (the file's units; metres for longitude/latitude, a degree taken as 111.32 km)", "cube"?: "bool: a data cube's file: a tile layer that follows the time slider (stac.addCube adds them), kept one when the project opens again", "start"?, "end"?, "unit"?, "interval"?, "dates"?: "a GeoTIFF address with date placeholders ({date:YYYY}, {YYYY}{MM}{DD}), one file per date: the dates it spans and steps through (as time.set), turning the time slider on", "connection"?: "the id of the saved web-service connection it comes from (as service.add)", "service"?: "bool: a web service's features (an ArcGIS query, OGC API Features items): read in pages as service.add reads them, known by the address as its layers are, and an ArcGIS layer drawn as its description says", "bounds"?: "with service: [west, south, east, north], the layer's longitude/latitude bounds its axes are checked against", "from"?: "the web document address that named url (internal: enforces public-address reach)", "fromDocument"?: bool, "anonymous"?: bool (internal: a plugin-origin download must never adopt a saved login), "coverage"?: bool (a WCS coverage's GetCoverage address, service.coverage's: a GeoTIFF, else the service's error; one that doesn't say its system is read in the one the address asks for), "coverageCrs"?: "EPSG:<code> (with coverage: the system it was asked in, service.coverage's coverageCrs, when the address doesn't say it)", "request"?: "number (internal: the download a plugin command left to the app, #1202)"}"#,
         ),
         C::new("layer.addDownload", "Add Downloaded Data", "Home › Add", add_download).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Reserved).with(crate::policy::Effect::Files))
-            .params(r#"{"id": a download the app finished (Home › Add › Add Data › From URL), "url": its address, "name"?: text, "layer"?: text, "zoom"?: bool, "x"?, "y"?, "wkt"?, "crs"?, "delimiter"?, "paperSpace"?, "blocks"?, "stream"?, "as"? (as layer.addData), "service"?: bool (a service's features: their axes (when they came as GeoJSON) and paging are checked, and the address is kept as the layer's source), "bounds"?: [west, south, east, north] (with service: the layer's longitude/latitude bounds from its capabilities, which its axes are checked against; without bounds they are left as they come; ignored without service), "coverage"?: bool (a WCS coverage: a GeoTIFF, else the service's error, and its request kept as the layer's source), "coverageCrs"?: "EPSG:<code>" (internal, with coverage: the system service.coverage's request asks it in (its coverageCrs), for an answer that doesn't say its own, when the address doesn't say it), "drawingInfo"?: object (internal, with service: an ArcGIS layer's drawingInfo from its description, which the layer is drawn with), "geolibreProject"?: bool (internal: downloaded project JSON), "geolibreLayer"?: {"token", "record"} (internal: reserved imported layer and its saved style), "geolibreZarr"?: bool (internal: an imported Zarr slice as GeoTIFF), "connection"?: "as layer.addUrl", "anonymous"?: bool (internal: preserves a plugin-origin download's anonymous reads), "request"?: number (internal: the download a plugin command left to the app, #1202), "window"?: {"bbox", "cellSize"?, "cog"?} (internal: what a cloud-optimised GeoTIFF's window the app read off the frame asked for, for a task to read it again, #1330)}"#),
+            .params(r#"{"id": a download the app finished (Home › Add › Add Data › From URL), "url": its address, "name"?: text, "layer"?: text, "zoom"?: bool, "x"?, "y"?, "wkt"?, "crs"?, "delimiter"?, "paperSpace"?, "blocks"?, "stream"?, "as"?, "at"? (as layer.addData), "service"?: bool (a service's features: their axes (when they came as GeoJSON) and paging are checked, and the address is kept as the layer's source), "bounds"?: [west, south, east, north] (with service: the layer's longitude/latitude bounds from its capabilities, which its axes are checked against; without bounds they are left as they come; ignored without service), "coverage"?: bool (a WCS coverage: a GeoTIFF, else the service's error, and its request kept as the layer's source), "coverageCrs"?: "EPSG:<code>" (internal, with coverage: the system service.coverage's request asks it in (its coverageCrs), for an answer that doesn't say its own, when the address doesn't say it), "drawingInfo"?: object (internal, with service: an ArcGIS layer's drawingInfo from its description, which the layer is drawn with), "geolibreProject"?: bool (internal: downloaded project JSON), "geolibreLayer"?: {"token", "record"} (internal: reserved imported layer and its saved style), "geolibreZarr"?: bool (internal: an imported Zarr slice as GeoTIFF), "connection"?: "as layer.addUrl", "anonymous"?: bool (internal: preserves a plugin-origin download's anonymous reads), "request"?: number (internal: the download a plugin command left to the app, #1202), "window"?: {"bbox", "cellSize"?, "cog"?} (internal: what a cloud-optimised GeoTIFF's window the app read off the frame asked for, for a task to read it again, #1330)}"#),
         C::new("layer.addEncodedPolyline", "Add Encoded Polyline", "Home › Add", add_encoded_polyline).roles(&[]).effects(crate::policy::Effects::NONE).params(
             r#"{"polyline": "encoded polyline text" | [texts] (one line each), "precision"?: 5 (Google) | 6 (OSRM, Valhalla), "name"?: text}"#,
         ),
-        C::new("layer.addDataText", "Add Data (from text)", "Home › Add", add_data_text).roles(&[]).effects(crate::policy::Effects::NONE).params(r#"{"fileName": "name.geojson|.csv|.tsv|.city.json|.gml|.dxf|.kml|.gpx|.rss|.xml (LandXML, GeoRSS) (a file of several layers, such as a city model, KML or GPX: all its layers)", "text": string, "name"?: text, "x"?, "y"?, "wkt"?, "crs"?, "delimiter"? (as layer.addData, for delimited text; crs also for a CityJSON or CityGML model, and for a DXF), "layer"?, "paperSpace"?, "blocks"? (as layer.addData, for a DXF)}"#),
+        C::new("layer.addDataText", "Add Data (from text)", "Home › Add", add_data_text).roles(&[]).effects(crate::policy::Effects::NONE).params(r#"{"fileName": "name.geojson|.csv|.tsv|.city.json|.gml|.dxf|.kml|.gpx|.rss|.xml (LandXML, GeoRSS, AIXM) (a file of several layers, such as a city model, KML or GPX: all its layers)", "text": string, "name"?: text, "x"?, "y"?, "wkt"?, "crs"?, "delimiter"? (as layer.addData, for delimited text; crs also for a CityJSON or CityGML model, and for a DXF), "layer"?, "paperSpace"?, "blocks"? (as layer.addData, for a DXF), "at"? (as layer.addData, for an AIXM message)}"#),
         C::new("layer.addSample", "Add Sample Data", "Home › Add › Add Data", add_sample).roles(&[]).effects(crate::policy::Effects::NONE).params(r#"{"name": "countries"|"cities"|"rivers"|"lakes"}"#),
         C::new("layer.remove", "Remove", "Layers", remove).roles(&[]).effects(crate::policy::Effects::NONE)
             .key("Delete")
@@ -2010,6 +2010,8 @@ fn add_geodatabase(s: &mut Session, p: &Value, path: &str) -> CmdResult {
 /// DBF picks with geometry follow the full Shapefile import path.
 fn add_data(s: &mut Session, p: &Value) -> CmdResult {
     let path = s_req(p, "path")?;
+    // An effective date is for an AIXM message only: refused for any other file, not ignored.
+    check_at(p, path, || may_be_aixm_path(path))?;
     #[cfg(not(target_arch = "wasm32"))]
     if Path::new(path).extension().is_some_and(|e| e.eq_ignore_ascii_case("dbf")) {
         if let Some(read) = super::reads::take::<WholeRead>(s, &dbf_shapefile_key(path)) {
@@ -2220,10 +2222,10 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
                 super::say_crs_note(s, crs);
             }
             let (full, reads) = read?;
-            // City models and OSM keep the file-wide report on their first layer. A feature-service
+            // City models, AIXM messages and OSM keep the file-wide report on their first layer. A feature-service
             // PBF has only one layer, so this flag does not transfer any report for it.
             #[cfg(not(target_arch = "wasm32"))]
-            let whole = is_city_model_path(path) || path.to_ascii_lowercase().ends_with(".pbf");
+            let whole = is_city_model_path(path) || is_aixm_path(path) || path.to_ascii_lowercase().ends_with(".pbf");
             #[cfg(target_arch = "wasm32")]
             let whole = !path.to_ascii_lowercase().ends_with(".zip");
             return add_picked(s, p, &full, reads, whole, Vec::new(), None);
@@ -2301,15 +2303,104 @@ fn past_read_as_added(path: &str, len: u64) -> Option<String> {
     (!ahead && len > floor).then(|| rustgis_data::io::file_size_error(path, floor))
 }
 
+/// An AIXM message's layers at the effective date `"at"` asks (today when it doesn't), or `None`
+/// for a file that isn't one. `"at"` given for any other file is refused, not ignored.
+fn aixm_reads(p: &Value, file_name: &str, bytes: &[u8]) -> Result<Option<Vec<rustgis_data::io::LayerRead>>, String> {
+    let aixm = rustgis_data::io::is_aixm(file_name, bytes);
+    let opts = check_at(p, file_name, || aixm)?;
+    if !aixm {
+        return Ok(None);
+    }
+    if ps(p, "crs").is_some_and(|c| !c.trim().is_empty()) {
+        return Err(format!("\"crs\" doesn't apply to {file_name}: an AIXM message names its own system (srsName)"));
+    }
+    let reads = rustgis_data::aixm::read(file_name, bytes, &opts).map_err(|e| e.to_string())?;
+    Ok(Some(
+        reads
+            .into_iter()
+            .map(|(mut dataset, report)| {
+                dataset.source.get_or_insert_with(|| file_name.to_string());
+                rustgis_data::io::LayerRead { dataset, report, styles: Vec::new() }
+            })
+            .collect(),
+    ))
+}
+
+/// The effective date `"at"` asks of an AIXM message, read as `aixm` says whether the file is
+/// one: refused when it isn't text, isn't a date, or is given for any other file, never ignored.
+pub(crate) fn check_at(p: &Value, file_name: &str, aixm: impl FnOnce() -> bool) -> Result<rustgis_data::aixm::Options, String> {
+    let at = match p.get("at") {
+        None | Some(Value::Null) => return Ok(rustgis_data::aixm::Options::default()),
+        Some(Value::String(t)) if t.trim().is_empty() => return Ok(rustgis_data::aixm::Options::default()),
+        Some(Value::String(t)) => t.trim(),
+        Some(_) => return Err("\"at\" is a date written as text, such as 2026-01-15 or 2026-01-15T12:00Z".to_string()),
+    };
+    if !aixm() {
+        let zipped = if file_name.to_ascii_lowercase().ends_with(".zip") {
+            " (an AIXM message in a zip is read as it is today: unzip it to choose a date)"
+        } else {
+            ""
+        };
+        return Err(format!("\"at\" is the effective date of an AIXM message, and {file_name} isn't one{zipped}"));
+    }
+    rustgis_data::aixm::Options::at_text(at)
+}
+
+/// Refuses an effective date for an address's answer that isn't an AIXM message, naming the
+/// address without quoting it (its last segment, which names the file, can hold a key).
+pub(crate) fn check_answer_at(p: &Value, url: &str, name: &str, bytes: &[u8]) -> Result<(), String> {
+    check_at(p, unquoted(url), || rustgis_data::io::is_aixm(name, bytes)).map(|_| ())
+}
+
+/// How a refusal names an address: not quoted, since it can hold a key, but a zip said as one.
+fn unquoted(url: &str) -> &'static str {
+    if address_extension(url).as_deref() == Some("zip") { "that address's .zip" } else { "the file at that address" }
+}
+
+/// Refuses an effective date (`"at"`) for an address that can't be an AIXM message (one naming
+/// another kind of file), before anything is downloaded: what `layer.addUrl` does, for the app's
+/// own way of adding an address.
+pub fn check_url_at(p: &Value) -> Result<(), String> {
+    let url = ps(p, "url").map(str::trim).unwrap_or("");
+    check_at(p, unquoted(url), || address_extension(url).is_none_or(|e| e == "xml" || e == "gml")).map(|_| ())
+}
+
+/// Whether a file named `path` may be an AIXM message: by its first bytes on the desktop, by its
+/// name in the browser (where its contents are checked when read).
+fn may_be_aixm_path(path: &str) -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    return is_aixm_path(path);
+    #[cfg(target_arch = "wasm32")]
+    {
+        let lower = path.to_ascii_lowercase();
+        lower.ends_with(".xml") || lower.ends_with(".gml")
+    }
+}
+
 /// Whether the desktop app reads a file of several layers whole ahead, off the UI thread
-/// ([`add_data_ahead`], [`read_layers_file`]): a ZIP, a city model, a GML, GPX or TopoJSON file,
-/// an OpenStreetMap extract (`.pbf`; a large one goes to GDAL instead where it is installed, and
+/// ([`add_data_ahead`], [`read_layers_file`]): a ZIP, a city model, an AIXM message, a GML, GPX or
+/// TopoJSON file, an OpenStreetMap extract (`.pbf`; a large one goes to GDAL instead where it is installed, and
 /// isn't read ahead, [`large_osm`]).
 #[cfg(not(target_arch = "wasm32"))]
 fn read_ahead_whole(path: &str) -> bool {
     let lower = path.to_ascii_lowercase();
     [".zip", ".gml", ".gpx", ".topojson", ".pbf"].iter().any(|e| lower.ends_with(e))
-        || (rustgis_data::io::is_multi_layer_name(path) && is_city_model_path(path))
+        || (rustgis_data::io::is_multi_layer_name(path) && (is_city_model_path(path) || is_aixm_path(path)))
+}
+
+/// Whether Add Data reads `path` as an AIXM message: a `.gml` or `.xml` file whose root (in its
+/// first bytes, read here) is an `AIXMBasicMessage`.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn is_aixm_path(path: &str) -> bool {
+    use std::io::Read;
+    let lower = path.to_ascii_lowercase();
+    if !(lower.ends_with(".gml") || lower.ends_with(".xml")) {
+        return false;
+    }
+    let mut head = Vec::new();
+    rustgis_data::provenance::open(path)
+        .and_then(|f| f.take(rustgis_data::aixm::HEAD_BYTES as u64).read_to_end(&mut head))
+        .is_ok_and(|_| rustgis_data::aixm::looks_like_aixm(&head))
 }
 
 /// Whether Add Data reads `path` as a city model's layers: a CityJSON model named `.city.json`, or
@@ -2346,6 +2437,9 @@ fn read_layers_file(p: &Value, path: &str) -> LayersRead {
     let bytes = rustgis_data::provenance::read(path).map_err(|e| format!("{path}: {e}"))?;
     let full = std::path::absolute(path).map(|p| p.display().to_string()).unwrap_or_else(|_| path.to_string());
     let crs = ps(p, "crs").map(str::trim).filter(|c| !c.is_empty());
+    if let Some(reads) = aixm_reads(p, &full, &bytes)? {
+        return Ok((full, reads));
+    }
     let reads = match crs {
         Some(text) if full.to_ascii_lowercase().ends_with(".zip") => {
             rustgis_data::io::read_zip_layers(&full, &bytes, Some(rustgis_data::raster::Crs::parse(text)?)).map_err(|e| e.to_string())?
@@ -2812,6 +2906,9 @@ pub(crate) fn add_layers(s: &mut Session, p: &Value, file_name: &str, bytes: &[u
     let lower = file_name.to_ascii_lowercase();
     let kml = lower.ends_with(".kml") || lower.ends_with(".kmz");
     // A KML's ground overlays (pictures) are raster layers, added after its placemarks.
+    // An AIXM message, at the effective date asked (today when none is); "at" for any other file
+    // is refused before anything else is read of it.
+    let aixm = aixm_reads(p, file_name, bytes)?;
     // Past the size a KML is read within, it is refused below without being scanned first.
     let within = bytes.len() as u64 <= rustgis_data::io::BYTES_FLOOR;
     let picked = ps(p, "layer").is_some_and(|l| !l.trim().is_empty());
@@ -2832,7 +2929,9 @@ pub(crate) fn add_layers(s: &mut Session, p: &Value, file_name: &str, bytes: &[u
     }
     // A DXF drawing: its coordinate system (it never says) and one of its own layers.
     let dxf = rustgis_data::dxf::is_dxf_name(file_name);
+    let whole_aixm = aixm.is_some();
     let reads = match crs.filter(|_| landxml) {
+        _ if aixm.is_some() => aixm.unwrap_or_default(),
         _ if lower.ends_with(".zip") && crs.is_some() => {
             let crs = crs.map(|text| super::parse_crs(s, text)).transpose()?;
             rustgis_data::io::read_zip_layers(file_name, bytes, crs).map_err(|e| e.to_string())?
@@ -2862,7 +2961,7 @@ pub(crate) fn add_layers(s: &mut Session, p: &Value, file_name: &str, bytes: &[u
     if dxf {
         return add_reads(s, p, file_name, reads, overlays, zoom);
     }
-    let whole = rustgis_data::io::is_city_model(file_name, bytes) || rustgis_data::osm::looks_like_osm_pbf(bytes);
+    let whole = whole_aixm || rustgis_data::io::is_city_model(file_name, bytes) || rustgis_data::osm::looks_like_osm_pbf(bytes);
     add_picked(s, p, file_name, reads, whole, overlays, zoom)
 }
 
@@ -2907,6 +3006,10 @@ fn add_picked(
                 {
                     said.messages.drain(at..=at);
                 }
+                // Notes a reader writes about the layer itself (an AIXM message's, each named by
+                // it) stay with it too: only what the file as a whole says travels.
+                let own = format!("{}: ", r.dataset.name);
+                said.messages.retain(|n| !n.text.starts_with(&own));
                 (r.dataset.source.clone(), said)
             })
             .collect();
@@ -3191,6 +3294,8 @@ fn file_layers(s: &mut Session, p: &Value) -> CmdResult {
 /// [`file_layers`]' listing.
 fn listed_layers(s: &mut Session, p: &Value) -> CmdResult {
     let path = s_req(p, "path")?;
+    // An effective date is for an AIXM message only: refused for any other file, not ignored.
+    check_at(p, path, || may_be_aixm_path(path))?;
     let path = &*gdb_path(path);
     let err = |e: rustgis_data::DataError| format!("{path}: {e}");
     // A geodatabase read without GDAL; through GDAL if it can't be and GDAL is installed.
@@ -3261,6 +3366,18 @@ fn listed_layers(s: &mut Session, p: &Value) -> CmdResult {
             return Err(rustgis_data::io::file_size_error(path, max));
         }
         let bytes = rustgis_data::provenance::read(path).map_err(|e| format!("{path}: {e}"))?;
+        // An AIXM message's layers at the date asked, as Add Data would add them: their names
+        // only, its rows and values not kept.
+        // Told by its name before it was read (in the browser): now by its contents.
+        check_at(p, path, || rustgis_data::io::is_aixm(path, &bytes))?;
+        if rustgis_data::io::is_aixm(path, &bytes) {
+            if ps(p, "crs").is_some_and(|c| !c.trim().is_empty()) {
+                return Err(format!("\"crs\" doesn't apply to {path}: an AIXM message names its own system (srsName)"));
+            }
+            let opts = check_at(p, path, || true)?;
+            let layers = rustgis_data::aixm::layer_names(path, &bytes, &opts).map_err(err)?;
+            return Ok(json!({"count": layers.len(), "layers": layers}));
+        }
         let zip = path.to_ascii_lowercase().ends_with(".zip");
         let layers: Vec<String> = match crs.filter(|_| zip || rustgis_data::io::is_city_model(path, &bytes)) {
             Some(crs) => {
@@ -5119,6 +5236,10 @@ pub(crate) fn fixed_download_urls(p: &Value) -> Option<Vec<String>> {
 pub(crate) fn add_url(s: &mut Session, p: &Value) -> CmdResult {
     let owner = s.continuation()?;
     let url = ps(p, "url").map(str::trim).unwrap_or("");
+    // An effective date is for an AIXM message only (`.xml`, `.gml`, or an address that doesn't
+    // say, whose contents are checked once fetched): refused for any other address, before it is
+    // opened in place or downloaded.
+    check_at(p, unquoted(url), || address_extension(url).is_none_or(|e| e == "xml" || e == "gml"))?;
     let out = add_url_as_given(s, p).map_err(|e| crate::sources::message_with_address(url, &e))?;
     s.check_continuation(&owner)?;
     Ok(out)
@@ -5501,6 +5622,7 @@ fn add_url_as_given(s: &mut Session, p: &Value) -> CmdResult {
             crate::render::rustgis_tiles::cache::download_blocking(url).map_err(named)?
         };
         let name = url_file_name(url, &bytes).map_err(named)?;
+        check_answer_at(p, url, &name, &bytes)?;
         let left_out = parts_left_out(url, &bytes, p);
         let cut = url_name_cut("Add Data From URL", url, p, &bytes);
         // A WCS coverage's own system it was asked for in, for an answer that doesn't say it.
@@ -5636,6 +5758,7 @@ fn add_url_range(s: &mut Session, p: &Value, url: &str, range: (u64, u64), publi
     let bytes = bytes.map_err(|e| range_failed(&ranged, e)).map_err(named)?;
     check_range_answer(&ranged, &bytes).map_err(named)?;
     let name = url_file_name(&ranged, &bytes).map_err(named)?;
+    check_answer_at(p, url, &name, &bytes)?;
     super::raster::add_named_bytes(s, p, name, bytes, b(p, "zoom")).map_err(named)
 }
 
@@ -5976,6 +6099,9 @@ pub(crate) fn add_cog(s: &mut Session, p: &Value, url: &str, probed: bool) -> Cm
 /// [`add_cog`], a GeoTIFF that can't be read now added all the same (unless `strict`), showing
 /// why: a project being imported keeps its layers.
 pub(crate) fn add_cog_with(s: &mut Session, p: &Value, url: &str, strict: bool, probed: bool) -> CmdResult {
+    // An effective date is for an AIXM message: a GeoTIFF found at an address refuses it (the
+    // address isn't quoted: it can hold a key).
+    check_at(p, "the file at that address", || false)?;
     let stem = cog_name(url);
     let name = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).unwrap_or(&stem);
     let empty_before = super::map_is_empty(s);
@@ -6251,8 +6377,9 @@ pub(crate) fn address_extension(url: &str) -> Option<String> {
 }
 
 /// `layer.addUrl` keys for other kinds of address, which a window (`"bbox"`) doesn't read.
-const WINDOW_UNREAD: [&str; 17] = [
+const WINDOW_UNREAD: [&str; 18] = [
     "layer",
+    "at",
     "x",
     "y",
     "wkt",
@@ -6315,7 +6442,13 @@ fn window_checks(p: &Value, url: &str, scan: bool) -> Result<(), String> {
     // A data cube's file is a tile layer that follows the time slider, and a window is a raster:
     // `"cube": false` asks for nothing.
     let cube = (b(p, "cube") == Some(true)).then_some("cube");
-    let unread: Vec<&str> = WINDOW_UNREAD.iter().copied().filter(|k| p.get(*k).is_some_and(|v| !v.is_null())).chain(cube).collect();
+    // A blank effective date is none, as everywhere (`check_at`).
+    let unread: Vec<&str> = WINDOW_UNREAD
+        .iter()
+        .copied()
+        .filter(|k| p.get(*k).is_some_and(|v| !v.is_null() && !(*k == "at" && v.as_str().is_some_and(|t| t.trim().is_empty()))))
+        .chain(cube)
+        .collect();
     if !unread.is_empty() {
         return Err(format!("{url}: a window (\"bbox\") doesn't read {}: leave it out", unread.join(", ")));
     }
@@ -6931,7 +7064,8 @@ fn add_download(s: &mut Session, p: &Value) -> CmdResult {
     let p = bound.as_ref();
     let id = f(p, "id").filter(|v| *v >= 0.0 && v.fract() == 0.0).map(|v| v as u64).ok_or("id is required")?;
     let url = ps(p, "url").unwrap_or("data").to_string();
-    // Read before the download is taken, so a bad one leaves it to be added again.
+    // Read before the download is taken, so a bad one leaves it to be added again (a refused "at",
+    // judged by what landed, doesn't).
     let service = super::b(p, "service").unwrap_or(false);
     let coverage = super::b(p, "coverage").unwrap_or(false);
     if (service || coverage) && ps(p, "url").is_none_or(|url| url.trim().is_empty()) {
@@ -6941,6 +7075,7 @@ fn add_download(s: &mut Session, p: &Value) -> CmdResult {
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(i) = s.landed_windows.iter().position(|(d, _)| *d == id) {
         let (_, read) = s.landed_windows.remove(i);
+        check_at(p, "a window of a GeoTIFF", || false)?;
         let r = add_window(s, p, read)?;
         return added_download(s, p, r, false, &url);
     }
@@ -6952,7 +7087,9 @@ fn add_download(s: &mut Session, p: &Value) -> CmdResult {
     // A download read already (an ArcGIS layer's protocol buffer pages, joined): added as read,
     // with no axes to check against bounds.
     if let Some(i) = s.landed_reads.iter().position(|(d, _)| *d == id) {
+        // Taken first, as bytes are: the app doesn't ask for it again, and it would be held.
         let (_, read) = s.landed_reads.remove(i);
+        check_at(p, "the service's answer", || false)?;
         let r = add_read(s, p, *read, b(p, "zoom"))?;
         return added_download(s, p, r, service || coverage, &url);
     }
@@ -6960,6 +7097,10 @@ fn add_download(s: &mut Session, p: &Value) -> CmdResult {
     let i = s.downloaded.iter().position(|(d, _)| *d == id).ok_or("no such download (it was dropped when another project opened)")?;
     let (_, bytes) = s.downloaded.remove(i);
     let read_at = s.downloaded_reach.iter().position(|(d, _)| *d == id).map(|i| s.downloaded_reach.remove(i).1);
+    // A GeoLibre download is never an AIXM message: an effective date is refused, not dropped.
+    if ["geolibreProject", "geolibreLayer", "geolibreZarr"].iter().any(|k| p.get(*k).is_some_and(|v| !v.is_null())) {
+        check_at(p, "a GeoLibre download", || false)?;
+    }
     if p.get("geolibreProject").and_then(Value::as_bool) == Some(true) {
         if bytes.len() > rustgis_map::geolibre::MAX_TEXT {
             return Err("GeoLibre project exceeds 64 MiB".into());
@@ -7004,6 +7145,7 @@ fn add_download(s: &mut Session, p: &Value) -> CmdResult {
     #[cfg(target_arch = "wasm32")]
     let drawn = None;
     let asked = if coverage { super::raster::coverage_system(p, &url) } else { None };
+    check_answer_at(p, &url, &name, &bytes)?;
     let r = super::raster::add_named_bytes_read(s, p, name, bytes, b(p, "zoom"), drawn, asked)?;
     if let Some(n) = left_out {
         s.notify(n, false);
@@ -7064,13 +7206,17 @@ pub(crate) fn add_data_text_after(s: &mut Session, p: &Value, zoom: Option<bool>
     let raw_name = s_req(p, "fileName")?;
     let name = super::raster::bytes_file_name(raw_name).ok_or("fileName is required")?;
     let text = s_req(p, "text")?;
-    // A city model: all its layers, in the coordinate system given or with a layer picked. A DXF
+    // A city model or an AIXM message: all its layers, in the coordinate system given or with a layer picked. A DXF
     // drawing too, which takes its coordinate system and whether its blocks are drawn from here.
     // Every other file of several layers too (KML, GPX, GeoRSS, LandXML), as its bytes are read.
     if rustgis_data::dxf::is_dxf_name(name)
         || rustgis_data::io::is_multi_layer_name(name)
         || rustgis_data::cityjson::is_cityjson_name(name)
         || rustgis_data::io::is_citygml(name, text.as_bytes())
+        // An AIXM message: all its layers, at the date asked; an effective date given for any
+        // other text is refused there.
+        || rustgis_data::io::is_aixm(name, text.as_bytes())
+        || p.get("at").is_some_and(|v| v.as_str().map_or(!v.is_null(), |t| !t.trim().is_empty()))
         || (["crs", "layer"].iter().any(|k| ps(p, k).is_some_and(|c| !c.trim().is_empty()))
             && rustgis_data::io::is_cityjson(name, text.as_bytes()))
     {
