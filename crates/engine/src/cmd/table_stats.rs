@@ -37,7 +37,7 @@ pub const MAX_DISTINCT_BYTES: usize = 8 << 20;
 /// significands at one binary exponent, in units of the smallest subnormal. 2098 bits hold
 /// any finite f64; usize::BITS more hold a whole column's sum. Each i128 bin holds at most
 /// usize::MAX 53-bit significands without overflowing, on either supported word size.
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct WideSum(Vec<i128>);
 
 impl WideSum {
@@ -86,6 +86,14 @@ impl WideSum {
         let scale = if cut < 52 { f64::from_bits(1u64 << cut) } else { 2.0f64.powi(cut as i32 - 1074) };
         let total = significand as f64 * scale;
         if negative { -total } else { total }
+    }
+
+    /// Whether `t` is the sum exactly: what is left once `t` is taken away is nothing, as the bins
+    /// count in units of the smallest subnormal, so any remainder totals to more than 0.
+    fn holds(&self, t: f64) -> bool {
+        let mut rest = self.clone();
+        rest.add(-t);
+        rest.total() == 0.0
     }
 }
 
@@ -360,12 +368,16 @@ fn gather(ds: &Dataset, t: &Target) -> Result<Done, String> {
                     t.layer, n.inexact, f.name
                 ),
             ));
-        } else if !whole && n.big > 0 {
-            // Each is held exactly, so whether a sum or mean is rounded depends on the others: said, plain.
-            notices.push(Note::plain(format!(
-                "{}: {} whole number(s) in '{}' past 2^53 are added as decimals, because the column also holds decimals, so the statistics may be rounded",
-                t.layer, n.big, f.name
-            )));
+        } else if !whole && n.big > 0 && n.sum.is_finite() && !n.wide_sum.holds(n.sum) {
+            // Each is held exactly, but their sum with the decimals isn't (5 + 0.5 + 2^54): rounded,
+            // and checked against the exact sum, so a sum that comes out exact says nothing.
+            notices.push(Note::loss(
+                LossCode::ChangedRounded,
+                format!(
+                    "{}: the sum and mean of '{}' are rounded, because its {} whole number(s) past 2^53 are added with decimals",
+                    t.layer, f.name, n.big
+                ),
+            ));
         }
         if !overflowed.is_empty() {
             notices.push(Note::loss(

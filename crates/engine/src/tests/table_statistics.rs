@@ -143,12 +143,17 @@ fn whole_numbers_added_with_decimals_past_2_53_say_how_many_are_rounded() {
     let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
     assert_eq!(said, ["w: 2 whole number(s) in 'x' past 2^53 are rounded in the statistics, because the column also holds decimals"]);
     assert!(s.notices_since(mark).iter().all(|n| n.loss() == Some(rustgis_data::loss::LossCode::ChangedRounded)), "each with its code");
-    // Past 2^53 but held exactly (2^54): the sum may still round, said plain.
+    // Past 2^53 but held exactly (2^54): a sum with decimals that comes out rounded is said
+    // (2^54 + 5.5 is 2^54 + 4 as a decimal); one that comes out exact isn't.
     let mut s = layer_of("w", fields.clone(), vec![vec![V::Int(5)], vec![V::Float(0.5)], vec![V::Int(1 << 54)]]);
     let mark = s.notice_mark();
+    assert_eq!(stats(&mut s, json!({"layer": "w", "field": "x"}))["sum"], ((1_i64 << 54) + 4) as f64);
+    let said: Vec<_> = s.notices_since(mark).iter().map(|n| (n.text.contains("are rounded"), n.loss())).collect();
+    assert_eq!(said, [(true, Some(rustgis_data::loss::LossCode::ChangedRounded))]);
+    let mut s = layer_of("w", fields.clone(), vec![vec![V::Float(0.0)], vec![V::Int(1 << 54)]]);
+    let mark = s.notice_mark();
     stats(&mut s, json!({"layer": "w", "field": "x"}));
-    let said: Vec<_> = s.notices_since(mark).iter().map(|n| (n.text.contains("may be rounded"), n.loss())).collect();
-    assert_eq!(said, [(true, None)]);
+    assert!(s.notices_since(mark).is_empty(), "an exact sum says nothing");
     // The same column with values a decimal holds: nothing said.
     let mut s = layer_of("w", fields, vec![vec![V::Int(5)], vec![V::Float(0.5)]]);
     let mark = s.notice_mark();
