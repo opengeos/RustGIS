@@ -1765,6 +1765,9 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
                 .into(),
         );
     }
+    if ch <= 0.0 && legend.as_ref().is_some_and(|l| !l.title.is_empty()) {
+        warnings.push("the legend lists nothing, so it is left out, its title with it".into());
+    }
     let mut placed: Vec<(&'static str, (f64, f64, f64, f64))> = Vec::new();
     let spot_of = |what: Surround| spots.iter().find(|(kind, _)| *kind == what).map(|(_, r)| *r);
     // In a column, at its top, centred across it; otherwise in its corner over the map.

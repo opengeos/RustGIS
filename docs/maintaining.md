@@ -359,7 +359,8 @@ as the text `"auto"`, `"always"` or `"none"` need nothing.
 
 A saved `layout.publication` that leaves out or sets up its legend (`legend` as `"none"` or an
 object that gives something, #3095) requires `layout-publication-legend`, so an older reader
-refuses it instead of making the default legend. `null` and a `legend` of `{}` need nothing.
+refuses it instead of making the default legend. `null`, a `legend` of `{}`, a blank `title` and
+an empty `exclude` need nothing.
 
 ## New dependencies
 

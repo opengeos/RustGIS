@@ -282,6 +282,7 @@ fn with_colorbar(parts: Value) -> (Session, Value) {
     let mut s = world();
     s.run("layer.addData", &json!({"path": tif.display().to_string()})).unwrap();
     let r = publish(&mut s, parts).unwrap();
+    let _ = std::fs::remove_file(tif);
     (s, r)
 }
 
@@ -325,6 +326,7 @@ fn a_publication_legend_keeps_its_columns_on_a_veiled_map() {
     let fc = json!({"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": ring}}]});
     let path = temp("fill.geojson");
     std::fs::write(&path, fc.to_string()).unwrap();
+    // Thirty layers make a legend too long for the room the map leaves, so the map is veiled.
     for _ in 0..30 {
         s.run("layer.addData", &json!({"path": path.display().to_string()})).unwrap();
     }
@@ -342,6 +344,9 @@ fn a_publication_legend_keeps_its_columns_on_a_veiled_map() {
             &json!({"profile": "a4-portrait", "extent": [10.0, 57.0, 30.0, 61.0], "author": "", "locator": "none", "legend": {"columns": 2}}),
         )
         .unwrap();
+    for file in [path, points] {
+        let _ = std::fs::remove_file(file);
+    }
     assert_eq!(r["veiled"], json!(true), "{r}");
     assert_eq!((legend(&s).0, r["legendColumns"].as_u64()), (2, Some(2)), "{r}");
 }
@@ -372,10 +377,27 @@ fn a_publication_legend_title_is_drawn_and_the_box_grows_to_hold_it() {
 }
 
 #[test]
+fn a_publication_legend_title_with_nothing_to_list_says_it_is_left_out() {
+    let w = world();
+    let all: Vec<&str> = w.map().layers.iter().map(|l| l.name.as_str()).collect();
+    let (s, r) = sheet(json!({"legend": {"title": "Key", "exclude": all}}));
+    assert!(find(&s, "Legend").is_none());
+    assert!(r["warnings"].to_string().contains("the legend lists nothing"), "{}", r["warnings"]);
+    let (_, r) = sheet(json!({"legend": {"exclude": all}}));
+    assert!(!r["warnings"].to_string().contains("the legend lists nothing"), "{}", r["warnings"]);
+}
+
+#[test]
 fn a_publication_legend_given_nothing_is_the_default_one() {
     let elements = |parts: Value| serde_json::to_value(&sheet(parts).0.project.layouts[0].elements).unwrap();
     let default = elements(json!({}));
-    for legend in [json!(null), json!({}), json!({"title": null, "columns": null, "exclude": null}), json!({"title": "", "exclude": []})] {
+    for legend in [
+        json!(null),
+        json!({}),
+        json!({"title": null, "columns": null, "exclude": null}),
+        json!({"title": "", "exclude": []}),
+        json!({"title": "  "}),
+    ] {
         assert_eq!(elements(json!({"legend": legend})), default, "{legend}");
     }
 }
@@ -419,7 +441,9 @@ fn a_saved_publication_that_sets_its_legend_requires_its_capability() {
     for legend in [json!("none"), json!({"title": "Key"}), json!({"columns": 2}), json!({"exclude": ["Cities"]})] {
         assert!(requires(legend.clone()), "{legend}");
     }
-    for legend in [json!(null), json!({}), json!({"title": null, "columns": null})] {
+    for legend in
+        [json!(null), json!({}), json!({"title": null, "columns": null}), json!({"title": ""}), json!({"title": " ", "exclude": []})]
+    {
         assert!(!requires(legend.clone()), "{legend}");
     }
 }

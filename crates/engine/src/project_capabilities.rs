@@ -205,11 +205,13 @@ fn command_sets_publication_parts(id: &str, params: &Value) -> bool {
 }
 
 /// A saved `layout.publication` that leaves out or sets up its legend (#3095): an older reader
-/// ignores `legend`, making the default one. `null`, and an object giving nothing, ask for it.
+/// ignores `legend`, making the default one. `null`, and an object giving nothing (each key
+/// `null`, a blank title or an empty list), ask for it.
 fn command_sets_publication_legend(id: &str, params: &Value) -> bool {
+    let nothing = |v: &Value| v.is_null() || v.as_str().is_some_and(|t| t.trim().is_empty()) || v.as_array().is_some_and(Vec::is_empty);
     match id {
         "layout.publication" => {
-            params.get("legend").is_some_and(|v| !v.is_null() && v.as_object().is_none_or(|o| o.values().any(|v| !v.is_null())))
+            params.get("legend").is_some_and(|v| !v.is_null() && v.as_object().is_none_or(|o| !o.values().all(nothing)))
         }
         "script.run" => params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, command_sets_publication_legend)),
         _ => false,

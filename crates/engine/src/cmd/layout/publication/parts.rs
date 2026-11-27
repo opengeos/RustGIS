@@ -112,6 +112,8 @@ pub(super) fn publication_legend(p: &Value, map: &Map) -> Result<Option<Publicat
             None => base.title,
             Some(v) => crate::cmd::within("title", "a legend's title", v.as_str().ok_or("title is text")?, 200)?,
         };
+        // A blank title is none, rather than an empty line over the rows.
+        let title = if title.trim().is_empty() { String::new() } else { title };
         let exclude = o.get("exclude").map(|v| excluded_layers(map, v)).transpose()?.unwrap_or_default();
         Ok(PublicationLegend { title, columns: legend_columns_param(o)?, exclude })
     })
