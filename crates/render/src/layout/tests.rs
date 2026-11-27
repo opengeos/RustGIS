@@ -2379,7 +2379,7 @@ fn a_legend_picture_is_measured_as_its_column_draws_it() {
     wait_for_tile_legends(&map, 1e6, &[], web_time::Instant::now() + LEGEND_WAIT).unwrap();
     let rows = legend_rows(&map, None, &opts(false));
     assert_eq!(row_kinds(&rows), ["Picture"]);
-    let LegendRow::Picture(p) = &rows[0] else { unreachable!() };
+    let LegendRow::Picture(p) = &rows[0] else { panic!("not a picture row") };
     let rustgis_tiles::cache::Payload::Image(pic) = &**p else { panic!("not a picture") };
     // The painter narrows it to its column: whole in 300 points, not in 100.
     let k = picture_scale(Rect::from_xywh(0.0, 0.0, 200.0, 300.0).unwrap(), pic, 1.0);
