@@ -79,6 +79,16 @@ standalone table. **Data › Export** also writes rasters to GeoTIFF, and **Data
 KML, GPX or CSV with WKT. Layouts, reports and presentations export from their own tabs and panes
 (see [Layouts and Reports](layouts.md)).
 
+The browser can't write to a folder, so in the web app an export command with a `path` (from the
+Script pane, the Assistant or a plugin) downloads the file under the name the path ends in, once
+the commands finish: `share.exportLayer`, `share.exportTable`, `share.exportMap`,
+`share.exportRaster` (a raster layer), `layout.export`, `report.export` and `data.convert`. A
+folder in the path isn't used, and a `.shp` path downloads a `.zip` of the Shapefile's files; a
+notice says each. At most 8 files, 256 MiB in all, can wait to be downloaded, and those of a script
+that then fails, or of a project replaced before they are offered, are dropped with a notice.
+GeoPackage and FlatGeobuf, a tile layer as a raster, an orbit, a block and publishing to a source
+need the desktop app; for a field package, use **Package for the Field** on the ribbon.
+
 To export the largest rows of a Summary Statistics result, give `share.exportTable` an optional
 `sort` list and `limit`. Each sort key names a stored field; `descending` defaults to `false`.
 Keys are applied in list order. Numbers sort numerically, text sorts case-sensitively, and nulls

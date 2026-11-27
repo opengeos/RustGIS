@@ -59,6 +59,10 @@ mod block_model;
 #[path = "tests/write_notices.rs"]
 mod write_notices;
 
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "tests/browser_exports.rs"]
+mod browser_exports;
+
 #[path = "tests/held_layers.rs"]
 mod held_layers;
 #[path = "tests/map_system_places.rs"]

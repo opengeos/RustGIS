@@ -1038,17 +1038,21 @@ pub(crate) fn export_work(s: &Session, p: &Value) -> Result<super::exports::Work
         return Err("export to a .pdf or .png file".into());
     }
     let (project, folder) = (detached(&s.project), s.path.clone());
+    let download = s.downloads_files();
     Ok(Box::new(move || {
         let (bytes, mut copy) = whole_bytes(project, folder, i, dpi, pdf);
+        let mut held = None;
         let written = bytes.and_then(|(bytes, pages)| {
             rustgis_data::progress::check().map_err(|e| e.to_string())?;
-            rustgis_data::io::write_atomic(Path::new(&path), &bytes).map_err(|e| format!("{path}: {e}"))?;
-            Ok(json!({"path": path, "pages": pages, "bytes": bytes.len()}))
+            let len = bytes.len();
+            held = super::exports::place(download, &path, bytes)?;
+            Ok(json!({"path": path, "pages": pages, "bytes": len}))
         });
         // The layers it lists are read whole; a layout drawn in it draws the others' views, and
         // one whose source fails there is said, as Export Layout says it.
         // What reading the layers lost keeps its code: said with the export's notes.
-        super::exports::drawn_on(&mut copy, written, path)
+        let wrote = super::exports::drawn_on(&mut copy, written, path)?;
+        Ok(super::exports::Wrote { download: held, ..wrote })
     }))
 }
 

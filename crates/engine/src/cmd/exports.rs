@@ -5,6 +5,13 @@
 //! [`export_land`] says what was written, as the command would have. The admitted operation owns
 //! preparation, file commit and delivery; a completed write remains written even if delivery
 //! is subsequently refused.
+//!
+//! The browser has no filesystem to write a path in ([`Session::downloads_files`]): there
+//! [`write_here`] names the export after the path's file, its work gives the bytes back instead
+//! of writing them ([`place`]), and the front end offers them as a download, as it does a tool's
+//! file output (`gp.fileDelivered`).
+
+use std::borrow::Cow;
 
 use serde_json::Value;
 
@@ -21,7 +28,11 @@ pub struct Wrote {
     /// Source failures to report if delivery cannot update their live layers.
     pub(crate) refused_notes: Vec<String>,
     /// A physical write completed, even if authority to deliver its result is later refused.
+    /// With `download` it is the download's name, and nothing is written yet.
     pub(crate) written_path: Option<String>,
+    /// The file's bytes when it is downloaded rather than written ([`place`]): what it says
+    /// (`notes`, `then`) is said once the front end has taken the download.
+    pub(crate) download: Option<Vec<u8>>,
     /// What it does to the session once written, after its notes, and adds to its answer (a
     /// GeoPackage table replaced: the layers reading it read it again).
     pub(crate) then: Option<Then>,
@@ -35,7 +46,8 @@ pub struct Wrote {
 }
 
 impl Wrote {
-    fn completion_notes(&self) -> Vec<String> {
+    /// What it will say or has said of the file, as plain text.
+    pub(crate) fn completion_notes(&self) -> Vec<String> {
         self.notes
             .texts()
             .chain(self.diagnostics.iter().map(|(_, text)| text.as_str()))
@@ -78,21 +90,84 @@ pub fn runs_in_background(command: &str) -> Option<(&'static str, &'static str)>
     IN_BACKGROUND.iter().find(|(c, ..)| *c == command).map(|(c, name, _)| (*c, *name))
 }
 
-/// `command`'s export written here: it says what it wrote.
+/// Puts an export's finished file where it goes: written at `path`, or, when it is downloaded
+/// (`download`, [`Session::downloads_files`]), given back for [`Wrote::download`].
+pub(crate) fn place<'a>(download: bool, path: &str, bytes: impl Into<Cow<'a, [u8]>>) -> Result<Option<Vec<u8>>, String> {
+    let bytes = bytes.into();
+    if download {
+        return Ok(Some(bytes.into_owned()));
+    }
+    rustgis_data::io::write_atomic(std::path::Path::new(path), &bytes).map_err(|e| format!("{path}: {e}"))?;
+    Ok(None)
+}
+
+/// Export `command`'s parameters when its file is downloaded: `path` cut to the download's name,
+/// with what to say of that once it is downloaded. A Shapefile, several files, is downloaded as
+/// a `.zip`. Refused here, before anything is read, for a path with no file name and for the
+/// formats the browser can't write.
+fn for_download<'a>(command: &str, p: &'a Value) -> Result<(Cow<'a, Value>, Vec<String>), String> {
+    // No path, or parameters that aren't an object: the export says what it needs.
+    let Some(path) = super::ps(p, "path") else { return Ok((Cow::Borrowed(p), Vec::new())) };
+    let mut name = path.rsplit(['/', '\\']).next().unwrap_or_default().to_string();
+    if matches!(name.as_str(), "" | "." | "..") {
+        return Err(format!(
+            "{path}: the browser downloads an export under the file name its path ends in, and this one has none; end it in a name such as map.png"
+        ));
+    }
+    let folder = name != path;
+    let mut notes = Vec::new();
+    if matches!(command, "share.exportLayer" | "share.exportTable") {
+        let named = std::path::Path::new(&name);
+        match named.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase().as_str() {
+            "gpkg" | "fgb" => {
+                return Err(format!(
+                    "{path}: the web app can't write GeoPackage or FlatGeobuf files; export to .geojson, .csv, .parquet, .zip (a Shapefile), .kml, .kmz or .gpx, which it downloads, or use the desktop app"
+                ));
+            }
+            "shp" => {
+                name = named.with_extension("zip").to_string_lossy().into_owned();
+                notes.push(format!("{name}: a Shapefile is several files, so the browser downloads them in one .zip"));
+            }
+            _ => {}
+        }
+    }
+    if folder {
+        notes.push(format!("{name}: the browser chooses where downloads go, so the folder in '{path}' wasn't used"));
+    }
+    let mut p = p.clone();
+    if let Some(params) = p.as_object_mut() {
+        params.insert("path".into(), Value::String(name));
+    }
+    Ok((Cow::Owned(p), notes))
+}
+
+/// `command`'s export written here: it says what it wrote. Where files are downloaded
+/// ([`Session::downloads_files`]) it answers that the download is pending instead, and says what
+/// it wrote when the front end acknowledges it.
 pub(crate) fn write_here(s: &mut Session, p: &Value, command: &str) -> CmdResult {
     let &(_, name, start) = IN_BACKGROUND.iter().find(|(c, ..)| *c == command).ok_or_else(|| format!("{command} isn't an export"))?;
+    let (p, renamed) = if s.downloads_files() { for_download(command, p)? } else { (Cow::Borrowed(p), Vec::new()) };
     let owner = s.continuation()?;
     owner.check()?;
     let current = owner.clone();
     let still = std::sync::Arc::new(move || current.check().is_ok());
     // The probe keeps authority checks at file commit even when the user cannot cancel this run.
     let control = if s.stoppable { rustgis_analysis::control::Control::stoppable() } else { rustgis_analysis::control::Control::new() };
-    let wrote = crate::render::rustgis_tiles::cache::with_still(still, || {
-        let work = start(s, p)?;
+    let mut wrote = crate::render::rustgis_tiles::cache::with_still(still, || {
+        let work = start(s, &p)?;
         written_under(name, &control, work)
     })?;
-    s.check_continuation(&owner)
-        .map_err(|why| completion_with_notes(command, wrote.written_path.as_deref(), &wrote.completion_notes(), why))?;
+    s.check_continuation(&owner).map_err(|why| {
+        // A download not yet offered wrote nothing.
+        let written = wrote.written_path.as_deref().filter(|_| wrote.download.is_none());
+        completion_with_notes(command, written, &wrote.completion_notes(), why)
+    })?;
+    if wrote.download.is_some() {
+        for (i, note) in renamed.into_iter().enumerate() {
+            wrote.notes.insert(i, note);
+        }
+        return super::gp::queue_export(s, wrote);
+    }
     said(s, wrote)
 }
 
@@ -132,7 +207,7 @@ fn written_under(name: &str, control: &std::sync::Arc<rustgis_analysis::control:
 }
 
 /// Says what an export wrote, and gives its answer (or the failure its `then` says).
-fn said(s: &mut Session, wrote: Wrote) -> CmdResult {
+pub(super) fn said(s: &mut Session, wrote: Wrote) -> CmdResult {
     let Wrote { mut answer, notes, diagnostics, then, written_path, .. } = wrote;
     let mark = s.notice_mark();
     say(s, diagnostics);
@@ -271,6 +346,8 @@ pub(crate) fn drawn(
         diagnostics: notices,
         refused_notes,
         written_path,
+        // Its caller's, which placed the file ([`place`]).
+        download: None,
         then: Some(then),
         #[cfg(not(target_arch = "wasm32"))]
         owner: None,
@@ -503,6 +580,7 @@ mod tests {
                 refused_notes: Vec::new(),
                 notes: ["Exported x"].into_iter().collect(),
                 written_path: Some("x".into()),
+                download: None,
                 then: None,
                 #[cfg(not(target_arch = "wasm32"))]
                 owner: None,

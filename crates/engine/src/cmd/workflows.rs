@@ -2653,10 +2653,13 @@ pub(crate) fn convert_work(s: &Session, p: &Value) -> Result<super::exports::Wor
     conversion_format(p)?;
     let params = p.clone();
     let (constructions, map) = (s.constructions.clone(), s.map().instance_id());
+    let download = s.downloads_files();
     Ok(Box::new(move || {
         let construction_notes = constructions.export_notes(map, &layer)?;
         let format = conversion_format(&params)?;
-        let chunks = if layer.is_streamed() && matches!(format, "geojson" | "csv") { layer.chunk_export()? } else { None };
+        // A download is made whole, in memory.
+        let chunks = if !download && layer.is_streamed() && matches!(format, "geojson" | "csv") { layer.chunk_export()? } else { None };
+        let mut held = None;
         let query = layer.definition_query.as_deref();
         let (mut notes, null_numbers, query_report) = if let Some((source, ds)) = chunks {
             let result = rustgis_data::export::write_source_as_filtered(
@@ -2711,14 +2714,17 @@ pub(crate) fn convert_work(s: &Session, p: &Value) -> Result<super::exports::Wor
             let (text, notes) = converted(&ds, &params)?;
             let mut notes: rustgis_data::loss::Notes = notes;
             super::share::coalesce_read_zm(&mut notes, &path, &ds, &unreadable);
-            rustgis_data::io::write_atomic(std::path::Path::new(&path), text.as_bytes()).map_err(|e| format!("{path}: {e}"))?;
+            held = super::exports::place(download, &path, text.into_bytes())?;
             if unreadable.rows > 0 {
                 notes.push(super::whole::unread_note(&path, unreadable.rows));
             }
             notes.extend(super::share::read_notes(&path, &ds.name, &unreadable));
             (notes, rustgis_data::export::numbers_written_as_null(&ds.features, &ds.fields, format), report)
         };
-        let bytes = std::fs::metadata(&path).map_err(|e| format!("{path}: {e}"))?.len();
+        let bytes = match &held {
+            Some(bytes) => bytes.len() as u64,
+            None => std::fs::metadata(&path).map_err(|e| format!("{path}: {e}"))?.len(),
+        };
         notes.extend(construction_notes);
         notes.push(format!("Exported {path}"));
         let target = path.clone();
@@ -2737,6 +2743,7 @@ pub(crate) fn convert_work(s: &Session, p: &Value) -> Result<super::exports::Wor
             diagnostics: Vec::new(),
             refused_notes,
             written_path: Some(path),
+            download: held,
             then,
             #[cfg(not(target_arch = "wasm32"))]
             owner: None,

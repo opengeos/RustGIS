@@ -153,6 +153,7 @@ pub(in crate::cmd) fn table_work(s: &Session, p: &Value) -> Result<Work, String>
     let gpkg = super::gpkg_table(p, &ext)?;
     let mut ds = s.project.tables.get(s.table_index(p)?).ok_or("no such table")?.dataset.clone();
     let (sort, limit) = options(&ds, p)?;
+    let download = s.downloads_files();
     Ok(Box::new(move || {
         let omitted = ordered(&mut ds, &sort, limit)?;
         let default = ds.name.clone();
@@ -173,8 +174,15 @@ pub(in crate::cmd) fn table_work(s: &Session, p: &Value) -> Result<Work, String>
         notes.extend(super::gpkg_dates_note(&ds, &ext, &path));
         let name_field = rustgis_data::io::name_field(&ds);
         notes.extend(rustgis_data::io::export_losses_notes(&ds, &ext, name_field, &path).map_err(|e| e.to_string())?);
-        let (left_out, table, placed) =
-            rustgis_data::io::write_path_to(&ds, Path::new(&path), rustgis_data::raster::Crs::LonLat, &gpkg).map_err(|e| e.to_string())?;
+        let crs = rustgis_data::raster::Crs::LonLat;
+        let mut held = None;
+        let (left_out, table, placed) = if download {
+            let (bytes, left_out, notes, _) = rustgis_data::io::write_bytes_noted(&ds, &ext, crs, &path).map_err(|e| e.to_string())?;
+            held = Some(bytes);
+            (left_out, None, notes)
+        } else {
+            rustgis_data::io::write_path_to(&ds, Path::new(&path), crs, &gpkg).map_err(|e| e.to_string())?
+        };
         // Old parts of a Shapefile written over that couldn't be removed.
         notes.extend(placed);
         if let Some(note) = rustgis_data::io::left_out_note(&path, &ext, left_out) {
@@ -201,6 +209,7 @@ pub(in crate::cmd) fn table_work(s: &Session, p: &Value) -> Result<Work, String>
             diagnostics: Vec::new(),
             refused_notes,
             written_path,
+            download: held,
             then: Some(Box::new(move |s, out| {
                 if let Some(note) = omitted_note {
                     let mark = s.notice_mark();

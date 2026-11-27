@@ -2851,14 +2851,19 @@ impl RustGisApp {
                 Some(download) => download(&name, bytes),
                 None => Err(tl!("this build has no download service").into()),
             };
-            // gp.fileDelivered reports delivery failures from its history record. The app also
-            // reports acknowledgment failures before dispatch, without repeating engine notices.
+            // gp.fileDelivered reports delivery failures itself. The app also reports
+            // acknowledgment failures before dispatch, without repeating engine notices.
+            // Asked before the acknowledgment forgets the file.
+            let export = self.session.is_export_file(id);
             let completed = self.acknowledge_gp_file(id, delivered.as_ref().err().map(String::as_str));
             let result = delivered.and(completed);
-            self.gp.last = Some(match &result {
-                Ok(_) => (true, self.session.project.gp_history.last().map(|h| h.messages.clone()).unwrap_or_default()),
-                Err(error) => (false, vec![error.clone()]),
-            });
+            // An export isn't a tool run: the Geoprocessing pane keeps showing the last one.
+            if !export {
+                self.gp.last = Some(match &result {
+                    Ok(_) => (true, self.session.project.gp_history.last().map(|h| h.messages.clone()).unwrap_or_default()),
+                    Err(error) => (false, vec![error.clone()]),
+                });
+            }
             requested = complete_gp_file(requested, id, &result);
         }
         requested

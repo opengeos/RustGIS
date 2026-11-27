@@ -1050,9 +1050,14 @@ pub fn written_bands(r: &Raster, band: usize) -> Result<Vec<usize>> {
 
 /// A raster as the bytes of a cloud-optimised GeoTIFF (for the browser, which downloads them).
 pub fn write(r: &Raster, band: usize) -> Result<Vec<u8>> {
+    write_with_info(r, band).map(|(bytes, _)| bytes)
+}
+
+/// [`write`], also saying how the file is laid out, as [`write_file`] does.
+pub fn write_with_info(r: &Raster, band: usize) -> Result<(Vec<u8>, CogInfo)> {
     let mut out = std::io::Cursor::new(Vec::new());
-    write_to(r, band, Flavour::Auto, &mut out)?;
-    Ok(out.into_inner())
+    let info = write_to(r, band, Flavour::Auto, &mut out)?;
+    Ok((out.into_inner(), info))
 }
 
 /// Writes a cloud-optimised GeoTIFF to `path` through a temporary file beside it, synced and

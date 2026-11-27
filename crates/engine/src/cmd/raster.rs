@@ -1299,12 +1299,26 @@ pub(crate) fn export_work(s: &Session, p: &Value) -> Result<super::exports::Work
     let (id, r) = get(s, p)?;
     let bi = band(p, "band", &r)?.unwrap_or(0);
     let cog = b(p, "cog") == Some(true);
+    let download = s.downloads_files();
     if let Some(bytes) = written_export(s, id, &r, bi, cog) {
         return Ok(Box::new(move || {
             // One write of bytes the layer holds, with no look at Cancel inside it: looked at before.
             rustgis_data::progress::check().map_err(|e| e.to_string())?;
-            rustgis_data::io::write_atomic(Path::new(&path), &bytes).map_err(|e| format!("{path}: {e}"))?;
-            wrote_geotiff(&r, bi, &path, None, "give \"band\" for another")
+            let held = super::exports::place(download, &path, bytes.as_slice())?;
+            let wrote = wrote_geotiff(&r, bi, &path, None, "give \"band\" for another")?;
+            Ok(super::exports::Wrote { download: held, ..wrote })
+        }));
+    }
+    if download {
+        return Ok(Box::new(move || {
+            let (bytes, cog) = if cog {
+                let (bytes, info) = raster::cogwrite::write_with_info(&r, bi).map_err(|e| format!("{path}: {e}"))?;
+                (bytes, Some(info))
+            } else {
+                (raster::geotiff::write(&r, bi).map_err(|e| format!("{path}: {e}"))?, None)
+            };
+            let wrote = wrote_geotiff(&r, bi, &path, cog, "give \"band\" for another")?;
+            Ok(super::exports::Wrote { download: Some(bytes), ..wrote })
         }));
     }
     Ok(Box::new(move || write_geotiff(&r, bi, cog, &path)))
@@ -1405,6 +1419,7 @@ fn wrote_geotiff(
         refused_notes: Vec::new(),
         notes: [format!("Exported {path}{note}")].into_iter().collect(),
         written_path: Some(path.to_string()),
+        download: None,
         then: None,
         #[cfg(not(target_arch = "wasm32"))]
         owner: None,

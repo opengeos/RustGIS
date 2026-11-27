@@ -395,8 +395,10 @@ pub(crate) fn export_work(s: &Session, p: &Value) -> Result<crate::cmd::exports:
     for m in &mut project.maps {
         m.detach_reads();
     }
+    let download = s.downloads_files();
     Ok(Box::new(move || {
         let mut copy = Session::new(project);
+        let mut held = None;
         let written = (|| {
             let bytes = if svg {
                 layout_svg(&mut copy, li, dpi)?.into_bytes()
@@ -404,12 +406,14 @@ pub(crate) fn export_work(s: &Session, p: &Value) -> Result<crate::cmd::exports:
                 layout_bytes_with(&mut copy, li, pdf, dpi, all, georeference, options)?
             };
             rustgis_data::progress::check().map_err(|e| e.to_string())?;
-            rustgis_data::io::write_atomic(Path::new(&path), &bytes).map_err(|e| format!("{path}: {e}"))?;
-            Ok(json!({"path": path, "bytes": bytes.len()}))
+            let len = bytes.len();
+            held = crate::cmd::exports::place(download, &path, bytes)?;
+            Ok(json!({"path": path, "bytes": len}))
         })();
         // What drawing it said (frames drawn as pictures, fonts it lacks), as the command says it
         // here.
-        crate::cmd::exports::drawn_on(&mut copy, written, path)
+        let wrote = crate::cmd::exports::drawn_on(&mut copy, written, path)?;
+        Ok(crate::cmd::exports::Wrote { download: held, ..wrote })
     }))
 }
 
