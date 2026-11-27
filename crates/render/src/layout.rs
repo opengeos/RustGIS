@@ -3953,6 +3953,12 @@ fn largest_fitting(text_size: f64, mut try_at: impl FnMut(f64) -> (Fitted, bool)
 /// A legend's rows `m` laid into at most `columns` columns as evenly as they go ([`balanced`]): how
 /// wide they are side by side with their gaps, and how tall the tallest, in points.
 fn measure(m: Measured, columns: usize) -> (f32, f32) {
+    #[cfg(test)]
+    tests::LAYOUTS_MEASURED.with_borrow_mut(|n| {
+        if let Some(n) = n {
+            n.push(columns);
+        }
+    });
     let (starts, height) = balanced(m, columns);
     let gap = LEGEND_COLUMN_GAP * m.size * starts.len().saturating_sub(1) as f32;
     let width: f32 = m.parts(&starts).map(widest).sum::<f32>() + gap;
@@ -4278,8 +4284,22 @@ pub fn legend_sizes_with_no_data_mm(
     (show_no_data, text_size): (bool, f64),
     (exclude, labels): (&[String], &BTreeMap<String, String>),
 ) -> Option<[(f64, f64); MAX_LEGEND_COLUMNS]> {
+    legend_sizes_in_columns_mm(map, scale, all_classes, hide_other, (show_no_data, text_size), (exclude, labels))
+}
+
+/// [`legend_sizes_with_no_data_mm`] in one to `N` columns alone, `N` at most
+/// [`MAX_LEGEND_COLUMNS`] (checked as it is built): for a caller that lays a legend out in no more
+/// columns, which then measures no more.
+pub fn legend_sizes_in_columns_mm<const N: usize>(
+    map: &mut Map,
+    scale: f64,
+    all_classes: bool,
+    hide_other: bool,
+    (show_no_data, text_size): (bool, f64),
+    (exclude, labels): (&[String], &BTreeMap<String, String>),
+) -> Option<[(f64, f64); N]> {
     let asked = LegendAsked { all_classes, hide_other, show_no_data, layer_names: true, text_size, exclude, labels };
-    legend_sizes_asked_mm(map, scale, &asked)
+    sizes_asked_mm(map, scale, &asked)
 }
 
 /// What a legend element asks of its rows, for measuring them as they are drawn: every class or
@@ -4317,6 +4337,13 @@ fn asked_rows<T>(map: &mut Map, scale: f64, asked: &LegendAsked, with: impl FnOn
 
 /// [`legend_sizes_mm`] of the legend `asked`: its size in one column, in two and so on, in mm.
 pub fn legend_sizes_asked_mm(map: &mut Map, scale: f64, asked: &LegendAsked) -> Option<[(f64, f64); MAX_LEGEND_COLUMNS]> {
+    sizes_asked_mm(map, scale, asked)
+}
+
+/// [`legend_sizes_asked_mm`] in one to `N` columns alone, `N` at most [`MAX_LEGEND_COLUMNS`]: a
+/// larger `N` doesn't build.
+fn sizes_asked_mm<const N: usize>(map: &mut Map, scale: f64, asked: &LegendAsked) -> Option<[(f64, f64); N]> {
+    const { assert!(N <= MAX_LEGEND_COLUMNS) };
     let size = legend_size(asked.text_size);
     let mm = 25.4 / 96.0;
     asked_rows(map, scale, asked, |rows| {
@@ -6030,6 +6057,9 @@ mod tests {
         /// [`LegendRow::text_width`] a row's name or label: what a legend's layout costs, counted.
         pub(super) static SYMBOL_SIDES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
         pub(super) static TEXT_MEASURES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+        /// While a test counts them (`Some`): the column counts [`measure`] laid a legend's rows
+        /// into on this thread, in turn.
+        pub(super) static LAYOUTS_MEASURED: std::cell::RefCell<Option<Vec<usize>>> = const { std::cell::RefCell::new(None) };
     }
 
     /// `rows` at 1:`scale`, measured at `size` times the default as the drawing measures them
@@ -8451,6 +8481,29 @@ mod tests {
             assert!(f.fits() && f.text_size < 100.0, "{f:?}");
         });
         assert!(halved.0 == r && halved.1 > 2 * r && halved.1 <= 11 * r, "{halved:?}");
+    }
+
+    /// A legend measured in one to three columns lays its rows out in those three column counts
+    /// alone, and gives the very sizes the measure in one to six gives for them; the measure in one
+    /// to six lays them out in each of the six once.
+    #[test]
+    fn a_legend_measured_in_fewer_columns_lays_out_no_more() {
+        let mut map = rows_map(50);
+        let laid = |run: &mut dyn FnMut()| {
+            LAYOUTS_MEASURED.set(Some(Vec::new()));
+            run();
+            LAYOUTS_MEASURED.take().unwrap_or_default()
+        };
+        let (mut three, mut six) = (None, None);
+        let in_three = laid(&mut || {
+            three = legend_sizes_in_columns_mm::<3>(&mut map, 1e6, true, false, (false, 9.0), (&[], &NO_LABELS));
+        });
+        let in_six = laid(&mut || {
+            six = legend_sizes_with_no_data_mm(&mut map, 1e6, true, false, (false, 9.0), (&[], &NO_LABELS));
+        });
+        assert_eq!((in_three, in_six), (vec![1, 2, 3], vec![1, 2, 3, 4, 5, 6]));
+        let (three, six) = (three.unwrap(), six.unwrap());
+        assert_eq!(three[..], six[..3]);
     }
 
     /// A legend shows a layer under the label it gives it, by the layer's name in any case (#1654):

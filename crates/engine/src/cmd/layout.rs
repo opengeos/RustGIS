@@ -789,15 +789,10 @@ pub(crate) fn legend_room(
 }
 
 /// The most columns `layout.publication` lays its legend in: the three it always chose among, so
-/// raising [`MAX_LEGEND_COLUMNS`] for the legends' fits leaves the layouts it makes as they were.
+/// raising [`MAX_LEGEND_COLUMNS`] for the legends' fits leaves the layouts it makes as they were. It
+/// measures its legend in those alone ([`crate::render::layout::legend_sizes_in_columns_mm`]).
 const PUBLICATION_LEGEND_COLUMNS: usize = 3;
 const _: () = assert!(PUBLICATION_LEGEND_COLUMNS <= MAX_LEGEND_COLUMNS);
-
-/// A legend's sizes in one to [`PUBLICATION_LEGEND_COLUMNS`] columns, of those measured in one to
-/// [`MAX_LEGEND_COLUMNS`]: the ones `layout.publication` chooses among.
-fn first_columns(sizes: [(f64, f64); MAX_LEGEND_COLUMNS]) -> [(f64, f64); PUBLICATION_LEGEND_COLUMNS] {
-    std::array::from_fn(|i| sizes.get(i).copied().unwrap_or_default())
-}
 
 /// Whether a publication legend laid out in more columns beats it in fewer, each as the share of it
 /// shown and the area (mm²) the surrounds leave over the drawing: it shows more of itself, or as
@@ -2238,15 +2233,14 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
         if context_in_legend { Vec::new() } else { legend_context(s.map(), center, scale, (fw, fh)) }
     };
     let mut context = context_at(s, center, scale);
-    let mut sizes = crate::render::layout::legend_sizes_with_no_data_mm(
+    let mut sizes = crate::render::layout::legend_sizes_in_columns_mm::<PUBLICATION_LEGEND_COLUMNS>(
         s.map_mut(),
         render_scale,
         false,
         false,
         (false, legend_pt),
         (&context, &Default::default()),
-    )
-    .map(first_columns);
+    );
     let (mut cw, mut ch) = match sizes {
         Some(sizes) => sizes[0],
         None => {
@@ -2513,15 +2507,14 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
                         } else {
                             // A legend that can't be measured there (a source that can't be read
                             // through) leaves that scale untried too, which is said.
-                            let measured = crate::render::layout::legend_sizes_with_no_data_mm(
+                            let measured = crate::render::layout::legend_sizes_in_columns_mm::<PUBLICATION_LEGEND_COLUMNS>(
                                 s.map_mut(),
                                 render_scale,
                                 false,
                                 false,
                                 (false, legend_pt),
                                 (&here_context, &Default::default()),
-                            )
-                            .map(first_columns);
+                            );
                             if measured.is_none() {
                                 unknown_at.get_or_insert(tried);
                             }
@@ -2607,15 +2600,14 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
                             *here
                         } else {
                             let at_there = crate::render::layout::frame_render_scale(s.map(), there, tried);
-                            let measured = crate::render::layout::legend_sizes_with_no_data_mm(
+                            let measured = crate::render::layout::legend_sizes_in_columns_mm::<PUBLICATION_LEGEND_COLUMNS>(
                                 s.map_mut(),
                                 at_there,
                                 false,
                                 false,
                                 (false, legend_pt),
                                 (&own_context, &Default::default()),
-                            )
-                            .map(first_columns);
+                            );
                             // A legend that can't be measured there leaves that move untried, which is
                             // said, as at a scale.
                             let Some(measured) = measured else {
