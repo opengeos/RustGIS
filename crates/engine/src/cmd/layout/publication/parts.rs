@@ -39,6 +39,15 @@ pub(super) fn publication_grid(p: &Value, default: Grid) -> Result<Option<Grid>,
     let keys: Vec<&str> = ADD_GRID_KEYS.iter().copied().filter(|k| !["layout", "kind", "frame", "off"].contains(k)).collect();
     part(p, "grid", &keys, default, |o, base| {
         let mut grid = grid_params(o, base)?;
+        // The keys only the other kind of grid reads: a graticule draws degrees, a measured grid
+        // its system's units.
+        let (kind, unread): (&str, &[&str]) = match grid.kind {
+            GridKind::Graticule => ("a graticule", &["crs", "short", "mgrs"]),
+            GridKind::Measured => ("a measured grid", &["format", "hemisphere"]),
+        };
+        if let Some(key) = unread.iter().find(|key| o.get(**key).is_some()) {
+            return Err(format!("grid takes no \"{key}\" for {kind}"));
+        }
         if grid.kind == GridKind::Graticule && grid.step <= 0.0 {
             grid.step = step;
         }

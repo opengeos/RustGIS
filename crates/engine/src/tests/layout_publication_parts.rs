@@ -176,6 +176,12 @@ fn a_publication_part_given_wrong_is_refused_and_nothing_is_made() {
         (json!({"grid": {"foo": 1}}), "grid takes no \"foo\""),
         (json!({"grid": {"stepp": null}}), "grid takes no \"stepp\""),
         (json!({"grid": {"off": true}}), "grid takes no \"off\""),
+        // A graticule draws degrees: it reads no coordinate system.
+        // Keys only the other kind of grid reads.
+        (json!({"grid": {"crs": "EPSG:32723"}}), "grid takes no \"crs\" for a graticule"),
+        (json!({"grid": {"type": "graticule", "short": true}}), "grid takes no \"short\" for a graticule"),
+        (json!({"grid": {"type": "measured", "format": "dms"}}), "grid takes no \"format\" for a measured grid"),
+        (json!({"grid": {"type": "measured", "hemisphere": false}}), "grid takes no \"hemisphere\" for a measured grid"),
         (json!({"grid": 5}), "grid is \"none\""),
         (json!({"grid": true}), "grid is \"none\""),
         (json!({"scaleBar": {"units": "parsecs"}}), "unknown units"),
@@ -244,6 +250,5 @@ fn a_publication_grid_says_what_its_typed_coordinate_system_loses() {
         s.notices_since(mark).iter().any(|n| n.text.starts_with("crs: "))
     };
     assert!(said(json!({"type": "measured", "crs": crs})));
-    // A graticule draws degrees and reads no coordinate system: nothing of it is lost.
-    assert!(!said(json!({"crs": crs})));
+    assert!(!said(json!({"type": "measured", "crs": "EPSG:32723"})));
 }

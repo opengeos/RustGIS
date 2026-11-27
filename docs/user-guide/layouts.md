@@ -144,7 +144,8 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
   - **Grid, scale bar and north arrow**: `"grid"`, `"scaleBar"` and `"northArrow"` each take
     `"none"` to leave that part out, or an object with its options, and a key the part doesn't
     read is refused. `"grid"` takes a frame grid's options (`{"step": 5}`,
-    `{"type": "measured"}`, `{"edges": ["bottom"]}`); the strips inside the frame follow its
+    `{"type": "measured"}`, `{"edges": ["bottom"]}`; a graticule takes no `crs`, `short` or `mgrs`,
+    and a measured grid no `format` or `hemisphere`); the strips inside the frame follow its
     labels, edges and `labelSize`, and without a graticule the default reference text names none
     (a `{grid}` you type reads `—`). `"scaleBar"` takes a scale bar's options
     (`{"units": "miles", "style": "line"}`), its box growing with a larger `textSize`. A `textSize` or `labelSize` you give is in points
