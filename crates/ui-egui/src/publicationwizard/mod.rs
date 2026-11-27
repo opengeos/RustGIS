@@ -194,9 +194,17 @@ impl Draft {
     }
 
     /// `"headings"` up to the last one given, a gap before it filled with the command's own; the
-    /// column's only on an editorial sheet, the one style that draws it.
+    /// reference's not where there is none, and the column's only on an editorial sheet, the one
+    /// style that draws it.
     fn headings_sent(&self) -> Vec<&str> {
-        let given = |i: usize| (i < 2 || self.editorial()) && !self.headings[i].trim().is_empty();
+        let given = |i: usize| {
+            let drawn = match i {
+                1 => !self.no_reference,
+                2 => self.editorial(),
+                _ => true,
+            };
+            drawn && !self.headings[i].trim().is_empty()
+        };
         let Some(last) = (0..self.headings.len()).rev().find(|&i| given(i)) else { return Vec::new() };
         (0..=last)
             .map(|i| if given(i) { self.headings[i].trim() } else { PUBLICATION_HEADINGS.get(i).copied().unwrap_or_default() })

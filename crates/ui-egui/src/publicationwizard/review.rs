@@ -39,7 +39,8 @@ pub(super) fn review_step(ui: &mut egui::Ui, d: &Draft) {
         if d.no_reference {
             row(tl!("Reference"), none.to_string());
         } else {
-            row(tl!("Reference"), if typed.is_empty() { PUBLICATION_DEFAULT_REFERENCE.join("\n") } else { typed });
+            let default = tl!("The default: projection, datum and graticule, filled in on the sheet");
+            row(tl!("Reference"), if typed.is_empty() { default.to_string() } else { typed });
             row(tl!("Reference heading"), heading(1, PUBLICATION_HEADINGS[1]));
         }
         if d.editorial() {

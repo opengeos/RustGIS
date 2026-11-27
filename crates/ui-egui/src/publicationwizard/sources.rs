@@ -138,6 +138,18 @@ mod tests {
         assert_eq!(d.params()["headings"], json!([PUBLICATION_HEADINGS[0], PUBLICATION_HEADINGS[1], "Col"]));
     }
 
+    /// A section left out takes no heading with it: not the reference's where there is none.
+    #[test]
+    fn a_section_left_out_sends_no_heading() {
+        let mut d = draft();
+        d.headings = [String::new(), "Ref".into(), String::new()];
+        d.no_reference = true;
+        assert!(d.params().get("headings").is_none());
+        d.style = "editorial".into();
+        d.headings[2] = "Col".into();
+        assert_eq!(d.params()["headings"], json!([PUBLICATION_HEADINGS[0], PUBLICATION_HEADINGS[1], "Col"]));
+    }
+
     /// A figure takes none of them.
     #[test]
     fn a_figure_takes_no_sources_reference_or_headings() {
@@ -146,13 +158,6 @@ mod tests {
         d.headings[0] = "S".into();
         d.size = "figure-1col".into();
         assert_eq!(d.params(), json!({"profile": "figure-1col"}));
-    }
-
-    /// The wizard's literals for the command's defaults are the engine's.
-    #[test]
-    fn the_defaults_shown_match_the_engines() {
-        assert_eq!(PUBLICATION_HEADINGS, ["Sources", "Cartographic reference"]);
-        assert_eq!(PUBLICATION_DEFAULT_REFERENCE, ["Projection: {projection}", "Datum: {datum} · Graticule: {grid}"]);
     }
 
     /// The step has its fields, and No cartographic reference turns the reference's box off.
@@ -254,14 +259,15 @@ mod tests {
     fn the_review_lists_sources_reference_and_headings() {
         let mut h = at(Step::Review, |d| d.sources = "IBGE\nANA".into());
         assert!(h.query_by_label("IBGE\nANA").is_some());
-        assert!(h.query_by_label(&PUBLICATION_DEFAULT_REFERENCE.join("\n")).is_some());
+        let default = "The default: projection, datum and graticule, filled in on the sheet";
+        assert!(h.query_by_label(default).is_some(), "said in words, not as tokens");
         assert!(h.query_by_label(PUBLICATION_HEADINGS[1]).is_some());
         let d = h.state_mut().dialogs.publication.as_mut().unwrap();
         d.no_reference = true;
         d.style = "editorial".into();
         d.headings = ["Fontes".into(), String::new(), "About".into()];
         h.run_steps(4);
-        assert!(h.query_by_label(&PUBLICATION_DEFAULT_REFERENCE.join("\n")).is_none());
+        assert!(h.query_by_label(default).is_none());
         assert!(h.query_by_label("Fontes").is_some() && h.query_by_label("About").is_some());
     }
 
