@@ -23,6 +23,33 @@ const DEFAULT_NAME: &str = "Publication";
 /// ±90 edge half of it is cut off again.
 const MIN_SIDE: f64 = 0.01;
 
+/// What a pick names in the session now.
+enum Held<'a> {
+    View,
+    Layer(&'a Layer),
+    Selection,
+}
+
+/// What `area` names now, or why it no longer holds: the one check the step, the review and Create
+/// share, so a stale pick reads the same in the three. It reads no places, as it runs every frame.
+fn held<'a>(s: &'a Session, area: &Area) -> Result<Held<'a>, &'static str> {
+    let map = s.map();
+    match area {
+        Area::View => Ok(Held::View),
+        Area::Layer { map: owner, .. } | Area::Selection { map: owner } if !owner.holds(s) => {
+            Err(tl!("The map was switched or renamed since the map extent was picked: pick it again."))
+        }
+        Area::Layer { layer, .. } => map
+            .layers
+            .iter()
+            .find(|l| l.instance_id() == *layer)
+            .map(Held::Layer)
+            .ok_or_else(|| tl!("The layer picked is no longer in the map: pick the map extent again.")),
+        Area::Selection { .. } if map.selection_count() == 0 => Err(tl!("Nothing is selected: pick the map extent again.")),
+        Area::Selection { .. } => Ok(Held::Selection),
+    }
+}
+
 /// The map step: the area the map frame shows and the layout's name.
 pub(super) fn map_step(ui: &mut egui::Ui, s: &Session, d: &mut Draft) {
     let map = s.map();
@@ -38,27 +65,28 @@ pub(super) fn map_step(ui: &mut egui::Ui, s: &Session, d: &mut Draft) {
         }
         ui.end_row();
         ui.label("");
+        // A pick that no longer holds marks nothing.
+        let held = held(s, &d.area);
         ui.horizontal(|ui| {
-            let picked = match &d.area {
-                Area::Layer { map: owner, layer } if owner.holds(s) => Some(*layer),
+            let picked = match held {
+                Ok(Held::Layer(l)) => Some(l),
                 _ => None,
             };
             let top = framable().next().map(Layer::instance_id);
             let radio = ui.add_enabled(top.is_some(), egui::RadioButton::new(picked.is_some(), tl!("Layer")));
             if radio.clicked()
-                && let Some(layer) = picked.or(top)
+                && let Some(layer) = picked.map(Layer::instance_id).or(top)
             {
                 d.area = Area::Layer { map: MapOwner::of(s), layer };
             }
             if let Some(picked) = picked {
-                let shown = framable().find(|l| l.instance_id() == picked).map_or_else(|| tl!("(none)").to_string(), |l| l.name.clone());
                 egui::ComboBox::from_id_salt("publication_wizard_map_layer")
-                    .selected_text(shown)
+                    .selected_text(picked.name.as_str())
                     .width(ui.available_width().min(180.0))
                     .truncate()
                     .show_ui(ui, |ui| {
                         for l in framable() {
-                            if ui.selectable_label(l.instance_id() == picked, l.name.as_str()).clicked() {
+                            if ui.selectable_label(l.instance_id() == picked.instance_id(), l.name.as_str()).clicked() {
                                 d.area = Area::Layer { map: MapOwner::of(s), layer: l.instance_id() };
                             }
                         }
@@ -69,9 +97,7 @@ pub(super) fn map_step(ui: &mut egui::Ui, s: &Session, d: &mut Draft) {
         });
         ui.end_row();
         ui.label("");
-        // A pick made in another map or project, or before this map was renamed, marks nothing.
-        let selected = matches!(&d.area, Area::Selection { map: owner } if owner.holds(s));
-        let selection = egui::RadioButton::new(selected, tl!("Selection"));
+        let selection = egui::RadioButton::new(matches!(held, Ok(Held::Selection)), tl!("Selection"));
         if ui
             .add_enabled(map.selection_count() > 0, selection)
             .on_hover_text(tl!("The selected features."))
@@ -100,16 +126,11 @@ pub(super) fn name_label(s: &Session, name: &str) -> String {
 
 /// How the review names the area.
 pub(super) fn area_label(s: &Session, area: &Area) -> String {
-    match area {
-        Area::View => tl!("The view").to_string(),
-        Area::Layer { map, layer } => s
-            .map()
-            .layers
-            .iter()
-            .find(|l| l.instance_id() == *layer && map.holds(s))
-            .map_or_else(|| tl!("(none)").to_string(), |l| i18n::fmt("Layer: {layer}", &[("layer", &l.name)])),
-        Area::Selection { map } if map.holds(s) && s.map().selection_count() > 0 => tl!("Selected features").to_string(),
-        Area::Selection { .. } => tl!("(none)").to_string(),
+    match held(s, area) {
+        Ok(Held::View) => tl!("The view").to_string(),
+        Ok(Held::Layer(l)) => i18n::fmt("Layer: {layer}", &[("layer", &l.name)]),
+        Ok(Held::Selection) => tl!("Selected features").to_string(),
+        Err(_) => tl!("(none)").to_string(),
     }
 }
 
@@ -128,28 +149,14 @@ fn framed(e: Extent) -> Option<[f64; 4]> {
     Some([west, south, east, north])
 }
 
-/// The `extent` to send for `area`, none for the view; an area that is gone since it was picked is
-/// an error rather than another one framed. Read once, at Create, on the UI thread where
+/// The `extent` to send for `area`, none for the view; a pick that no longer holds is an error
+/// rather than another area framed. Read once, at Create, on the UI thread where
 /// `layout.publication` runs next: it may walk the whole layer, or the whole selection.
 pub(super) fn area_extent(s: &Session, area: &Area) -> Result<Option<[f64; 4]>, String> {
-    let map = s.map();
-    let extent = match area {
-        Area::View => return Ok(None),
-        Area::Layer { map: owner, .. } | Area::Selection { map: owner } if !owner.holds(s) => {
-            return Err(tl!("The map was switched or renamed since the map extent was picked: pick it again.").to_string());
-        }
-        Area::Layer { layer, .. } => map
-            .layers
-            .iter()
-            .find(|l| l.instance_id() == *layer)
-            .ok_or_else(|| tl!("The layer picked is no longer in the map: pick the map extent again.").to_string())?
-            .shown_extent(),
-        Area::Selection { .. } => {
-            if map.selection_count() == 0 {
-                return Err(tl!("Nothing is selected: pick the map extent again.").to_string());
-            }
-            map.selection_extent()
-        }
+    let extent = match held(s, area)? {
+        Held::View => return Ok(None),
+        Held::Layer(l) => l.shown_extent(),
+        Held::Selection => s.map().selection_extent(),
     };
     framed(extent).map(Some).ok_or_else(|| tl!("There is nothing to frame there: pick another map extent.").to_string())
 }
@@ -201,27 +208,6 @@ mod tests {
         assert!(got.is_some_and(|[w, s, e, n]| w < e && s < n), "one point, framed: {got:?}");
     }
 
-    /// A layer removed, a selection cleared or another map (or the same one renamed) since the
-    /// area was picked is refused, saying so, rather than framing something else.
-    #[test]
-    fn an_area_gone_is_refused() {
-        let mut app = app();
-        let map = MapOwner::of(&app.session);
-        let id = app.session.map().layers.iter().find(|l| l.name == "Rivers").unwrap().instance_id();
-        let layer = Area::Layer { map: map.clone(), layer: id };
-        let selection = Area::Selection { map };
-        assert_eq!(area_extent(&app.session, &selection), Err("Nothing is selected: pick the map extent again.".to_string()));
-        app.run("layer.remove", json!({"layer": "Rivers"})).unwrap();
-        assert_eq!(
-            area_extent(&app.session, &layer),
-            Err("The layer picked is no longer in the map: pick the map extent again.".to_string())
-        );
-        app.run("map.new", json!({})).unwrap();
-        let other = Err("The map was switched or renamed since the map extent was picked: pick it again.".to_string());
-        assert_eq!(area_extent(&app.session, &layer), other);
-        assert_eq!(area_extent(&app.session, &selection), other);
-    }
-
     /// The step starts on the view; Layer picks one from the list; Selection is off with nothing
     /// selected.
     #[test]
@@ -245,84 +231,20 @@ mod tests {
         assert!(matches!(area(&h), Area::Selection { .. }), "{:?}", area(&h));
     }
 
-    /// A pick made in another map, or before the map was renamed, shows as no pick: neither radio
-    /// marked, the review naming none.
+    /// A long layer name is cut to the list's width, inside the window at its smallest.
     #[test]
-    fn a_pick_from_a_renamed_map_shows_as_none() {
-        for layer in [true, false] {
-            let mut app = app();
-            open(&mut app);
-            let map = MapOwner::of(&app.session);
-            app.run("select.byAttributes", json!({"layer": "Cities", "where": "name = 'Tokyo'"})).unwrap();
-            let id = app.session.map().layers.last().unwrap().instance_id();
-            let area = if layer { Area::Layer { map, layer: id } } else { Area::Selection { map } };
-            app.run("map.rename", json!({"name": "Renamed"})).unwrap();
-            assert_eq!(area_label(&app.session, &area), "(none)", "layer: {layer}");
-            let d = app.dialogs.publication.as_mut().unwrap();
-            (d.area, d.step) = (area, Step::Map);
-            let h = harness(app);
-            for name in ["View", "Layer", "Selection"] {
-                let radio = h.get_by_role_and_label(Role::RadioButton, name);
-                assert_ne!(radio.accesskit_node().toggled(), Some(egui::accesskit::Toggled::True), "{name}, layer: {layer}");
-            }
-        }
-    }
-
-    /// A pick made in a project since replaced is refused, though the new one's map has the same
-    /// name: its layer ids and selection are other ones.
-    #[test]
-    fn a_pick_from_a_replaced_project_is_refused() {
-        let mut app = app();
-        let map = app.session.map().name.clone();
-        let owner = MapOwner::of(&app.session);
-        let areas = [Area::Layer { map: owner.clone(), layer: 1 }, Area::Selection { map: owner }];
-        app.run("project.new", json!({})).unwrap();
-        app.run("map.rename", json!({"name": map})).unwrap();
-        assert_eq!(app.session.map().name, map);
-        for area in areas {
-            let said = area_extent(&app.session, &area).unwrap_err();
-            assert!(said.starts_with("The map was switched or renamed"), "{area:?}: {said}");
-        }
-    }
-
-    /// A long layer name is cut to the list's width, inside the window at its smallest; a layer
-    /// picked and then removed reads as (none).
-    #[test]
-    fn the_layer_list_stays_in_the_window_and_names_a_layer_gone() {
+    fn the_layer_list_stays_in_the_window() {
         let mut app = app();
         open(&mut app);
         let long = "A layer with a very long name ".repeat(6);
         app.run("layer.rename", json!({"layer": "Cities", "name": long})).unwrap();
         let map = MapOwner::of(&app.session);
-        let (id, instance) = app.session.map().layers.first().map(|l| (l.id, l.instance_id())).unwrap();
+        let instance = app.session.map().layers[0].instance_id();
         let d = app.dialogs.publication.as_mut().unwrap();
         (d.area, d.step) = (Area::Layer { map, layer: instance }, Step::Map);
-        let mut h = harness_sized(app, egui::vec2(420.0, 600.0));
+        let h = harness_sized(app, egui::vec2(420.0, 600.0));
         let list = h.get_by_role(Role::ComboBox).rect();
         assert!(list.right() <= 420.0, "the list runs to {}", list.right());
-        h.state_mut().run("layer.remove", json!({"layer": id})).unwrap();
-        h.run_steps(4);
-        assert_eq!(h.get_by_role(Role::ComboBox).accesskit_node().value().as_deref(), Some("(none)"));
-    }
-
-    /// Undo gives a layer's id to the next one added: a pick of the layer undone is refused, not
-    /// moved to the new one.
-    #[test]
-    fn a_pick_isnt_passed_to_a_layer_that_reuses_its_id() {
-        let mut app = app();
-        app.run("layer.copy", json!({"layer": "Rivers"})).unwrap();
-        app.run("layer.paste", json!({})).unwrap();
-        let (id, layer) = (app.session.map().layers[0].id, app.session.map().layers[0].instance_id());
-        let area = Area::Layer { map: MapOwner::of(&app.session), layer };
-        app.run("edit.undo", Value::Null).unwrap();
-        app.run("layer.copy", json!({"layer": "Lakes"})).unwrap();
-        app.run("layer.paste", json!({})).unwrap();
-        assert_eq!(app.session.map().layers[0].id, id, "the id is reused");
-        assert_eq!(area_label(&app.session, &area), "(none)");
-        assert_eq!(
-            area_extent(&app.session, &area),
-            Err("The layer picked is no longer in the map: pick the map extent again.".to_string())
-        );
     }
 
     /// The review names what Create will make: a selection cleared since reads as none, and a name
@@ -366,6 +288,66 @@ mod tests {
         let area = state.dialogs.publication.as_ref().unwrap().area.clone();
         assert_eq!(area_label(&state.session, &area), "Layer: No places");
         assert_eq!(area_extent(&state.session, &area), Err("There is nothing to frame there: pick another map extent.".to_string()));
+    }
+
+    /// A pick that no longer holds reads the same everywhere: no choice marked on the step,
+    /// "(none)" in the review, and Create says why instead of framing something else.
+    #[test]
+    fn a_pick_that_no_longer_holds_reads_the_same_everywhere() {
+        const SWITCHED: &str = "The map was switched or renamed since the map extent was picked: pick it again.";
+        const GONE: &str = "The layer picked is no longer in the map: pick the map extent again.";
+        const CLEARED: &str = "Nothing is selected: pick the map extent again.";
+        type Change = fn(&mut RustGisApp);
+        fn run(app: &mut RustGisApp, id: &str, p: Value) {
+            app.run(id, p).unwrap();
+        }
+        let cases: [(&str, bool, Change, &str); 9] = [
+            ("another map, layer", true, |a| run(a, "map.new", json!({})), SWITCHED),
+            ("another map, selection", false, |a| run(a, "map.new", json!({})), SWITCHED),
+            ("map renamed, layer", true, |a| run(a, "map.rename", json!({"name": "Renamed"})), SWITCHED),
+            ("map renamed, selection", false, |a| run(a, "map.rename", json!({"name": "Renamed"})), SWITCHED),
+            ("project replaced, layer", true, |a| replace_project(a), SWITCHED),
+            ("project replaced, selection", false, |a| replace_project(a), SWITCHED),
+            ("layer removed", true, |a| run(a, "layer.remove", json!({"layer": "Rivers copy"})), GONE),
+            (
+                "paste undone, its id reused",
+                true,
+                |a| {
+                    run(a, "edit.undo", Value::Null);
+                    run(a, "layer.copy", json!({"layer": "Lakes"}));
+                    run(a, "layer.paste", json!({}));
+                },
+                GONE,
+            ),
+            ("selection cleared", false, |a| run(a, "select.clear", Value::Null), CLEARED),
+        ];
+        for (case, layer, change, why) in cases {
+            let mut app = app();
+            run(&mut app, "select.byAttributes", json!({"layer": "Cities", "where": "name = 'Tokyo'"}));
+            run(&mut app, "layer.copy", json!({"layer": "Rivers"}));
+            run(&mut app, "layer.paste", json!({}));
+            let map = MapOwner::of(&app.session);
+            let area = if layer { Area::Layer { map, layer: app.session.map().layers[0].instance_id() } } else { Area::Selection { map } };
+            change(&mut app);
+            assert_eq!(area_label(&app.session, &area), "(none)", "{case}");
+            assert_eq!(area_extent(&app.session, &area), Err(why.to_string()), "{case}");
+            open(&mut app);
+            let d = app.dialogs.publication.as_mut().unwrap();
+            (d.area, d.step) = (area, Step::Map);
+            let h = harness(app);
+            for name in ["View", "Layer", "Selection"] {
+                let radio = h.get_by_role_and_label(Role::RadioButton, name);
+                assert_ne!(radio.accesskit_node().toggled(), Some(egui::accesskit::Toggled::True), "{case}: {name}");
+            }
+            assert!(h.query_by_role(Role::ComboBox).is_none(), "{case}: no layer list");
+        }
+    }
+
+    /// A project opened over this one, its map named as the old one was.
+    fn replace_project(app: &mut RustGisApp) {
+        let name = app.session.map().name.clone();
+        app.run("project.new", json!({})).unwrap();
+        app.run("map.rename", json!({"name": name})).unwrap();
     }
 
     /// Create frames the layer picked and names the layout as typed; a figure takes both too.
