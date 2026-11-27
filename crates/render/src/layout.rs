@@ -559,7 +559,7 @@ fn draw_page(
                     pending.legends |= missing;
                     // A fit still leaving rows out, for an export to say ([`unfitted_legends`]).
                     if let Some(f) = fitted.filter(|f| on_canvas && !f.fits()) {
-                        unfitted(e.id, *fit, &f);
+                        unfitted((e.id, &e.name), *fit, &f);
                     }
                     // An export's page drawn without a picture stays incomplete, whenever the
                     // picture lands after (see `finish_legends`).

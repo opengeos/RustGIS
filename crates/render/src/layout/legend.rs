@@ -518,10 +518,12 @@ pub(crate) fn legend_budget() -> LegendBudget {
 /// A legend under a fit other than manual that the page drew still wider or taller than the room
 /// its title leaves in its box ([`unfitted_legends`]): the columns and verdict of the very fit
 /// ([`fit_legend`]) its rows were drawn by.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct UnfittedLegend {
     /// The legend element's id.
     pub id: u32,
+    /// The legend element's name, as the layout holds it.
+    pub name: String,
     pub fit: LegendFit,
     /// The columns its rows were drawn in.
     pub columns: usize,
@@ -566,14 +568,16 @@ pub fn unfitted_legends<T>(f: impl FnOnce() -> T) -> (T, Vec<UnfittedLegend>) {
     (out, listed)
 }
 
-/// Lists the legend `id` under `fit`, drawn as `fitted`, while [`unfitted_legends`] runs.
-pub(super) fn unfitted(id: u32, fit: LegendFit, fitted: &Fitted) {
+/// Lists the legend `id` named `name` under `fit`, drawn as `fitted`, while [`unfitted_legends`]
+/// runs.
+pub(super) fn unfitted((id, name): (u32, &str), fit: LegendFit, fitted: &Fitted) {
     UNFITTED.with_borrow_mut(|u| {
         if let Some(listed) = u
             && !listed.iter().any(|l| l.id == id)
         {
             listed.push(UnfittedLegend {
                 id,
+                name: name.to_string(),
                 fit: fit.kept(),
                 columns: fitted.columns,
                 too_wide: fitted.too_wide,

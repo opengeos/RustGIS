@@ -3813,18 +3813,29 @@ fn say_legend_fit(s: &mut Session, li: usize, id: u32) {
 
 /// Says what the legends under a fit that an export drew still lose in their boxes
 /// ([`rustgis_render::layout::unfitted_legends`]), in the words setting the fit gave
-/// ([`legend_fit_warnings`]), each notice once: a fit can stop succeeding after it is set, as when
-/// a layer is added to its map. A manual legend is not listed, so its export says what it did.
+/// ([`legend_fit_warnings`]): a fit can stop succeeding after it is set, as when a layer is added to
+/// its map. One notice a reason, with how many legends it is true of and which, by name (shortened,
+/// as [`crate::project::short_name`] does) and id, the first ten, as a scale bar's notices count
+/// theirs. A manual legend is not listed, so its export says what it did.
 fn say_unfitted_legends(s: &mut Session, unfitted: &[rustgis_render::layout::UnfittedLegend]) {
-    let mut said: Vec<String> = Vec::new();
+    // Each reason, in the order first met, with the legends it is true of.
+    let mut said: Vec<(String, Vec<String>)> = Vec::new();
     for l in unfitted {
-        for notice in legend_fit_warnings(l.fit, l.columns, (l.too_wide, l.too_tall)) {
-            if !said.contains(&notice) {
-                said.push(notice);
+        let named = format!("\"{}\" ({})", crate::project::short_name(&l.name), l.id);
+        for reason in legend_fit_warnings(l.fit, l.columns, (l.too_wide, l.too_tall)) {
+            match said.iter_mut().find(|(r, _)| *r == reason) {
+                Some((_, legends)) => legends.push(named.clone()),
+                None => said.push((reason, vec![named.clone()])),
             }
         }
     }
-    for notice in said {
+    for (reason, legends) in said {
+        let n = legends.len();
+        let mut names = legends.into_iter().take(10).collect::<Vec<_>>().join(", ");
+        if n > 10 {
+            names.push_str(&format!(" and {} more", n - 10));
+        }
+        let notice = if n == 1 { format!("Legend {names}: {reason}") } else { format!("{n} legends ({names}): {reason}") };
         s.warn(notice);
     }
 }

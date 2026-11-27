@@ -13159,9 +13159,11 @@ fn a_fit_that_cannot_make_a_legend_fit_says_so() {
 }
 
 /// A legend whose fit made it fit when it was set, and no longer does once a layer is added to its
-/// map, says so at export, once an export, in the words setting the fit gave: as PNG, PDF and SVG,
-/// and as the page the Assistant is shown. While it still fits, an export says nothing of it; nor,
-/// as before, does a manual legend's.
+/// map, says so at export, once an export, in the words setting the fit gave, after its name and
+/// id: as PNG, PDF and SVG, and as the page the Assistant is shown. Two that fail alike are one
+/// notice, counted and both named; one failing otherwise is a notice of its own; a long name is
+/// shortened, and an empty one, quotes or a line break in one keep the notice whole. While a legend
+/// still fits, an export says nothing of it; nor, as before, does a manual legend's.
 #[test]
 fn a_fitted_legend_that_no_longer_fits_says_so_at_export() {
     use std::collections::BTreeMap;
@@ -13180,49 +13182,82 @@ fn a_fitted_legend_that_no_longer_fits_says_so_at_export() {
     };
     let point = r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{},"geometry":{"type":"Point","coordinates":[2.35,48.85]}}]}"#;
     let added = json!({"fileName": "extra.geojson", "text": point, "name": "Extra"});
-    // Its rows in one column at 4 points, and at 9, without the layer and with it.
-    let (small, big) = (legend_sizes(&mut s, frame, &at(4.0))[0], legend_sizes(&mut s, frame, &at(9.0))[0]);
+    // Its rows at 4 points, and at 9, without the layer and with it.
+    let (small, big) = (legend_sizes(&mut s, frame, &at(4.0)), legend_sizes(&mut s, frame, &at(9.0)));
     s.run("layer.addDataText", &added).unwrap();
     let more = legend_sizes(&mut s, frame, &at(4.0))[0];
     s.run("layer.remove", &json!({"layer": "Extra"})).unwrap();
-    assert_eq!(legend_sizes(&mut s, frame, &at(4.0))[0], small, "the layer gone, its rows are as they were");
+    assert_eq!(legend_sizes(&mut s, frame, &at(4.0)), small, "the layer gone, its rows are as they were");
+    let small = small[0];
     assert!(more.1 > small.1, "the layer adds a row: {small:?} {more:?}");
-    // As wide as any of them, and as tall as its title and half-way between its rows at 4 points
-    // without the layer and with it: shrunk, they fit without it, and not with it.
+    // As wide as any of them in one column, and as tall as its title and half-way between its rows
+    // at 4 points without the layer and with it: shrunk, they fit without it, and not with it.
     let title = crate::render::layout::legend_title_mm(9.0);
-    let (w, h) = (big.0.max(more.0) + 5.0, title + (small.1 + more.1) / 2.0);
+    let (w, h) = (big[0].0.max(more.0) + 5.0, title + (small.1 + more.1) / 2.0);
+    // Too narrow for two columns at 9 points, so adding columns leaves it in one, too short.
+    assert!(big[1].0 > w && big[0].1 > h, "{big:?}");
     let dir = std::env::temp_dir().join(format!("rustgis-unfitted-legend-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    // What each export says of the legend's box.
+    // What a legend's fit in its box is said to lose since `mark`, as it is set or at export.
+    let fit_said = |s: &Session, mark: u64| -> Vec<String> {
+        let lost = |n: &str| n.contains("the legend lists") || n.contains("the legend's columns");
+        s.notices_since(mark).iter().map(|n| n.text.clone()).filter(|n| lost(n)).collect()
+    };
+    // What each export says of the legends' boxes.
     let exports = |s: &mut Session| -> Vec<(&'static str, Vec<String>)> {
         let mut told = Vec::new();
         for ext in ["png", "pdf", "svg"] {
             let mark = s.notice_mark();
             s.run("layout.export", &json!({"path": dir.join(format!("page.{ext}")), "dpi": 48})).unwrap();
-            told.push((ext, legend_said(s, mark)));
+            told.push((ext, fit_said(s, mark)));
         }
         let mark = s.notice_mark();
         crate::cmd::layout::layout_png(s, 0, 48.0, None).unwrap();
-        told.push(("view", legend_said(s, mark)));
+        told.push(("view", fit_said(s, mark)));
         told
     };
-    // The exports that said something of it.
+    // The exports that said something of them.
     let told = |s: &mut Session| exports(s).into_iter().filter(|(_, said)| !said.is_empty()).collect::<Vec<_>>();
+    // A legend added in the box `w` × `h` under `fit`, named `name`: its id.
+    let add = |s: &mut Session, fit: &str, (w, h): (f64, f64), name: &str| {
+        let legend = json!({"kind": "legend", "allClasses": true, "fit": fit, "x": 10, "y": 10, "w": w, "h": h});
+        let id = s.run("layout.addElement", &legend).unwrap()["element"].as_u64().unwrap() as u32;
+        s.run("layout.update", &json!({"element": id, "name": name})).unwrap();
+        id
+    };
+    // A long name with quotes and a line break, shortened to its first 100 characters.
+    let long = format!("Key \"A\"\nsecond line {}", "x".repeat(120));
+    let shortened = format!("{}…", long.chars().take(100).collect::<String>());
     let mark = s.notice_mark();
-    let legend = json!({"kind": "legend", "allClasses": true, "fit": "adjustSize", "x": 10, "y": 10, "w": w, "h": h});
-    let id = s.run("layout.addElement", &legend).unwrap()["element"].clone();
-    assert_eq!(legend_said(&s, mark), Vec::<String>::new(), "it fits as added");
+    let a = add(&mut s, "adjustSize", (w, h), &long);
+    assert_eq!(fit_said(&s, mark), Vec::<String>::new(), "it fits as added");
     let said = told(&mut s);
     assert!(said.is_empty(), "still fitting, its exports say nothing of it: {said:?}");
     s.run("layer.addDataText", &added).unwrap();
-    let expected = "the legend lists more than fits its box even with its text shrunk to 4 points: its last rows or the ends of long labels are left out";
+    let shrunk = "the legend lists more than fits its box even with its text shrunk to 4 points: its last rows or the ends of long labels are left out";
     for (ext, said) in exports(&mut s) {
-        assert_eq!(said, [expected], "{ext}");
+        assert_eq!(said, [format!("Legend \"{shortened}\" ({a}): {shrunk}")], "{ext}");
     }
-    // Made manual, its exports say nothing of its box, as before legends had a fit.
-    s.run("layout.update", &json!({"element": id, "fit": "manual"})).unwrap();
+    // A second that fails alike, its name empty; a third that fails otherwise; a fourth that fits.
+    let b = add(&mut s, "adjustSize", (w, h), "");
+    // A command given an empty name keeps the one it had; a hand-edited file can hold one.
+    s.project.layouts[0].elements.iter_mut().find(|e| e.id == b).unwrap().name.clear();
+    let c = add(&mut s, "adjustColumns", (w, h), "Key C");
+    add(&mut s, "adjustSize", (w, big[0].1 + title + 20.0), "Roomy");
+    let one = "the legend lists more than fits its box even in one column: its last rows or the ends of long labels are left out";
+    for (ext, said) in exports(&mut s) {
+        assert_eq!(
+            said,
+            [format!("2 legends (\"{shortened}\" ({a}), \"\" ({b})): {shrunk}"), format!("Legend \"Key C\" ({c}): {one}")],
+            "{ext}"
+        );
+    }
+    // Made manual, their exports say nothing of their boxes, as before legends had a fit.
+    for id in [a, b, c] {
+        s.run("layout.update", &json!({"element": id, "fit": "manual"})).unwrap();
+    }
     let said = told(&mut s);
-    assert!(said.is_empty(), "a manual legend's exports: {said:?}");
+    assert!(said.is_empty(), "manual legends' exports: {said:?}");
     std::fs::remove_dir_all(dir).unwrap();
 }
 
