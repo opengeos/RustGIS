@@ -32,7 +32,7 @@ impl Limit {
 
     /// An empty buffer counted against this limit.
     pub(crate) fn buffer(&self) -> Buffer<'_> {
-        Buffer { file: Vec::new(), at: 0, limit: self }
+        Buffer { file: Vec::new(), at: 0, limit: self, charged: 0 }
     }
 
     /// Refuses a file of `bytes` made apart from the buffers (a zip of them) when it passes the
@@ -72,25 +72,33 @@ pub(crate) struct Buffer<'a> {
     /// Where the next write goes.
     at: u64,
     limit: &'a Limit,
+    /// The allocation counted against the limit: what the system holds, not the file's length.
+    charged: usize,
 }
 
 impl Buffer<'_> {
-    /// The file made, no longer counted against the limit.
-    pub(crate) fn into_inner(self) -> Vec<u8> {
-        self.limit.held.fetch_sub(self.file.len(), Ordering::Relaxed);
+    /// The file made, its spare room given back, no longer counted against the limit.
+    pub(crate) fn into_inner(mut self) -> Vec<u8> {
+        self.file.shrink_to_fit();
+        self.limit.held.fetch_sub(self.charged, Ordering::Relaxed);
         self.file
     }
 
-    /// Makes room for the file to reach `end` bytes, within the limit: its allocation doubles,
-    /// but never past what the limit leaves it, and a refusal by the system is an error.
+    /// Makes room for the file to reach `end` bytes, within the limit, which counts the
+    /// allocation (its capacity, not the file's length): it doubles, but never past what the
+    /// limit leaves, and a refusal by the system is an error.
     fn reserve(&mut self, end: usize) -> std::io::Result<()> {
-        let Some(more) = end.checked_sub(self.file.len()).filter(|n| *n > 0) else { return Ok(()) };
-        let held = self.limit.take(more)?;
-        if end > self.file.capacity() {
-            let most = end.saturating_add(self.limit.max - held);
-            let room = self.file.capacity().saturating_mul(2).clamp(end, most);
-            self.file.try_reserve_exact(room - self.file.len()).map_err(|_| Error::from(ErrorKind::OutOfMemory))?;
+        let old = self.file.capacity();
+        if end <= old {
+            return Ok(());
         }
+        let left = self.limit.max.saturating_sub(self.limit.held.load(Ordering::Relaxed));
+        // At least `end`; past what is left only when `end` is, which the limit then refuses.
+        let room = old.saturating_mul(2).max(end).min(old.saturating_add(left)).max(end);
+        self.limit.take(room - old)?;
+        self.charged += room - old;
+        // For bytes, `try_reserve_exact` allocates what is asked.
+        self.file.try_reserve_exact(room - self.file.len()).map_err(|_| Error::from(ErrorKind::OutOfMemory))?;
         Ok(())
     }
 }
@@ -155,11 +163,13 @@ mod tests {
         b.seek(SeekFrom::End(2)).unwrap();
         b.write_all(b"z").unwrap();
         assert_eq!(b.file, b"aXYd\0\0z");
-        // Another buffer shares what is left.
+        // Another buffer shares what is left of the limit, which counts allocations: the first
+        // holds 8 bytes of room for its 7.
+        assert_eq!(b.file.capacity(), 8);
         let mut other = limit.buffer();
-        other.write_all(b"123").unwrap();
+        other.write_all(b"12").unwrap();
         assert!(!limit.passed());
-        assert!(other.write_all(b"4").is_err());
+        assert!(other.write_all(b"3").is_err());
         assert!(limit.passed() && b.file.capacity() <= 10, "{}", b.file.capacity());
         let e = limit.whole(Ok(())).unwrap_err().to_string();
         assert!(e.contains("passes the 10 bytes"), "{e}");
@@ -173,6 +183,24 @@ mod tests {
         assert_eq!(b.into_inner().len(), 1000);
         limit.buffer().write_all(&[0; 1000]).unwrap();
         assert!(!limit.passed(), "a file handed over is no longer counted");
+        // Buffers sharing a limit are held to it by what they allocate, not by their lengths,
+        // and a file handed on keeps no spare room.
+        let limit = Limit::new(1000);
+        let mut parts = [limit.buffer(), limit.buffer(), limit.buffer()];
+        let mut refused = false;
+        for round in 0..200 {
+            for i in 0..3 {
+                if let Some(part) = parts.get_mut(i) {
+                    refused |= part.write_all(&[round as u8; 7]).is_err();
+                }
+                let allocated: usize = parts.iter().map(|p| p.file.capacity()).sum();
+                assert!(allocated <= 1000, "{allocated} bytes allocated");
+            }
+        }
+        assert!(refused && limit.passed());
+        let [first, ..] = parts;
+        let file = first.into_inner();
+        assert_eq!(file.capacity(), file.len());
     }
 
     /// Counts the items a writer says it has done.

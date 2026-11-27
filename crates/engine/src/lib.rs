@@ -1820,15 +1820,26 @@ impl Session {
         }
         let waiting = self.waiting_download_bytes();
         let bytes = self.download_cap().saturating_sub(waiting);
-        if self.file_outputs.len() >= cmd::exports::MAX_DOWNLOADS || bytes == 0 {
+        if self.waiting_download_count() >= cmd::exports::MAX_DOWNLOADS || bytes == 0 {
             return Err(cmd::gp::queue_full(self.download_cap()));
         }
         Ok(Some(cmd::exports::Room { bytes, waiting }))
     }
 
-    /// The bytes of the files waiting to be handed over for download.
+    /// The files waiting for download: this project's, and those of a project a command replaced,
+    /// kept until the command ends in case it gives that project back.
+    fn waiting_downloads(&self) -> impl Iterator<Item = &cmd::gp::PendingFile> {
+        self.file_outputs.iter().chain(self.put_aside.iter().flat_map(|aside| aside.file_outputs.iter()))
+    }
+
+    /// How many files wait for download, those put aside with a replaced project included.
+    pub(crate) fn waiting_download_count(&self) -> usize {
+        self.waiting_downloads().count()
+    }
+
+    /// The bytes the files waiting for download hold, those put aside included.
     pub(crate) fn waiting_download_bytes(&self) -> usize {
-        self.file_outputs.iter().filter_map(|f| f.bytes.as_ref()).map(|bytes| bytes.len()).sum()
+        self.waiting_downloads().filter_map(|f| f.bytes.as_ref()).map(|bytes| bytes.capacity()).sum()
     }
 
     /// Whether pending download `id` is an export's: no geoprocessing run records it.

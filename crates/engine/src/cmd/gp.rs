@@ -3894,7 +3894,7 @@ fn queue(s: &mut Session, file_name: String, bytes: Arc<Vec<u8>>, from: Delivery
             mib(cap)
         ));
     }
-    if s.file_outputs.len() >= MAX_DOWNLOADS || bytes.len() > cap.saturating_sub(held) {
+    if s.waiting_download_count() >= MAX_DOWNLOADS || bytes.len() > cap.saturating_sub(held) {
         return Err(queue_full(cap));
     }
     s.next_pending = s.next_pending.wrapping_add(1);

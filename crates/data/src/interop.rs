@@ -163,6 +163,15 @@ pub(crate) fn write_gpx(ds: &Dataset, name_field: Option<usize>, out: &mut impl 
                 crate::progress::step(1)?;
             }
             let Some(g) = &f.geometry else { continue };
+            // Waypoints in the first pass, tracks in the second: a feature the pass doesn't write
+            // costs it no name.
+            let written = match g {
+                Geometry::Point(_) | Geometry::MultiPoint(_) => !tracks,
+                Geometry::Line(_) | Geometry::Polygon(_) => tracks,
+            };
+            if !written {
+                continue;
+            }
             let name = name_field.map(|fi| ds.value(r, fi).to_file_text()).unwrap_or_else(|| f.id.to_string());
             let name = xml(&name, "GPX", || feature_place(&ds.name, f.id, "name"))?;
             match g {

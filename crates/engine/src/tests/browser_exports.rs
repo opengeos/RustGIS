@@ -459,6 +459,26 @@ fn a_browser_export_is_held_to_what_the_waiting_downloads_leave() {
     assert_eq!(s.take_gp_files().len(), 2);
 }
 
+/// A project a command replaces keeps its downloads waiting until the command ends, in case it
+/// is given back, and they count against the limit: an export in the new project can't pass it.
+#[test]
+fn downloads_put_aside_with_a_replaced_project_count_against_the_limit() {
+    let files = Files::new();
+    let mut s = session(&files, true);
+    let script = "project.new\nshare.exportMap {\"width\": 64, \"height\": 64, \"path\": \"later.png\"}";
+    // What the new project's map comes to by itself.
+    let mut alone = session(&files, true);
+    alone.run("script.run", &json!({"script": script})).unwrap();
+    let map = alone.take_gp_files().iter().map(|f| f.2.len()).sum::<usize>();
+    s.run("share.exportTable", &json!({"table": "Totals", "path": "totals.csv"})).unwrap();
+    // Room for either file, not both.
+    s.download_cap = Some(s.waiting_download_bytes() + map - 1);
+    let e = s.run("script.run", &json!({"script": script})).unwrap_err();
+    assert!(e.contains("share.exportMap"), "{e}");
+    let waiting: Vec<String> = s.take_gp_files().into_iter().map(|f| f.1).collect();
+    assert_eq!(waiting, ["totals.csv"]);
+}
+
 /// An export queued in a project a command opened, before that command fails, is said to be
 /// dropped; one that waited in the project given back still waits.
 #[test]
