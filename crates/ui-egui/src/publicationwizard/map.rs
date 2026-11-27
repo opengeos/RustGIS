@@ -7,8 +7,7 @@ use crate::dialogs::MapOwner;
 pub enum Area {
     /// The view, left to `layout.publication`.
     View,
-    /// A layer's features, as Zoom To Layer frames them (hidden or not): the layer's id, in the
-    /// map it was picked in.
+    /// The features a layer shows (hidden or not): the layer's id, in the map it was picked in.
     Layer { map: MapOwner, id: u32 },
     /// The selected features of the map it was picked in.
     Selection { map: MapOwner },
@@ -23,7 +22,7 @@ const MIN_SIDE: f64 = 0.01;
 /// The map step: the area the map frame shows and the layout's name.
 pub(super) fn map_step(ui: &mut egui::Ui, s: &Session, d: &mut Draft) {
     let map = s.map();
-    // Top first, as Contents lists them. A layer's kept extent here; the one it shows is read at
+    // In the map's layer order, top first. A layer's kept extent here; the one it shows is read at
     // Create, as it walks the rows under a definition query.
     let framable = || map.layers.iter().filter(|l| !l.extent().is_empty());
     egui::Grid::new("publication_wizard_map").num_columns(2).spacing(egui::vec2(8.0, 8.0)).show(ui, |ui| {
