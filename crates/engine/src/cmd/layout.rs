@@ -38,6 +38,7 @@ use frame::*;
 mod inputs;
 pub(crate) use inputs::*;
 mod legend;
+pub(in crate::cmd) use legend::say_unfitted_legends_in;
 use legend::*;
 pub(crate) use legend::{legend_columns_param, legend_fit_param, legend_names_param};
 mod page;

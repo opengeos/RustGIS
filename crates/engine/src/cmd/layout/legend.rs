@@ -196,10 +196,21 @@ pub(in crate::cmd::layout) fn say_legend_fit(s: &mut Session, li: usize, id: u32
 /// as [`crate::project::short_name`] does) and id, the first ten, as a scale bar's notices count
 /// theirs. A manual legend is not listed, so its export says what it did.
 pub(in crate::cmd::layout) fn say_unfitted_legends(s: &mut Session, unfitted: &[rustgis_render::layout::UnfittedLegend]) {
+    let listed: Vec<_> = unfitted.iter().map(|l| (None, l.clone())).collect();
+    say_unfitted_legends_in(s, &listed);
+}
+
+/// [`say_unfitted_legends`] of legends each in the layout it names, when one does: a report
+/// draws several layouts, whose legends' ids can be the same, and names each legend's layout
+/// (shortened as its name is), `"Legend" (3) in "Atlas"`.
+pub(in crate::cmd) fn say_unfitted_legends_in(s: &mut Session, unfitted: &[(Option<String>, rustgis_render::layout::UnfittedLegend)]) {
     // Each reason, in the order first met, with the legends it is true of.
     let mut said: Vec<(String, Vec<String>)> = Vec::new();
-    for l in unfitted {
-        let named = format!("\"{}\" ({})", crate::project::short_name(&l.name), l.id);
+    for (layout, l) in unfitted {
+        let mut named = format!("\"{}\" ({})", crate::project::short_name(&l.name), l.id);
+        if let Some(layout) = layout {
+            named.push_str(&format!(" in \"{}\"", crate::project::short_name(layout)));
+        }
         for reason in legend_fit_warnings(l.fit, l.columns, (l.too_wide, l.too_tall)) {
             match said.iter_mut().find(|(r, _)| *r == reason) {
                 Some((_, legends)) => legends.push(named.clone()),

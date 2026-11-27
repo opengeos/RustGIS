@@ -13197,6 +13197,69 @@ fn a_fit_that_cannot_make_a_legend_fit_says_so() {
     );
 }
 
+/// A report whose pages draw layouts says, as a PDF and as a PNG of its first page, the fitted
+/// legends on them that no longer fit, as a layout's export says them, each with its layout: two
+/// layouts' legends sharing an id are both named, and a layout on two pages is said once. While
+/// they fit, nothing is said.
+#[test]
+fn a_report_says_the_fitted_legends_on_its_layouts_that_no_longer_fit() {
+    use std::collections::BTreeMap;
+    let mut s = world();
+    for name in ["Atlas A", "Atlas B"] {
+        s.run("layout.new", &json!({"name": name, "page": "a4", "orientation": "landscape", "template": "map"})).unwrap();
+    }
+    let frame = s.project.layouts[0].first_frame().unwrap();
+    let labels = BTreeMap::new();
+    let at = |pt: f64| crate::render::layout::LegendAsked {
+        all_classes: true,
+        hide_other: false,
+        show_no_data: false,
+        layer_names: true,
+        text_size: pt,
+        exclude: &[],
+        labels: &labels,
+    };
+    let point = r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{},"geometry":{"type":"Point","coordinates":[2.35,48.85]}}]}"#;
+    let added = json!({"fileName": "extra.geojson", "text": point, "name": "Extra"});
+    // Its rows in one column at 4 points, and at 9, without the layer and with it.
+    let (small, big) = (legend_sizes(&mut s, frame, &at(4.0))[0], legend_sizes(&mut s, frame, &at(9.0))[0]);
+    s.run("layer.addDataText", &added).unwrap();
+    let more = legend_sizes(&mut s, frame, &at(4.0))[0];
+    s.run("layer.remove", &json!({"layer": "Extra"})).unwrap();
+    assert!(more.1 > small.1, "the layer adds a row: {small:?} {more:?}");
+    // Shrunk, its rows fit without the layer, and not with it.
+    let title = crate::render::layout::legend_title_mm(9.0);
+    let (w, h) = (big.0.max(more.0) + 5.0, title + (small.1 + more.1) / 2.0);
+    let mut ids = Vec::new();
+    for (layout, name) in [("Atlas A", "Key A"), ("Atlas B", "Key B")] {
+        let legend = json!({"layout": layout, "kind": "legend", "allClasses": true, "fit": "adjustSize", "x": 10, "y": 10, "w": w, "h": h});
+        let id = s.run("layout.addElement", &legend).unwrap()["element"].as_u64().unwrap() as u32;
+        s.run("layout.update", &json!({"layout": layout, "element": id, "name": name})).unwrap();
+        ids.push(id);
+    }
+    assert_eq!(ids[0], ids[1], "the two layouts' legends share an id");
+    let id = ids[0];
+    s.run("report.new", &json!({"layer": "Countries", "name": "Atlas", "fields": ["name"], "where": "name LIKE 'F%'"})).unwrap();
+    for layout in ["Atlas A", "Atlas B", "Atlas A"] {
+        s.run("report.existingTemplate", &json!({"report": "Atlas", "layout": layout})).unwrap();
+    }
+    // What a legend's fit in its box is said to lose by the report as a PDF and as a PNG.
+    let said = |s: &mut Session| -> [Vec<String>; 2] {
+        [true, false].map(|pdf| {
+            let mark = s.notice_mark();
+            crate::cmd::report::report_bytes(s, 0, 48.0, pdf).unwrap();
+            s.notices_since(mark).iter().map(|n| n.text.clone()).filter(|n| n.contains("the legend lists")).collect()
+        })
+    };
+    assert_eq!(said(&mut s), [Vec::<String>::new(), Vec::new()], "they fit");
+    s.run("layer.addDataText", &added).unwrap();
+    let shrunk = "the legend lists more than fits its box even with its text shrunk to 4 points: its last rows or the ends of long labels are left out";
+    let [pdf, png] = said(&mut s);
+    assert_eq!(pdf, [format!("2 legends (\"Key A\" ({id}) in \"Atlas A\", \"Key B\" ({id}) in \"Atlas B\"): {shrunk}")]);
+    // A PNG is the report's first page: the first layout.
+    assert_eq!(png, [format!("Legend \"Key A\" ({id}) in \"Atlas A\": {shrunk}")]);
+}
+
 /// A legend whose fit made it fit when it was set, and no longer does once a layer is added to its
 /// map, says so at export, once an export, in the words setting the fit gave, after its name and
 /// id: as PNG, PDF and SVG, and as the page the Assistant is shown. Two that fail alike are one
