@@ -1644,6 +1644,12 @@ fn records_that_cant_be_read_by_rows_say_why() {
     let mut second_order = G1::new(5, 6, x.clone());
     second_order.bds_flags = 0x40;
     assert!(read_whole(&second_order.bytes()).starts_with("spherical harmonics and second-order packing"));
+    let mut wide = G1::new(5, 6, x.clone());
+    wide.bits = 33;
+    assert_eq!(read_whole(&wide.bytes()), "values of 33 bits can't be read row by row");
+    let mut short = G1::new(5, 6, x[..20].to_vec());
+    short.bits = 16;
+    assert!(read_whole(&short.bytes()).starts_with("a data section that doesn't hold its grid's values"));
     // Two messages in the range, and two fields in a message.
     let mut two = G1::new(5, 6, x.clone()).bytes();
     two.extend(G1::new(5, 6, x.clone()).bytes());

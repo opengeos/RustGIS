@@ -5336,9 +5336,10 @@ fn add_url_as_given(s: &mut Session, p: &Value) -> CmdResult {
     let scan = super::raster::as_scan(p)?;
     // A byte range of a GRIB file (`"bytes"`, #2428): only that range is downloaded, and read as
     // the file. The browser refuses it ([`byte_range`]).
-    // With a box (`"bbox"`, #3055), only the record's headers and the rows of the box.
+    // With a box (`"bbox"`, #3055), only the record's headers and the rows of the box. A `false`
+    // is no box, as [`byte_range`] reads it.
     #[cfg(not(target_arch = "wasm32"))]
-    if ["bytes", "bbox"].iter().all(|k| p.get(*k).is_some_and(|v| !v.is_null())) {
+    if ["bytes", "bbox"].iter().all(|k| p.get(*k).is_some_and(|v| !v.is_null() && v.as_bool() != Some(false))) {
         return add_url_rows(s, p, url, public);
     }
     #[cfg(not(target_arch = "wasm32"))]
@@ -5571,6 +5572,11 @@ fn range_asked(p: &Value, url: &str, rows: bool) -> Result<Option<(u64, u64)>, S
             return Err("\"bytes\" reads a range of a GRIB file (an address ending in .grb, .grib, .grb2 or .grib2, or \"format\": \"grib\"): a range of another format isn't a file".into());
         }
     }
+    // The browser's refusal comes before the keys a range doesn't go with: what it says holds
+    // whatever else is asked.
+    if cfg!(target_arch = "wasm32") {
+        return Err("\"bytes\" works on the desktop and the command line for now: in the browser, a range from another site needs that site's leave (CORS)".into());
+    }
     let other = ["bbox", "cellSize", "as", "service", "coverage", "cube", "cog", "whole", "dates"];
     if let Some(k) = other.iter().skip(usize::from(rows)).find(|k| p.get(**k).is_some_and(|v| !v.is_null() && v.as_bool() != Some(false))) {
         if *k == "bbox" {
@@ -5580,9 +5586,6 @@ fn range_asked(p: &Value, url: &str, rows: bool) -> Result<Option<(u64, u64)>, S
     }
     if rustgis_data::time::is_template(url) {
         return Err("\"bytes\" doesn't go with a dated address: give the file's own address".into());
-    }
-    if cfg!(target_arch = "wasm32") {
-        return Err("\"bytes\" works on the desktop and the command line for now: in the browser, a range from another site needs that site's leave (CORS)".into());
     }
     Ok(Some((first, last)))
 }

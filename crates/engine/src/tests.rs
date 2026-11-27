@@ -53252,11 +53252,15 @@ fn the_rows_of_a_box_of_a_grib_record_are_asked_for_alone() {
     let r = s.run("layer.addUrl", &json!({"url": url, "bytes": [0, 87], "bbox": [9.6, 59.6, 10.4, 60.4]})).unwrap();
     assert_eq!(cells(&s, &r).4, vec![1.0]);
     assert_eq!(count(), 4096 + 360 + 4096 + 88);
+    // `"bbox": false` is no box: the range is read as the file, as before boxes.
+    let r = s.run("layer.addUrl", &json!({"url": url, "bytes": [0, 87], "bbox": false})).unwrap();
+    assert_eq!(cells(&s, &r).4, vec![1.0, 2.0]);
+    assert_eq!(count(), 4096 + 360 + 4096 + 88 + 88);
     // Two messages in the range: downloaded whole after the first read, cut to the box, and said.
     let mark = s.notice_mark();
     let r = s.run("layer.addUrl", &json!({"url": url, "bytes": [0, 4971], "bbox": [9.6, 59.6, 10.4, 60.4], "name": "Two"})).unwrap();
     assert_eq!(cells(&s, &r).4, vec![1.0]);
-    assert_eq!(count(), 4096 + 360 + 4096 + 88 + 4096 + 4972);
+    assert_eq!(count(), 4096 + 360 + 4096 + 88 + 88 + 4096 + 4972);
     let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
     let whole = "Two: a range that isn't one whole message of one field can't be read row by row: the whole record was downloaded (5 kB) and cut to the box";
     assert!(said.contains(&whole.to_string()), "{said:?}");

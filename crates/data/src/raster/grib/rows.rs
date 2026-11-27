@@ -90,8 +90,11 @@ pub fn plan(head: &[u8], len: u64, bbox: [f64; 4]) -> Result<Plan> {
     if bits == 0 {
         return whole("a constant field has no rows to read");
     }
+    if bits > MAX_BITS {
+        return Ok(Plan::Whole(format!("values of {bits} bits can't be read row by row")));
+    }
     let per_row = grid.ni as u64 * u64::from(bits);
-    if bits > MAX_BITS || data.1 < per_row.saturating_mul(grid.nj as u64).div_ceil(8) {
+    if data.1 < per_row.saturating_mul(grid.nj as u64).div_ceil(8) {
         return whole("a data section that doesn't hold its grid's values can't be read row by row");
     }
     let top = grid.north() + grid.dy / 2.0;
