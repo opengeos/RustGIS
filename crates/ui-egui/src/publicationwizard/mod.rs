@@ -1,7 +1,8 @@
-//! Publication Layout Wizard: `layout.publication` asked step by step (size, style, texts, sources
-//! and reference, accent), then made at once, as the New Layout › Publication Layout menu makes it
-//! (#2850).
+//! Publication Layout Wizard: `layout.publication` asked step by step (size, map, style, texts,
+//! sources and reference, accent), then made at once, as the New Layout › Publication Layout menu
+//! makes it (#2850).
 mod accent;
+mod map;
 mod review;
 mod size;
 mod sources;
@@ -11,12 +12,14 @@ mod texts;
 use crate::textform::StatLayer;
 use crate::{RustGisApp, i18n, theme::Tokens};
 use accent::accent_step;
+use map::{Area, area_extent, map_step};
 use review::review_step;
 use rustgis_engine::Session;
 use rustgis_engine::cmd::layout::{
     MAX_PUBLICATION_LINES, MAX_PUBLICATION_TEXT, PUBLICATION_DEFAULT_REFERENCE, PUBLICATION_HEADINGS, PUBLICATION_PROFILES,
     publication_style_accent,
 };
+use rustgis_engine::geom::Extent;
 use rustgis_engine::map::Map;
 use rustgis_engine::map::layout::PAGES;
 use serde_json::{Value, json};
@@ -29,6 +32,7 @@ use texts::texts_step;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Step {
     Size,
+    Map,
     Style,
     Texts,
     Sources,
@@ -88,6 +92,9 @@ pub struct Draft {
     /// A page size's id (`a4`, from [`PAGES`]) or a figure's profile id (`figure-1col`).
     pub size: String,
     pub orientation: Orientation,
+    pub area: Area,
+    /// The layout's name; empty leaves it to the command.
+    pub name: String,
     pub style: String,
     pub title: String,
     /// Whether the title was typed; until then it is the active map's name, as the menu's.
@@ -126,6 +133,8 @@ impl Draft {
             step: Step::Size,
             size: "a4".into(),
             orientation: Orientation::Auto,
+            area: Area::View,
+            name: String::new(),
             style: "classic".into(),
             title: s.map().name.clone(),
             title_typed: false,
@@ -160,9 +169,9 @@ impl Draft {
     /// The steps this draft goes through, in order.
     fn steps(&self) -> &'static [Step] {
         if self.figure() {
-            return &[Step::Size, Step::Review];
+            return &[Step::Size, Step::Map, Step::Review];
         }
-        &[Step::Size, Step::Style, Step::Texts, Step::Sources, Step::Accent, Step::Review]
+        &[Step::Size, Step::Map, Step::Style, Step::Texts, Step::Sources, Step::Accent, Step::Review]
     }
 
     /// The step `by` places from this one, if there is one.
@@ -181,6 +190,9 @@ impl Draft {
             (false, Orientation::Landscape) => format!("{}-landscape", self.size),
         };
         let mut p = json!({"profile": profile});
+        if !self.name.trim().is_empty() {
+            p["name"] = json!(self.name.trim());
+        }
         if self.figure() {
             return p;
         }
@@ -334,6 +346,7 @@ fn size_label(id: &str) -> String {
 fn step_name(step: Step) -> &'static str {
     match step {
         Step::Size => tl_raw!("Size"),
+        Step::Map => tl_raw!("Map"),
         Step::Style => tl_raw!("Style"),
         Step::Texts => tl_raw!("Texts"),
         Step::Sources => tl_raw!("Sources and reference"),
@@ -422,11 +435,12 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                 .auto_shrink([false, false])
                 .show(ui, |ui| match d.step {
                     Step::Size => size_step(ui, &mut d),
+                    Step::Map => map_step(ui, &app.session, &mut d),
                     Step::Style => style_step(ui, &mut d, t.accent),
                     Step::Texts => texts_step(ui, &mut d, app.session.map()),
                     Step::Sources => sources_step(ui, &mut d, app.session.map()),
                     Step::Accent => accent_step(ui, &mut d, t.accent),
-                    Step::Review => review_step(ui, &d),
+                    Step::Review => review_step(ui, &app.session, &d),
                 });
             ui.separator();
             let size = egui::vec2(84.0, 28.0);
@@ -451,8 +465,17 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
             });
         });
     // A layout the command refuses is said (a map with no extent), and the wizard stays.
-    if create && crate::ribbon::make_publication(app, d.params()) {
-        close = true;
+    if create {
+        match area_extent(&app.session, &d.area) {
+            Ok(extent) => {
+                let mut params = d.params();
+                if let Some(extent) = extent {
+                    params["extent"] = json!(extent);
+                }
+                close |= crate::ribbon::make_publication(app, params);
+            }
+            Err(e) => app.session.notify(e, true),
+        }
     }
     if !open || close {
         app.dialogs.open = None;
@@ -533,6 +556,7 @@ mod tests {
         assert_eq!(d.title, name);
         assert!(d.subtitle.is_empty() && d.note.is_empty() && d.sources.is_empty() && d.author.is_empty());
         assert!(d.accent.is_none() && !d.no_author);
+        assert!(d.area == Area::View && d.name.is_empty());
         assert_eq!(app.dialogs.open, Some("publicationWizard"));
         app.dialogs.publication.as_mut().unwrap().subtitle = "Kept".into();
         open(&mut app);
@@ -570,8 +594,8 @@ mod tests {
         assert_eq!(d.params(), json!({"profile": "figure-1col"}));
     }
 
-    /// A sheet goes through the six steps; a figure goes from its size to the review, the steps
-    /// it takes nothing from skipped both ways. Back is off on the first step; Next becomes
+    /// A sheet goes through the seven steps; a figure goes from its size to its map and the review,
+    /// the steps it takes nothing from skipped both ways. Back is off on the first step; Next becomes
     /// Create on the last.
     #[test]
     fn a_sheet_takes_every_step_and_a_figure_skips_what_it_doesnt_draw() {
@@ -579,22 +603,26 @@ mod tests {
         open(&mut app);
         let mut h = harness(app);
         assert!(h.get_by_role_and_label(Role::Button, "Back").accesskit_node().is_disabled(), "Back is off");
-        for want in [Step::Style, Step::Texts, Step::Sources, Step::Accent, Step::Review] {
+        for want in [Step::Map, Step::Style, Step::Texts, Step::Sources, Step::Accent, Step::Review] {
             click(&mut h, "Next");
             assert_eq!(step(&h), want);
         }
         assert!(h.query_by_role_and_label(Role::Button, "Next").is_none());
         assert!(h.query_by_role_and_label(Role::Button, "Create").is_some());
-        for want in [Step::Accent, Step::Sources, Step::Texts, Step::Style, Step::Size] {
+        for want in [Step::Accent, Step::Sources, Step::Texts, Step::Style, Step::Map, Step::Size] {
             click(&mut h, "Back");
             assert_eq!(step(&h), want);
         }
         h.state_mut().dialogs.publication.as_mut().unwrap().size = "figure-2col".into();
         h.run_steps(2);
-        click(&mut h, "Next");
-        assert_eq!(step(&h), Step::Review);
-        click(&mut h, "Back");
-        assert_eq!(step(&h), Step::Size);
+        for want in [Step::Map, Step::Review] {
+            click(&mut h, "Next");
+            assert_eq!(step(&h), want);
+        }
+        for want in [Step::Map, Step::Size] {
+            click(&mut h, "Back");
+            assert_eq!(step(&h), want);
+        }
     }
 
     /// Create makes the layout in one step, closes the wizard and opens the Publish tab, as the
@@ -657,7 +685,7 @@ mod tests {
         let mut h = harness(app);
         let at = |h: &egui_kittest::Harness<'static, RustGisApp>| h.get_by_role_and_label(Role::Button, "Next").rect();
         let first = at(&h);
-        for _ in 0..4 {
+        for _ in 0..5 {
             click(&mut h, "Next");
             assert_eq!(at(&h), first, "{:?}", step(&h));
         }
@@ -678,7 +706,7 @@ mod tests {
             assert_ne!(next, "Next", "{code}: the language changed");
             let at = |h: &egui_kittest::Harness<'static, RustGisApp>| h.get_by_role_and_label(Role::Button, &next).rect();
             let first = at(&h);
-            for _ in 0..4 {
+            for _ in 0..5 {
                 h.get_by_role_and_label(Role::Button, &next).click();
                 h.run_steps(4);
                 assert_eq!(at(&h), first, "{code}: {:?}", step(&h));
