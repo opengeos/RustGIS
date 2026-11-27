@@ -37,7 +37,6 @@ pub(in crate::cmd::layout) fn frame_map<'a>(
     };
     s.project.maps.iter().find(|m| m.name.eq_ignore_ascii_case(map)).ok_or_else(|| format!("no map '{map}'"))
 }
-
 /// Binds the chosen frame map and the layers whose extent this zoom consumes.
 pub(in crate::cmd::layout) fn frame_zoom_inputs(input: &crate::cmd::InputContext<'_>, p: &Value) -> Result<crate::cmd::Inputs, String> {
     let s = input;
@@ -53,7 +52,6 @@ pub(in crate::cmd::layout) fn frame_zoom_inputs(input: &crate::cmd::InputContext
     inputs.state = json!({"layout":index(input,p)?,"frame":frame});
     Ok(inputs)
 }
-
 /// Binds a new series to its actual frame map, unless the call only turns it off.
 pub(in crate::cmd::layout) fn series_inputs(input: &crate::cmd::InputContext<'_>, p: &Value) -> Result<crate::cmd::Inputs, String> {
     let s = input;
@@ -68,7 +66,6 @@ pub(in crate::cmd::layout) fn series_inputs(input: &crate::cmd::InputContext<'_>
     inputs.state = json!({"layout":index(input,p)?,"frame":frame});
     Ok(inputs)
 }
-
 /// Binds the stored series frame/layer before changing its current page.
 pub(in crate::cmd::layout) fn series_page_inputs(input: &crate::cmd::InputContext<'_>, p: &Value) -> Result<crate::cmd::Inputs, String> {
     let s = input;
@@ -80,7 +77,6 @@ pub(in crate::cmd::layout) fn series_page_inputs(input: &crate::cmd::InputContex
     inputs.state = json!({"layout":li,"series":s.project.layouts.get(li).and_then(|l|l.series.as_ref())});
     Ok(inputs)
 }
-
 /// Collects only the selectors the requested surround validates, including chart field precedence.
 pub(in crate::cmd::layout) fn element_inputs(input: &crate::cmd::InputContext<'_>, p: &Value) -> Result<crate::cmd::Inputs, String> {
     let s = input;
@@ -116,12 +112,10 @@ pub(in crate::cmd::layout) fn element_inputs(input: &crate::cmd::InputContext<'_
     inputs.state = json!({"layout":index(input,p)?,"frame":frame,"selectors":inputs.state});
     Ok(inputs)
 }
-
 /// Resolves the same active/name/index layout used by export before its dependency walk.
 pub(in crate::cmd::layout) fn layout_inputs(input: &crate::cmd::InputContext<'_>, p: &Value) -> Result<crate::cmd::Inputs, String> {
     Ok(render_inputs_at(input, index(input, p)?))
 }
-
 /// Collects only maps actually referenced by renderer frames; never renders or opens a source.
 pub(crate) fn render_inputs_at(input: &impl crate::cmd::InputSource, li: usize) -> crate::cmd::Inputs {
     let context = input.input_context();
@@ -196,14 +190,12 @@ pub(in crate::cmd::layout) fn added_frame_map<'a>(
         None => Ok(s.map()),
     }
 }
-
 /// Records the map whose current view initializes the new frame.
 pub(in crate::cmd::layout) fn add_frame_inputs(input: &crate::cmd::InputContext<'_>, p: &Value) -> Result<crate::cmd::Inputs, String> {
     let mut inputs = object_inputs(input, p)?;
     inputs.maps.push(added_frame_map(input, p)?.instance_id());
     Ok(inputs)
 }
-
 /// Records only stored references actually validated by this element update.
 pub(in crate::cmd::layout) fn update_inputs(input: &crate::cmd::InputContext<'_>, p: &Value) -> Result<crate::cmd::Inputs, String> {
     let s = input;
@@ -259,12 +251,10 @@ pub(in crate::cmd::layout) fn object_inputs(input: &crate::cmd::InputContext<'_>
     inputs.state = json!({"layout":i,"name":layout.name});
     Ok(inputs)
 }
-
 /// Browser name-based actions use their existing name-to-layout parameter projection.
 pub(in crate::cmd::layout) fn named_object_inputs(input: &crate::cmd::InputContext<'_>, p: &Value) -> Result<crate::cmd::Inputs, String> {
     object_inputs(input, &by_name(p))
 }
-
 /// Closing the layout view succeeds even when none is open.
 pub(in crate::cmd::layout) fn close_inputs(input: &crate::cmd::InputContext<'_>, _: &Value) -> Result<crate::cmd::Inputs, String> {
     let s = input;

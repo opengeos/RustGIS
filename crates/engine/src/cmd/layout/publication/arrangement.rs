@@ -30,7 +30,6 @@ pub(in crate::cmd::layout) fn home_slot(kind: Surround) -> usize {
 /// At most this many arrangements are saved by name, each name at most this many characters
 /// (#1379).
 pub const MAX_SAVED_ARRANGEMENTS: usize = 20;
-
 pub const MAX_ARRANGEMENT_NAME: usize = 40;
 
 /// Names an arrangement can't be saved under: those `"arrangement"` reads otherwise, and those

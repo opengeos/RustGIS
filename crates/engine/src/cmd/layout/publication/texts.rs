@@ -12,7 +12,6 @@ pub(in crate::cmd::layout) const GRID_STEPS: &[f64] = &[0.01, 0.02, 0.05, 0.1, 0
 /// left and right edges (a latitude such as `10°S` across), and along the top and bottom ones. A
 /// sheet scales them with its labels, by its short side (#2581).
 pub(in crate::cmd::layout) const LABEL_ROOM_SIDE: f64 = 9.0;
-
 pub(in crate::cmd::layout) const LABEL_ROOM_END: f64 = 6.0;
 
 /// A scale denominator rounded up to two significant figures (1:1,234,567 to 1:1,300,000), so the

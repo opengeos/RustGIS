@@ -55,7 +55,6 @@ const PDF_BUDGET: usize = if cfg!(target_arch = "wasm32") { 256 << 20 } else { 1
 
 /// Layout files: JSON with this extension.
 pub const LAYOUT_EXTENSION: &str = "rgislayout";
-
 /// Largest layout file read (64 MiB, pictures included).
 const MAX_LAYOUT: u64 = 64 << 20;
 

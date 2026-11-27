@@ -75,11 +75,9 @@ pub(in crate::cmd::layout) fn place(p: &Value, l: &Layout, (dx, dy, dw, dh): (f6
 
 /// Said when a map frame is given a background: it draws its map and its paper itself.
 pub(in crate::cmd::layout) const NO_FRAME_BACKGROUND: &str = "a map frame takes no background: it draws its map and the paper behind it";
-
 /// Said when a grid or an extent indicator is added with a background: they go on a map frame.
 pub(in crate::cmd::layout) const NO_OVERLAY_BACKGROUND: &str =
     "a grid or an extent indicator goes on a map frame, which takes no background";
-
 /// What an element's `background` object takes.
 pub(in crate::cmd::layout) const BACKGROUND_KEYS: [&str; 5] = ["fill", "outline", "width", "radius", "padding"];
 
@@ -726,12 +724,9 @@ pub(in crate::cmd::layout) const ONLY_RECTANGLE_RADIUS: &str = "only a rectangle
 /// and, when adding, also an extent indicator's or a grid's.
 pub(in crate::cmd::layout) const ONLY_COLOR_ADDED: &str = "only text, lines, arrows, rectangles, ellipses, circles, extent indicators, grids, scale bars, \
 legends, colorbars, tables and charts take a color";
-
 pub(in crate::cmd::layout) const ONLY_COLOR_UPDATED: &str =
     "only text, lines, arrows, rectangles, ellipses, circles, scale bars, legends, colorbars, tables and charts take a color";
-
 pub(in crate::cmd::layout) const ONLY_FILL: &str = "only north arrows, rectangles, ellipses, circles and scale bars take a fill";
-
 pub(in crate::cmd::layout) const ONLY_OUTLINE: &str = "only north arrows, rectangles, ellipses and circles take an outline";
 
 /// Whether `p` gives `k`: `null` is not given.

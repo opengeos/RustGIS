@@ -8,10 +8,8 @@ pub(in crate::cmd::layout) const ONLY_CHART_OPTIONS: &str = "only charts take a 
 
 /// The keys only a chart takes: what it draws, then how it draws it.
 pub(in crate::cmd::layout) const CHART_DATA_KEYS: [&str; 7] = ["label", "group", "statistic", "order", "bars", "other", "stack"];
-
 /// What a chart is given that changes the room its title and key leave its bars, beside its size.
 pub(in crate::cmd::layout) const CHART_ROOM_KEYS: [&str; 4] = ["orientation", "title", "values", "hideLabels"];
-
 pub(in crate::cmd::layout) const CHART_LOOK_KEYS: [&str; 9] =
     ["values", "decimals", "barColor", "classes", "labelAlign", "mirror", "max", "hideLabels", "barOutline"];
 

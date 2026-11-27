@@ -3,10 +3,8 @@
 use super::*;
 
 pub(in crate::cmd::layout) const ONLY_LEGEND_COLUMNS: &str = "only legends have columns";
-
 /// Refuse the optional no-data key on an element that cannot display it.
 pub(in crate::cmd::layout) const ONLY_LEGEND_NO_DATA: &str = "only legends take showNoData";
-
 pub(in crate::cmd::layout) const ONLY_LEGEND_LABELS: &str = "only legends label layers";
 
 /// A box sized to its content, less the padding again, can come out a rounding error short of it:
