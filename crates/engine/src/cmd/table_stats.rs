@@ -422,13 +422,22 @@ fn gather(ds: &Dataset, t: &Target) -> Result<Done, String> {
         map.insert("distinct".into(), json!(t2.distinct.len()));
         if t2.capped {
             map.insert("distinctCapped".into(), json!(true));
-            notices.push(Note::loss(LossCode::DroppedOverLimit, if t2.byte_capped { format!(
-                "{}: '{}' reached the {} MiB distinct-text budget; it has more than {} distinct values and the distinct count stops at {}",
-                t.layer, f.name, MAX_DISTINCT_BYTES >> 20, t2.distinct.len(), t2.distinct.len()
-            ) } else { format!(
-                "{}: '{}' has more than {MAX_DISTINCT} distinct values; the distinct count stops at {MAX_DISTINCT}",
-                t.layer, f.name
-            ) }));
+            let text = if t2.byte_capped {
+                format!(
+                    "{}: '{}' reached the {} MiB distinct-text budget; it has more than {} distinct values and the distinct count stops at {}",
+                    t.layer,
+                    f.name,
+                    MAX_DISTINCT_BYTES >> 20,
+                    t2.distinct.len(),
+                    t2.distinct.len()
+                )
+            } else {
+                format!(
+                    "{}: '{}' has more than {MAX_DISTINCT} distinct values; the distinct count stops at {MAX_DISTINCT}",
+                    t.layer, f.name
+                )
+            };
+            notices.push(Note::loss(LossCode::DroppedOverLimit, text));
         }
         if t2.invalid_dates > 0 {
             notices.push(Note::loss(
