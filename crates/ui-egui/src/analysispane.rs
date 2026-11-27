@@ -2277,8 +2277,10 @@ fn refuse_huge_paste(app: &mut RustGisApp, ui: &Ui, box_id: egui::Id) {
     });
     if refused {
         let text = tl!("The paste would make the script larger than 1 MB: nothing was pasted").to_string();
-        // Once while it shows: a held key repeats, and each repeat comes here.
-        if !app.map.toasts.iter().any(|t| t.text == text) {
+        // Once while it shows: a held key repeats, and each repeat comes here. One that has had
+        // its time is still listed until this frame's toasts are drawn.
+        let now = ui.input(|i| i.time);
+        if !app.map.toasts.iter().any(|t| t.text == text && t.live(now)) {
             app.session.notify(text, true);
         }
     }
@@ -3751,17 +3753,17 @@ mod tests {
         use egui::Event;
         let max = crate::SCRIPT_FILE_MAX_BYTES;
         let mut h = find_harness(&"a".repeat(max - 10));
-        let said = h.state().session.notices.len();
+        let said = h.state().session.notice_mark();
         h.event(Event::Paste("b".repeat(10)));
         h.run();
         assert_eq!(h.state().workflow.script.len(), max);
-        assert_eq!(h.state().session.notices.len(), said, "a paste that fits says nothing");
+        assert_eq!(h.state().session.notice_mark(), said, "a paste that fits says nothing");
         let kept = h.state().workflow.script.clone();
         h.event(Event::Paste("c".into()));
         h.run();
         assert_eq!(h.state().workflow.script, kept);
+        assert_eq!(h.state().session.notice_mark(), said + 1);
         let notices = &h.state().session.notices;
-        assert_eq!(notices.len(), said + 1);
         assert_eq!(notices.last().map(|n| n.text.as_str()), Some("The paste would make the script larger than 1 MB: nothing was pasted"));
     }
 
@@ -3800,8 +3802,8 @@ mod tests {
         h.run_steps(2);
         assert_eq!(h.state().workflow.script, "map.zoomFull");
         assert_eq!(times(h.state()), 1);
-        // Once it has gone, the next refusal says so again.
-        h.state_mut().map.toasts.clear();
+        // Once it has had its time, the next refusal says so again, though it is still listed.
+        h.state_mut().map.toasts.iter_mut().for_each(|t| t.at -= 10.0);
         h.event(egui::Event::Paste("a".repeat(crate::SCRIPT_FILE_MAX_BYTES)));
         h.run_steps(2);
         assert_eq!(times(h.state()), 2);
