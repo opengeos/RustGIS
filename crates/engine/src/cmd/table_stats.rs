@@ -19,6 +19,7 @@
 use std::borrow::Cow;
 use std::collections::HashSet;
 
+use rustgis_data::loss::{LossCode, Note};
 use rustgis_data::{Dataset, Value as Cell};
 use serde_json::{Value, json};
 
@@ -267,7 +268,8 @@ fn resolve(s: &Session, p: &Value) -> Result<Target, String> {
 /// An answer, and what it says to the user.
 struct Done {
     answer: Value,
-    notices: Vec<String>,
+    /// What the count left out or rounded, each with its code: every one is a real loss.
+    notices: Vec<rustgis_data::loss::Note>,
 }
 
 /// Counts column `t.column` of `ds` over its rows, looking at Cancel as it goes (see
@@ -336,25 +338,34 @@ fn gather(ds: &Dataset, t: &Target) -> Result<Done, String> {
         map.insert("max".into(), pick(max));
         map.insert("stdDev".into(), pick(json!(std_dev)));
         if n.skipped > 0 {
-            notices.push(format!(
-                "{}: {} value(s) in '{}' that aren't finite numbers (NaN, infinity or other text) left out of the statistics",
-                t.layer, n.skipped, f.name
+            notices.push(Note::loss(
+                LossCode::DroppedValue,
+                format!(
+                    "{}: {} value(s) in '{}' that aren't finite numbers (NaN, infinity or other text) left out of the statistics",
+                    t.layer, n.skipped, f.name
+                ),
             ));
         }
         // Whole numbers added up exactly unless the column also holds decimals, which add them as
         // decimals: the whole numbers past 2^53 are then rounded.
         if !whole && n.big > 0 {
-            notices.push(format!(
-                "{}: {} whole number(s) in '{}' past 2^53 are rounded in the statistics, because the column also holds decimals",
-                t.layer, n.big, f.name
+            notices.push(Note::loss(
+                LossCode::ChangedRounded,
+                format!(
+                    "{}: {} whole number(s) in '{}' past 2^53 are rounded in the statistics, because the column also holds decimals",
+                    t.layer, n.big, f.name
+                ),
             ));
         }
         if !overflowed.is_empty() {
-            notices.push(format!(
-                "{}: the {} of '{}' is too large to hold as a decimal number (past about 1.8e308) and is left out",
-                t.layer,
-                overflowed.join(" and the "),
-                f.name
+            notices.push(Note::loss(
+                LossCode::DroppedCalculationResult,
+                format!(
+                    "{}: the {} of '{}' is too large to hold as a decimal number (past about 1.8e308) and is left out",
+                    t.layer,
+                    overflowed.join(" and the "),
+                    f.name
+                ),
             ));
         }
     } else {
@@ -411,18 +422,21 @@ fn gather(ds: &Dataset, t: &Target) -> Result<Done, String> {
         map.insert("distinct".into(), json!(t2.distinct.len()));
         if t2.capped {
             map.insert("distinctCapped".into(), json!(true));
-            notices.push(if t2.byte_capped { format!(
+            notices.push(Note::loss(LossCode::DroppedOverLimit, if t2.byte_capped { format!(
                 "{}: '{}' reached the {} MiB distinct-text budget; it has more than {} distinct values and the distinct count stops at {}",
                 t.layer, f.name, MAX_DISTINCT_BYTES >> 20, t2.distinct.len(), t2.distinct.len()
             ) } else { format!(
                 "{}: '{}' has more than {MAX_DISTINCT} distinct values; the distinct count stops at {MAX_DISTINCT}",
                 t.layer, f.name
-            ) });
+            ) }));
         }
         if t2.invalid_dates > 0 {
-            notices.push(format!(
-                "{}: {} value(s) in '{}' aren't dates and were left out of the date minimum and maximum",
-                t.layer, t2.invalid_dates, f.name
+            notices.push(Note::loss(
+                LossCode::DroppedValue,
+                format!(
+                    "{}: {} value(s) in '{}' aren't dates and were left out of the date minimum and maximum",
+                    t.layer, t2.invalid_dates, f.name
+                ),
             ));
         }
         map.insert("min".into(), json!(min));
@@ -482,7 +496,7 @@ pub(super) fn run(s: &mut Session, p: &Value) -> CmdResult {
         None => gather(&l.dataset, &target)?,
     };
     for n in done.notices {
-        s.notify(n, false);
+        s.say(n);
     }
     Ok(done.answer)
 }
