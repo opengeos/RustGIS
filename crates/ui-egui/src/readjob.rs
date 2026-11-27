@@ -771,7 +771,7 @@ impl Reads {
 pub(crate) fn under_way(app: &RustGisApp) -> Option<&'static str> {
     match &app.reads.job {
         Some(job) => Some(job.name),
-        None => (!app.reads.waiting.is_empty()).then_some("A read"),
+        None => (!app.reads.waiting.is_empty()).then(|| crate::tl_raw!("A read")),
     }
 }
 

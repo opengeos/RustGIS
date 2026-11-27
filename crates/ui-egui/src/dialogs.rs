@@ -1132,19 +1132,37 @@ fn export_table_choice(app: &mut RustGisApp, ui: &mut egui::Ui) {
     let label = ui.label(tl!("Table"));
     let picked = app.dialogs.export_table;
     let is_picked = |t: &Table| picked == Some((t.id, t.instance_id()));
-    let shown = app.session.project.tables.iter().find(|t| is_picked(t)).map_or("", |t| t.dataset.name.as_str());
+    let tables = &app.session.project.tables;
+    let shown = tables.iter().find(|t| is_picked(t)).map_or_else(String::new, |t| table_label(tables, t.id));
+    let mut chosen = None;
     egui::ComboBox::from_id_salt("export_table_choice")
         .selected_text(shown)
         .width(220.0)
         .show_ui(ui, |ui| {
-            for t in &app.session.project.tables {
-                if ui.selectable_label(is_picked(t), &t.dataset.name).clicked() {
-                    app.dialogs.pick_export_table(t);
+            for t in tables {
+                if ui.selectable_label(is_picked(t), table_label(tables, t.id)).clicked() {
+                    chosen = Some(t.id);
                 }
             }
         })
         .response
         .labelled_by(label.id);
+    if let Some(t) = chosen.and_then(|id| app.session.project.table(id)) {
+        app.dialogs.pick_export_table(t);
+    }
+}
+
+/// How Export Table names standalone table `id` among `tables`: its name, and where names repeat
+/// (the project allows it), which of them it is, in the Layers pane's order.
+fn table_label(tables: &[Table], id: u32) -> String {
+    let Some(name) = tables.iter().find(|t| t.id == id).map(|t| t.dataset.name.as_str()) else { return String::new() };
+    let same: Vec<u32> = tables.iter().filter(|t| t.dataset.name == name).map(|t| t.id).collect();
+    match same.iter().position(|&other| other == id) {
+        Some(k) if same.len() > 1 => {
+            crate::i18n::fmt("{name} ({k} of {n})", &[("name", name), ("k", &(k + 1).to_string()), ("n", &same.len().to_string())])
+        }
+        _ => name.to_string(),
+    }
 }
 
 /// Export Features (the active layer) and Export Table (`table`: a standalone table), in a format
@@ -3607,6 +3625,21 @@ fn calculation_preview(rows: &[rustgis_engine::cmd::edit::CalculationPreview]) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Export Table's picker tells apart standalone tables that share a name, which the project
+    /// allows, so the one written is the one meant; a name used once stays as it is.
+    #[test]
+    fn export_table_labels_tell_tables_with_one_name_apart() {
+        use rustgis_engine::data::{Dataset, GeometryType};
+        let mut app = RustGisApp::with_sample();
+        let first = app.session.project.add_table(Dataset::new("totals", GeometryType::None, vec![]));
+        let other = app.session.project.add_table(Dataset::new("ranks", GeometryType::None, vec![]));
+        let second = app.session.project.add_table(Dataset::new("totals", GeometryType::None, vec![]));
+        let tables = &app.session.project.tables;
+        assert_eq!(table_label(tables, first), "totals (1 of 2)");
+        assert_eq!(table_label(tables, second), "totals (2 of 2)");
+        assert_eq!(table_label(tables, other), "ranks");
+    }
 
     /// The GeoPackage prompt belongs to the map it opened on, wherever that map goes among the maps;
     /// another map or project refuses it (#2959).
