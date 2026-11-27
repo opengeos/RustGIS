@@ -242,13 +242,14 @@ impl LegendRow<'_> {
     }
 
     /// Its width beside a column of swatches `column` points wide ([`swatch_column`]) in a legend
-    /// `size` times the default, its text `text` points wide ([`LegendRow::text_width`]), in points.
+    /// `size` times the default, its text `text` points wide ([`LegendRow::text_width`]), in points;
+    /// a picture's, `text` itself ([`RowSizes::of`]).
     pub(super) fn width(&self, column: f32, size: f32, text: f32) -> f32 {
         match self {
             LegendRow::Plain(..) => column + LEGEND_INDENT * size + text,
             LegendRow::Head(_) => text,
             LegendRow::Class(..) => column + LEGEND_LABEL_INDENT * size + text,
-            LegendRow::Picture(p) => (LEGEND_INDENT + picture_size(p).0) * size,
+            LegendRow::Picture(_) => text,
         }
     }
 }
@@ -260,7 +261,8 @@ pub(super) fn symbol_sides(rows: &[LegendRow], scale: f64) -> Vec<f32> {
 }
 
 /// A legend's rows measured at a size `size` times the default ([`legend_size`]), in points, in
-/// their order: each row's height and the width of its text, made once a size.
+/// their order: each row's height and the width of its text (of a legend picture, after its
+/// indent), made once a size.
 pub(super) struct RowSizes {
     size: f32,
     heights: Vec<f32>,
@@ -272,8 +274,32 @@ impl RowSizes {
     /// default.
     pub(super) fn of(rows: &[LegendRow], sides: &[f32], size: f32) -> Self {
         let heights = rows.iter().zip(sides).map(|(row, &side)| row.height_beside(side, size)).collect();
-        let texts = rows.iter().map(|row| row.text_width(size)).collect();
+        let texts = rows
+            .iter()
+            .map(|row| match row {
+                LegendRow::Picture(p) => (LEGEND_INDENT + picture_size(p).0) * size,
+                _ => row.text_width(size),
+            })
+            .collect();
         RowSizes { size, heights, texts }
+    }
+
+    /// These measures as a box `room` points wide draws the rows: a legend picture wider than it,
+    /// after its indent, narrowed to it and shortened with it, as [`legend_picture`] draws it
+    /// ([`picture_scale`]); one that can't be narrowed to anything keeps its size.
+    fn narrowed(mut self, rows: &[LegendRow], room: f32) -> Self {
+        for ((row, height), width) in rows.iter().zip(&mut self.heights).zip(&mut self.texts) {
+            if let LegendRow::Picture(p) = row
+                && *width > room
+            {
+                let (w, h) = picture_size(p);
+                let k = ((room - LEGEND_INDENT * self.size).max(0.0) / w.max(1.0)).min(self.size);
+                if k > 0.0 {
+                    (*width, *height) = (LEGEND_INDENT * self.size + w * k, h * k);
+                }
+            }
+        }
+        self
     }
 }
 
@@ -692,7 +718,9 @@ pub(super) fn beyond(measured: f32, room: f32, size: f32) -> bool {
 /// width in the columns its rows are then laid in within the room ([`drawn_starts`]), side by side
 /// with their gaps ([`across`]); it fits when it is neither wider nor taller than the room by more
 /// than a thousandth of a row. Too tall, its columns are filled in turn to the room's height, so
-/// its width is that of those columns, not of the even ones.
+/// its width is that of those columns, not of the even ones. A legend picture wider than the room
+/// is measured narrowed to it, as its column draws it ([`RowSizes::narrowed`]), where a manual
+/// legend measures it a pixel a point, as it always has.
 ///
 /// - Manual (and a value that is no fit): the columns and size as set.
 /// - adjustSize: in the columns set, the largest that fits of `text_size` and the sizes a quarter
@@ -771,11 +799,12 @@ impl Trials<'_, '_> {
         Fitted { columns, size, text_size: pt, starts, too_wide, too_tall }
     }
 
-    /// The rows' measures at `size` times the default: those made before, else made now.
+    /// The rows' measures at `size` times the default as the room draws them
+    /// ([`RowSizes::narrowed`]): those made before, else made now.
     fn take(&mut self, size: f32) -> RowSizes {
         match self.sizes.iter().position(|s| s.size.to_bits() == size.to_bits()) {
             Some(k) => self.sizes.swap_remove(k),
-            None => RowSizes::of(self.rows, self.sides, size),
+            None => RowSizes::of(self.rows, self.sides, size).narrowed(self.rows, self.room.0),
         }
     }
 

@@ -2354,6 +2354,46 @@ fn drawn_legend(map: &Map, (w, h): (f32, f32), (columns, fit): (usize, LegendFit
     pm
 }
 
+/// A picture `side` pixels square, for a legend.
+fn red_picture_of(side: u32) -> Vec<u8> {
+    let mut image = Pixmap::new(side, side).unwrap();
+    image.fill(tiny_skia::Color::from_rgba8(220, 20, 20, 255));
+    image.encode_png().unwrap()
+}
+
+/// A web layer's legend picture wider than its box is narrowed to it as drawn
+/// ([`picture_scale`]), and shortened with it, so a fit counts it at the size it is drawn: a
+/// 256 pixel picture in a box 200 points wide is drawn about 194 across and down, whole in a box
+/// 300 tall, and it fits there; in one 100 tall it is cut, and said. It fails if a fit measured
+/// the picture at a pixel a point in a column that draws it smaller.
+#[test]
+fn a_legend_picture_is_measured_as_its_column_draws_it() {
+    let url = "https://tiles.test/waits/fit-wide-picture-legend.png";
+    let fetch = crate::tiles::tests::hold_fetch(url);
+    let mut map = Map::new("m");
+    let mut tile = rustgis_map::TileLayer::new("Walls", rustgis_map::TileKind::Raster, "https://tiles.test/red/{z}/{x}/{y}.png");
+    tile.legends = vec![rustgis_data::ogc::Legend { url: url.into(), ..Default::default() }];
+    map.tiles.push(tile);
+    assert!(tile_legends_pending(&map, 1e6, &[]), "the picture is asked for");
+    fetch.recv_timeout(std::time::Duration::from_secs(5)).unwrap()(Ok(red_picture_of(256)));
+    wait_for_tile_legends(&map, 1e6, &[], web_time::Instant::now() + LEGEND_WAIT).unwrap();
+    let rows = legend_rows(&map, None, &opts(false));
+    assert_eq!(row_kinds(&rows), ["Picture"]);
+    let LegendRow::Picture(p) = &rows[0] else { unreachable!() };
+    let rustgis_tiles::cache::Payload::Image(pic) = &**p else { panic!("not a picture") };
+    // The painter narrows it to its column: whole in 300 points, not in 100.
+    let k = picture_scale(Rect::from_xywh(0.0, 0.0, 200.0, 300.0).unwrap(), pic, 1.0);
+    let drawn_h = pic.height() as f32 * k;
+    assert!(k < 1.0 && drawn_h <= 300.0 && drawn_h > 100.0, "{k} {drawn_h}");
+    assert!(measure_at(&rows, 1, (1e6, 1.0)).0 > 200.0, "a pixel a point, it is wider than the box");
+    for fit in [LegendFit::AdjustColumns, LegendFit::AdjustColumnsAndSize, LegendFit::AdjustSize] {
+        let f = fit_legend(&rows, (1, fit), (200.0, 300.0), (1e6, 9.0));
+        assert!(f.fits() && f.text_size == 9.0, "{fit:?}: {f:?}");
+        let f = fit_legend(&rows, (1, fit), (200.0, 100.0), (1e6, 9.0));
+        assert!(f.too_tall && !f.too_wide, "{fit:?} cut: {f:?}");
+    }
+}
+
 /// Legends with nothing to list, a box shorter than its title or no room at all draw and fit
 /// without a panic, a NaN or a loop: nothing to list fits, rows with no room are cut and say so.
 #[test]
