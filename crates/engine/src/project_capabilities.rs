@@ -410,7 +410,10 @@ fn command_uses_legend_fit(id: &str, params: &Value) -> bool {
                 || legend_names_param(params) == Ok(Some(false))
                 || legend_columns_param(params).is_ok_and(|n| n.is_some_and(|n| n > LEGEND_COLUMNS_BEFORE_FIT))
         }
-        "layout.import" => imported_layout_uses(params, &["\"fit\"", "\"show_layer_names\"", "\"columns\""], legends_fitting),
+        // A layout file, read as `layout.import` reads it, which `report.existingTemplate` also does.
+        "layout.import" | "report.existingTemplate" => {
+            imported_layout_uses(params, &["\"fit\"", "\"show_layer_names\"", "\"columns\""], legends_fitting)
+        }
         "script.run" => params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, command_uses_legend_fit)),
         _ => false,
     }
@@ -2127,6 +2130,9 @@ mod tests {
             ("layout.import", json!({"text": base["layouts"][0].to_string()}), false),
             ("layout.import", json!({"text": damaged.to_string()}), false),
             ("layout.import", json!({"path": "legends.rgislayout"}), false),
+            // A report section's template is a layout file read as `layout.import` reads it.
+            ("report.existingTemplate", json!({"text": saved["layouts"][0].to_string()}), true),
+            ("report.existingTemplate", json!({"text": base["layouts"][0].to_string()}), false),
         ] {
             // A scale bar's fit name is its details' to require, not this.
             let bar = params.get("fit") == Some(&json!("adjustWidth"));
