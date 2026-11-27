@@ -88,12 +88,11 @@ impl WideSum {
         if negative { -total } else { total }
     }
 
-    /// Whether `t` is the sum exactly: what is left once `t` is taken away is nothing, as the bins
-    /// count in units of the smallest subnormal, so any remainder totals to more than 0.
-    fn holds(&self, t: f64) -> bool {
+    /// How far `t` is from the sum: what is left once `t` is taken away, rounded once.
+    fn off_by(&self, t: f64) -> f64 {
         let mut rest = self.clone();
         rest.add(-t);
-        rest.total() == 0.0
+        rest.total()
     }
 }
 
@@ -174,6 +173,14 @@ impl Numbers {
             self.min = self.min.min(x);
             self.max = self.max.max(x);
         }
+    }
+
+    /// Whether the sum the answer gives is off by half a unit or more: rounded at the scale of the
+    /// whole numbers past 2^53, as decimals alone never round a sum this far (0.1 + 0.2 isn't).
+    /// The sum given is the running one, or the exact one where that overflowed.
+    fn sum_rounded(&self) -> bool {
+        let given = if self.sum.is_finite() { self.sum } else { self.wide_sum.total() };
+        given.is_finite() && self.wide_sum.off_by(given).abs() >= 0.5
     }
 
     fn add_whole(&mut self, i: i64) {
@@ -368,11 +375,7 @@ fn gather(ds: &Dataset, t: &Target) -> Result<Done, String> {
                     t.layer, n.inexact, f.name
                 ),
             ));
-        } else if !whole && n.big > 0 && {
-            // The sum the answer gives: the running one, or the exact one where that overflowed.
-            let given = if n.sum.is_finite() { n.sum } else { n.wide_sum.total() };
-            given.is_finite() && !n.wide_sum.holds(given)
-        } {
+        } else if !whole && n.big > 0 && n.sum_rounded() {
             // Each is held exactly, but their sum with the decimals isn't (5 + 0.5 + 2^54): rounded,
             // and checked against the exact sum, so a sum that comes out exact says nothing.
             notices.push(Note::loss(

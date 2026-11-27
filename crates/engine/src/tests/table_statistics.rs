@@ -154,6 +154,12 @@ fn whole_numbers_added_with_decimals_past_2_53_say_how_many_are_rounded() {
     let mark = s.notice_mark();
     stats(&mut s, json!({"layer": "w", "field": "x"}));
     assert!(s.notices_since(mark).is_empty(), "an exact sum says nothing");
+    // Decimals alone round a sum only as decimals do, which isn't said: the big ones cancel.
+    let cancel = vec![vec![V::Int(1 << 54)], vec![V::Int(-(1 << 54))], vec![V::Float(0.1)], vec![V::Float(0.2)]];
+    let mut s = layer_of("w", fields.clone(), cancel);
+    let mark = s.notice_mark();
+    stats(&mut s, json!({"layer": "w", "field": "x"}));
+    assert!(s.notices_since(mark).is_empty(), "{:?}", s.notices_since(mark));
     // So is the exact sum given where the running one overflows.
     let huge = || vec![V::Float(f64::MAX), V::Float(f64::MAX), V::Float(-f64::MAX), V::Float(-f64::MAX), V::Int(1 << 54)];
     let mut rows: Vec<Vec<V>> = huge().into_iter().map(|v| vec![v]).collect();
