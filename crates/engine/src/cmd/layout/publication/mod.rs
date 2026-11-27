@@ -555,7 +555,8 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
                             let pt = 9.0 * k;
                             // Letter spacing in points, and the millimetres it adds to each character.
                             let spacing = 0.18 * pt;
-                            let added = spacing * 1.33 * 25.4 / 96.0;
+                            // As the renderer spaces them: 1.33 points of the drawing per point of spacing.
+                            let added = spacing * 1.33 / rustgis_map::layout::PT_PER_MM;
                             let t = capitals(&fill(t));
                             let width = |x: &str| {
                                 let x = drawn(x);
