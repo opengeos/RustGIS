@@ -26,7 +26,7 @@ use rustgis_engine::map::Map;
 use rustgis_engine::map::layout::PAGES;
 use serde_json::{Value, json};
 use size::size_step;
-use sources::sources_step;
+use sources::{reference_step, sources_step};
 use style::style_step;
 use texts::texts_step;
 
@@ -39,6 +39,8 @@ pub enum Step {
     Placement,
     Texts,
     Sources,
+    /// A figure's cartographic reference, the one text it draws.
+    Reference,
     Accent,
     Review,
 }
@@ -72,7 +74,7 @@ enum Field {
 }
 
 impl Field {
-    /// The step that asks for it.
+    /// The sheet's step that asks for it.
     fn step(self) -> Step {
         match self {
             Field::Title | Field::Subtitle | Field::Note | Field::Author | Field::Heading(2) => Step::Texts,
@@ -169,8 +171,9 @@ impl Draft {
         self.accent.filter(|&c| self.picked.is_some() || c != own)
     }
 
-    /// Whether the size is a figure, which takes no style, texts or accent: the command draws the
-    /// map edge to edge and leaves the rest to the caption.
+    /// Whether the size is a figure, which takes no style or accent and no text but its reference:
+    /// the command draws the map edge to edge, the reference under it, and leaves the rest to the
+    /// caption.
     fn figure(&self) -> bool {
         PUBLICATION_PROFILES.iter().any(|p| !p.sheet && p.id == self.size)
     }
@@ -178,7 +181,7 @@ impl Draft {
     /// The steps this draft goes through, in order.
     fn steps(&self) -> &'static [Step] {
         if self.figure() {
-            return &[Step::Size, Step::Map, Step::Placement, Step::Review];
+            return &[Step::Size, Step::Map, Step::Placement, Step::Reference, Step::Review];
         }
         &[Step::Size, Step::Map, Step::Style, Step::Placement, Step::Texts, Step::Sources, Step::Accent, Step::Review]
     }
@@ -211,6 +214,10 @@ impl Draft {
         if !self.name.trim().is_empty() {
             p["name"] = json!(self.name.trim());
         }
+        let reference: Vec<&str> = lines(&self.reference).collect();
+        if self.no_reference || !reference.is_empty() {
+            p["reference"] = json!(if self.no_reference { Vec::new() } else { reference });
+        }
         if self.figure() {
             return p;
         }
@@ -227,10 +234,6 @@ impl Draft {
         let sources: Vec<&str> = lines(&self.sources).collect();
         if !sources.is_empty() {
             p["sources"] = json!(sources);
-        }
-        let reference: Vec<&str> = lines(&self.reference).collect();
-        if self.no_reference || !reference.is_empty() {
-            p["reference"] = json!(if self.no_reference { Vec::new() } else { reference });
         }
         let headings = self.headings_sent();
         if !headings.is_empty() {
@@ -289,10 +292,11 @@ impl Draft {
         }
     }
 
-    /// Notes `field` as its step's last one while it has the focus, typed into or not, and ends
-    /// its step's refusal note when its text changes.
+    /// Notes `field` as its step's last one while it has the focus, typed into or not (but on a
+    /// figure's step, which adds no statistic), and ends its step's refusal note when its text
+    /// changes.
     fn edited(&mut self, r: &egui::Response, field: Field) {
-        if r.has_focus() {
+        if r.has_focus() && self.step != Step::Reference {
             self.targets[field.step().slot()] = Some(field);
         }
         if r.changed() {
@@ -336,7 +340,8 @@ fn statistic_menu(ui: &mut egui::Ui, d: &mut Draft, map: &Map, own: Field) {
 /// done unseen.
 fn limit_note(ui: &mut egui::Ui, d: &mut Draft, fields: &[Field]) {
     let limit = [("limit", &*MAX_PUBLICATION_TEXT.to_string())];
-    let note = if d.refused[d.step.slot()] {
+    // A figure's step adds no statistic: a refusal on the sheet's sources step isn't its own.
+    let note = if d.step != Step::Reference && d.refused[d.step.slot()] {
         i18n::fmt("The statistic wasn't added: each field takes at most {limit} characters.", &limit)
     } else if fields.iter().any(|&f| !d.off(f) && d.field_mut(f).chars().count() >= MAX_PUBLICATION_TEXT) {
         i18n::fmt("Each field takes at most {limit} characters.", &limit)
@@ -369,6 +374,7 @@ fn step_name(step: Step) -> &'static str {
         Step::Placement => tl_raw!("Placement"),
         Step::Texts => tl_raw!("Texts"),
         Step::Sources => tl_raw!("Sources and reference"),
+        Step::Reference => tl_raw!("Reference"),
         Step::Accent => tl_raw!("Accent"),
         Step::Review => tl_raw!("Review"),
     }
@@ -383,6 +389,7 @@ fn step_label(step: Step) -> &'static str {
         Step::Placement => tl!("Placement"),
         Step::Texts => tl!("Texts"),
         Step::Sources => tl!("Sources"),
+        Step::Reference => tl!("Reference"),
         Step::Accent => tl!("Accent"),
         Step::Review => tl!("Review"),
     }
@@ -508,6 +515,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                             Step::Placement => arrange_step(ui, &app.session, &mut d),
                             Step::Texts => texts_step(ui, &mut d, app.session.map()),
                             Step::Sources => sources_step(ui, &mut d, app.session.map()),
+                            Step::Reference => reference_step(ui, &mut d),
                             Step::Accent => accent_step(ui, &mut d, t.accent),
                             Step::Review => review_step(ui, &app.session, &d),
                         });
@@ -673,9 +681,9 @@ mod tests {
         assert_eq!(d.params(), json!({"profile": "figure-1col"}));
     }
 
-    /// A sheet goes through the eight steps; a figure goes from its size to its map, its placement
-    /// and the review, the steps it takes nothing from skipped both ways. Back is off on the first
-    /// step; Next becomes Create on the last.
+    /// A sheet goes through the eight steps; a figure goes from its size to its map, its placement,
+    /// its reference and the review, the steps it takes nothing from skipped both ways. Back is off
+    /// on the first step; Next becomes Create on the last.
     #[test]
     fn a_sheet_takes_every_step_and_a_figure_skips_what_it_doesnt_draw() {
         let mut app = app();
@@ -694,11 +702,11 @@ mod tests {
         }
         h.state_mut().dialogs.publication.as_mut().unwrap().size = "figure-2col".into();
         h.run_steps(2);
-        for want in [Step::Map, Step::Placement, Step::Review] {
+        for want in [Step::Map, Step::Placement, Step::Reference, Step::Review] {
             click(&mut h, "Next");
             assert_eq!(step(&h), want);
         }
-        for want in [Step::Placement, Step::Map, Step::Size] {
+        for want in [Step::Reference, Step::Placement, Step::Map, Step::Size] {
             click(&mut h, "Back");
             assert_eq!(step(&h), want);
         }
@@ -759,7 +767,7 @@ mod tests {
     /// The names the step list holds, in order, and the one it marks as the current step.
     fn listed(h: &egui_kittest::Harness<'static, RustGisApp>) -> (Vec<&'static str>, Vec<&'static str>) {
         let (mut names, mut current) = (Vec::new(), Vec::new());
-        for name in ["Size", "Map", "Style", "Placement", "Texts", "Sources", "Accent", "Review"] {
+        for name in ["Size", "Map", "Style", "Placement", "Texts", "Sources", "Reference", "Accent", "Review"] {
             if let Some(n) = h.query_by_role_and_label(Role::Button, name) {
                 names.push(name);
                 if n.accesskit_node().toggled() == Some(egui::accesskit::Toggled::True) {
@@ -800,7 +808,7 @@ mod tests {
         click(&mut h, "Back");
         h.state_mut().dialogs.publication.as_mut().unwrap().size = "figure-1col".into();
         h.run_steps(2);
-        assert_eq!(listed(&h), (vec!["Size", "Map", "Placement", "Review"], vec!["Size"]));
+        assert_eq!(listed(&h), (vec!["Size", "Map", "Placement", "Reference", "Review"], vec!["Size"]));
     }
 
     /// A step clicked in the list is the one shown, first, middle or last, keeping what was
