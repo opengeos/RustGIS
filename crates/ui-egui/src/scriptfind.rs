@@ -151,8 +151,9 @@ struct Field {
 
 impl Field {
     /// After any write of the text (typed, pasted or filled from a selection): cut to what the field
-    /// takes, keeping how many characters that left out. Given back as the field goes from fitting
-    /// to cut, for one notice, not one a keystroke while it stays over; the bar's note counts on.
+    /// takes, keeping how many characters that left out. Given back, for a notice, as the field
+    /// goes from fitting to cut and whenever a write leaves out more than one character (a paste);
+    /// not for each key typed while it stays over.
     fn written(&mut self) -> Option<usize> {
         let before = self.left_out;
         self.left_out = 0;
@@ -160,7 +161,7 @@ impl Field {
             self.left_out = self.text.get(end..).map_or(0, |rest| rest.chars().count());
             self.text.truncate(end);
         }
-        (before == 0 && self.left_out > 0).then_some(self.left_out)
+        (self.left_out > 1 || (before == 0 && self.left_out == 1)).then_some(self.left_out)
     }
 }
 
@@ -787,15 +788,16 @@ mod tests {
         assert_eq!((field.written(), field.left_out), (None, 0), "what fits says nothing");
         field.text.push_str("ab");
         assert_eq!((field.written(), field.text.chars().count()), (Some(2), FIELD_MAX));
-        field.text.push_str("cd");
-        assert_eq!((field.written(), field.left_out), (None, 2), "held past the limit: said once");
         field.text.push('c');
-        assert_eq!((field.written(), field.left_out), (None, 1), "still cut: the note counts, Messages was told");
+        assert_eq!((field.written(), field.left_out), (None, 1), "a key typed while over: the note counts, Messages was told");
         field.text.pop();
         assert_eq!((field.written(), field.left_out), (None, 0), "a change that fits takes the note away");
         // The pop left room for one: two more are over again by one.
         field.text.push_str("cd");
         assert_eq!(field.written(), Some(1), "cut again after fitting: said again");
+        // Another long paste over a field already cut leaves out more than a keystroke does.
+        field.text.push_str(&"x".repeat(30));
+        assert_eq!(field.written(), Some(30), "a paste's cut is said, whatever was cut before");
     }
 
     #[test]
