@@ -131,8 +131,10 @@ const exited = new Promise((ok) =>
   }),
 );
 for (const pipe of [browser.stdio[3], browser.stdio[4]]) pipe.on("error", (e) => close(`the pipe to Chrome failed: ${e.message}`));
+// Decoded across reads: a read can end inside a character.
+browser.stdio[4].setEncoding("utf8");
 browser.stdio[4].on("data", (chunk) => {
-  buffer += chunk.toString();
+  buffer += chunk;
   let end;
   while ((end = buffer.indexOf("\0")) >= 0) {
     const msg = JSON.parse(buffer.slice(0, end));
