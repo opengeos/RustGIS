@@ -599,10 +599,13 @@ pub fn shortcuts(app: &mut RustGisApp, ctx: &egui::Context) {
         return;
     }
     let cmd = egui::Modifiers::COMMAND;
-    // The pane in use as the key went down: the wheel turned over the canvas after it, on the
-    // same frame, doesn't make the key the canvas's.
-    let layers =
-        |key| crate::inuse::press(app, key, None).map_or(crate::inuse::pane(app), |press| press.pane) == crate::inuse::Pane::Layers;
+    // The pane in use as the key went down: the wheel turned over the canvas after it doesn't
+    // make the key the canvas's, on the same frame or while the key is held (its repeats are the
+    // pane's it was pressed in, as in `chrome::shortcuts`).
+    let layers = |key| {
+        let pressed_in = crate::inuse::press(app, key, None).map(|press| press.pane).or_else(|| crate::inuse::held_in(app, key));
+        pressed_in.unwrap_or_else(|| crate::inuse::pane(app)) == crate::inuse::Pane::Layers
+    };
     let (mut del, mut dup, mut undo, mut redo) = (false, false, false, false);
     ctx.input_mut(|i| {
         undo = i.consume_shortcut(&egui::KeyboardShortcut::new(cmd, egui::Key::Z));
@@ -2161,6 +2164,23 @@ mod tests {
         assert_eq!(h.state().mb.graph.nodes.len(), 1, "the node stays");
         assert_eq!(h.state().session.map().layers.len(), layers - 1);
         assert!(h.state().session.map().layer_by_name("Rivers").is_none(), "Delete removed the layer clicked in the list");
+        // The key still held, and the wheel turned over the canvas: its repeats stay the layer
+        // list's, and the node stays.
+        let canvas = pos2(800.0, 500.0);
+        h.event(Event::PointerMoved(canvas));
+        h.step();
+        h.event(Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: vec2(0.0, 1.0),
+            modifiers: Modifiers::NONE,
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Wheel,
+        });
+        h.run_steps(2);
+        h.event(Event::Key { key: Key::Delete, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+        h.run_steps(2);
+        assert_eq!(h.state().mb.graph.nodes.len(), 1, "a held Delete's repeat on the canvas leaves the node");
+        assert_eq!(h.state().session.map().layers.len(), layers - 1);
     }
 
     /// Closing with unsaved changes asks first; Discard closes, Cancel keeps the model open.
