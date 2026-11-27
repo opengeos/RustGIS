@@ -1132,12 +1132,15 @@ fn projected_bytes_within(ds: &Dataset, ext: &str, crs: Crs, limit: &Limit) -> R
     limit.whole(made)
 }
 
-/// A zip of `entries`, which were held to `limit` as they were made, refused too when it passes
-/// it by itself.
+/// A zip of `entries`, which were held to `limit` as they were made: they stay counted against it
+/// while the archive is made, and the archive is written within what they leave, so the two
+/// together never pass it (besides one entry's compressed bytes at a time).
 fn zipped(entries: &[(String, Vec<u8>)], limit: &Limit) -> Result<Vec<u8>> {
-    let zip = crate::zip::write(entries).map_err(DataError::Format)?;
-    limit.admit(zip.len());
-    Ok(zip)
+    let parts: usize = entries.iter().map(|(_, bytes)| bytes.capacity()).sum();
+    let _parts = limit.hold(parts)?;
+    let mut out = limit.buffer();
+    let made = crate::zip::write_to(entries, &mut out).map_err(DataError::Format);
+    limit.whole(made.map(|()| out.into_inner()))
 }
 
 /// The text `data.convert` makes of a dataset in longitude/latitude, in `format` (`geojson`,

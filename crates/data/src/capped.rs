@@ -35,12 +35,11 @@ impl Limit {
         Buffer { file: Vec::new(), at: 0, limit: self, charged: 0 }
     }
 
-    /// Refuses a file of `bytes` made apart from the buffers (a zip of them) when it passes the
-    /// limit.
-    pub(crate) fn admit(&self, bytes: usize) {
-        if bytes > self.max {
-            self.passed.store(true, Ordering::Relaxed);
-        }
+    /// Counts `bytes` held apart from the buffers (files made in them and taken out, while an
+    /// archive of them is made) against the limit until the guard is dropped; refused past it.
+    pub(crate) fn hold(&self, bytes: usize) -> Result<Held<'_>> {
+        self.take(bytes).map_err(|_| DataError::Format(format!("the file passes the {} bytes it may come to", self.max)))?;
+        Ok(Held { limit: self, bytes })
     }
 
     /// `made`, or an error once a write was refused: a writer may drop that write's error (some
@@ -62,6 +61,18 @@ impl Limit {
         self.held.fetch_sub(n, Ordering::Relaxed);
         self.passed.store(true, Ordering::Relaxed);
         Err(Error::other("the file passes the size it may come to"))
+    }
+}
+
+/// Bytes counted against a [`Limit`] while they are held ([`Limit::hold`]).
+pub(crate) struct Held<'a> {
+    limit: &'a Limit,
+    bytes: usize,
+}
+
+impl Drop for Held<'_> {
+    fn drop(&mut self) {
+        self.limit.held.fetch_sub(self.bytes, Ordering::Relaxed);
     }
 }
 
@@ -256,6 +267,11 @@ mod tests {
             let unzipped: usize = crate::zip::read(&zip).unwrap().iter().filter(|e| counted(&e.0)).map(|e| e.1.len()).sum();
             assert!(zip.len() < unzipped - 1, "{ext}");
             assert!(whole(ext, &Limit::new(unzipped - 1)).is_err(), "{ext}");
+            // The parts stay counted while the archive is made, so both must fit: with room for
+            // half the archive past them it is refused, with room to spare it is the same zip.
+            let all: usize = crate::zip::read(&zip).unwrap().iter().map(|e| e.1.len()).sum();
+            assert!(whole(ext, &Limit::new(all + zip.len() / 2)).is_err(), "{ext}: parts and archive past the limit");
+            assert_eq!(whole(ext, &Limit::new(2 * (all + zip.len()))).unwrap(), zip, "{ext}");
         }
     }
 

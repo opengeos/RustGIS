@@ -3883,18 +3883,29 @@ pub(crate) fn queue_full(cap: usize) -> String {
 /// `gp.fileDelivered`, within what the queue holds.
 fn queue(s: &mut Session, file_name: String, bytes: Arc<Vec<u8>>, from: Delivery) -> CmdResult {
     use super::exports::{MAX_DOWNLOADS, mib};
+    // A file held only here gives back its spare room first: an encoder's buffer can be twice
+    // its length. One shared (a raster layer's own file) counts whole.
+    let bytes = match Arc::try_unwrap(bytes) {
+        Ok(mut file) => {
+            file.shrink_to_fit();
+            Arc::new(file)
+        }
+        Err(shared) => shared,
+    };
     let cap = s.download_cap();
     let held = s.waiting_download_bytes();
     // An export whose writer takes a limit was stopped at it; this is what holds the others (a
     // picture, an SVG, a PDF past its pages, the file a raster layer holds) to it.
-    if matches!(from, Delivery::Export(_)) && bytes.len() > cap {
+    // Measured as the queue counts what waits: by what the file holds, its spare room included.
+    let size = bytes.capacity();
+    if matches!(from, Delivery::Export(_)) && size > cap {
         return Err(format!(
             "{file_name}: {} MiB, more than the {} MiB a command can download in the browser; export less (a selection of features, a smaller size or fewer pages), use the Export buttons, or use the desktop app",
-            mib(bytes.len()),
+            mib(size),
             mib(cap)
         ));
     }
-    if s.waiting_download_count() >= MAX_DOWNLOADS || bytes.len() > cap.saturating_sub(held) {
+    if s.waiting_download_count() >= MAX_DOWNLOADS || size > cap.saturating_sub(held) {
         return Err(queue_full(cap));
     }
     s.next_pending = s.next_pending.wrapping_add(1);
@@ -4356,6 +4367,21 @@ mod file_tests {
             }));
         }
         s.run("test.queueFile", &json!({"name":name,"bytes":bytes,"record":record}))
+    }
+
+    /// A file queued with spare room (an encoder's buffer) gives it back before it is admitted,
+    /// so what waits never passes the limit the queue counts it against.
+    #[test]
+    fn a_queued_file_is_held_to_the_limit_by_what_it_holds() {
+        let mut s = Session::new(crate::Project::default());
+        s.download_cap = Some(50);
+        s.registry.commands.push(C::new("test.queueRoomy", "File export", "Test", |s, _| {
+            let mut file = Vec::with_capacity(100);
+            file.extend_from_slice(&[7; 10]);
+            super::queue_file(s, "roomy.bin".into(), file, record(), Vec::new())
+        }));
+        assert_eq!(s.run("test.queueRoomy", &Value::Null).unwrap()["pending"], true);
+        assert_eq!(s.waiting_download_bytes(), 10);
     }
 
     fn record() -> GpRecord {
