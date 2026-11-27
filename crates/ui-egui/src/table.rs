@@ -380,28 +380,29 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
         .size_range(120.0..=600.0)
         .frame(egui::Frame::NONE.fill(t.pane))
         .show(ui, |ui| {
-            // Data source: a layer or a standalone table.
-            let (ds, selection, title, key, table_instance): (Dataset, Vec<usize>, String, ViewKey, Option<u64>) =
-                match layer_id.and_then(|id| app.session.map().layer(id)) {
-                    Some(l) => (l.dataset.clone(), l.selection.clone(), l.name.clone(), ViewKey::Layer(l.instance_id()), None),
+            prune_views(app);
+            // Data source metadata for the header: borrow `&Dataset` briefly instead of cloning it
+            // so toolbar commands never run with an extra `Arc` reference pinning the rows.
+            let (title, key, table_instance, total_rows, selected_n, hidden_n): (String, ViewKey, Option<u64>, usize, usize, usize) = {
+                let (ds, selected_n, title, key, table_instance) = match layer_id.and_then(|id| app.session.map().layer(id)) {
+                    Some(l) => (&l.dataset, l.selection.len(), l.name.clone(), ViewKey::Layer(l.instance_id()), None),
                     None => match app.session.table_standalone.and_then(|id| app.session.project.table(id)) {
-                        Some(tb) => (tb.dataset.clone(), Vec::new(), tb.name.clone(), ViewKey::Table(tb.id), Some(tb.instance_id())),
+                        Some(tb) => (&tb.dataset, 0, tb.name.clone(), ViewKey::Table(tb.id), Some(tb.instance_id())),
                         None => {
                             app.session.table_standalone = None;
                             return;
                         }
                     },
                 };
-            let is_layer = layer_id.is_some();
-            prune_views(app);
-            if app.table.sort_schema.as_ref().is_none_or(|(view, fields)| *view != key || *fields != ds.fields) {
-                app.table.sort = None;
-                app.table.sort_schema = Some((key, ds.fields.clone()));
-            }
-            let view = app.table.views.entry(key).or_default();
-            view.repair(&ds.fields);
-            let shown = view.shown(&ds.fields);
-            let hidden_n = view.hidden_count(&ds.fields);
+                if app.table.sort_schema.as_ref().is_none_or(|(view, fields)| *view != key || *fields != ds.fields) {
+                    app.table.sort = None;
+                    app.table.sort_schema = Some((key, ds.fields.clone()));
+                }
+                let view = app.table.views.entry(key).or_default();
+                view.repair(&ds.fields);
+                (title, key, table_instance, ds.features.len(), selected_n, view.hidden_count(&ds.fields))
+            };
+            let is_layer = matches!(key, ViewKey::Layer(_));
             let mut show_all = false;
             // Header.
             let (hr, _) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::hover());
@@ -418,7 +419,7 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
                 ui.label(
                     egui::RichText::new(crate::i18n::fmt(
                         "{n} of {total} selected",
-                        &[("n", &selection.len().to_string()), ("total", &ds.features.len().to_string())],
+                        &[("n", &selected_n.to_string()), ("total", &total_rows.to_string())],
                     ))
                     .size(11.5)
                     .color(t.text_dim),
@@ -484,235 +485,302 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
                     }
                 });
             }
-            let rows = RowOrder::displayed(
-                &mut app.table.row_order,
-                &ds,
-                app.table.sort,
-                &app.table.filter,
-                (app.table.selected_only && is_layer).then_some(selection.as_slice()),
-            );
-            let row_count = rows.map_or(ds.features.len(), <[usize]>::len);
-            let mut clicked: Option<(usize, bool)> = None;
-            let mut commits: Vec<(u64, usize, String, String)> = Vec::new();
-            // Whether the cell being typed in was laid out (its row scrolled into view).
-            let mut drawn = false;
-            let mut cancel: Option<(u64, usize)> = None;
-            let mut sort_click: Option<usize> = None;
-            let mut column_action: Option<(usize, ColumnAction)> = None;
-            // A text field to convert to dates ("date") or date-times ("datetime").
-            let mut convert: Option<(usize, &str)> = None;
-            // A field to show the statistics of.
-            let mut statistics: Option<usize> = None;
-            // A field to delete.
-            let mut delete_field: Option<usize> = None;
-            // A cell double-clicked in a column whose name finds another field.
-            let mut by_other_name = false;
-            egui::ScrollArea::horizontal().show(ui, |ui| {
-                let mut tb = TableBuilder::new(ui)
-                    .striped(true)
-                    .resizable(true)
-                    .sense(Sense::click())
-                    .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                    .column(Column::initial(90.0).at_least(54.0));
-                for _ in &shown {
-                    tb = tb.column(Column::initial(120.0).at_least(50.0).clip(true));
-                }
-                tb.min_scrolled_height(0.0)
-                    .header(24.0, |mut h| {
-                        h.col(|ui| {
-                            ui.label(egui::RichText::new(tl!("Feature ID")).font(semibold(11.5)).color(t.text_dim))
-                                .on_hover_text(tl!("Feature identifier, not a dataset field or a row position."));
-                        });
-                        for &i in &shown {
-                            h.col(|ui| {
-                                let Some(fd) = ds.fields.get(i) else { return };
-                                let arrow = match app.table.sort {
-                                    Some((c, true)) if c == i => " ↑",
-                                    Some((c, false)) if c == i => " ↓",
-                                    _ => "",
-                                };
-                                let r = ui.add(
-                                    egui::Label::new(egui::RichText::new(format!("{}{arrow}", fd.display())).font(semibold(11.5)))
-                                        .sense(Sense::click()),
-                                );
-                                let r = r.on_hover_text(crate::i18n::fmt(
-                                    "{field} ({type}) · click to sort, right-click for columns",
-                                    &[("field", &fd.name), ("type", tl_raw!(fd.ty.label()))],
-                                ));
-                                if r.clicked() {
-                                    sort_click = Some(i);
-                                }
-                                r.context_menu(|ui| {
-                                    if ui.button(tl!("Hide Column")).clicked() {
-                                        column_action = Some((i, ColumnAction::Hide));
-                                        ui.close();
-                                    }
-                                    let can = |left| app.table.views.get(&key).is_some_and(|v| v.neighbour(&ds.fields, i, left).is_some());
-                                    if ui.add_enabled(can(true), egui::Button::new(tl!("Move Left"))).clicked() {
-                                        column_action = Some((i, ColumnAction::Left));
-                                        ui.close();
-                                    }
-                                    if ui.add_enabled(can(false), egui::Button::new(tl!("Move Right"))).clicked() {
-                                        column_action = Some((i, ColumnAction::Right));
-                                        ui.close();
-                                    }
-                                    ui.separator();
-                                    if ui.add_enabled(hidden_n > 0, egui::Button::new(tl!("Show All Columns"))).clicked() {
-                                        show_all = true;
-                                        ui.close();
-                                    }
-                                    if is_layer {
-                                        ui.separator();
-                                        if ui.button(tl!("Statistics…")).clicked() {
-                                            statistics = Some(i);
-                                            ui.close();
-                                        }
-                                    }
-                                    // The edit commands find a field by name, ignoring case: a
-                                    // column whose name finds another one isn't changed by name.
-                                    let named = ds.field_index(&fd.name) == Some(i);
-                                    if fd.ty == rustgis_engine::data::FieldType::Text {
-                                        ui.separator();
-                                        if ui
-                                            .add_enabled(named, egui::Button::new(tl!("Convert to Date")))
-                                            .on_disabled_hover_text(shadowed())
-                                            .clicked()
-                                        {
-                                            convert = Some((i, "date"));
-                                            ui.close();
-                                        }
-                                        if ui
-                                            .add_enabled(named, egui::Button::new(tl!("Convert to Date and Time")))
-                                            .on_disabled_hover_text(shadowed())
-                                            .clicked()
-                                        {
-                                            convert = Some((i, "datetime"));
-                                            ui.close();
-                                        }
-                                    }
-                                    // A layer's fields are deleted from Data › Data Design; a
-                                    // table has no other place to delete them.
-                                    if !is_layer {
-                                        ui.separator();
-                                        if ui
-                                            .add_enabled(named, egui::Button::new(tl!("Delete Field")))
-                                            .on_disabled_hover_text(shadowed())
-                                            .clicked()
-                                        {
-                                            delete_field = Some(i);
-                                            ui.close();
-                                        }
-                                    }
-                                });
-                            });
-                        }
-                    })
-                    .body(|body| {
-                        body.rows(22.0, row_count, |mut row| {
-                            let r = match rows {
-                                Some(rows) => {
-                                    let Some(&index) = rows.get(row.index()) else { return };
-                                    index
-                                }
-                                None => row.index(),
-                            };
-                            let sel = selection.contains(&r);
-                            row.set_selected(sel);
-                            let oid = ds.features.get(r).map(|f| f.id).unwrap_or(0);
-                            row.col(|ui| {
-                                ui.label(egui::RichText::new(oid.to_string()).size(11.5).color(t.text_dim));
-                            });
-                            for &c in &shown {
-                                row.col(|ui| {
-                                    let editing = app.table.editing.as_ref().is_some_and(|e| e.fid == oid && e.col == c);
-                                    if editing {
-                                        if let Some(e) = app.table.editing.as_mut() {
-                                            drawn = true;
-                                            // Named for its field (a screen reader says what it edits; an empty cell shows it).
-                                            let name = ds.fields.get(c).map(|f| f.name.as_str()).unwrap_or_default();
-                                            let te = ui
-                                                .add(egui::TextEdit::singleline(&mut e.text).hint_text(name).desired_width(f32::INFINITY));
-                                            if std::mem::take(&mut e.focus) {
-                                                te.request_focus();
-                                            }
-                                            if te.has_focus() {
-                                                app.table.focus_pass = Some(pass);
-                                            }
-                                            // Enter, Tab or a click elsewhere keeps the value; Escape
-                                            // leaves the cell as it was (the shortcuts leave it to the
-                                            // cell, see `had_focus`).
-                                            if te.lost_focus() {
-                                                if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                                                    cancel = Some((oid, c));
-                                                } else {
-                                                    commits.push((oid, c, e.text.clone(), e.was.clone()));
-                                                }
-                                            }
-                                        }
-                                    } else {
-                                        let v = ds.value(r, c);
-                                        // A picture (a photo's thumbnail) is named, not spelled out.
-                                        let picture = matches!(v, V::Text(s) if crate::mapview::is_picture(s));
-                                        let shown = if picture { tl!("picture").to_string() } else { v.to_string() };
-                                        let txt = egui::RichText::new(shown).size(11.5);
-                                        let txt = if matches!(v, V::Null) || picture { txt.color(t.text_disabled).italics() } else { txt };
-                                        let resp = ui.add(egui::Label::new(txt).sense(Sense::click()).truncate());
-                                        if resp.double_clicked() && ds.fields.get(c).is_some_and(|f| ds.field_index(&f.name) != Some(c)) {
-                                            // Its value would be written to the field its name finds.
-                                            by_other_name = true;
-                                        } else if resp.double_clicked() {
-                                            // The cell being typed in is kept first (once: its
-                                            // editor may have kept it on losing the focus).
-                                            if let Some(e) = app.table.editing.take()
-                                                && !commits.iter().any(|q| q.0 == e.fid && q.1 == e.col)
-                                                && cancel != Some((e.fid, e.col))
-                                            {
-                                                commits.push((e.fid, e.col, e.text, e.was));
-                                            }
-                                            let text = if matches!(v, V::Null) { String::new() } else { v.to_string() };
-                                            app.table.editing = Some(CellEdit::new(key, oid, c, text, &ds.fields, table_instance));
-                                        } else if resp.clicked() {
-                                            clicked = Some((r, ui.input(|i| i.modifiers.command || i.modifiers.shift)));
-                                        }
-                                    }
-                                });
-                            }
-                            if row.response().clicked() {
-                                clicked = Some((r, row.response().ctx.input(|i| i.modifiers.command || i.modifiers.shift)));
-                            }
-                        });
-                    });
-            });
-            if let Some(i) = sort_click {
-                app.table.sort = match app.table.sort {
-                    Some((c, true)) if c == i => Some((i, false)),
-                    Some((c, false)) if c == i => None,
-                    _ => Some((i, true)),
-                };
+            if show_all && let Some(view) = app.table.views.get_mut(&key) {
+                view.show_all();
+                show_all = false;
             }
-            if let Some(view) = app.table.views.get_mut(&key) {
-                match column_action {
-                    Some((i, ColumnAction::Hide)) => {
-                        view.hide(&ds.fields, i);
-                        // Rows aren't left ordered by a column that can't be seen.
-                        if app.table.sort.is_some_and(|(c, _)| c == i) {
-                            app.table.sort = None;
+            // Borrow `&Dataset` and `&[usize]` while drawing the grid; drop the borrow before any
+            // command runs so mutating commands never see an extra `Arc` reference from the table.
+            let mut stats_asked: Option<Value> = None;
+            let mut convert_asked: Option<(usize, String, &'static str)> = None;
+            let mut delete_field_name: Option<String> = None;
+            let mut select_row: Option<(usize, &'static str)> = None;
+            let mut by_other_name = false;
+            let mut resolved_commits: Vec<(u64, String, rustgis_engine::data::FieldType, String, String)> = Vec::new();
+            {
+                let (ds, selection): (&Dataset, &[usize]) = match key {
+                    ViewKey::Layer(_) => match app.session.table_layer.and_then(|id| app.session.map().layer(id)) {
+                        Some(l) if ViewKey::Layer(l.instance_id()) == key => (&l.dataset, l.selection.as_slice()),
+                        _ => return,
+                    },
+                    ViewKey::Table(id) => {
+                        match app.session.table_standalone.filter(|&cur| cur == id).and_then(|id| app.session.project.table(id)) {
+                            Some(tb) if Some(tb.instance_id()) == table_instance => (&tb.dataset, &[]),
+                            _ => return,
                         }
                     }
-                    Some((i, ColumnAction::Left)) => view.shift(&ds.fields, i, true),
-                    Some((i, ColumnAction::Right)) => view.shift(&ds.fields, i, false),
-                    None => {}
+                };
+                let shown = app.table.views.get(&key).map(|v| v.shown(&ds.fields)).unwrap_or_else(|| (0..ds.fields.len()).collect());
+                let rows = RowOrder::displayed(
+                    &mut app.table.row_order,
+                    ds,
+                    app.table.sort,
+                    &app.table.filter,
+                    (app.table.selected_only && is_layer).then_some(selection),
+                );
+                let row_count = rows.map_or(ds.features.len(), <[usize]>::len);
+                let mut clicked: Option<(usize, bool)> = None;
+                let mut commits: Vec<(u64, usize, String, String)> = Vec::new();
+                // Whether the cell being typed in was laid out (its row scrolled into view).
+                let mut drawn = false;
+                let mut cancel: Option<(u64, usize)> = None;
+                let mut sort_click: Option<usize> = None;
+                let mut column_action: Option<(usize, ColumnAction)> = None;
+                // A text field to convert to dates ("date") or date-times ("datetime").
+                let mut convert: Option<(usize, &str)> = None;
+                // A field to show the statistics of.
+                let mut statistics: Option<usize> = None;
+                // A field to delete.
+                let mut delete_field: Option<usize> = None;
+                egui::ScrollArea::horizontal().show(ui, |ui| {
+                    let mut tb = TableBuilder::new(ui)
+                        .striped(true)
+                        .resizable(true)
+                        .sense(Sense::click())
+                        .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+                        .column(Column::initial(90.0).at_least(54.0));
+                    for _ in &shown {
+                        tb = tb.column(Column::initial(120.0).at_least(50.0).clip(true));
+                    }
+                    tb.min_scrolled_height(0.0)
+                        .header(24.0, |mut h| {
+                            h.col(|ui| {
+                                ui.label(egui::RichText::new(tl!("Feature ID")).font(semibold(11.5)).color(t.text_dim))
+                                    .on_hover_text(tl!("Feature identifier, not a dataset field or a row position."));
+                            });
+                            for &i in &shown {
+                                h.col(|ui| {
+                                    let Some(fd) = ds.fields.get(i) else { return };
+                                    let arrow = match app.table.sort {
+                                        Some((c, true)) if c == i => " ↑",
+                                        Some((c, false)) if c == i => " ↓",
+                                        _ => "",
+                                    };
+                                    let r = ui.add(
+                                        egui::Label::new(egui::RichText::new(format!("{}{arrow}", fd.display())).font(semibold(11.5)))
+                                            .sense(Sense::click()),
+                                    );
+                                    let r = r.on_hover_text(crate::i18n::fmt(
+                                        "{field} ({type}) · click to sort, right-click for columns",
+                                        &[("field", &fd.name), ("type", tl_raw!(fd.ty.label()))],
+                                    ));
+                                    if r.clicked() {
+                                        sort_click = Some(i);
+                                    }
+                                    r.context_menu(|ui| {
+                                        if ui.button(tl!("Hide Column")).clicked() {
+                                            column_action = Some((i, ColumnAction::Hide));
+                                            ui.close();
+                                        }
+                                        let can =
+                                            |left| app.table.views.get(&key).is_some_and(|v| v.neighbour(&ds.fields, i, left).is_some());
+                                        if ui.add_enabled(can(true), egui::Button::new(tl!("Move Left"))).clicked() {
+                                            column_action = Some((i, ColumnAction::Left));
+                                            ui.close();
+                                        }
+                                        if ui.add_enabled(can(false), egui::Button::new(tl!("Move Right"))).clicked() {
+                                            column_action = Some((i, ColumnAction::Right));
+                                            ui.close();
+                                        }
+                                        ui.separator();
+                                        if ui.add_enabled(hidden_n > 0, egui::Button::new(tl!("Show All Columns"))).clicked() {
+                                            show_all = true;
+                                            ui.close();
+                                        }
+                                        if is_layer {
+                                            ui.separator();
+                                            if ui.button(tl!("Statistics…")).clicked() {
+                                                statistics = Some(i);
+                                                ui.close();
+                                            }
+                                        }
+                                        // The edit commands find a field by name, ignoring case: a
+                                        // column whose name finds another one isn't changed by name.
+                                        let named = ds.field_index(&fd.name) == Some(i);
+                                        if fd.ty == rustgis_engine::data::FieldType::Text {
+                                            ui.separator();
+                                            if ui
+                                                .add_enabled(named, egui::Button::new(tl!("Convert to Date")))
+                                                .on_disabled_hover_text(shadowed())
+                                                .clicked()
+                                            {
+                                                convert = Some((i, "date"));
+                                                ui.close();
+                                            }
+                                            if ui
+                                                .add_enabled(named, egui::Button::new(tl!("Convert to Date and Time")))
+                                                .on_disabled_hover_text(shadowed())
+                                                .clicked()
+                                            {
+                                                convert = Some((i, "datetime"));
+                                                ui.close();
+                                            }
+                                        }
+                                        // A layer's fields are deleted from Data › Data Design; a
+                                        // table has no other place to delete them.
+                                        if !is_layer {
+                                            ui.separator();
+                                            if ui
+                                                .add_enabled(named, egui::Button::new(tl!("Delete Field")))
+                                                .on_disabled_hover_text(shadowed())
+                                                .clicked()
+                                            {
+                                                delete_field = Some(i);
+                                                ui.close();
+                                            }
+                                        }
+                                    });
+                                });
+                            }
+                        })
+                        .body(|body| {
+                            body.rows(22.0, row_count, |mut row| {
+                                let r = match rows {
+                                    Some(rows) => {
+                                        let Some(&index) = rows.get(row.index()) else { return };
+                                        index
+                                    }
+                                    None => row.index(),
+                                };
+                                let sel = selection.contains(&r);
+                                row.set_selected(sel);
+                                let oid = ds.features.get(r).map(|f| f.id).unwrap_or(0);
+                                row.col(|ui| {
+                                    ui.label(egui::RichText::new(oid.to_string()).size(11.5).color(t.text_dim));
+                                });
+                                for &c in &shown {
+                                    row.col(|ui| {
+                                        let editing = app.table.editing.as_ref().is_some_and(|e| e.fid == oid && e.col == c);
+                                        if editing {
+                                            if let Some(e) = app.table.editing.as_mut() {
+                                                drawn = true;
+                                                // Named for its field (a screen reader says what it edits; an empty cell shows it).
+                                                let name = ds.fields.get(c).map(|f| f.name.as_str()).unwrap_or_default();
+                                                let te = ui.add(
+                                                    egui::TextEdit::singleline(&mut e.text).hint_text(name).desired_width(f32::INFINITY),
+                                                );
+                                                if std::mem::take(&mut e.focus) {
+                                                    te.request_focus();
+                                                }
+                                                if te.has_focus() {
+                                                    app.table.focus_pass = Some(pass);
+                                                }
+                                                // Enter, Tab or a click elsewhere keeps the value; Escape
+                                                // leaves the cell as it was (the shortcuts leave it to the
+                                                // cell, see `had_focus`).
+                                                if te.lost_focus() {
+                                                    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                                                        cancel = Some((oid, c));
+                                                    } else {
+                                                        commits.push((oid, c, e.text.clone(), e.was.clone()));
+                                                    }
+                                                }
+                                            }
+                                        } else {
+                                            let v = ds.value(r, c);
+                                            // A picture (a photo's thumbnail) is named, not spelled out.
+                                            let picture = matches!(v, V::Text(s) if crate::mapview::is_picture(s));
+                                            let shown = if picture { tl!("picture").to_string() } else { v.to_string() };
+                                            let txt = egui::RichText::new(shown).size(11.5);
+                                            let txt =
+                                                if matches!(v, V::Null) || picture { txt.color(t.text_disabled).italics() } else { txt };
+                                            let resp = ui.add(egui::Label::new(txt).sense(Sense::click()).truncate());
+                                            if resp.double_clicked() && ds.fields.get(c).is_some_and(|f| ds.field_index(&f.name) != Some(c))
+                                            {
+                                                // Its value would be written to the field its name finds.
+                                                by_other_name = true;
+                                            } else if resp.double_clicked() {
+                                                // The cell being typed in is kept first (once: its
+                                                // editor may have kept it on losing the focus).
+                                                if let Some(e) = app.table.editing.take()
+                                                    && !commits.iter().any(|q| q.0 == e.fid && q.1 == e.col)
+                                                    && cancel != Some((e.fid, e.col))
+                                                {
+                                                    commits.push((e.fid, e.col, e.text, e.was));
+                                                }
+                                                let text = if matches!(v, V::Null) { String::new() } else { v.to_string() };
+                                                app.table.editing = Some(CellEdit::new(key, oid, c, text, &ds.fields, table_instance));
+                                            } else if resp.clicked() {
+                                                clicked = Some((r, ui.input(|i| i.modifiers.command || i.modifiers.shift)));
+                                            }
+                                        }
+                                    });
+                                }
+                                if row.response().clicked() {
+                                    clicked = Some((r, row.response().ctx.input(|i| i.modifiers.command || i.modifiers.shift)));
+                                }
+                            });
+                        });
+                });
+                if let Some(i) = sort_click {
+                    app.table.sort = match app.table.sort {
+                        Some((c, true)) if c == i => Some((i, false)),
+                        Some((c, false)) if c == i => None,
+                        _ => Some((i, true)),
+                    };
                 }
-                if show_all {
-                    view.show_all();
+                if let Some(view) = app.table.views.get_mut(&key) {
+                    match column_action {
+                        Some((i, ColumnAction::Hide)) => {
+                            view.hide(&ds.fields, i);
+                            // Rows aren't left ordered by a column that can't be seen.
+                            if app.table.sort.is_some_and(|(c, _)| c == i) {
+                                app.table.sort = None;
+                            }
+                        }
+                        Some((i, ColumnAction::Left)) => view.shift(&ds.fields, i, true),
+                        Some((i, ColumnAction::Right)) => view.shift(&ds.fields, i, false),
+                        None => {}
+                    }
+                    if show_all {
+                        view.show_all();
+                    }
+                }
+                if let Some(i) = statistics
+                    && let Some(fd) = ds.fields.get(i)
+                    && let Some(layer) = layer_id
+                {
+                    // By the column's place, so a second column of the same name is its own.
+                    stats_asked = Some(json!({"layer": layer, "field": fd.name, "index": i, "selected": app.table.selected_only}));
+                }
+                if let Some((i, ty)) = convert
+                    && let Some(fd) = ds.fields.get(i)
+                {
+                    convert_asked = Some((i, fd.name.clone(), ty));
+                }
+                if let Some(fd) = delete_field.and_then(|i| ds.fields.get(i)) {
+                    delete_field_name = Some(fd.name.clone());
+                }
+                if let Some((r, add)) = clicked
+                    && is_layer
+                {
+                    let mode = if add { if selection.contains(&r) { "remove" } else { "add" } } else { "new" };
+                    select_row = Some((r, mode));
+                }
+                // A cell scrolled out of view loses the focus unseen: kept, as a click elsewhere (left
+                // as it was on Escape).
+                if !drawn
+                    && let Some(e) = app.table.editing.take_if(|e| !e.focus)
+                    && !(had_focus(&app.table, pass) && ui.input(|i| i.key_pressed(egui::Key::Escape)))
+                {
+                    commits.push((e.fid, e.col, e.text, e.was));
+                }
+                let ends = |editing: &Option<CellEdit>, fid: u64, c: usize| editing.as_ref().is_some_and(|e| e.fid == fid && e.col == c);
+                if let Some((fid, c)) = cancel
+                    && ends(&app.table.editing, fid, c)
+                {
+                    app.table.editing = None;
+                }
+                for (fid, c, text, was) in commits {
+                    if ends(&app.table.editing, fid, c) {
+                        app.table.editing = None;
+                    }
+                    if let Some(fd) = ds.fields.get(c) {
+                        resolved_commits.push((fid, fd.name.clone(), fd.ty, text, was));
+                    }
                 }
             }
-            if let Some(i) = statistics
-                && let Some(fd) = ds.fields.get(i)
-                && let Some(layer) = layer_id
-            {
-                // By the column's place, so a second column of the same name is its own.
-                let asked = json!({"layer": layer, "field": fd.name, "index": i, "selected": app.table.selected_only});
+            if let Some(asked) = stats_asked {
                 ask_statistics(app, asked);
             }
             // The layer or table the view shows, as the edit commands name it.
@@ -723,77 +791,59 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
                 }
                 p
             };
-            if let Some((i, ty)) = convert
-                && let Some(fd) = ds.fields.get(i)
-            {
-                let params = target(json!({"field": fd.name, "type": ty}));
+            if let Some((i, field_name, ty)) = convert_asked {
+                let params = target(json!({"field": field_name, "type": ty}));
                 if is_layer && layer_id.and_then(|id| app.session.map().layer(id)).is_some_and(|l| l.is_streamed()) {
                     // Use the ordinary command admission refusal before scanning a view sample.
                     let _ = app.run("edit.convertField", params);
                 } else {
-                    app.table.dates = Some(dates::Dialog::new(key, table_instance, ds.clone(), i, ty, params));
+                    let ds = match key {
+                        ViewKey::Layer(_) => layer_id.and_then(|id| app.session.map().layer(id)).map(|l| l.dataset.clone()),
+                        ViewKey::Table(id) => app.session.project.table(id).map(|t| t.dataset.clone()),
+                    };
+                    if let Some(ds) = ds {
+                        app.table.dates = Some(dates::Dialog::new(key, table_instance, ds, i, ty, params));
+                    }
                 }
             }
             if by_other_name {
                 app.session.notify(shadowed().to_string(), true);
             }
-            if let Some(fd) = delete_field.and_then(|i| ds.fields.get(i)) {
+            if let Some(field_name) = delete_field_name {
                 // Refused (a definition query reading it): said, unless the command said so.
                 let mark = app.session.notice_mark();
-                if let Err(e) = app.run("edit.deleteField", target(json!({"field": fd.name})))
+                if let Err(e) = app.run("edit.deleteField", target(json!({"field": field_name})))
                     && app.session.notices_since(mark).is_empty()
                 {
                     app.session.notify(e, true);
                 }
             }
-            if let Some((r, add)) = clicked
-                && is_layer
-            {
-                let mode = if add { if selection.contains(&r) { "remove" } else { "add" } } else { "new" };
+            if let Some((r, mode)) = select_row {
                 let _ = app.run("select.rows", json!({"layer": layer_id, "rows": [r], "mode": mode}));
             }
-            // A cell scrolled out of view loses the focus unseen: kept, as a click elsewhere (left
-            // as it was on Escape).
-            if !drawn
-                && let Some(e) = app.table.editing.take_if(|e| !e.focus)
-                && !(had_focus(&app.table, pass) && ui.input(|i| i.key_pressed(egui::Key::Escape)))
-            {
-                commits.push((e.fid, e.col, e.text, e.was));
-            }
-            let ends = |editing: &Option<CellEdit>, fid: u64, c: usize| editing.as_ref().is_some_and(|e| e.fid == fid && e.col == c);
-            if let Some((fid, c)) = cancel
-                && ends(&app.table.editing, fid, c)
-            {
-                app.table.editing = None;
-            }
-            for (fid, c, text, was) in commits {
-                if ends(&app.table.editing, fid, c) {
-                    app.table.editing = None;
-                }
-                // Its feature where it is now, in the layer or table as it is (the table's own Delete
-                // runs after `ds` was read); gone, nothing is written.
+            for (fid, field_name, field_ty, text, was) in resolved_commits {
+                // Its feature where it is now, in the layer or table as it is; gone, nothing is written.
                 let rows = match key {
                     ViewKey::Layer(_) => layer_id.and_then(|id| app.session.map().layer(id)).map(|l| &l.dataset.features),
                     ViewKey::Table(id) => app.session.project.table(id).map(|t| &t.dataset.features),
                 };
-                let live = rows.and_then(|rows| rows.iter().position(|f| f.id == fid));
-                let (Some(fd), Some(r)) = (ds.fields.get(c), live) else { continue };
+                let Some(r) = rows.and_then(|rows| rows.iter().position(|f| f.id == fid)) else { continue };
                 if text == was {
                     continue;
                 }
                 // Text that isn't a value of the field (a number mistyped) is refused, not
                 // written as null or false.
-                if !fits(&text, fd.ty) {
+                if !fits(&text, field_ty) {
                     let msg = crate::i18n::fmt(
                         "“{text}” isn't a {type} value: {field} is left as it was.",
-                        &[("text", text.trim()), ("type", tl_raw!(fd.ty.label())), ("field", &fd.name)],
+                        &[("text", text.trim()), ("type", tl_raw!(field_ty.label())), ("field", &field_name)],
                     );
                     app.session.notify(msg, true);
                     continue;
                 }
                 // Refused (editing turned off, a domain or rule): said, unless the command said so.
                 let mark = app.session.notice_mark();
-                if let Err(e) = app.run("edit.setValue", target(json!({"row": r, "field": fd.name, "value": text})))
+                if let Err(e) = app.run("edit.setValue", target(json!({"row": r, "field": field_name, "value": text})))
                     && app.session.notices_since(mark).is_empty()
                 {
                     app.session.notify(e, true);
@@ -1707,5 +1757,160 @@ mod tests {
             output.textures_delta.clear();
             assert_eq!(app.table.stats.is_some(), !selected, "only the selected-row window closes");
         }
+    }
+
+    /// Attribute table mutations (`edit.setValue`, `edit.delete`, `edit.addFeature`,
+    /// `edit.deleteField`) must not run while the table pane holds an extra `Dataset` clone.
+    #[test]
+    fn attribute_table_drops_dataset_borrow_before_mutating_commands() {
+        use rustgis_engine::data::{FieldType, GeometryType};
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        let sample_ds = || {
+            let mut ds = Dataset::new(
+                "Parcels",
+                GeometryType::Point,
+                vec![Field::new("name", FieldType::Text), Field::new("code", FieldType::Integer)],
+            );
+            for i in 0..8 {
+                ds.push(None, vec![V::Text(format!("Parcel {i}")), V::Int(i)]);
+            }
+            ds
+        };
+
+        // 1. Cell edit (`edit.setValue`): only live + Undo snapshot (2), no extra table clone.
+        let mut app = RustGisApp::new(rustgis_engine::Session::new(rustgis_engine::Project::default()));
+        let id = app.session.map_mut().add_dataset(sample_ds());
+        app.session.table_layer = Some(id);
+        app.session.map_mut().editing.settings.enabled = true;
+        let ds_ref = &app.session.map().layer(id).unwrap().dataset;
+        let fid0 = ds_ref.features[0].id;
+        let schema = ds_ref.fields.clone();
+        let key = ViewKey::Layer(app.session.map().layer(id).unwrap().instance_id());
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 1000.0)).build_ui_state(
+            |ui, app: &mut RustGisApp| {
+                app.logic(&ui.ctx().clone());
+                show(app, ui);
+            },
+            app,
+        );
+        h.run_steps(2);
+        h.state_mut().table.editing = Some(CellEdit::new(key, fid0, 0, "Parcel 0".into(), &schema, None));
+        h.run_steps(2);
+        h.event(egui::Event::Text("X".into()));
+        h.run_steps(2);
+        let weak = h.state().session.map().layer(id).unwrap().dataset.features.allocation_key();
+        assert_eq!(weak.strong_count(), 1);
+        let seen = Arc::new(AtomicUsize::new(0));
+        let seen_c = Arc::clone(&seen);
+        let weak_c = weak.clone();
+        h.key_press(egui::Key::Enter);
+        let ((), fired) = rustgis_engine::data::before_rows_copy(
+            Box::new(move || {
+                seen_c.store(weak_c.strong_count(), Ordering::SeqCst);
+            }),
+            || h.step(),
+        );
+        assert!(fired);
+        assert_eq!(seen.load(Ordering::SeqCst), 2, "table::show must not hold an extra Dataset Arc across edit.setValue");
+        h.run_steps(1);
+        assert_eq!(h.state().session.map().layer(id).unwrap().dataset.value(0, 0).to_string(), "Parcel 0X");
+
+        // 2. Toolbar Delete (`edit.delete`): only live + Undo snapshot (2), no extra table clone.
+        let mut app = RustGisApp::new(rustgis_engine::Session::new(rustgis_engine::Project::default()));
+        let id = app.session.map_mut().add_dataset(sample_ds());
+        app.session.table_layer = Some(id);
+        app.session.active_layer = Some(id);
+        app.session.map_mut().editing.settings.enabled = true;
+        app.session.map_mut().layer_mut(id).unwrap().selection = vec![0];
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 1000.0)).build_ui_state(
+            |ui, app: &mut RustGisApp| {
+                app.logic(&ui.ctx().clone());
+                show(app, ui);
+            },
+            app,
+        );
+        h.run_steps(2);
+        let weak = h.state().session.map().layer(id).unwrap().dataset.features.allocation_key();
+        assert_eq!(weak.strong_count(), 1);
+        let seen = Arc::new(AtomicUsize::new(0));
+        let seen_c = Arc::clone(&seen);
+        let weak_c = weak.clone();
+        h.get_by_label("Delete selected rows").click();
+        let ((), fired) = rustgis_engine::data::before_rows_copy(
+            Box::new(move || {
+                seen_c.store(weak_c.strong_count(), Ordering::SeqCst);
+            }),
+            || h.step(),
+        );
+        assert!(fired);
+        assert_eq!(seen.load(Ordering::SeqCst), 2, "table::show must not hold an extra Dataset Arc across edit.delete");
+
+        // 3. Standalone table Add row (`edit.addFeature`) and Delete Field (`edit.deleteField`).
+        let mut app = RustGisApp::new(rustgis_engine::Session::new(rustgis_engine::Project::default()));
+        let mut tb_ds =
+            Dataset::new("Notes", GeometryType::None, vec![Field::new("alpha", FieldType::Text), Field::new("beta", FieldType::Text)]);
+        tb_ds.push(None, vec![V::Text("a".into()), V::Text("b".into())]);
+        let tid = app.session.project.add_table(tb_ds);
+        app.session.table_standalone = Some(tid);
+        app.session.map_mut().editing.settings.enabled = true;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 1000.0)).build_ui_state(
+            |ui, app: &mut RustGisApp| {
+                app.logic(&ui.ctx().clone());
+                show(app, ui);
+            },
+            app,
+        );
+        h.run_steps(2);
+        let weak = h.state().session.project.table(tid).unwrap().dataset.features.allocation_key();
+        assert_eq!(weak.strong_count(), 1);
+        let seen = Arc::new(AtomicUsize::new(0));
+        let seen_c = Arc::clone(&seen);
+        let weak_c = weak.clone();
+        h.get_by_label("Add row").click();
+        let ((), fired) = rustgis_engine::data::before_rows_copy(
+            Box::new(move || {
+                seen_c.store(weak_c.strong_count(), Ordering::SeqCst);
+            }),
+            || h.step(),
+        );
+        assert!(fired);
+        assert_eq!(seen.load(Ordering::SeqCst), 2, "table::show must not hold an extra Dataset Arc across edit.addFeature");
+
+        // Fresh table for Delete Field so Undo starts empty.
+        let mut app = RustGisApp::new(rustgis_engine::Session::new(rustgis_engine::Project::default()));
+        let mut tb_ds =
+            Dataset::new("Notes", GeometryType::None, vec![Field::new("alpha", FieldType::Text), Field::new("beta", FieldType::Text)]);
+        tb_ds.push(None, vec![V::Text("a".into()), V::Text("b".into())]);
+        let tid = app.session.project.add_table(tb_ds);
+        app.session.table_standalone = Some(tid);
+        app.session.map_mut().editing.settings.enabled = true;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 1000.0)).build_ui_state(
+            |ui, app: &mut RustGisApp| {
+                app.logic(&ui.ctx().clone());
+                show(app, ui);
+            },
+            app,
+        );
+        h.run_steps(4);
+        h.get_by_label("alpha").click_secondary();
+        h.run_steps(2);
+        let weak = h.state().session.project.table(tid).unwrap().dataset.features.allocation_key();
+        assert_eq!(weak.strong_count(), 1);
+        let seen = Arc::new(AtomicUsize::new(0));
+        let seen_c = Arc::clone(&seen);
+        let weak_c = weak.clone();
+        h.get_by_label("Delete Field").click();
+        let ((), fired) = rustgis_engine::data::before_rows_copy(
+            Box::new(move || {
+                seen_c.store(weak_c.strong_count(), Ordering::SeqCst);
+            }),
+            || h.step(),
+        );
+        assert!(fired);
+        assert_eq!(seen.load(Ordering::SeqCst), 2, "table::show must not hold an extra Dataset Arc across edit.deleteField");
     }
 }

@@ -180,6 +180,8 @@ fn run_presented(
     preview: Option<rustgis_engine::data::Dataset>,
 ) -> Result<Value, String> {
     if !app.reads_off_frame {
+        // Release any preview snapshot before running inline so it does not pin the rows' `Arc`.
+        drop(preview);
         // Read here and now: what its file holds now is what it reads.
         if matches!(command, "layer.reloadData" | "map.reloadTiles") {
             crate::diskwatch::reading(app, command, &p);

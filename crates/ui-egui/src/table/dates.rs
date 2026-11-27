@@ -207,11 +207,21 @@ pub(super) fn show(app: &mut RustGisApp, ctx: &egui::Context) {
             if pattern.contains("%y") {
                 dialog.params["pivotYear"] = json!(dialog.pivot);
             }
+            let params = std::mem::take(&mut dialog.params);
+            #[cfg(not(target_arch = "wasm32"))]
+            let preview = app
+                .reads_off_frame
+                .then(|| std::mem::replace(&mut dialog.dataset, Dataset::new("", rustgis_engine::data::GeometryType::None, Vec::new())));
+            // Drop the dialog and its dataset snapshot before running the conversion inline.
+            drop(dialog);
             let mark = app.session.notice_mark();
             #[cfg(not(target_arch = "wasm32"))]
-            let result = crate::readjob::run_date_preview(app, dialog.params.clone(), dialog.dataset.clone());
+            let result = match preview {
+                Some(dataset) => crate::readjob::run_date_preview(app, params, dataset),
+                None => app.run("edit.convertField", params),
+            };
             #[cfg(target_arch = "wasm32")]
-            let result = app.run("edit.convertField", dialog.params.clone());
+            let result = app.run("edit.convertField", params);
             if let Err(e) = result
                 && app.session.notices_since(mark).is_empty()
             {
@@ -329,5 +339,56 @@ mod tests {
         let choices = scan(&ds, 0, FieldType::DateTime, Some(1926), &AtomicBool::new(false), &done).unwrap();
         assert_eq!(choices.iter().map(|c| PRESETS[c.index].0).collect::<Vec<_>>(), ["MM/DD/YY HH:MM", "DD/MM/YY HH:MM"]);
         assert_eq!(choices[0].examples[0].1, "1926-03-05T14:30:00");
+    }
+
+    /// Inline date conversion drops the dialog's dataset snapshot before running
+    /// `edit.convertField`, so no extra `Arc` reference pins the rows during mutation.
+    #[test]
+    fn date_dialog_drops_dataset_before_inline_convert() {
+        let mut app = RustGisApp::new(rustgis_engine::Session::new(rustgis_engine::Project::default()));
+        let mut ds = Dataset::new("Dates", rustgis_engine::data::GeometryType::None, vec![Field::new("d", FieldType::Text)]);
+        for _ in 0..8 {
+            ds.push(None, vec![V::Text("03/05/2026".into())]);
+        }
+        let tid = app.session.project.add_table(ds);
+        app.session.table_standalone = Some(tid);
+        app.session.map_mut().editing.settings.enabled = true;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 1000.0)).with_max_steps(64).build_ui_state(
+            |ui, app: &mut RustGisApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run_steps(4);
+        h.get_by_label("d").click_secondary();
+        h.run_steps(2);
+        h.get_by_label("Convert to Date").click();
+        h.run_steps(2);
+        let d = h.state_mut().table.dates.as_mut().unwrap();
+        if d.choices.is_none() {
+            d.choices = Some(d.result.recv_timeout(std::time::Duration::from_secs(5)).unwrap());
+        }
+        h.run_steps(2);
+        h.get_by_label("DD/MM/YYYY").click();
+        h.run_steps(2);
+        let weak = h.state().session.project.table(tid).unwrap().dataset.features.allocation_key();
+        // While the dialog is open, it owns one preview clone beside the live table.
+        assert_eq!(weak.strong_count(), 2);
+        let seen = Arc::new(AtomicUsize::new(0));
+        let seen_c = Arc::clone(&seen);
+        let weak_c = weak.clone();
+        h.get_by_label("Convert").click();
+        let ((), fired) = rustgis_engine::data::before_rows_copy(
+            Box::new(move || {
+                seen_c.store(weak_c.strong_count(), Ordering::SeqCst);
+            }),
+            || h.step(),
+        );
+        assert!(fired);
+        assert_eq!(seen.load(Ordering::SeqCst), 2, "dates::show must drop dialog.dataset before running edit.convertField");
+        h.run_steps(2);
+        assert_eq!(h.state().session.project.table(tid).unwrap().dataset.value(0, 0).to_string(), "2026-05-03");
     }
 }

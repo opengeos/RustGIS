@@ -386,20 +386,23 @@ fn snap_window(p: Coord, m: f64) -> Option<[f64; 4]> {
 /// Cloning the node and adjacency vectors is one step without a Cancel check inside it.
 fn route_on(graph: &Network, ds: &Dataset, from: Coord, to: Coord, snap_m: f64) -> Result<Route, String> {
     crate::control::check()?;
-    let mut nodes = graph.nodes.clone();
-    let mut adj = graph.adj.clone();
     let segs = &graph.segs;
     let skipped_segments = graph.skipped_segments;
     let route_error = |reason, skipped| route_error(ds, reason, skipped, graph.overflowing);
-    let nearest = |p: Coord, nodes: &[Coord]| nearest_segment(segs, nodes, p, None);
+    if segs.is_empty() {
+        return Err(route_error("the layer has no lines".into(), skipped_segments));
+    }
+    let mut nodes = graph.nodes.clone();
+    let mut adj = graph.adj.clone();
+    let nearest = |p: Coord, nodes: &[Coord]| nearest_segment(segs, nodes, p, Some(snap_m));
     // Each end becomes a node on its segment, joined to the segment's two ends.
     let attach = |p: Coord, nodes: &mut Vec<Coord>, adj: &mut Vec<Vec<Edge>>| -> Result<(usize, usize, f64), String> {
-        let (si, t, q, d) = nearest(p, nodes)?.ok_or_else(|| route_error("the layer has no lines".into(), skipped_segments))?;
+        let too_far = || {
+            route_error(format!("a route end is more than {} from the network", rustgis_geom::format_distance(snap_m)), skipped_segments)
+        };
+        let (si, t, q, d) = nearest(p, nodes)?.ok_or_else(too_far)?;
         if d > snap_m {
-            return Err(route_error(
-                format!("a route end is more than {} from the network", rustgis_geom::format_distance(snap_m)),
-                skipped_segments,
-            ));
+            return Err(too_far());
         }
         let &(a, b, weight, row) = segs.get(si).ok_or_else(|| route_error("the layer has no lines".into(), skipped_segments))?;
         if t <= 0.0 {
@@ -1899,5 +1902,61 @@ mod tests {
         let mut ds = Dataset::new("legacy prefilter", GeometryType::Point, vec![]);
         ds.push(Some(Geometry::Point(point)), vec![]);
         assert!(within(&ds, &[0], center, 100_000.0).is_empty());
+    }
+
+    /// Bounding-box culling in `route_on` matches unculled snapping bit for bit and preserves the
+    /// distinct error messages for an empty network versus an endpoint beyond `snap_m`.
+    #[test]
+    fn route_on_culls_by_snap_window_with_identical_results_and_errors() {
+        let n = 25usize;
+        let step = 0.001;
+        let (x0, y0) = (-84.0, 35.9);
+        let mut ds = Dataset::new("roads", GeometryType::Polyline, vec![]);
+        for r in 0..n {
+            for c in 0..(n - 1) {
+                let a = Coord::new(x0 + c as f64 * step, y0 + r as f64 * step);
+                let b = Coord::new(x0 + (c + 1) as f64 * step, y0 + r as f64 * step);
+                ds.push(Some(Geometry::Line(vec![vec![a, b]])), vec![]);
+            }
+        }
+        for r in 0..(n - 1) {
+            for c in 0..n {
+                let a = Coord::new(x0 + c as f64 * step, y0 + r as f64 * step);
+                let b = Coord::new(x0 + c as f64 * step, y0 + (r + 1) as f64 * step);
+                ds.push(Some(Geometry::Line(vec![vec![a, b]])), vec![]);
+            }
+        }
+        let rows: Vec<usize> = (0..ds.features.len()).collect();
+        let graph = Network::build(&ds, &rows, None).unwrap();
+        let stops: Vec<Coord> = (0..10)
+            .map(|i| {
+                let c = (i * 5 + 2) % (n - 1);
+                let r = (i * 7 + 1) % (n - 1);
+                Coord::new(x0 + (c as f64 + 0.5) * step, y0 + r as f64 * step + 0.0001)
+            })
+            .collect();
+        for &p in &stops {
+            let unculled = nearest_segment(&graph.segs, &graph.nodes, p, None).unwrap().unwrap();
+            let culled = nearest_segment(&graph.segs, &graph.nodes, p, Some(50.0)).unwrap().unwrap();
+            assert_eq!(unculled.0, culled.0);
+            assert_eq!(unculled.1.to_bits(), culled.1.to_bits());
+            assert_eq!(unculled.2.x.to_bits(), culled.2.x.to_bits());
+            assert_eq!(unculled.2.y.to_bits(), culled.2.y.to_bits());
+            assert_eq!(unculled.3.to_bits(), culled.3.to_bits());
+        }
+        for w in stops.windows(2) {
+            let r = route_on(&graph, &ds, w[0], w[1], 50.0).unwrap();
+            assert!(!r.rows.is_empty() && r.length_m > 0.0);
+        }
+        // Culled to None on a non-empty network still reports a distance error, not an empty layer.
+        let far = route_on(&graph, &ds, Coord::new(x0 - 1.0, y0), stops[0], 50.0).unwrap_err();
+        assert!(far.contains("from the network"), "{far}");
+        let neg = route_on(&graph, &ds, stops[0], stops[1], -1.0).unwrap_err();
+        assert!(neg.contains("from the network"), "{neg}");
+        // An actually empty network still reports having no lines.
+        let empty_ds = Dataset::new("empty", GeometryType::Polyline, vec![]);
+        let empty_graph = Network::build(&empty_ds, &[], None).unwrap();
+        let empty_err = route_on(&empty_graph, &empty_ds, stops[0], stops[1], 50.0).unwrap_err();
+        assert!(empty_err.contains("the layer has no lines"), "{empty_err}");
     }
 }
