@@ -158,6 +158,17 @@ fn step_name(step: Step) -> &'static str {
     }
 }
 
+/// A step's name as the list shows it, in display form (`tl!`).
+fn step_label(step: Step) -> &'static str {
+    match step {
+        Step::Size => tl!("Size"),
+        Step::Style => tl!("Style"),
+        Step::Texts => tl!("Texts"),
+        Step::Accent => tl!("Accent"),
+        Step::Review => tl!("Review"),
+    }
+}
+
 /// What a figure leaves out, said where its size is picked and in the review: the texts and
 /// accent typed for a sheet aren't drawn on it.
 fn figure_note(ui: &mut egui::Ui) {
@@ -202,7 +213,7 @@ fn step_list(ui: &mut egui::Ui, d: &mut Draft) {
     ui.vertical(|ui| {
         ui.set_width(LIST_WIDTH);
         for &step in d.steps() {
-            let item = egui::Button::selectable(d.step == step, i18n::t(step_name(step))).wrap().min_size(egui::vec2(LIST_WIDTH, 0.0));
+            let item = egui::Button::selectable(d.step == step, step_label(step)).wrap().min_size(egui::vec2(LIST_WIDTH, 0.0));
             if ui.add(item).clicked() {
                 d.step = step;
             }
