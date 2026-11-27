@@ -569,8 +569,12 @@ fn asked_by(asked: &Value, params: &Value) -> bool {
     };
     let given = o.iter().all(|(k, v)| match k.as_str() {
         "url" => {
-            let (u, given) = (v.as_str().map(str::trim), params["url"].as_str().map(str::trim));
-            u == given || u.zip(range).is_some_and(|(u, r)| given == Some(crate::cmd::layer::ranged_address(u, r).as_str()))
+            let (u, given) = (v.as_str(), params["url"].as_str().map(str::trim));
+            // The desktop app marks a range on the address as asked, spaces and all; it may come
+            // marked on it trimmed too.
+            u.map(str::trim) == given
+                || u.zip(range)
+                    .is_some_and(|(u, r)| [u, u.trim()].iter().any(|u| given == Some(crate::cmd::layer::ranged_address(u, r).trim())))
         }
         _ if passed_on(k, v) => params.get(k) == Some(v),
         _ => true,
@@ -1350,6 +1354,11 @@ mod tests {
         assert!(asked_by(&asked, &json!({"url": ranged, "name": "rain", "anonymous": true, "id": 3})));
         let other = crate::cmd::layer::ranged_address(u, (200, 299));
         assert!(!asked_by(&asked, &json!({"url": other, "name": "rain", "anonymous": true, "id": 3})));
+        // An address asked with spaces around it: the app marks the range on it as given.
+        let spaced = json!({"url": format!("{u} "), "bytes": [100, 199], "name": "rain", "anonymous": true});
+        let marked = crate::cmd::layer::ranged_address(&format!("{u} "), (100, 199));
+        assert!(asked_by(&spaced, &json!({"url": marked, "name": "rain", "anonymous": true, "id": 3})));
+        assert!(asked_by(&spaced, &json!({"url": ranged, "name": "rain", "anonymous": true, "id": 3})));
         // Without a range asked, the marked address is another download.
         assert!(!asked_by(
             &json!({"url": u, "name": "rain", "anonymous": true}),
