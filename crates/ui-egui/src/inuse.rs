@@ -708,6 +708,17 @@ mod tests {
             h.state().map.toasts.iter().map(|t| &t.text).collect::<Vec<_>>()
         );
 
+        // A group with no layer in it, copied from its menu: it goes by its own name, so the
+        // feature copied before it isn't what Paste takes.
+        h.state_mut().run("group.add", json!({"name": "Empty"})).unwrap();
+        let groups = |h: &Window| h.state().session.map().groups.len();
+        let n = groups(&h);
+        crate::panes::copy_layers(h.state_mut(), json!({"group": "Empty"}));
+        assert_eq!(h.state().ui.copy_out.as_deref(), Some("Empty"));
+        h.run_steps(2);
+        clip(&mut h, Event::Paste("Empty".into()));
+        assert_eq!(groups(&h), n + 1, "the copied group is pasted");
+
         // A layer clicked and Copy in one frame: the layer just clicked is the one copied.
         let lakes = h.get_by_label("Lakes").rect().center();
         in_one_frame(&mut h, [Event::PointerMoved(lakes), button(lakes, true), button(lakes, false), Event::Copy]);

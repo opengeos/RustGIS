@@ -963,29 +963,40 @@ fn paste_label(app: &RustGisApp) -> &'static str {
     }
 }
 
+/// The names a copy of layers goes by on the clipboard: its layers', or its groups' when it has no
+/// layer (an empty group was copied).
+fn copied_names(copy: &rustgis_engine::cmd::layer_copy::LayerClip) -> Vec<&str> {
+    if copy.layers.is_empty() {
+        copy.groups.iter().map(|g| g.name.as_str()).collect()
+    } else {
+        copy.layers.iter().map(|l| l.name.as_str()).collect()
+    }
+}
+
 /// Copies layers (`layer.copy` with `params`) and puts their names on the clipboard as text, one a
 /// line: a paste elsewhere gives the names, and a Paste key in the layer list can tell whether the
-/// layers are still the last thing copied ([`pastes_copied_layers`]). A copy with no layer in it
-/// (an empty group) puts no text there, so the Paste key doesn't take it; the menu's Paste does.
-/// A copy refused is said by `run`.
+/// layers are still the last thing copied ([`pastes_copied_layers`]). So what the clipboard held
+/// before (features, say) is replaced, as any copy replaces it. A copy refused is said by `run`.
 pub(crate) fn copy_layers(app: &mut RustGisApp, params: Value) {
-    let Ok(copied) = app.run("layer.copy", params) else { return };
-    let names: Vec<&str> = copied["layers"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
-    if !names.is_empty() {
-        app.ui.copy_out = Some(names.join("\n"));
+    if app.run("layer.copy", params).is_err() {
+        return;
+    }
+    let names = app.session.layer_clipboard.as_ref().map(copied_names).unwrap_or_default().join("\n");
+    if !names.trim().is_empty() {
+        app.ui.copy_out = Some(names);
     }
 }
 
 /// Whether a Paste key in the layer list, with `text` on the clipboard, pastes the copied layers:
-/// while the clipboard holds the names of the layers copied (line ends aside, which a clipboard
-/// may change). Features or text copied since are the newer copy, and layers a script copied
-/// since aren't the ones the clipboard names.
+/// while the clipboard holds the names the copy goes by ([`copied_names`]; line ends aside, which
+/// a clipboard may change). Features or text copied since are the newer copy, and layers a script
+/// copied since aren't the ones the clipboard names.
 pub(crate) fn pastes_copied_layers(app: &RustGisApp, text: &str) -> bool {
-    let pasted: Vec<&str> = text.lines().map(str::trim_end).filter(|line| !line.is_empty()).collect();
-    app.session
-        .layer_clipboard
-        .as_ref()
-        .is_some_and(|copy| !copy.layers.is_empty() && copy.layers.iter().map(|l| l.name.trim_end()).eq(pasted.iter().copied()))
+    let lines = |text: &str| text.lines().map(str::trim_end).filter(|line| !line.is_empty()).map(str::to_owned).collect::<Vec<_>>();
+    app.session.layer_clipboard.as_ref().is_some_and(|copy| {
+        let names = lines(&copied_names(copy).join("\n"));
+        !names.is_empty() && names == lines(text)
+    })
 }
 
 /// Where `layer.paste` puts the copies when they are pasted on layer `id`: above it, or at the
