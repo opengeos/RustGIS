@@ -1,5 +1,6 @@
 //! The wizard's map step.
 use super::*;
+use crate::dialogs::MapOwner;
 
 /// Which area the map frame shows.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -7,10 +8,10 @@ pub enum Area {
     /// The view, left to `layout.publication`.
     View,
     /// A layer's features, as Zoom To Layer frames them (hidden or not): the layer's id, in the
-    /// map named.
-    Layer { map: String, id: u32 },
-    /// The selected features of the map named.
-    Selection { map: String },
+    /// map it was picked in.
+    Layer { map: MapOwner, id: u32 },
+    /// The selected features of the map it was picked in.
+    Selection { map: MapOwner },
 }
 
 /// The name `layout.publication` gives when none is: data, not translated.
@@ -24,7 +25,7 @@ pub(super) fn map_step(ui: &mut egui::Ui, s: &Session, d: &mut Draft) {
     let map = s.map();
     // Top first, as Contents lists them. A layer's kept extent here; the one it shows is read at
     // Create, as it walks the rows under a definition query.
-    let framable = || map.layers.iter().rev().filter(|l| !l.extent().is_empty());
+    let framable = || map.layers.iter().filter(|l| !l.extent().is_empty());
     egui::Grid::new("publication_wizard_map").num_columns(2).spacing(egui::vec2(8.0, 8.0)).show(ui, |ui| {
         // A row for each choice, so the label sits beside the first one.
         ui.label(tl!("Map extent"));
@@ -35,33 +36,37 @@ pub(super) fn map_step(ui: &mut egui::Ui, s: &Session, d: &mut Draft) {
         ui.label("");
         ui.horizontal(|ui| {
             let picked = match &d.area {
-                Area::Layer { map: name, id } if *name == map.name => Some(*id),
+                Area::Layer { map: owner, id } if owner.holds(s) => Some(*id),
                 _ => None,
             };
             let top = framable().next().map(|l| l.id);
-            if ui.add_enabled(top.is_some(), egui::RadioButton::new(picked.is_some(), tl!("Layer"))).clicked()
+            let layer = ui.add_enabled(top.is_some(), egui::RadioButton::new(picked.is_some(), tl!("Layer")));
+            if layer.clicked()
                 && let Some(id) = picked.or(top)
             {
-                d.area = Area::Layer { map: map.name.clone(), id };
+                d.area = Area::Layer { map: MapOwner::of(s), id };
             }
             if let Some(id) = picked {
-                let shown = framable().find(|l| l.id == id).map_or_else(String::new, |l| l.name.clone());
+                let shown = framable().find(|l| l.id == id).map_or_else(|| tl!("(none)").to_string(), |l| l.name.clone());
                 egui::ComboBox::from_id_salt("publication_wizard_map_layer")
                     .selected_text(shown)
                     .width(ui.available_width().min(180.0))
+                    .truncate()
                     .show_ui(ui, |ui| {
                         for l in framable() {
                             if ui.selectable_label(l.id == id, l.name.as_str()).clicked() {
-                                d.area = Area::Layer { map: map.name.clone(), id: l.id };
+                                d.area = Area::Layer { map: MapOwner::of(s), id: l.id };
                             }
                         }
-                    });
+                    })
+                    .response
+                    .labelled_by(layer.id);
             }
         });
         ui.end_row();
         ui.label("");
-        // A pick made in another map, or before this one was renamed, marks nothing.
-        let selected = matches!(&d.area, Area::Selection { map: name } if *name == map.name);
+        // A pick made in another map or project, or before this map was renamed, marks nothing.
+        let selected = matches!(&d.area, Area::Selection { map: owner } if owner.holds(s));
         let selection = egui::RadioButton::new(selected, tl!("Selection"));
         if ui
             .add_enabled(map.selection_count() > 0, selection)
@@ -69,7 +74,7 @@ pub(super) fn map_step(ui: &mut egui::Ui, s: &Session, d: &mut Draft) {
             .on_disabled_hover_text(tl!("Nothing is selected in the map."))
             .clicked()
         {
-            d.area = Area::Selection { map: map.name.clone() };
+            d.area = Area::Selection { map: MapOwner::of(s) };
         }
         ui.end_row();
         let label = ui.label(tl!("Name"));
@@ -86,9 +91,9 @@ pub(super) fn area_label(s: &Session, area: &Area) -> String {
             .map()
             .layers
             .iter()
-            .find(|l| l.id == *id && s.map().name == *map)
+            .find(|l| l.id == *id && map.holds(s))
             .map_or_else(|| tl!("(none)").to_string(), |l| i18n::fmt("Layer: {layer}", &[("layer", &l.name)])),
-        Area::Selection { map } if s.map().name == *map => tl!("Selected features").to_string(),
+        Area::Selection { map } if map.holds(s) => tl!("Selected features").to_string(),
         Area::Selection { .. } => tl!("(none)").to_string(),
     }
 }
@@ -109,12 +114,14 @@ fn framed(e: Extent) -> Option<[f64; 4]> {
 }
 
 /// The `extent` to send for `area`, none for the view; an area that is gone since it was picked is
-/// an error rather than another one framed.
+/// an error rather than another one framed. Read once, at Create, on the UI thread where
+/// `layout.publication` runs next: a layer under a definition query is walked whole, as is the
+/// selection.
 pub(super) fn area_extent(s: &Session, area: &Area) -> Result<Option<[f64; 4]>, String> {
     let map = s.map();
     let extent = match area {
         Area::View => return Ok(None),
-        Area::Layer { map: name, .. } | Area::Selection { map: name } if *name != map.name => {
+        Area::Layer { map: owner, .. } | Area::Selection { map: owner } if !owner.holds(s) => {
             return Err(tl!("The map was switched or renamed since the map extent was picked: pick it again.").to_string());
         }
         Area::Layer { id, .. } => map
@@ -163,7 +170,7 @@ mod tests {
     #[test]
     fn each_area_sends_its_own_extent() {
         let mut app = app();
-        let map = app.session.map().name.clone();
+        let map = MapOwner::of(&app.session);
         assert_eq!(area_extent(&app.session, &Area::View), Ok(None));
         app.run("layer.definitionQuery", json!({"layer": "Cities", "where": "pop_max > 10000000"})).unwrap();
         let (id, shown, all) = {
@@ -184,7 +191,7 @@ mod tests {
     #[test]
     fn an_area_gone_is_refused() {
         let mut app = app();
-        let map = app.session.map().name.clone();
+        let map = MapOwner::of(&app.session);
         let id = app.session.map().layers.iter().find(|l| l.name == "Rivers").unwrap().id;
         let layer = Area::Layer { map: map.clone(), id };
         let selection = Area::Selection { map };
@@ -213,7 +220,8 @@ mod tests {
         assert!(h.get_by_role_and_label(Role::RadioButton, "Selection").accesskit_node().is_disabled());
         h.get_by_role_and_label(Role::RadioButton, "Layer").click();
         h.run_steps(4);
-        let top = h.state().session.map().layers.last().unwrap().id;
+        let top = h.state().session.map().layers.first().unwrap().id;
+        assert_eq!(h.state().session.map().layers[0].name, "Cities", "the layer drawn on top");
         assert!(matches!(area(&h), Area::Layer { id, .. } if id == top), "{:?}", area(&h));
         h.state_mut().run("select.byAttributes", json!({"layer": "Cities", "where": "name = 'Tokyo'"})).unwrap();
         h.run_steps(2);
@@ -229,7 +237,7 @@ mod tests {
         for layer in [true, false] {
             let mut app = app();
             open(&mut app);
-            let map = app.session.map().name.clone();
+            let map = MapOwner::of(&app.session);
             app.run("select.byAttributes", json!({"layer": "Cities", "where": "name = 'Tokyo'"})).unwrap();
             let id = app.session.map().layers.last().unwrap().id;
             let area = if layer { Area::Layer { map, id } } else { Area::Selection { map } };
@@ -245,13 +253,50 @@ mod tests {
         }
     }
 
+    /// A pick made in a project since replaced is refused, though the new one's map has the same
+    /// name: its layer ids and selection are other ones.
+    #[test]
+    fn a_pick_from_a_replaced_project_is_refused() {
+        let mut app = app();
+        let map = app.session.map().name.clone();
+        let owner = MapOwner::of(&app.session);
+        let areas = [Area::Layer { map: owner.clone(), id: 1 }, Area::Selection { map: owner }];
+        app.run("project.new", json!({})).unwrap();
+        app.run("map.rename", json!({"name": map})).unwrap();
+        assert_eq!(app.session.map().name, map);
+        for area in areas {
+            let said = area_extent(&app.session, &area).unwrap_err();
+            assert!(said.starts_with("The map was switched or renamed"), "{area:?}: {said}");
+        }
+    }
+
+    /// A long layer name is cut to the list's width, inside the window at its smallest; a layer
+    /// picked and then removed reads as (none).
+    #[test]
+    fn the_layer_list_stays_in_the_window_and_names_a_layer_gone() {
+        let mut app = app();
+        open(&mut app);
+        let long = "A layer with a very long name ".repeat(6);
+        app.run("layer.rename", json!({"layer": "Cities", "name": long})).unwrap();
+        let map = MapOwner::of(&app.session);
+        let id = app.session.map().layers.first().unwrap().id;
+        let d = app.dialogs.publication.as_mut().unwrap();
+        (d.area, d.step) = (Area::Layer { map, id }, Step::Map);
+        let mut h = harness_sized(app, egui::vec2(420.0, 600.0));
+        let list = h.get_by_role(Role::ComboBox).rect();
+        assert!(list.right() <= 420.0, "the list runs to {}", list.right());
+        h.state_mut().run("layer.remove", json!({"layer": id})).unwrap();
+        h.run_steps(4);
+        assert_eq!(h.get_by_role(Role::ComboBox).accesskit_node().value().as_deref(), Some("(none)"));
+    }
+
     /// Create frames the layer picked and names the layout as typed; a figure takes both too.
     #[test]
     fn create_frames_the_area_and_names_the_layout() {
         for size in ["a4", "figure-1col"] {
             let mut app = app();
             open(&mut app);
-            let map = app.session.map().name.clone();
+            let map = MapOwner::of(&app.session);
             app.run("select.byAttributes", json!({"layer": "Cities", "where": "name = 'Tokyo'"})).unwrap();
             let [w, s, e, n] = framed(app.session.map().selection_extent()).unwrap();
             {
@@ -279,7 +324,7 @@ mod tests {
     fn create_with_the_area_gone_is_said_and_makes_nothing() {
         let mut app = app();
         open(&mut app);
-        let map = app.session.map().name.clone();
+        let map = MapOwner::of(&app.session);
         {
             let d = app.dialogs.publication.as_mut().unwrap();
             d.area = Area::Selection { map };
