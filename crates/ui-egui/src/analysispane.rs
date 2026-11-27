@@ -2276,7 +2276,11 @@ fn refuse_huge_paste(app: &mut RustGisApp, ui: &Ui, box_id: egui::Id) {
         });
     });
     if refused {
-        app.session.notify(tl!("The paste would make the script larger than 1 MB: nothing was pasted").to_string(), true);
+        let text = tl!("The paste would make the script larger than 1 MB: nothing was pasted").to_string();
+        // Once while it shows: a held key repeats, and each repeat comes here.
+        if !app.map.toasts.iter().any(|t| t.text == text) {
+            app.session.notify(text, true);
+        }
     }
 }
 
@@ -3789,7 +3793,18 @@ mod tests {
         h.run_steps(2);
         assert_eq!(h.state().workflow.script, "map.zoomFull");
         let said = "The paste would make the script larger than 1 MB: nothing was pasted";
-        assert!(h.state().session.notices.iter().any(|n| n.text == said));
+        let times = |app: &RustGisApp| app.session.notices.iter().filter(|n| n.text == said).count();
+        assert_eq!(times(h.state()), 1);
+        // Refused again while the notice shows (a held Ctrl+V): not said twice.
+        h.event(egui::Event::Paste("a".repeat(crate::SCRIPT_FILE_MAX_BYTES)));
+        h.run_steps(2);
+        assert_eq!(h.state().workflow.script, "map.zoomFull");
+        assert_eq!(times(h.state()), 1);
+        // Once it has gone, the next refusal says so again.
+        h.state_mut().map.toasts.clear();
+        h.event(egui::Event::Paste("a".repeat(crate::SCRIPT_FILE_MAX_BYTES)));
+        h.run_steps(2);
+        assert_eq!(times(h.state()), 2);
     }
 
     /// The limit counts bytes, less those of the selection the paste replaces, and the pastes of one
