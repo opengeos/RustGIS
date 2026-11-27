@@ -12,10 +12,10 @@ pub const ARRANGEMENTS: [(&str, Homes); 4] =
     [("classic", [0, 1, 2, 3]), ("mirrored", [1, 0, 3, 2]), ("legendRight", [0, 1, 3, 2]), ("legendTop", [2, 1, 0, 3])];
 
 /// The keys of an arrangement given surround by surround, in [`Homes`]'s order.
-pub const ARRANGEMENT_KEYS: [&str; 4] = ["locator", "northArrow", "legend", "scaleBar"];
+pub(in crate::cmd::layout) const ARRANGEMENT_KEYS: [&str; 4] = ["locator", "northArrow", "legend", "scaleBar"];
 
 /// The corners by name, in [`Homes`]'s numbering.
-pub const CORNER_NAMES: [&str; 4] = ["top-left", "top-right", "bottom-left", "bottom-right"];
+pub(in crate::cmd::layout) const CORNER_NAMES: [&str; 4] = ["top-left", "top-right", "bottom-left", "bottom-right"];
 
 /// A surround's place in [`Homes`].
 pub(in crate::cmd::layout) fn home_slot(kind: Surround) -> usize {
