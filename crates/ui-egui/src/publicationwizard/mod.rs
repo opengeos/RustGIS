@@ -10,7 +10,7 @@ use crate::{RustGisApp, i18n, theme::Tokens};
 use accent::accent_step;
 use review::review_step;
 use rustgis_engine::Session;
-use rustgis_engine::cmd::layout::{MAX_PUBLICATION_TEXT, PUBLICATION_PROFILES, PUBLICATION_STYLES, publication_style_accent};
+use rustgis_engine::cmd::layout::{PUBLICATION_PROFILES, publication_style_accent};
 use rustgis_engine::map::layout::PAGES;
 use serde_json::{Value, json};
 use size::size_step;

@@ -1,5 +1,6 @@
 //! The wizard's style step.
 use super::*;
+use rustgis_engine::cmd::layout::PUBLICATION_STYLES;
 
 /// The style step: each sheet style, by the name and description the menu gives it.
 pub(super) fn style_step(ui: &mut egui::Ui, d: &mut Draft, app_accent: egui::Color32) {

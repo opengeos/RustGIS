@@ -1,5 +1,6 @@
 //! The wizard's texts step.
 use super::*;
+use rustgis_engine::cmd::layout::MAX_PUBLICATION_TEXT;
 
 /// The texts step: the title, subtitle, note, sources and credit line.
 pub(super) fn texts_step(ui: &mut egui::Ui, d: &mut Draft) {
