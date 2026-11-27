@@ -3,7 +3,7 @@
 use super::*;
 use rustgis_map::layout::{Element, ElementKind, Grid};
 
-/// A layout with a map frame, a grid on it, a scale bar, a north arrow and a colorbar's layer.
+/// A layout with a map frame, a grid on it, a scale bar and a north arrow.
 fn laid_out() -> Session {
     let mut s = world();
     s.run("layout.new", &json!({"template": "map"})).unwrap();
@@ -72,7 +72,7 @@ fn a_grid_number_of_the_wrong_type_is_refused() {
     let mut s = laid_out();
     let frame = frame(&s);
     for key in ["step", "tickLength", "width"] {
-        for v in [json!("bad"), json!(true), json!([]), json!({})] {
+        for v in [json!("bad"), json!(""), json!(true), json!([]), json!({})] {
             let mut add = json!({"kind": "grid"});
             add[key] = v.clone();
             refused(&mut s, "layout.addElement", add, &format!("{key} is "));
@@ -122,7 +122,7 @@ fn a_null_value_is_not_given() {
     assert_eq!(grid(&s), before);
     let bar = id(&s, |k| matches!(k, ElementKind::ScaleBar { .. }));
     let kept = serde_json::to_value(elements(&s)).unwrap();
-    s.run("layout.update", &json!({"element": bar, "style": null, "units": null})).unwrap();
+    s.run("layout.update", &json!({"element": bar, "style": null, "units": null, "divisions": null})).unwrap();
     assert_eq!(serde_json::to_value(elements(&s)).unwrap(), kept);
 }
 

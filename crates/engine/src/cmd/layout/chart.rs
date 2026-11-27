@@ -72,10 +72,7 @@ pub(in crate::cmd::layout) fn given_name<'a>(p: &'a Value, k: &str, names: &str)
 /// A choice given as `k` by name, when it's given (and not null): an error when it isn't one of
 /// `names`.
 pub(in crate::cmd::layout) fn given_choice<T>(p: &Value, k: &str, from: fn(&str) -> Option<T>, names: &str) -> Result<Option<T>, String> {
-    match p.get(k).filter(|v| !v.is_null()) {
-        Some(v) => v.as_str().and_then(from).map(Some).ok_or_else(|| format!("{k} is {names}")),
-        None => Ok(None),
-    }
+    given_name(p, k, names)?.map(|v| from(v).ok_or_else(|| format!("{k} is {names}"))).transpose()
 }
 
 /// A chart's options beyond its layer and field ([`ElementKind::Chart`], #2487).

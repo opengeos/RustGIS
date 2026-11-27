@@ -56,10 +56,8 @@ pub(in crate::cmd::layout) fn restyle(kind: &ElementKind, p: &Value) -> Result<O
                 }
                 None => *units,
             };
-            let divisions = match p.get("divisions") {
-                Some(_) => f(p, "divisions").ok_or("divisions is a number")?.round().clamp(1.0, MAX_SCALE_DIVISIONS as f64) as usize,
-                None => *divisions,
-            };
+            let divisions =
+                given_num(p, "divisions", "a number")?.map_or(*divisions, |n| n.round().clamp(1.0, MAX_SCALE_DIVISIONS as f64) as usize);
             let (color, fill) = (color(p, "color", *c)?, color(p, "fill", *fill)?);
             let text_size = text_size_param(p, "textSize", SCALE_BAR_TEXT_PT)?.unwrap_or(*text_size);
             // Its details, each read before any is set: one part is the division whole.
