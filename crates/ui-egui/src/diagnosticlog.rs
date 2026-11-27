@@ -5,6 +5,7 @@ use rustgis_engine::data::diagnostics::{Filter, NetworkKind, Record, Severity};
 
 use crate::{RustGisApp, theme::Tokens};
 
+/// The Messages pane: its filters, Copy diagnostics and Clear, then the entries, newest first.
 pub(crate) fn show(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     // Background requests may finish without another UI action (including HEAD probes).
     ui.ctx().request_repaint_after(std::time::Duration::from_millis(500));
@@ -71,6 +72,8 @@ pub(crate) fn show(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     app.ui.diagnostic_snapshot = Some((generation, records));
 }
 
+/// One entry: its time, severity and source, the message, the loss code with a link to its entry
+/// in the guide (set in `open_url` when clicked), and any technical details.
 fn entry(ui: &mut Ui, record: &Record, t: &Tokens, open_url: &mut Option<String>) {
     // Literal labels, so each is found and translated with the interface's other strings.
     let (severity, color) = match record.severity {

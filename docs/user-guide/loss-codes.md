@@ -28,7 +28,7 @@ A map service offered legend pictures that RustGIS does not show, so they were l
 
 A polygon ring was left out. Rings that could not be read, or that have no area, are skipped, and a format with no holes keeps only the outer edge of each polygon.
 
-**Where you see it:** reading GeoRSS, GML, MapInfo or Esri PBF data; exporting polygons to GPX (their holes are left out).
+**Where you see it:** reading GeoRSS, GML or MapInfo data, or feature service answers in PBF; exporting polygons to GPX (their holes are left out).
 
 **What to do:** Correct the unreadable polygon ring in the source, or write to a format that holds holes, such as GeoPackage.
 
@@ -144,7 +144,7 @@ Longitude and latitude on a body other than the Earth were written as Earth coor
 
 Text that is not valid in the encoding it was read with was read with a replacement character in its place.
 
-**Where you see it:** reading a Shapefile or dBASE file, a DXF drawing, or Esri PBF data.
+**Where you see it:** reading a Shapefile or dBASE file, a DXF drawing, or feature service answers in PBF.
 
 **What to do:** Put a .cpg file naming the file's own encoding beside it.
 
