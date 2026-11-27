@@ -200,27 +200,34 @@ pub(in crate::cmd::layout) fn say_unfitted_legends(s: &mut Session, unfitted: &[
     say_unfitted_legends_in(s, &listed);
 }
 
-/// [`say_unfitted_legends`] of legends each in the layout it names, when one does: a report
-/// draws several layouts, whose legends' ids can be the same, and names each legend's layout
-/// (shortened as its name is), `"Legend" (3) in "Atlas"`.
-pub(in crate::cmd) fn say_unfitted_legends_in(s: &mut Session, unfitted: &[(Option<String>, rustgis_render::layout::UnfittedLegend)]) {
-    // Each reason, in the order first met, with the legends it is true of.
-    let mut said: Vec<(String, Vec<String>)> = Vec::new();
+/// [`say_unfitted_legends`] of legends each in the layout it names (by its index and name), when
+/// one does: a report draws several layouts, whose legends' ids can be the same, and names each
+/// legend's layout (shortened as its name is), `"Legend" (3) in "Atlas"`. A legend is the same
+/// legend by its layout's index and its id: listed again (another page of a series, cut another
+/// way that a reason's words don't tell apart), it is named and counted once under that reason.
+pub(in crate::cmd) fn say_unfitted_legends_in(
+    s: &mut Session,
+    unfitted: &[(Option<(usize, String)>, rustgis_render::layout::UnfittedLegend)],
+) {
+    // Each reason, in the order first met, with the legends it is true of, each once.
+    let mut said: Vec<(String, Vec<((Option<usize>, u32), String)>)> = Vec::new();
     for (layout, l) in unfitted {
         let mut named = format!("\"{}\" ({})", crate::project::short_name(&l.name), l.id);
-        if let Some(layout) = layout {
+        if let Some((_, layout)) = layout {
             named.push_str(&format!(" in \"{}\"", crate::project::short_name(layout)));
         }
+        let legend = (layout.as_ref().map(|(li, _)| *li), l.id);
         for reason in legend_fit_warnings(l.fit, l.columns, (l.too_wide, l.too_tall)) {
             match said.iter_mut().find(|(r, _)| *r == reason) {
-                Some((_, legends)) => legends.push(named.clone()),
-                None => said.push((reason, vec![named.clone()])),
+                Some((_, legends)) if legends.iter().any(|(at, _)| *at == legend) => {}
+                Some((_, legends)) => legends.push((legend, named.clone())),
+                None => said.push((reason, vec![(legend, named.clone())])),
             }
         }
     }
     for (reason, legends) in said {
         let n = legends.len();
-        let mut names = legends.into_iter().take(10).collect::<Vec<_>>().join(", ");
+        let mut names = legends.into_iter().take(10).map(|(_, named)| named).collect::<Vec<_>>().join(", ");
         if n > 10 {
             names.push_str(&format!(" and {} more", n - 10));
         }
@@ -439,4 +446,40 @@ pub(in crate::cmd::layout) fn with_labels(
         return Err(format!("a legend can label at most {MAX_LEGEND_LABELS} layers"));
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use rustgis_map::layout::LegendFit;
+    use rustgis_render::layout::UnfittedLegend;
+
+    use crate::{Project, Session};
+
+    /// What [`super::say_unfitted_legends`] says of `listed`.
+    fn said(listed: &[UnfittedLegend]) -> Vec<String> {
+        let mut s = Session::new(Project::default());
+        super::say_unfitted_legends(&mut s, listed);
+        s.notices.iter().map(|n| n.text.clone()).collect()
+    }
+
+    /// A one-column legend listed twice, too wide on one page of a series and too tall on another,
+    /// is under one reason, whose words are the same for both: named and counted once there. Two
+    /// legends under one reason are still both, counted.
+    #[test]
+    fn a_legend_is_named_once_under_each_reason() {
+        let cut = |id: u32, name: &str, (too_wide, too_tall): (bool, bool)| UnfittedLegend {
+            id,
+            name: name.into(),
+            fit: LegendFit::AdjustSize,
+            columns: 1,
+            too_wide,
+            too_tall,
+        };
+        let reason = "the legend lists more than fits its box even with its text shrunk to 4 points: its last rows or the ends of long labels are left out";
+        assert_eq!(said(&[cut(7, "Roads", (true, false)), cut(7, "Roads", (false, true))]), [format!("Legend \"Roads\" (7): {reason}")]);
+        assert_eq!(
+            said(&[cut(7, "Roads", (true, false)), cut(8, "Rivers", (false, true)), cut(7, "Roads", (false, true))]),
+            [format!("2 legends (\"Roads\" (7), \"Rivers\" (8)): {reason}")]
+        );
+    }
 }

@@ -1236,7 +1236,8 @@ fn keep_unfitted(
 /// Says the legends [`keep_unfitted`] kept, each named with its layout, as a layout's export
 /// says its own ([`super::layout::say_unfitted_legends_in`]).
 fn say_report_unfitted(s: &mut Session, kept: &[(usize, rustgis_render::layout::UnfittedLegend)]) {
-    let named: Vec<_> = kept.iter().map(|(li, l)| (s.project.layouts.get(*li).map(|layout| layout.name.clone()), l.clone())).collect();
+    let named: Vec<_> =
+        kept.iter().map(|(li, l)| (s.project.layouts.get(*li).map(|layout| (*li, layout.name.clone())), l.clone())).collect();
     super::layout::say_unfitted_legends_in(s, &named);
 }
 
