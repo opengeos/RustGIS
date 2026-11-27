@@ -4911,6 +4911,33 @@ pub fn text_in_dates<'a>(features: impl IntoIterator<Item = &'a crate::Feature>,
     counts
 }
 
+/// For each field, how many values a GeoPackage export writes empty in a yes/no field, as they
+/// aren't yes or no ([`Value::as_yes_no`]): `0.5`, `maybe`, a date. Null and empty text aren't counted.
+pub fn unheld_yes_no(ds: &Dataset) -> Vec<usize> {
+    let mut counts = vec![0usize; ds.fields.len()];
+    for f in &ds.features {
+        for ((n, field), v) in counts.iter_mut().zip(&ds.fields).zip(&f.attrs) {
+            *n += usize::from(field.ty == FieldType::Boolean && !v.asks_null() && v.as_yes_no().is_none());
+        }
+    }
+    counts
+}
+
+/// What a GeoPackage export to `target` says of the values it wrote empty in yes/no fields
+/// ([`unheld_yes_no`]). `None` when there was none.
+pub fn unheld_yes_no_note(fields: &[Field], counts: &[usize], target: &str) -> Option<crate::loss::Note> {
+    let total: usize = counts.iter().sum();
+    if total == 0 {
+        return None;
+    }
+    let target: String = target.chars().map(dbf_notice_char).collect();
+    let what = if total == 1 { "1 value isn't yes or no and was".to_string() } else { format!("{total} values aren't yes or no and were") };
+    Some(crate::loss::Note::loss(
+        crate::loss::LossCode::DroppedValue,
+        format!("{target}: {what} written empty, in {}", named_fields(fields, counts)),
+    ))
+}
+
 /// What a GeoPackage export to `target` says of the text it wrote in date fields
 /// ([`text_in_dates`]). `None` when there was none.
 pub fn text_in_dates_note(fields: &[Field], counts: &[usize], target: &str) -> Option<crate::loss::Note> {

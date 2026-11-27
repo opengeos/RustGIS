@@ -282,6 +282,19 @@ impl Value {
         }
     }
 
+    /// The yes/no value this value is, as a yes/no field holds it: a yes/no as it is, a whole
+    /// number yes unless it is 0, text one of the [`yes_no`](Value::yes_no) words; anything else
+    /// (`0.5`, `maybe`, a date, null) is neither.
+    pub fn as_yes_no(&self) -> Option<bool> {
+        match self {
+            Value::Bool(b) => Some(*b),
+            Value::Int(i) => Some(*i != 0),
+            Value::Float(f) if f.is_finite() && f.fract() == 0.0 => Some(*f != 0.0),
+            Value::Text(t) => Value::yes_no(t),
+            _ => None,
+        }
+    }
+
     /// The yes/no value text says, ignoring case and spaces around it: `true`, `t`, `yes`, `y` and
     /// `1` are true; `false`, `f`, `no`, `n` and `0` are false; other text is neither.
     pub fn yes_no(text: &str) -> Option<bool> {

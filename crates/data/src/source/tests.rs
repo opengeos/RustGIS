@@ -4091,6 +4091,26 @@ fn geopackage_yes_no_text_that_isnt_yes_or_no_is_said() {
         let code = Some(crate::loss::LossCode::DroppedValue);
         assert_eq!(said, [("gates: 1 value isn't yes or no and was read as empty, in 'open'".to_string(), code)]);
     }
+    // An export writes a yes/no field's values as a yes/no field reads them, and counts the rest.
+    let mut odd = Dataset::new("odd", GeometryType::Point, vec![Field::new("open", FieldType::Boolean)]);
+    for v in [Value::Float(2.0), Value::Float(0.5), Value::Text("no".into()), Value::Text("maybe".into()), Value::Null] {
+        odd.push(Some(Geometry::Point(Coord::new(1.0, 2.0))), vec![v]);
+    }
+    let counts = crate::io::unheld_yes_no(&odd);
+    assert_eq!(
+        crate::io::unheld_yes_no_note(&odd.fields, &counts, "odd.gpkg").map(|n| (n.text, n.loss)),
+        Some((
+            "odd.gpkg: 2 values aren't yes or no and were written empty, in 'open'".to_string(),
+            Some(crate::loss::LossCode::DroppedValue)
+        ))
+    );
+    let clean = crate::io::unheld_yes_no(&gates);
+    assert_eq!(crate::io::unheld_yes_no_note(&gates.fields, &clean, "gates.gpkg"), None);
+    let odd_path = workspace.path().join("odd.gpkg");
+    crate::io::write_path(&odd, &odd_path).unwrap();
+    let (ds, _) = materialize(open_path(&odd_path, None).unwrap().as_ref()).unwrap();
+    let values: Vec<Value> = ds.features.iter().map(|f| f.attrs[0].clone()).collect();
+    assert_eq!(values, [Value::Bool(true), Value::Null, Value::Bool(false), Value::Null, Value::Null]);
     for (values, said) in read("t") {
         assert_eq!(values, [Value::Bool(true), Value::Bool(false), Value::Bool(true), Value::Null]);
         assert!(said.is_empty(), "{said:?}");
