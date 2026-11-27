@@ -288,7 +288,7 @@ impl ShpSource {
     fn narrowing(&self, req: &Request) -> Narrowing {
         let own = self.reproject.own_box(req);
         let everywhere = req.extent.is_none() && own == Some(super::whole_plane());
-        Narrowing { own, everywhere, by_area: req.extent.is_some() || own.is_some() && !everywhere }
+        Narrowing { own, everywhere, by_area: req.extent.is_some() || (own.is_some() && !everywhere) }
     }
 
     /// A complete visit of a request's records, or of those numbered `numbered` (from 0, in
@@ -654,7 +654,7 @@ fn boxed_off_note(n: u64, sampled: bool, late: bool) -> Vec<crate::loss::Note> {
         format!("{n} shape(s)")
     };
     vec![crate::loss::Note::loss(
-        crate::loss::LossCode::DroppedGeometry,
+        crate::loss::LossCode::DroppedFeature,
         format!(
             "{what} have a coordinate that isn't a number under a bounding box that is one: they have no geometry, so the read leaves them out, but the layer's extent and its index still take in their stored boxes"
         ),

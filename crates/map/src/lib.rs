@@ -5358,7 +5358,7 @@ mod tests {
         let id = m.add_dataset(d);
         let at = |x: f64, y: f64| lonlat_to_merc(Coord::new(x, y));
         let outside = at(-50.0, 5.0);
-        assert!(m.layers[0].projected()[0].as_ref().unwrap().hit(outside, 1000.0), "the gap lets the inside out");
+        assert!(m.layers[0].projected().get(0).unwrap().hit(outside, 1000.0), "the gap lets the inside out");
         assert_eq!(m.hits_at(outside, 1000.0, 1e6, |_| true, false, 10), vec![]);
         assert_eq!(m.hits_at(at(5.0, 5.0), 1000.0, 1e6, |_| true, false, 10), vec![(id, 0)]);
         assert_eq!(m.hits_at(at(10.0, 5.0), 1000.0, 1e6, |_| true, false, 10), vec![(id, 0)]);

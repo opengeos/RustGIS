@@ -762,13 +762,13 @@ fn a_nan_shape_under_a_finite_box_is_said_when_kept_without_geometry() {
         };
         const SAID: &str = "have a coordinate that isn't a number under a bounding box that is one";
         const KEPT: &str = "have a coordinate that isn't a number (NaN or infinite): their features are kept without geometry";
-        // Each read says the shapes it gave without geometry as dropped geometry, which the
-        // checks below see.
+        // A read says the shapes it gave without geometry as dropped geometry, and those an area
+        // read left out as dropped features, which the checks below see.
         let said = |notes: &[crate::loss::Note]| {
             notes
                 .iter()
                 .filter(|n| n.contains(SAID))
-                .inspect(|n| assert_eq!(n.loss, Some(crate::loss::LossCode::DroppedGeometry), "{n:?}"))
+                .inspect(|n| assert_eq!(n.loss, Some(crate::loss::LossCode::DroppedFeature), "{n:?}"))
                 .map(|n| n.text.clone())
                 .collect::<Vec<_>>()
         };
