@@ -618,9 +618,14 @@ pub fn read_project(text: &str, dir: &str, images: &mut ReadImage, report: &mut 
     let maplayers: Vec<Node> =
         child(root, "projectlayers").map(|p| p.children().filter(|c| c.has_tag_name("maplayer")).collect()).unwrap_or_default();
     if maplayers.len() > MAX_LAYERS {
-        // Coded only when a layer left out holds data: a group or annotation layer holds none.
+        // Coded only when a layer left out holds data: a group or annotation layer holds none, nor
+        // does a memory layer, which QGIS saves without its features.
         let text = format!("layers past the first {MAX_LAYERS}");
-        if maplayers.iter().skip(MAX_LAYERS).any(|ml| !matches!(ml.attribute("type"), Some("group" | "annotation"))) {
+        let holds_data = |ml: &Node| {
+            !matches!(ml.attribute("type"), Some("group" | "annotation"))
+                && child(*ml, "provider").and_then(|p| p.text()).map(str::trim) != Some("memory")
+        };
+        if maplayers.iter().skip(MAX_LAYERS).any(holds_data) {
             report.lost("", NoteKind::Skipped, LossCode::DroppedFeature, text);
         } else {
             report.skipped("", text);
