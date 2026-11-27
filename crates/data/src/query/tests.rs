@@ -90,6 +90,8 @@ fn number_literals_are_exact_or_refused() {
     assert_eq!(v("1e3"), Value::Int(1000));
     assert_eq!(v("1.5e3"), Value::Int(1500));
     assert_eq!(v("1e19"), Value::Float(1e19), "a decimal holds it exactly");
+    // Only whole-number digits are kept from rounding: a fraction past them reads as the nearest decimal.
+    assert_eq!(v("1000000000000000.123456789"), Value::Float(1_000_000_000_000_000.1));
     assert_eq!(v("9007199254740992.0"), Value::Float(9_007_199_254_740_992.0));
     assert_eq!(v("0.12345678901234567891"), Value::Float(0.123_456_789_012_345_68));
 }

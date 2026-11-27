@@ -360,7 +360,6 @@ pub(crate) fn null_text_at(counts: &mut Vec<usize>, k: usize) {
 }
 
 /// Counts one more text value that isn't valid in its encoding in the field at `k` ([`Batch::not_utf8`]).
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn not_utf8_at(counts: &mut Vec<usize>, k: usize) {
     unread_dates_by(counts, k, 1);
 }
