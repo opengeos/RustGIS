@@ -193,9 +193,9 @@ pub fn read_bytes(bytes: &[u8]) -> Result<Archive, String> {
         && let (Some(n), Some(v)) = (col(m, "name"), col(m, "value"))
     {
         db.rows(m, |_, r| {
-            // A metadata row that isn't UTF-8 is passed over, as before.
-            if let (Some(Val::Text(n)), Some(Val::Text(v))) = (r.get(n), r.get(v)) {
-                meta.push((n.clone(), v.clone()));
+            // Text that isn't UTF-8 reads with U+FFFD, as it always did.
+            if let (Some(n), Some(v)) = (r.get(n).and_then(Val::text), r.get(v).and_then(Val::text)) {
+                meta.push((n.into_owned(), v.into_owned()));
             }
             if meta.len() >= 1000 { ControlFlow::Break(()) } else { ControlFlow::Continue(()) }
         })?;

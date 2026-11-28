@@ -345,12 +345,23 @@ impl EditTable {
                 tx.execute(&format!("UPDATE {table} SET {} WHERE {pk} = ?", sets.join(", ")), params_from_iter(args)).map_err(err)? as u64;
             saved.updated += 1;
         }
-        // What the columns of the updated rows held before the save, to tell a value the save changed
-        // from one the load already said (a date that isn't one, a number that isn't, text that isn't
-        // UTF-8); the rest of the rows isn't kept.
-        let dated: Vec<usize> = snapshot_columns.iter().map(|&(_, c)| c).collect();
-        let before: std::collections::HashMap<(i64, usize), Sql> =
-            current.iter().flat_map(|(k, row)| dated.iter().filter_map(move |&c| row.get(c).map(|v| ((*k, c), v.clone())))).collect();
+        // What the updated rows held before the save, to tell a value the save changed from one the
+        // load already said. Only a value a read can say something of is kept: text or a blob (a
+        // date that isn't one, a number that isn't, text that isn't UTF-8) or a whole number in a
+        // decimal field; the deleted rows and the rest of each row aren't.
+        let updated: std::collections::HashSet<i64> = edits.updates.iter().map(|(f, _)| f.id.cast_signed()).collect();
+        let decimal: std::collections::HashSet<usize> = snapshot_columns
+            .iter()
+            .filter(|(i, _)| fields.get(*i).is_some_and(|f| f.ty == crate::FieldType::Double))
+            .map(|&(_, c)| c)
+            .collect();
+        let said = |c: usize, v: &Sql| matches!(v, Sql::Text(_) | Sql::Blob(_)) || matches!(v, Sql::Integer(_)) && decimal.contains(&c);
+        let columns_kept: Vec<usize> = snapshot_columns.iter().map(|&(_, c)| c).collect();
+        let before: std::collections::HashMap<(i64, usize), Sql> = current
+            .iter()
+            .filter(|(k, _)| updated.contains(k))
+            .flat_map(|(k, row)| columns_kept.iter().filter_map(move |&c| row.get(c).filter(|v| said(c, v)).map(|v| ((*k, c), v.clone()))))
+            .collect();
         drop(current);
         // Reserve the loaded baseline as well as live and historical keys. A deleted source row
         // can still be present in the layer, so SQLite's ordinary rowid allocation is not enough.
