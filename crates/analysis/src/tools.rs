@@ -1609,14 +1609,16 @@ fn geo_union_all<'a>(polys: impl IntoIterator<Item = &'a geo::Polygon<f64>>) -> 
     geo::unary_union(oriented.iter())
 }
 
-/// Union a Dissolve group using consistently oriented rings and OGC extraction.
-/// Overlay masks use Geo's union to keep its rounding on shared boundaries.
-fn union_all<'a, P>(polys: P) -> MultiPolygon<f64>
+/// Union a Dissolve group using consistently oriented rings and OGC extraction. A group uses
+/// Geo's union if any coordinate is outside the finite range ±2^500 (about ±3.27e150).
+/// The i_overlay 9 stopgap uses its serial build on desktop and in the browser. Its optional
+/// parallel build would require integrating the sort and split workers with RustGIS's thread
+/// setting. The union is one step with no Cancel check inside it.
+fn dissolve_union<'a, P>(polys: P) -> MultiPolygon<f64>
 where
     P: IntoIterator<Item = &'a geo::Polygon<f64>>,
     P::IntoIter: Clone,
 {
-    use geo::{Winding, winding_order::WindingOrder};
     use i_overlay9::core::{fill_rule::FillRule, overlay_rule::OverlayRule};
     use i_overlay9::float::overlay::{FloatOverlay, OverlayOptions};
     use i_overlay9::i_float::float::compatible::FloatPointCompatible;
@@ -1624,15 +1626,11 @@ where
     // i_overlay 4.5 can loop forever during contour extraction. Restore geo::unary_union
     // and remove the direct dependency once geo ships with i_overlay 9.
     let polys = polys.into_iter();
-    let mut winding = None;
     let mut supported = true;
     let mut subject = Vec::new();
     for poly in polys.clone() {
         let (exterior, interiors) = poly.orient(Direction::Default).into_inner();
         for ring in std::iter::once(exterior).chain(interiors) {
-            if winding.is_none() {
-                winding = ring.winding_order();
-            }
             // Overlay closes paths implicitly. Polygon::new closes them again on output.
             if let Some((_, open)) = ring.0.split_last() {
                 subject.push(
@@ -1647,14 +1645,15 @@ where
             }
         }
     }
-    // The new adapter panics outside its coordinate range. Keep geo's existing behavior there.
+    // Out-of-range groups still use Geo's contour extraction, which can hang.
     if !supported {
         drop(subject);
         return geo_union_all(polys);
     }
-    let fill = if winding == Some(WindingOrder::CounterClockwise) { FillRule::Positive } else { FillRule::Negative };
-    let shapes =
-        FloatOverlay::with_subj_custom(&subject, OverlayOptions::<f64, i32>::ogc(), Default::default()).overlay(OverlayRule::Subject, fill);
+    // The exteriors are counterclockwise and the holes clockwise. A collapsed exterior can
+    // leave a hole as the first wound ring, but the group still needs positive fill.
+    let shapes = FloatOverlay::with_subj_custom(&subject, OverlayOptions::<f64, i32>::ogc(), Default::default())
+        .overlay(OverlayRule::Subject, FillRule::Positive);
     MultiPolygon::new(
         shapes
             .into_iter()
@@ -1884,7 +1883,7 @@ fn dissolved(g: &Geometry) -> std::borrow::Cow<'_, Geometry> {
 /// overlap with it, a line's stretches in it, the points in it or on its edge; outside, the rest.
 /// `None` when nothing is left, or only a shared edge or corner.
 ///
-/// The mask's polygons are in the run's plane ([`crate::convert::plane`]), oriented as `union_all`
+/// The mask's polygons are in the run's plane ([`crate::convert::plane`]), oriented as `geo_union_all`
 /// leaves them. The feature's may wind either way (the reference corpus has a clockwise parcel),
 /// but must not overlap each other: pass a feature of several polygons through [`dissolved`] first,
 /// once for all its masks.
@@ -3456,7 +3455,7 @@ fn dissolve(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
         crate::control::check()?;
         crate::control::reached(done);
         let n = parts.len() as i64;
-        let u = union_all(parts.iter().flat_map(|m| m.0.iter()));
+        let u = dissolve_union(parts.iter().flat_map(|m| m.0.iter()));
         let mut attrs = if fi.is_some() { vec![key, Value::Int(n)] } else { vec![Value::Int(n)] };
         if !requests.is_empty() {
             record_order(&mut records);
@@ -9865,20 +9864,21 @@ mod tests {
         let paths: Vec<Vec<(f64, f64)>> = serde_json::from_str(include_str!("../testdata/dissolve-contours.json")).unwrap();
         let mut polys: Vec<_> = paths.into_iter().map(|path| geo::Polygon::new(path.into(), vec![])).collect();
 
-        // The old overlay only hits this dead end with enough segments for its fragmented
-        // solver. A disjoint rectangle covers the grid, so the small squares add no union area.
+        // The grid must exceed both fragment solver thresholds (16,000 segments in i_overlay
+        // 4.5.2 and 32,000 in 9.2.1). A separate rectangle covers it, so the squares add no area.
         let (x, y, width, height) = (-123.796, 42.736, 0.013, 0.004);
         let rectangle = |x, y, w, h| geo::Polygon::new(vec![(x, y), (x + w, y), (x + w, y + h), (x, y + h)].into(), vec![]);
-        let (dx, dy) = (width / 64.0, height / 64.0);
-        for row in 0..64 {
-            for col in 0..64 {
+        const SIDE: i32 = 128;
+        let (dx, dy) = (width / f64::from(SIDE), height / f64::from(SIDE));
+        for row in 0..SIDE {
+            for col in 0..SIDE {
                 polys.push(rectangle(x + f64::from(col) * dx + dx / 4.0, y + f64::from(row) * dy + dy / 4.0, dx / 2.0, dy / 2.0));
             }
         }
         polys.push(rectangle(x, y, width, height));
 
         let (done, result) = std::sync::mpsc::channel();
-        let worker = std::thread::Builder::new().spawn(move || done.send(union_all(&polys)).unwrap()).unwrap();
+        let worker = std::thread::Builder::new().spawn(move || done.send(dissolve_union(&polys)).unwrap()).unwrap();
         // test-wait: bound the wait so a contour loop fails the test instead of hanging CI.
         let union = result.recv_timeout(std::time::Duration::from_secs(15)).expect("polygon union did not finish");
         worker.join().unwrap();
@@ -9889,6 +9889,29 @@ mod tests {
         // Areas of the merged Census polygons and the separate rectangle, computed with GEOS.
         for (area, expected) in areas.into_iter().zip([1.575_209_1e-5, 5.2e-5]) {
             assert!((area - expected).abs() < 1e-10, "area {area}, expected {expected}");
+        }
+    }
+
+    #[test]
+    fn dissolve_union_keeps_shells_after_a_collapsed_exterior() {
+        let hole = geo::Rect::new((0.0, 0.0), (2.0, 2.0)).to_polygon();
+        let collapsed = geo::Polygon::new(vec![(0.0, 0.0), (1.0, 0.0), (2.0, 0.0)].into(), vec![hole.exterior().clone()]);
+        let a = geo::Rect::new((3.0, 0.0), (4.0, 1.0)).to_polygon();
+        let b = geo::Rect::new((5.0, 0.0), (6.0, 1.0)).to_polygon();
+
+        let union = dissolve_union([&collapsed, &a, &b]);
+        assert_eq!(union.0.len(), 2);
+        assert!((geo::Area::unsigned_area(&union) - 2.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn dissolve_union_falls_back_for_out_of_range_exteriors_and_holes() {
+        let wide = geo::LineString::from(vec![(0.0, 0.0), (1e160, 1.0), (1.0, 1.0), (0.0, 1.0)]);
+        let shell = geo::Rect::new((-1.0, -1.0), (2.0, 2.0)).to_polygon();
+        let wide_shell = geo::Polygon::new(wide.clone(), vec![]);
+        let wide_hole = geo::Polygon::new(shell.exterior().clone(), vec![wide]);
+        for poly in [&wide_shell, &wide_hole] {
+            assert_eq!(dissolve_union([poly]), geo_union_all([poly]));
         }
     }
 
