@@ -164,7 +164,7 @@ pub(crate) fn reset_sources(s: &mut Session, path: &std::path::Path, table: &str
                     source.reset();
                     n += 1;
                 } else {
-                    match source.reopen() {
+                    match l.refresh_replaced_source() {
                         Ok(()) => n += 1,
                         Err(e) => failed.push(format!("{} ({e})", l.name)),
                     }

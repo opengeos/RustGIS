@@ -580,6 +580,47 @@ impl Layer {
         moved
     }
 
+    /// Reopens a source whose contents a command deliberately replaced. Its new header is
+    /// authoritative; retain aliases for unchanged columns, but discard the old window before
+    /// any new rows can be paired with it. External source changes still use strict validation.
+    pub fn refresh_replaced_source(&mut self) -> Result<(), String> {
+        let Some(source) = &mut self.source else { return Ok(()) };
+        source.reopen()?;
+        if let Some(info) = source.info() {
+            let removed: Vec<_> = self
+                .dataset
+                .fields
+                .iter()
+                .filter(|saved| !info.fields.iter().any(|fresh| fresh.name == saved.name))
+                .map(|field| field.name.clone())
+                .collect();
+            self.dataset.fields = info
+                .fields
+                .iter()
+                .map(|fresh| {
+                    self.dataset
+                        .fields
+                        .iter()
+                        .find(|saved| saved.name == fresh.name && saved.ty == fresh.ty)
+                        .cloned()
+                        .unwrap_or_else(|| fresh.clone())
+                })
+                .collect();
+            self.dataset.geometry_type = info.geometry_type;
+            self.dataset.crs = info.coordinate_system();
+            self.dataset.zm_dropped = info.zm_dropped;
+            if !removed.is_empty() {
+                let count = removed.len();
+                let columns = if count == 1 { "column" } else { "columns" };
+                let names = removed.iter().take(5).map(|name| format!("'{}'", name.escape_debug())).collect::<Vec<_>>().join(", ");
+                let more = if count > 5 { format!(" and {} more", count - 5) } else { String::new() };
+                source.saw_read_notes(&[format!("the replaced source no longer has {count} saved {columns}: {names}{more}").into()]);
+            }
+        }
+        self.install(Vec::new());
+        Ok(())
+    }
+
     /// The dataset, streamed, raster and time-following Zarr addresses used to read this layer
     /// again, in that order. Local paths are included; database origins stay password-free.
     pub fn addresses_mut(&mut self) -> impl Iterator<Item = &mut String> {
@@ -739,12 +780,19 @@ impl Layer {
                 Ok(fields) => {
                     let note = self.added_source_fields_note(&fields);
                     self.dataset.fields = fields;
-                    if let (Some(source), Some(note)) = (&mut self.source, note) {
-                        source.saw_read_notes(&[note]);
+                    if let Some(source) = &mut self.source {
+                        if source.schema_refused {
+                            source.clear_error();
+                            source.reread();
+                        }
+                        if let Some(note) = note {
+                            source.saw_read_notes(&[note]);
+                        }
                     }
                 }
                 Err(error) => {
                     if let Some(source) = &mut self.source {
+                        source.schema_refused = true;
                         source.error = Some(error);
                     }
                     self.install(Vec::new());
@@ -4208,6 +4256,22 @@ mod tests {
         let source = layer.source.as_ref().unwrap();
         assert!(source.error.as_deref().unwrap().contains("saved_old_name"));
         assert!(source.chunk_source().is_none(), "render traversal must honor the refusal");
+        // Reconciled saved fields recover at the same view, without a pan or reopen.
+        layer.dataset.fields[0].name = "rank".into();
+        layer.sync_source(&view, true);
+        assert_eq!(layer.dataset.features.len(), 1);
+        assert!(layer.source.as_ref().unwrap().error.is_none());
+        assert!(layer.source.as_ref().unwrap().chunk_source().is_some());
+        // An explicitly replaced source adopts its header, preserves matching aliases and
+        // names saved columns that disappeared; old window rows cannot survive the change.
+        layer.dataset.fields[0].alias = Some("Rank".into());
+        layer.dataset.fields.push(Field::new("gone", FieldType::Integer));
+        layer.refresh_replaced_source().unwrap();
+        assert!(layer.dataset.features.is_empty());
+        assert_eq!(layer.dataset.fields.len(), 1);
+        assert_eq!(layer.dataset.fields[0].alias.as_deref(), Some("Rank"));
+        let notes = layer.source.as_mut().unwrap().take_read_notes();
+        assert!(notes.iter().any(|n| n.contains("1 saved column") && n.contains("'gone'")), "{notes:?}");
         drop(layer);
         for extension in ["shp", "shx", "dbf", "prj", "cpg"] {
             let _ = std::fs::remove_file(path.with_extension(extension));
