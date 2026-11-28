@@ -1985,6 +1985,7 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
                     fit: LegendFit::Manual,
                     show_layer_names: LayerNames::Shown,
                     class_labels: Default::default(),
+                    show_counts: Default::default(),
                 },
             );
         }
