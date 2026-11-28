@@ -38,6 +38,26 @@ pub fn countries_url() -> String {
     format!("{API}/ALL/ADM0/")
 }
 
+/// The address of all countries available at a validated administrative level.
+pub fn level_url(level: &str) -> Result<String, String> {
+    Ok(format!("{API}/ALL/{}/", self::level(level)?))
+}
+
+/// Available countries at one level, with a unit count when the service supplies one.
+/// Reject malformed entries rather than interpreting an unreadable catalogue as absence.
+pub fn parse_availability(bytes: &[u8]) -> Result<std::collections::BTreeMap<String, Option<u64>>, String> {
+    let v: Value = serde_json::from_slice(bytes).map_err(|_| "the geoBoundaries list isn't JSON".to_string())?;
+    v.as_array()
+        .ok_or_else(|| "the geoBoundaries list isn't a list".to_string())?
+        .iter()
+        .map(|entry| {
+            let iso = country(entry.get("boundaryISO").and_then(Value::as_str).ok_or("missing country code")?)?;
+            let count = entry.get("admUnitCount").and_then(|n| n.as_u64().or_else(|| n.as_str()?.parse().ok()));
+            Ok((iso, count))
+        })
+        .collect()
+}
+
 /// A country's level, as the API describes it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Boundary {
@@ -100,6 +120,21 @@ fn direct(url: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn availability_keeps_counts_and_rejects_unreadable_catalogues() {
+        let list = br#"[{"boundaryISO":"PER","admUnitCount":"196"},{"boundaryISO":"CHE","admUnitCount":26},{"boundaryISO":"KEN"}]"#;
+        let parsed = parse_availability(list).unwrap();
+        assert_eq!(parsed.get("PER"), Some(&Some(196)));
+        assert_eq!(parsed.get("CHE"), Some(&Some(26)));
+        assert_eq!(parsed.get("KEN"), Some(&None));
+        assert!(!parsed.contains_key("NZL"));
+        assert!(parse_availability(b"{}").is_err());
+        assert!(parse_availability(br#"[{"boundaryName":"Peru"}]"#).is_err());
+        assert!(parse_availability(br#"[{"boundaryISO":"?"}]"#).is_err());
+        assert_eq!(level_url("3").unwrap(), format!("{API}/ALL/ADM3/"));
+        assert!(level_url("ADM6").is_err());
+    }
 
     #[test]
     fn requests_and_answers() {
