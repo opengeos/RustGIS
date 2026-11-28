@@ -183,6 +183,7 @@ const COMMAND_CAPABILITIES: &[(&str, CommandCheck)] = &[
     ("layout-text-statistics", command_uses_text_statistics),
     ("layout-publication-parts", command_sets_publication_parts),
     ("layout-publication-legend", command_sets_publication_legend),
+    ("shaded-relief-shadow-softness", command_sets_shadow_softness),
 ];
 
 /// A saved `layout.publication` that leaves out or sets up its grid, scale bar or north arrow
@@ -211,6 +212,17 @@ fn command_sets_publication_legend(id: &str, params: &Value) -> bool {
             params.get("legend").is_some_and(|v| !v.is_null() && v.as_object().is_none_or(|o| !o.values().all(nothing)))
         }
         "script.run" => params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, command_sets_publication_legend)),
+        _ => false,
+    }
+}
+
+/// A saved `raster.symbology` that sets a Shaded Relief's shadow softness (#3144): an older reader
+/// runs it without the key, saying nothing, so the shadows would be traced at the default disc.
+/// `null` asks for that default.
+fn command_sets_shadow_softness(id: &str, params: &Value) -> bool {
+    match id {
+        "raster.symbology" => params.get("shadowSoftness").is_some_and(|v| !v.is_null()),
+        "script.run" => params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, command_sets_shadow_softness)),
         _ => false,
     }
 }
@@ -294,11 +306,11 @@ fn command_uses_text_statistics(id: &str, params: &Value) -> bool {
         "presentation.mapPage" | "presentation.updatePage" => params.get("title").is_some_and(holds_statistic),
         // A layout file, read as `layout.import` reads it, which `report.existingTemplate` also does.
         "layout.import" | "report.existingTemplate" => imported_layout_uses(params, &STATISTIC_KEYS, text_statistics),
-        "presentation.import" => params
-            .get("text")
-            .and_then(Value::as_str)
+        "presentation.import" => crate::cmd::items::inline_text(params)
+            .ok()
+            .flatten()
             .filter(|t| STATISTIC_KEYS.iter().any(|key| t.contains(key)) || t.contains('\\'))
-            .and_then(|t| serde_json::from_str::<rustgis_map::presentation::Presentation>(t).ok())
+            .and_then(|t| serde_json::from_str::<rustgis_map::presentation::Presentation>(&t).ok())
             .is_some_and(|p| presentation_uses_text_statistics(&p)),
         "script.run" => params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, command_uses_text_statistics)),
         _ => false,
@@ -789,7 +801,7 @@ fn command_uses_chart_outline(id: &str, params: &Value) -> bool {
     }
 }
 
-/// Whether a `layout.import` carries its layout as `"text"` with an element `uses`: an older
+/// Whether a command carries its layout inline with an element `uses`: an older
 /// reader reads it without the keys it doesn't know. One read from a `"path"` is a layout file,
 /// whose own header requires what it uses (#2277). Every save asks, so a text with none of the
 /// feature's `keys` (a saved layout writes them only when set) isn't read through, unless it has a
@@ -799,14 +811,16 @@ fn imported_layout_uses(params: &Value, keys: &[&str], uses: fn(&rustgis_map::la
     imported_layout(params, keys).is_some_and(|l| l.elements.iter().any(uses))
 }
 
-/// A `layout.import`'s layout, read only when its text names one of `keys` (or escapes, which
-/// could hide one).
+/// The layout a command carries inline, read only when its text names one of `keys` (or escapes,
+/// which could hide one). `data` (base64) goes before `text`, as `report.existingTemplate` reads
+/// them; one it refuses is no layout. `data` is decoded for each check, rather than keeping it:
+/// only a step that carries it pays, and only on a save.
 fn imported_layout(params: &Value, keys: &[&str]) -> Option<rustgis_map::layout::Layout> {
-    params
-        .get("text")
-        .and_then(Value::as_str)
+    crate::cmd::items::inline_text(params)
+        .ok()
+        .flatten()
         .filter(|t| keys.iter().any(|key| t.contains(key)) || t.contains('\\'))
-        .and_then(|t| serde_json::from_str::<rustgis_map::layout::Layout>(t).ok())
+        .and_then(|t| serde_json::from_str::<rustgis_map::layout::Layout>(&t).ok())
 }
 
 /// Require only executable payloads being saved: graph files omit steps, web tools omit graphs.
@@ -977,6 +991,15 @@ fn relief_light(layer: &Layer) -> bool {
     )
 }
 
+/// Whether a layer sets how soft its Shaded Relief's cast shadows are (#3144): an older reader
+/// would trace them at the default and save the layer again without the setting.
+fn sets_shadow_softness(layer: &Layer) -> bool {
+    layer
+        .raster
+        .as_ref()
+        .is_some_and(|r| matches!(&r.style.renderer, RasterRenderer::ShadedRelief { shadow_softness, .. } if shadow_softness.is_some()))
+}
+
 /// Whether a layer is a window of a Zarr variable following the time slider (#1720): an older
 /// reader would drop the window and read the whole map at each step.
 fn zarr_window(layer: &Layer) -> bool {
@@ -1019,6 +1042,7 @@ fn layer_capabilities(layer: &Layer) -> Vec<&'static str> {
     [
         (relief_effects(layer), "shaded-relief-effects"),
         (relief_light(layer), "shaded-relief-light"),
+        (sets_shadow_softness(layer), "shaded-relief-shadow-softness"),
         (layer.size_by.is_some(), super::SIZE_BY_CAPABILITY),
         (layer.has_picture_markers(), "picture-markers"),
         (layer.any_picture(svg_picture), "svg-markers"),
@@ -1055,7 +1079,7 @@ fn map_capabilities<'a>(maps: impl IntoIterator<Item = &'a Map>) -> Vec<&'static
     let (mut polygon, mut svg) = (false, false);
     let (mut offline_area_id, mut paper, mut native, mut guided, mut weighed, mut cleared, mut deduped) =
         (false, false, false, false, false, false, false);
-    let (mut crisp, mut bed) = (false, false);
+    let (mut crisp, mut bed, mut soft) = (false, false, false);
     for map in maps {
         offline_area_id |= map.offline_area_id.is_some();
         // A blank basemap's paper colour (#2532), which an older reader would draw and save white.
@@ -1090,6 +1114,7 @@ fn map_capabilities<'a>(maps: impl IntoIterator<Item = &'a Map>) -> Vec<&'static
         }
         relief |= map.layers.iter().any(relief_effects);
         light |= map.layers.iter().any(relief_light);
+        soft |= map.layers.iter().any(sets_shadow_softness);
         sized |= map.layers.iter().any(|layer| layer.size_by.is_some());
         pictures |= map.layers.iter().any(Layer::has_picture_markers);
         svg |= map.layers.iter().any(|layer| layer.any_picture(svg_picture));
@@ -1110,6 +1135,7 @@ fn map_capabilities<'a>(maps: impl IntoIterator<Item = &'a Map>) -> Vec<&'static
         (walls_layer, "terrain-block-walls-layer"),
         (relief, "shaded-relief-effects"),
         (light, "shaded-relief-light"),
+        (soft, "shaded-relief-shadow-softness"),
         (legends, "normalized-legend-urls"),
         (sized, super::SIZE_BY_CAPABILITY),
         (pictures, "picture-markers"),
@@ -1592,6 +1618,9 @@ mod tests {
             (&["layout-text-statistics"], "layout.addElement", json!({"kind": "text", "text": "{count:Cities}"})),
             (&["layout-publication-parts"], "layout.publication", json!({"grid": "none"})),
             (&["layout-publication-legend"], "layout.publication", json!({"legend": "none"})),
+            (&["shaded-relief-shadow-softness"], "raster.symbology", json!({"type": "shadedRelief", "shadowSoftness": 1.5})),
+            // `null` is the default an older reader draws.
+            (&[], "raster.symbology", json!({"type": "shadedRelief", "shadowSoftness": null})),
             // An SVG image is a picture marker as well, in a node as in a saved command.
             (&["picture-markers", "svg-markers"], "layer.marker", json!({"image": svg})),
             (&[], "buffer", json!({"input": "Cities", "distance": 1})),
@@ -2273,6 +2302,10 @@ mod tests {
         let mut damaged = base["layouts"][0].clone();
         damaged["elements"][1]["kind"]["Legend"]["fit"] = json!("adjustFrame");
         damaged["elements"][1]["kind"]["Legend"]["show_layer_names"] = json!("no");
+        let data = |text: &str| {
+            use base64::Engine;
+            base64::engine::general_purpose::STANDARD.encode(text)
+        };
         for (id, params, required) in [
             ("layout.addElement", json!({"kind": "legend", "fit": "adjustSize"}), true),
             ("layout.addElement", json!({"kind": "legend", "showLayerNames": false, "fit": "shrink"}), true),
@@ -2294,6 +2327,20 @@ mod tests {
             // A report section's template is a layout file read as `layout.import` reads it.
             ("report.existingTemplate", json!({"text": saved["layouts"][0].to_string()}), true),
             ("report.existingTemplate", json!({"text": base["layouts"][0].to_string()}), false),
+            // It reads `data` (base64) before `text`.
+            ("report.existingTemplate", json!({"data": data(&saved["layouts"][0].to_string())}), true),
+            ("report.existingTemplate", json!({"data": data(&base["layouts"][0].to_string())}), false),
+            ("report.existingTemplate", json!({"data": "not base64"}), false),
+            (
+                "report.existingTemplate",
+                json!({"data": data(&saved["layouts"][0].to_string()), "text": base["layouts"][0].to_string()}),
+                true,
+            ),
+            (
+                "report.existingTemplate",
+                json!({"data": data(&base["layouts"][0].to_string()), "text": saved["layouts"][0].to_string()}),
+                false,
+            ),
         ] {
             // A scale bar's fit name is its details' to require, not this.
             let bar = params.get("fit") == Some(&json!("adjustWidth"));
@@ -3025,6 +3072,10 @@ mod tests {
         let base = with_text("{scale} {count:} {foo}");
         assert_eq!(base.get("requires"), None);
         let layout = saved["layouts"][0].to_string();
+        let data = {
+            use base64::Engine;
+            base64::engine::general_purpose::STANDARD.encode(&layout)
+        };
         for (id, params, required) in [
             ("layout.addElement", json!({"kind": "text", "text": "{sum:Sites:visits}"}), true),
             ("layout.addElement", json!({"kind": "text", "text": "{scale}"}), false),
@@ -3047,6 +3098,7 @@ mod tests {
             ("layout.import", json!({"text": layout}), true),
             // A report section's template is a layout file read as `layout.import` reads it.
             ("report.existingTemplate", json!({"text": layout}), true),
+            ("report.existingTemplate", json!({"data": data}), true),
         ] {
             let script = format!("{id} {params}");
             for value in [
@@ -3072,6 +3124,10 @@ mod tests {
         let blank_page = |title: &str| json!({"title": title, "kind": {"type": "blank", "text": "", "background": [255, 255, 255, 255]}});
         let presentation = |page: Value| json!({"name": "P", "width": 297, "height": 210, "pages": [page]}).to_string();
         let base = serde_json::to_value(Project::default()).unwrap();
+        let data = |title: &str| {
+            use base64::Engine;
+            base64::engine::general_purpose::STANDARD.encode(presentation(map_page(title)))
+        };
         for (page, required) in [(map_page("{count:Sites}"), true), (map_page("Sites"), false), (blank_page("{count:Sites}"), false)] {
             let mut document = base.clone();
             document["presentations"] = json!([{"name": "P", "width": 297, "height": 210, "pages": [page.clone()]}]);
@@ -3087,6 +3143,9 @@ mod tests {
             ("presentation.import", json!({"text": presentation(map_page("{count:Sites}"))}), true),
             ("presentation.import", json!({"text": presentation(map_page("Sites"))}), false),
             ("presentation.import", json!({"text": presentation(blank_page("{count:Sites}"))}), false),
+            // It reads `data` (base64) before `text`.
+            ("presentation.import", json!({"data": data("{count:Sites}")}), true),
+            ("presentation.import", json!({"data": data("Sites"), "text": presentation(map_page("{count:Sites}"))}), false),
         ] {
             let script = format!("{id} {params}");
             for value in [
@@ -3211,7 +3270,7 @@ mod tests {
         }))
         .unwrap();
         let clean = Layer::new_raster(1, "DEM", raster);
-        for field in ["shadow", "sky", "fill", "rock", "ambient", "balanced"] {
+        for field in ["shadow", "sky", "fill", "rock", "ambient", "balanced", "shadow_softness"] {
             let mut value = serde_json::to_value(&clean).unwrap();
             value["raster"]["style"]["renderer"]["ShadedRelief"][field] = match field {
                 "rock" => serde_json::to_value(rustgis_map::raster::Rock::DEFAULT).unwrap(),
@@ -3226,7 +3285,11 @@ mod tests {
                 json_bytes(&map_file_bytes(p.map()).unwrap()),
                 json_bytes(&layer_file_bytes(&layer).unwrap()),
             ] {
-                let needs = if matches!(field, "ambient" | "balanced") { "shaded-relief-light" } else { "shaded-relief-effects" };
+                let needs = match field {
+                    "ambient" | "balanced" => "shaded-relief-light",
+                    "shadow_softness" => "shaded-relief-shadow-softness",
+                    _ => "shaded-relief-effects",
+                };
                 assert_eq!(document["requires"], json!([needs]), "{field}: {document}");
             }
         }
