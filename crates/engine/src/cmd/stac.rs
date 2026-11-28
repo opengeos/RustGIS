@@ -794,7 +794,14 @@ thread_local! {
     /// For tests: the values a piece holds at most, in place of [`super::cube::MAX_VALUES`], so a
     /// small cube is read in several pieces.
     pub(crate) static PIECE_VALUES: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+    /// For tests: the dates read at once, in place of [`STAC_READERS`], so one at a time reads
+    /// them in turn.
+    pub(crate) static READERS: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
 }
+
+/// For tests: the band files a STAC cube read the values of, by address, in the order read.
+#[cfg(test)]
+pub(crate) static BANDS_READ: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 
 /// A STAC collection's band as a data cube for `cube.trend` (#579): each date's files (a grid
 /// tile each, MODIS's h13v09 and h13v10 for one date), read in place from their tiled GeoTIFFs
@@ -1199,6 +1206,10 @@ impl super::cube::TimeCube for StacCube {
         Some((self.width as usize, self.height as usize))
     }
     fn readers(&self) -> usize {
+        #[cfg(test)]
+        if let Some(n) = READERS.with(std::cell::Cell::get) {
+            return n;
+        }
         STAC_READERS
     }
     fn nothing_read(&self) -> Option<String> {
@@ -1312,6 +1323,33 @@ impl super::cube::TimeCube for StacCube {
     /// scaled as its metadata says, a cell the mean of the pixels read in it (one, or a block of
     /// the full images'); a cell no file covers (or none has a value for) is NaN.
     fn slice_of(&self, i: usize, piece: usize) -> Result<Option<(std::sync::Arc<rustgis_data::raster::Raster>, usize)>, String> {
+        self.read_slice(i, piece, None)
+    }
+    /// As [`slice_of`](Self::slice_of), but an item whose pixels the mask lets through (all of
+    /// them, unmasked) all fall in `decided` cells isn't read past its mask: its bands' windows
+    /// couldn't change a cell. One with pixels its mask file doesn't cover is read, so those are
+    /// said as ever; the pixels with a value in only some of the bands are counted over the items
+    /// read (a skipped item's lie in cells a better date filled).
+    fn first_slice_of(
+        &self,
+        i: usize,
+        piece: usize,
+        decided: &(dyn Fn(usize) -> bool + Sync),
+    ) -> Result<Option<(std::sync::Arc<rustgis_data::raster::Raster>, usize)>, String> {
+        self.read_slice(i, piece, Some(decided))
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl StacCube {
+    /// [`TimeCube::slice_of`](super::cube::TimeCube::slice_of), or with `decided`
+    /// [`TimeCube::first_slice_of`](super::cube::TimeCube::first_slice_of).
+    fn read_slice(
+        &self,
+        i: usize,
+        piece: usize,
+        decided: Option<&(dyn Fn(usize) -> bool + Sync)>,
+    ) -> Result<Option<(std::sync::Arc<rustgis_data::raster::Raster>, usize)>, String> {
         use crate::render::rustgis_tiles::cog;
         let files = self.files.get(i).ok_or_else(|| format!("no date {i}"))?;
         let top = u32::try_from(piece).ok().and_then(|p| p.checked_mul(self.rows)).filter(|t| *t < self.height).ok_or("no such piece")?;
@@ -1370,10 +1408,28 @@ impl super::cube::TimeCube for StacCube {
                 (Some(_), None) => return Err(crate::sources::message_with_address(href, "has no quality band to mask its cells by")),
                 _ => None,
             };
+            let across = (fc1 - fc0) as usize;
+            // The piece's cell of the window's pixel `i`.
+            let cell_of = |i: usize| {
+                let row = ((fr0 - dy - top_f) as usize + i / across) / f as usize;
+                let col = ((fc0 - dx) as usize + i % across) / f as usize;
+                row * w as usize + col
+            };
+            // First: an item that could fill no cell (each pixel the mask lets through falls in one
+            // holding a better date's value) isn't read; one with pixels its mask doesn't cover
+            // is, so they are counted and said as they would be.
+            if let Some(decided) = decided
+                && !keep.as_ref().is_some_and(|k| k.iter().any(Option::is_none))
+            {
+                let pixels = across * (fr1 - fr0) as usize;
+                let lets = |i: usize| keep.as_ref().is_none_or(|k| k.get(i).copied().flatten() == Some(true));
+                if !(0..pixels).any(|i| lets(i) && !decided(cell_of(i))) {
+                    continue;
+                }
+            }
             // The item's pixels with a value that the mask file doesn't cover, and those with a value
             // in only some of the bands asked for.
             let mut outside = 0u64;
-            let across = (fc1 - fc0) as usize;
             let mut partial = 0u64;
             let bands = std::iter::once((href, scale, fill)).chain(more.iter().map(|(h, s, f)| (h, s, f)));
             // Every band's window is read before any pixel goes in, so a cell's bands are the mean of
@@ -1398,6 +1454,10 @@ impl super::cube::TimeCube for StacCube {
                     }
                     cog::read_values_blocking(&bi, bh, self.level, 0, cols, rows)?
                 };
+                #[cfg(test)]
+                if let Ok(mut read) = BANDS_READ.lock() {
+                    read.push(bh.clone());
+                }
                 reads.push((read, fill, (*k, *o)));
             }
             let pixels = reads.iter().map(|(r, ..)| r.len()).min().unwrap_or(0);
@@ -1423,10 +1483,7 @@ impl super::cube::TimeCube for StacCube {
                     partial += 1;
                     continue;
                 }
-                let (r, c) = (i / across, i % across);
-                let row = ((fr0 - dy - top_f) as usize + r) / f as usize;
-                let col = ((fc0 - dx) as usize + c) / f as usize;
-                let cell = row * w as usize + col;
+                let cell = cell_of(i);
                 for ((read, _, (k, o)), (sum, count)) in reads.iter().zip(sums.iter_mut().zip(&mut counts)) {
                     if let (Some(s), Some(n)) = (sum.get_mut(cell), count.get_mut(cell)) {
                         *s += f64::from(read[i]) * k + o;
