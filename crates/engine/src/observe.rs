@@ -111,7 +111,7 @@ impl Observation {
     }
 
     /// A monitored source at its linked path, with the companions its reader reads or sizes: a
-    /// Shapefile's lowercase `.dbf`, `.shx` and `.prj` and every ASCII-case `.cpg`
+    /// Shapefile's lowercase `.dbf`, `.shx` and `.prj` and every ASCII-case `.cpg` and `.cst`
     /// (`rustgis_data::dbf`), a MapInfo file's `.mid` (`rustgis_data::io`), a SQLite file's
     /// `-wal` and `-journal`, or a DuckDB database's `.wal` (commits not yet checkpointed, as the
     /// DuckDB conversion's cache key counts them). A missing source is
@@ -121,7 +121,10 @@ impl Observation {
         let primary = FileRevision::read(path, Presence::Optional, "source")?;
         let mut companions = Vec::new();
         if has_extension(path, &["shp"]) {
-            for ext in ["dbf", "shx", "prj", "cpg", "CPG", "Cpg", "cPg", "cpG", "CPg", "CpG", "cPG"] {
+            for ext in [
+                "dbf", "shx", "prj", "cpg", "CPG", "Cpg", "cPg", "cpG", "CPg", "CpG", "cPG", "cst", "CST", "Cst", "cSt", "csT", "CSt",
+                "CsT", "cST",
+            ] {
                 companions.push(FileRevision::read(&path.with_extension(ext), Presence::Optional, "source")?);
             }
         } else if has_extension(path, &["mif"]) {
@@ -217,7 +220,7 @@ mod tests {
     #[test]
     fn shapefile_and_mapinfo_components_the_reader_opens_are_observed() {
         let dir = dir("components");
-        for (main, exts) in [("roads.shp", &["dbf", "shx", "prj", "cpg", "CPG"][..]), ("roads.mif", &["mid"][..])] {
+        for (main, exts) in [("roads.shp", &["dbf", "shx", "prj", "cpg", "CPG", "cst", "CsT"][..]), ("roads.mif", &["mid"][..])] {
             let main = dir.join(main);
             std::fs::write(&main, b"shapes").unwrap();
             let path = main.display().to_string();

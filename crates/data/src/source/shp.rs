@@ -1,4 +1,4 @@
-//! Shapefiles read in place: a large `.shp` with its `.dbf`, `.prj` and `.cpg`, a view at a time.
+//! Shapefiles read in place: a large `.shp` with its `.dbf`, `.prj` and code-page declaration, a view at a time.
 //!
 //! Opening builds or reuses a disk-backed R-tree and record directory. Queries use a bounded
 //! SQLite page cache, then read matching shapes and `.dbf` rows by their offsets.
@@ -127,7 +127,7 @@ const BUFFER: usize = 1 << 20;
 const MAX_RECORD: u64 = crate::io::BYTES_FLOOR;
 
 impl ShpSource {
-    /// Opens `path` (the `.shp`) with the `.dbf` and optional `.prj` and `.cpg` beside it.
+    /// Opens `path` (the `.shp`) with the `.dbf` and optional `.prj`, `.cpg` and `.cst` beside it.
     pub fn open_path(path: &Path, name: &str) -> Result<ShpSource> {
         Self::open_path_in(path, name, None)
     }
@@ -146,8 +146,8 @@ impl ShpSource {
         let stamps = [Stamp::of(path), Stamp::of(&dbf)];
         let mut notes = crate::loss::Notes::new();
         let table = read_table(&dbf)?;
-        let cpg = crate::dbf::read_cpg(path, &mut notes);
-        let encoding = crate::dbf::encoding(cpg.as_deref(), table.ldid, &mut notes);
+        let (cpg, cst) = crate::dbf::read_sidecars(path, &mut notes);
+        let (encoding, _) = crate::dbf::encoding(cpg.as_deref(), cst.as_deref(), table.ldid, &mut notes);
         let shp_len = std::fs::metadata(path)?.len();
         if shp_len > u64::from(u32::MAX) {
             return Err(bad("the .shp is larger than the format's 4 GB"));

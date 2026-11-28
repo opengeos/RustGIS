@@ -5,7 +5,7 @@
 use serde::{Deserialize, Serialize};
 
 /// The files of a source as they were at a moment: each one's name, size and SHA-256 hash, and
-/// the files that weren't there. A Shapefile is its `.shp`, `.shx`, `.dbf`, `.prj` and `.cpg`
+/// the files that weren't there. A Shapefile is its `.shp`, `.shx`, `.dbf`, `.prj`, `.cpg` and `.cst`
 /// (the ones its reader opens); a GeoJSON file is itself. Only the contents count: a file
 /// copied, touched or moved to another disk with the same bytes is the same file.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -179,7 +179,7 @@ mod native {
 
     /// The files of the source at `path`, each as a name beside it and its path: for a
     /// Shapefile the companions its reader opens (the `.cpg` in whichever case is there, else
-    /// `.cpg`), otherwise the file alone.
+    /// `.cpg`, plus its `.cst` when present), otherwise the file alone.
     fn parts(path: &Path) -> Vec<(String, PathBuf)> {
         let mut paths = vec![path.to_path_buf()];
         if path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("shp")) {
@@ -191,6 +191,7 @@ mod native {
                 .find(|p| p.is_file())
                 .unwrap_or_else(|| path.with_extension("cpg"));
             paths.push(cpg);
+            paths.extend(crate::dbf::CST_SPELLINGS.into_iter().map(|e| path.with_extension(e)).find(|p| p.is_file()));
         }
         paths.into_iter().map(|p| (p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), p)).collect()
     }
@@ -297,7 +298,7 @@ mod native {
         pub fn changed(&self, path: &Path) -> Result<Vec<String>> {
             let now = parts(path);
             let mut changed = Vec::new();
-            // Files there now that the record lacks (a `.cpg` added in another case); not the
+            // Files there now that the record lacks (an added encoding declaration); not the
             // `.cpg` name `parts` falls back to when there is none.
             for (name, p) in &now {
                 if !self.files.iter().any(|(n, _)| n == name) && p.exists() {

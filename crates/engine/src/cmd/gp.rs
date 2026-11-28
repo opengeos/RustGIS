@@ -2559,7 +2559,7 @@ fn is_folder_target_ext(ext: &str) -> bool {
 /// Whether a file with this lowercase extension may be a Shapefile or GeoPackage sidecar.
 #[cfg(not(target_arch = "wasm32"))]
 fn is_folder_sidecar_ext(ext: &str) -> bool {
-    matches!(ext, "dbf" | "shx" | "prj" | "cpg" | "qpj" | "sbn" | "sbx" | "qix" | "xml" | "gpkg-wal" | "gpkg-shm" | "wal" | "shm")
+    matches!(ext, "dbf" | "shx" | "prj" | "cpg" | "cst" | "qpj" | "sbn" | "sbx" | "qix" | "xml" | "gpkg-wal" | "gpkg-shm" | "wal" | "shm")
 }
 
 /// Runs a geoprocessing tool in batch across multiple layers or files: under the control of the
@@ -2831,7 +2831,7 @@ pub fn run_batch_with(s: &mut Session, p: &Value, control: &std::sync::Arc<rustg
                 continue;
             }
             let stem = path.file_stem().and_then(|stem| stem.to_str()).unwrap_or("").to_ascii_lowercase();
-            let is_shp_sidecar = (matches!(ext.as_str(), "dbf" | "shx" | "prj" | "cpg" | "qpj" | "sbn" | "sbx" | "qix")
+            let is_shp_sidecar = (matches!(ext.as_str(), "dbf" | "shx" | "prj" | "cpg" | "cst" | "qpj" | "sbn" | "sbx" | "qix")
                 && shp_stems.contains(&stem))
                 || (ext == "xml" && stem.strip_suffix(".shp").map(|s| shp_stems.contains(s)).unwrap_or(false));
             let is_gpkg_sidecar = matches!(ext.as_str(), "gpkg-wal" | "gpkg-shm" | "wal" | "shm")
@@ -4052,7 +4052,7 @@ fn names_file(source: &str, destination: &std::path::Path) -> bool {
     }
     let shapefile = source.extension().is_some_and(|e| e.eq_ignore_ascii_case("shp"));
     let companion = |ext: &str| source.with_extension(ext).canonicalize().is_ok_and(|p| p.as_path() == destination);
-    shapefile && ["dbf", "shx", "prj", "cpg"].iter().any(|&ext| companion(ext) || companion(ext.to_ascii_uppercase().as_str()))
+    shapefile && ["dbf", "shx", "prj", "cpg", "cst"].iter().any(|&ext| companion(ext) || companion(ext.to_ascii_uppercase().as_str()))
 }
 
 /// Adds a tool's table to the project under its name: in place of a table of that name, or, for

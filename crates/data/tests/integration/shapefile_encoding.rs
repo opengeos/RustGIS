@@ -82,7 +82,7 @@ const NO_OTHER_ENCODING: &str = "no .cpg file names another encoding RustGIS rea
 fn cause(encoding: &str) -> String {
     match encoding {
         "UTF-8" => NO_OTHER_ENCODING.to_string(),
-        other => format!("the .cpg or the .dbf's language driver declares {other}"),
+        other => format!("the .cpg, .cst or the .dbf's language driver declares {other}"),
     }
 }
 

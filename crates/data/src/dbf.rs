@@ -3,7 +3,7 @@
 use encoding_rs as rs;
 use shapefile::dbase::{CodePageMark, UnicodeLossy, encoding::DynEncoding};
 
-const MAX_CPG_BYTES: usize = 1024;
+const MAX_CODE_PAGE_BYTES: usize = 1024;
 
 /// Keep the selection thread-safe; dbase's dynamic decoder is created per read because it
 /// is `Send` but not `Sync`, whereas feature sources can be shared between readers.
@@ -141,21 +141,23 @@ fn ldid_code_page(ldid: u8) -> Option<u16> {
     })
 }
 
-pub(crate) fn encoding(cpg: Option<&[u8]>, ldid: u8, notes: &mut crate::loss::Notes) -> DbfEncoding {
-    if let Some(bytes) = cpg {
-        let label = if bytes.len() <= MAX_CPG_BYTES { std::str::from_utf8(bytes).unwrap_or("") } else { "" };
-        let label = label.trim().trim_start_matches('\u{feff}').trim();
-        if let Some(encoding) = DbfEncoding::from_name(label) {
-            return encoding;
-        }
+/// Reads the first usable declaration in order. The flag says whether Publish to Source can
+/// write with the same selection, subject to its separate round-trip checks.
+pub(crate) fn encoding(cpg: Option<&[u8]>, cst: Option<&[u8]>, ldid: u8, notes: &mut crate::loss::Notes) -> (DbfEncoding, bool) {
+    if let Some(encoding) = sidecar_encoding(cpg) {
+        return (encoding, true);
     }
-    // A `.cpg` that can't be used: the file's own language driver gives the encoding, and then
-    // nothing is assumed; without one it is UTF-8, assumed. One that names a code page RustGIS
-    // can't read is said below, as assumed, on its own.
-    let page = (ldid != 0).then(|| ldid_code_page(ldid)).flatten();
+    if let Some(encoding) = sidecar_encoding(cst) {
+        if cpg.is_some() {
+            notes.push("Shapefile: unsupported or empty .cpg");
+        }
+        notes.push(format!("Shapefile: code page taken from the .cst ({})", encoding.name()));
+        return (encoding, true);
+    }
+    let page = ldid_code_page(ldid);
     let resolved = page.and_then(DbfEncoding::from_number);
-    if cpg.is_some() {
-        let text = "Shapefile: unsupported or empty .cpg; using the .dbf code page, or UTF-8 if unavailable";
+    for ext in [cpg.map(|_| "cpg"), cst.map(|_| "cst")].into_iter().flatten() {
+        let text = format!("Shapefile: unsupported or empty .{ext}; using the .dbf code page, or UTF-8 if unavailable");
         notes.push(if ldid == 0 {
             crate::loss::Note::loss(crate::loss::LossCode::AssumedEncoding, text)
         } else {
@@ -164,10 +166,11 @@ pub(crate) fn encoding(cpg: Option<&[u8]>, ldid: u8, notes: &mut crate::loss::No
     }
     // No language driver: UTF-8, as it always was, without a note.
     if ldid == 0 {
-        return DbfEncoding::Utf8;
+        return (DbfEncoding::Utf8, cpg.is_none() && cst.is_none());
     }
     if let Some(encoding) = resolved {
-        return encoding;
+        // Preserve the publish refusal for an unusable .cpg when there is no usable .cst.
+        return (encoding, cpg.is_none());
     }
     let named = page.map_or_else(String::new, |p| match page_name(p) {
         Some(name) => format!(" (code page {p}, {name})"),
@@ -177,7 +180,14 @@ pub(crate) fn encoding(cpg: Option<&[u8]>, ldid: u8, notes: &mut crate::loss::No
         crate::loss::LossCode::AssumedEncoding,
         format!("Shapefile: unsupported .dbf code page 0x{ldid:02X}{named}; using UTF-8"),
     ));
-    DbfEncoding::Utf8
+    (DbfEncoding::Utf8, false)
+}
+
+/// A label small enough to be a declaration, in one of the code pages a DBF can use.
+pub(crate) fn sidecar_encoding(bytes: Option<&[u8]>) -> Option<DbfEncoding> {
+    let bytes = bytes.filter(|b| b.len() <= MAX_CODE_PAGE_BYTES)?;
+    let label = std::str::from_utf8(bytes).ok()?.trim().trim_start_matches('\u{feff}').trim();
+    DbfEncoding::from_name(label)
 }
 
 /// The name of a code page a language driver may name and RustGIS can't decode, for the note.
@@ -203,7 +213,11 @@ pub(crate) const NO_OTHER_ENCODING: &str = "no .cpg file names another encoding 
 /// The end of each note of text that isn't valid in `encoding`: for UTF-8, why the text was read as
 /// it ([`NO_OTHER_ENCODING`]); for another, that the file declares it.
 pub(crate) fn cause(encoding: &str) -> String {
-    if encoding == "UTF-8" { NO_OTHER_ENCODING.to_string() } else { format!("the .cpg or the .dbf's language driver declares {encoding}") }
+    if encoding == "UTF-8" {
+        NO_OTHER_ENCODING.to_string()
+    } else {
+        format!("the .cpg, .cst or the .dbf's language driver declares {encoding}")
+    }
 }
 
 /// What opening a `.dbf` says of its field names that aren't valid in its `encoding` ([`not_utf8`]),
@@ -432,31 +446,33 @@ pub(crate) fn date(field: &[u8]) -> std::result::Result<Option<crate::date::Date
 }
 
 /// A code-page label should be a few bytes. Bound reads even for a hostile sidecar.
-pub(crate) fn read_cpg(path: &std::path::Path, notes: &mut crate::loss::Notes) -> Option<Vec<u8>> {
-    match try_read_cpg(path) {
+fn read_code_page(path: &std::path::Path, spellings: [&str; 8], notes: &mut crate::loss::Notes) -> Option<Vec<u8>> {
+    match try_read_code_page(path, spellings) {
         Ok(bytes) => bytes,
         Err(e) => {
-            // Why it can't be used; what the encoding falls back to, and whether that is assumed,
-            // is said with the `.dbf`'s code page in hand ([`encoding`]), as for one that can't be.
-            notes.push(crate::loss::Note::plain(format!("could not read the .cpg ({e})")));
+            // The selection reports the fallback as it does for an unusable declaration.
+            notes.push(crate::loss::Note::plain(format!("could not read the .{} ({e})", spellings[0])));
             Some(Vec::new())
         }
     }
 }
 
-/// Every ASCII case of the `.cpg` extension, the conventional spellings first: tried in turn,
+/// Every ASCII case of the extension, the conventional spellings first: tried in turn,
 /// without scanning a potentially large directory, and the first there wins.
 pub(crate) const CPG_SPELLINGS: [&str; 8] = ["cpg", "CPG", "Cpg", "cPg", "cpG", "CPg", "CpG", "cPG"];
+pub(crate) const CST_SPELLINGS: [&str; 8] = ["cst", "CST", "Cst", "cSt", "csT", "CSt", "CsT", "cST"];
 
-fn try_read_cpg(path: &std::path::Path) -> std::io::Result<Option<Vec<u8>>> {
+/// Reads at most one byte more than a label can hold, so oversized declarations stay unusable.
+pub(crate) fn try_read_code_page(path: &std::path::Path, spellings: [&str; 8]) -> std::io::Result<Option<Vec<u8>>> {
     use std::io::Read;
-    for ext in CPG_SPELLINGS {
-        match crate::provenance::open(path.with_extension(ext)) {
+    for ext in spellings {
+        let part = path.with_extension(ext);
+        match crate::provenance::open(&part) {
             Ok(file) => {
                 let mut bytes = Vec::new();
-                (&file).take(MAX_CPG_BYTES as u64 + 1).read_to_end(&mut bytes)?;
-                if bytes.len() <= MAX_CPG_BYTES {
-                    crate::provenance::buffer(&path.with_extension(ext), &file, &bytes);
+                (&file).take(MAX_CODE_PAGE_BYTES as u64 + 1).read_to_end(&mut bytes)?;
+                if bytes.len() <= MAX_CODE_PAGE_BYTES {
+                    crate::provenance::buffer(&part, &file, &bytes);
                 }
                 return Ok(Some(bytes));
             }
@@ -465,6 +481,14 @@ fn try_read_cpg(path: &std::path::Path) -> std::io::Result<Option<Vec<u8>>> {
         }
     }
     Ok(None)
+}
+
+/// Reads encoding sidecars beside a Shapefile or DBF. Only a missing or unusable .cpg needs
+/// the fallback .cst.
+pub(crate) fn read_sidecars(path: &std::path::Path, notes: &mut crate::loss::Notes) -> (Option<Vec<u8>>, Option<Vec<u8>>) {
+    let cpg = read_code_page(path, CPG_SPELLINGS, notes);
+    let cst = if sidecar_encoding(cpg.as_deref()).is_none() { read_code_page(path, CST_SPELLINGS, notes) } else { None };
+    (cpg, cst)
 }
 
 #[cfg(test)]
@@ -600,14 +624,14 @@ mod tests {
     #[test]
     fn a_page_rustgis_cant_decode_is_named_in_the_note() {
         let mut notes = crate::loss::Notes::new();
-        assert!(matches!(encoding(None, 0x6C, &mut notes), DbfEncoding::Utf8));
+        assert!(matches!(encoding(None, None, 0x6C, &mut notes), (DbfEncoding::Utf8, false)));
         assert_eq!(
             notes.texts().collect::<Vec<_>>(),
             ["Shapefile: unsupported .dbf code page 0x6C (code page 863, DOS French Canadian); using UTF-8"]
         );
         assert_eq!(notes[0].loss, Some(crate::loss::LossCode::AssumedEncoding));
         let mut notes = crate::loss::Notes::new();
-        encoding(None, 0xFF, &mut notes);
+        encoding(None, None, 0xFF, &mut notes);
         assert_eq!(notes.texts().collect::<Vec<_>>(), ["Shapefile: unsupported .dbf code page 0xFF; using UTF-8"]);
         assert_eq!(notes[0].loss, Some(crate::loss::LossCode::AssumedEncoding));
     }
@@ -616,7 +640,7 @@ mod tests {
     /// and with a code page that can't be decoded; a code page that is decoded is named by it.
     #[test]
     fn utf8_is_what_text_is_read_as_unless_another_encoding_is_named() {
-        let read = |cpg: Option<&[u8]>, ldid| encoding(cpg, ldid, &mut crate::loss::Notes::new()).name();
+        let read = |cpg: Option<&[u8]>, ldid| encoding(cpg, None, ldid, &mut crate::loss::Notes::new()).0.name();
         for (cpg, ldid) in [(None, 0), (None, 0xF0), (Some(b"UTF-8".as_slice()), 0x03), (Some(b"65001".as_slice()), 0), (None, 0x6C)] {
             assert_eq!(read(cpg, ldid), "UTF-8");
         }
@@ -634,7 +658,7 @@ mod tests {
     /// aren't. A DOS page gives every byte a character.
     #[test]
     fn bytes_that_cant_be_read_are_those_the_declared_decoder_replaces() {
-        let page = |cpg: &[u8]| encoding(Some(cpg), 0, &mut crate::loss::Notes::new());
+        let page = |cpg: &[u8]| encoding(Some(cpg), None, 0, &mut crate::loss::Notes::new()).0;
         let (sjis, big5, utf8) = (page(b"932"), page(b"950"), page(b"UTF-8"));
         assert!(sjis.malformed(b"X\x82") && sjis.malformed(b"\x82 ") && sjis.malformed(b"\xff"));
         assert!(!sjis.malformed(b"\x93\x8c\x8b\x9e") && !sjis.malformed(b"plain") && !sjis.malformed(b""));
@@ -708,7 +732,7 @@ mod tests {
         assert_eq!(
             not_utf8_names_note(&[1], "Big5").as_ref().map(crate::loss::Note::as_str),
             Some(
-                "Shapefile: 1 field name isn't valid Big5 and was read with U+FFFD in place of the bytes that can't be read, in field 1; the .cpg or the .dbf's language driver declares Big5"
+                "Shapefile: 1 field name isn't valid Big5 and was read with U+FFFD in place of the bytes that can't be read, in field 1; the .cpg, .cst or the .dbf's language driver declares Big5"
             )
         );
     }
