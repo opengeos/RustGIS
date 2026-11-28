@@ -780,8 +780,20 @@ pub(crate) struct BandRun {
     pub thickness: f64,
 }
 
-/// The top band's stretches along each side of a block's outline, in [`Block::side`]'s order.
-pub(crate) type Bands = Vec<Vec<BandRun>>;
+/// The top band's stretches along each side of a block's outline, in [`Block::side`]'s order
+/// (through `Deref`), and the name of the layer they come from, for what is said of them.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Bands {
+    pub layer: String,
+    pub sides: Vec<Vec<BandRun>>,
+}
+
+impl std::ops::Deref for Bands {
+    type Target = Vec<Vec<BandRun>>;
+    fn deref(&self) -> &Self::Target {
+        &self.sides
+    }
+}
 
 /// The band along the top of the walls of block `b` on `map` (#2607), when they have a top layer
 /// (`TerrainBlock::walls_top`, taken as [`crate::terrain::walls_layer`] takes the walls' layer):
@@ -795,7 +807,7 @@ pub(crate) type Bands = Vec<Vec<BandRun>>;
 /// The pieces are cut, and kept, as the walls' are ([`layer_cut`]).
 pub(crate) fn band_runs(map: &Map, b: &Block, ground: &Ground, scale: f64, env: &rustgis_data::query::Env) -> Bands {
     use rustgis_map::view::BandThickness;
-    let none = || vec![Vec::new(); b.sides()];
+    let none = || Bands { layer: String::new(), sides: vec![Vec::new(); b.sides()] };
     let top = map.view.terrain.as_ref().and_then(|t| t.block.as_ref()).and_then(|t| t.walls_top.as_ref());
     let Some((layer, top)) = top.and_then(|t| crate::terrain::walls_layer(map, &t.layer).map(|l| (l, t))) else {
         return none();
@@ -840,7 +852,7 @@ pub(crate) fn band_runs(map: &Map, b: &Block, ground: &Ground, scale: f64, env: 
         }
         out
     };
-    let bands = cut.units.iter().map(&mut side_bands).collect();
+    let bands = Bands { layer: layer.name.clone(), sides: cut.units.iter().map(&mut side_bands).collect() };
     if !plain.is_empty() {
         crate::approximations::band_left_plain(&layer.name, plain.len());
     }
@@ -1567,7 +1579,8 @@ pub(crate) fn draw_walls(
     // outlines are, once all its sides are filled ([`draw_bands`]); and whether it stopped at the
     // base anywhere.
     let (mut band_fills, mut band_lines): (Vec<(tiny_skia::Path, Rgba)>, Vec<(tiny_skia::Path, Rgba)>) = (Vec::new(), Vec::new());
-    let mut band_at_base = false;
+    // How many of the band's stretches stop at the base, said once with the layer.
+    let mut band_at_base = 0usize;
     // Where a side's band meets its neighbour's in its own colour: no contact there.
     let side_ends = |i: usize| {
         let (key, a, z) = b.side(i);
@@ -1822,7 +1835,7 @@ pub(crate) fn draw_walls(
         // a quad a stretch as the wall's (a hair longer each way), outlined along the ground and
         // its foot, and across it at its ends: a contact with another class or the bare rock. At
         // the ends of a side, where the walls' outline goes down the corner (a box's corners, a
-        // polygon block's sharp ones, round 5), always: the band's fill would hide that line,
+        // polygon block's sharp ones), always: the band's fill would hide that line,
         // drawn before it; elsewhere only where the neighbour's band isn't there in its colour and
         // thickness.
         let ((lo_end, hi_end), (prev, next)) = (side_ends(s), b.neighbours(s));
@@ -1863,7 +1876,7 @@ pub(crate) fn draw_walls(
                 // The ground's edge over `t`, on the screen line from `ta` to `tz` the wall is drawn
                 // to: in a turned view the stretch's ends lie at different depths, so the ground's
                 // point `t` along the stretch is not `t` along that line, and the band's contacts
-                // would lean away from their feet (round 2).
+                // would lean away from their feet.
                 let seen = |t: f64| {
                     let (u, v) = lerp((ra.0, ra.1), (rz.0, rz.1), t);
                     cam.project_raised(u, v, ra.2 + (rz.2 - ra.2) * t, w, h)
@@ -1883,8 +1896,10 @@ pub(crate) fn draw_walls(
                 // The band's foot `t` along the stretch: its thickness under the ground's edge
                 // drawn there, never below the base. That edge is the mesh's (`ta` to `tz`), which
                 // can stand off the ground read at the stretch's ends, and the ground inside the
-                // stretch off both (rounds 4 and 5): its height is read through its screen point
+                // stretch off both: its height is read through its screen point
                 // ([`up_through`]), from the line's between the ends there.
+                // Whether this stretch of the band stops at the base anywhere.
+                let mut at_base = false;
                 let mut under = |t: f64| {
                     let m = Coord::new(ends[0].x + (ends[1].x - ends[0].x) * t, ends[0].y + (ends[1].y - ends[0].y) * t);
                     let (gu, gv) = cam.ground_px(m);
@@ -1897,8 +1912,8 @@ pub(crate) fn draw_walls(
                     let (line, top) = (ra.2 + (rz.2 - ra.2) * t, top_at(t));
                     let edge = up_through(&cam, (gu, gv), line, top, (w, h, k));
                     let (foot, base) = (edge - run.thickness / per, b.base / per);
-                    band_at_base |= foot < base;
-                    // Never over the top on screen, whatever the heights (round 8): where it would
+                    at_base |= foot < base;
+                    // Never over the top on screen, whatever the heights: where it would
                     // stand up the vertical from the top, it is the top.
                     let (Some(p), Some(q), Some(at)) = (seen_up(line), seen_up(line - 1.0), seen_up(foot.max(base))) else {
                         return None;
@@ -1909,12 +1924,12 @@ pub(crate) fn draw_walls(
                 };
                 let (Some((ba, over_a)), Some((bz, over_z))) = (under(t0), under(t1)) else { continue };
                 // Where the foot meets the base inside the stretch, it bends there: along the base
-                // on one side, rising from it on the other, not straight across over the rock
-                // (round 6).
+                // on one side, rising from it on the other, not straight across over the rock.
                 let bend = ((over_a < 0.0) != (over_z < 0.0))
                     .then(|| t0 + (t1 - t0) * over_a / (over_a - over_z))
                     .and_then(&mut under)
                     .map(|(p, _)| p);
+                band_at_base += usize::from(at_base);
                 let (ta2, tz2) = (top_at(t0), top_at(t1));
                 let foot = match bend {
                     Some(c) => vec![grow(bz, c), pt(c), grow(ba, c)],
@@ -2103,8 +2118,8 @@ pub(crate) fn draw_walls(
     }
     stroke_outlines(pm, &mut outlines, k);
     draw_bands(pm, &mut band_fills, &mut band_lines, k);
-    if band_at_base {
-        crate::approximations::band_at_base();
+    if band_at_base > 0 {
+        crate::approximations::band_at_base(&bands.layer, band_at_base);
     }
     draw_water(pm, &mut waters, k);
 }
@@ -2114,7 +2129,7 @@ pub(crate) fn draw_walls(
 /// read along the vertical's line on screen (the part of `at` across it left out) from its
 /// points at `near` and a pixel of height either side. A vertical's heights and its points' places
 /// along that line match by a projective map, which keeps cross-ratios, so the height is exact
-/// (round 8), not a straight-line estimate's. `near` where it can't be told.
+/// (a straight-line estimate is off where `near` stands far from it). `near` where it can't be told.
 fn up_through(cam: &rustgis_map::Camera, (u, v): (f64, f64), near: f64, at: (f64, f64), (w, h, k): (f64, f64, f64)) -> f64 {
     let seen = |up: f64| cam.project_raised(u, v, up, w, h).map(|(x, y)| (x * k, y * k));
     let (Some(p0), Some(p1), Some(p2)) = (seen(near), seen(near - 1.0), seen(near + 1.0)) else { return near };
@@ -3766,7 +3781,7 @@ mod tests {
 
     #[test]
     fn a_band_reaching_a_box_corner_keeps_the_corners_outline() {
-        // #2607, round 1: the band runs to the south wall's west end, the box's corner: the
+        // #2607: the band runs to the south wall's west end, the box's corner: the
         // outline down that corner shows across the band as it does below it, not under its fill.
         let red = Rgba::rgb(220, 30, 30);
         let (m, b, g, res) = block_under_soils(&[([-3000.0, -1500.0, 3000.0, 0.0], "argissolo", red)], 30.0);
@@ -3794,7 +3809,7 @@ mod tests {
 
     #[test]
     fn a_field_thickness_past_the_blocks_depth_is_kept_and_stops_at_the_base() {
-        // #2607, round 1: a polygon's 25 000 m (more than any block is deep) is its thickness as
+        // #2607: a polygon's 25 000 m (more than any block is deep) is its thickness as
         // given, not cut to 20 000 unsaid; the band stops at the base, said once. A thickness
         // within the wall says nothing of the base.
         use rustgis_map::view::BandThickness;
@@ -3820,7 +3835,7 @@ mod tests {
 
     #[test]
     fn a_band_contact_stands_upright_in_a_turned_view() {
-        // #2607, round 2: seen from bearing 40°, the south wall recedes, so its ends lie at
+        // #2607: seen from bearing 40°, the south wall recedes, so its ends lie at
         // different depths. In one stretch, the contact at x 0 (red soil west, green east, 30 m,
         // 60 doubled) runs straight down from the ground's edge there to the band's foot there:
         // red just west of x 0 and green just east, near the ground as near the foot.
@@ -3844,7 +3859,7 @@ mod tests {
 
     #[test]
     fn a_band_over_a_rise_inside_a_stretch_stays_under_its_top() {
-        // #2607, round 4: the ground rises from 500 m at the south wall's ends to 700 m at x 0, but
+        // #2607: the ground rises from 500 m at the south wall's ends to 700 m at x 0, but
         // the wall is one stretch, whose top is the straight line between its ends (1000 m
         // doubled). The band's foot is taken from that line too: at x 0, where the classes meet,
         // it doesn't stand 1340 m up, over the top, and no band shows above the top line.
@@ -3892,7 +3907,7 @@ mod tests {
 
     #[test]
     fn a_band_reaching_a_polygon_blocks_corner_keeps_the_corners_outline() {
-        // #2607, round 5: a square polygon block under one soil all round. The band goes on
+        // #2607: a square polygon block under one soil all round. The band goes on
         // round the south-west corner in the same colour and thickness, but the outline turns
         // 90° there, so the walls' outline goes down the corner: that line shows across the band
         // too, not under its fill.
@@ -3928,7 +3943,7 @@ mod tests {
 
     #[test]
     fn a_band_hangs_from_the_meshs_edge_where_the_ground_reads_higher() {
-        // #2607, round 5: the mesh puts the ground's edge along the south wall at 500 m (1000
+        // #2607: the mesh puts the ground's edge along the south wall at 500 m (1000
         // doubled), but the DEM reads 700 m (1400) there. The band hangs its 30 m (60) from the
         // edge drawn, so its foot is at 940, not at 1340 over the top: no band above the top
         // line, and the band under it.
@@ -3968,7 +3983,7 @@ mod tests {
 
     #[test]
     fn a_band_meeting_the_base_inside_a_stretch_stays_on_it() {
-        // #2607, round 6: one stretch along the south wall, its ground rising from 100 at x −1000
+        // #2607: one stretch along the south wall, its ground rising from 100 at x −1000
         // to 300 at x 1000 (exaggerated), the base at 0, the band 200 deep. Its foot is on the
         // base all along the west half, where the ground stands under 200 over it, and rises from
         // x 0: no rock shows between the band and the base, as it would under a straight foot
@@ -4024,7 +4039,7 @@ mod tests {
 
     #[test]
     fn a_thin_band_hangs_from_a_mesh_edge_far_under_the_ground_read() {
-        // #2607, round 8, CodeRabbit's case: a 600 × 500 view at 60°, 5 m a pixel, heights
+        // #2607: a 600 × 500 view at 60°, 5 m a pixel, heights
         // doubled, the DEM at 280 m (560) and the mesh's edge at 200 m (400) along the south
         // wall, the band 1 m deep (0.4 px). Its foot hangs from the edge drawn: no band shows over
         // the top line, where a foot taken from a straight-line estimate of the edge's height
@@ -4060,7 +4075,7 @@ mod tests {
 
     #[test]
     fn the_height_through_a_screen_point_is_read_exactly() {
-        // #2607, round 8: CodeRabbit's case, a 600 × 500 view at 60°, 5 m a pixel, heights
+        // #2607: a 600 × 500 view at 60°, 5 m a pixel, heights
         // doubled: the mesh's edge at 200 m (80 up px), the DEM at 280 m (112). Read from the DEM's
         // height, the height through the edge's screen point is the edge's, not a straight-line
         // estimate's (80.9 there, which stood a 0.4 px band's foot over its top).
@@ -4102,7 +4117,8 @@ mod tests {
     #[test]
     fn a_band_thicker_than_the_wall_stops_at_the_base_and_says_so() {
         // #2607: 150 m (300 m doubled) of soil over a wall 200 m (doubled) high: red down to the
-        // base, said once; a hatch over the soil's fill is left off the band, said with how many.
+        // base, said once with the layer and the stretches; a hatch over the soil's fill is left
+        // off the band, said with how many.
         let red = Rgba::rgb(220, 30, 30);
         let (mut m, b, g, res) = block_under_soils(&[([-3000.0, -1500.0, 3000.0, 0.0], "argissolo", red)], 150.0);
         let hatch = FillPattern::Hatch { angle: 0.0, spacing: 6.0, width: 2.0, offset: 0.0 };
@@ -4122,7 +4138,9 @@ mod tests {
         let said = crate::approximations::take();
         crate::approximations::restore(before);
         assert!(c.red() > 2 * c.green() && c.red() > 2 * c.blue(), "{c:?}");
-        assert_eq!(said.iter().filter(|t| t.contains("stops at the base")).count(), 1, "{said:?}");
+        // Said once, with the layer and how many of the wall's 20 stretches it stops in: all.
+        let at_base: Vec<_> = said.iter().filter(|t| t.contains("stops at the base")).collect();
+        assert!(at_base.len() == 1 && at_base[0].starts_with("solos: ") && at_base[0].contains(" 20 stretches "), "{said:?}");
         assert_eq!(
             said.iter().filter(|t| t.starts_with("solos: the block diagram's top band shows solid fills only, so 1 of")).count(),
             1,

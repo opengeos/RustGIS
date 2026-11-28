@@ -357,12 +357,14 @@ pub(crate) fn band_no_field(name: &str, field: &str) {
     );
 }
 
-/// What a block diagram's top band (#2607) drew where it is thicker than the ground stands over
-/// the base: it stops at the base there.
-pub(crate) fn band_at_base() {
+/// What a block diagram's top band (#2607) drew of layer `name` where it is thicker than the
+/// ground stands over the base: `n` of its stretches along the walls stop at the base.
+pub(crate) fn band_at_base(name: &str, n: usize) {
     note(
-        "\0band base".to_string(),
-        "Block diagram: its top band is thicker than the ground stands over the base in places, so it stops at the base there".to_string(),
+        format!("{name}\0band base"),
+        format!(
+            "{name}: the block diagram's top band is thicker than the ground stands over the base along {n} stretches of the walls, so it stops at the base there"
+        ),
     );
 }
 
