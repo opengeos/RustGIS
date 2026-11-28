@@ -293,11 +293,11 @@ fn command_uses_text_statistics(id: &str, params: &Value) -> bool {
         "presentation.mapPage" | "presentation.updatePage" => params.get("title").is_some_and(holds_statistic),
         // A layout file, read as `layout.import` reads it, which `report.existingTemplate` also does.
         "layout.import" | "report.existingTemplate" => imported_layout_uses(params, &STATISTIC_KEYS, text_statistics),
-        "presentation.import" => params
-            .get("text")
-            .and_then(Value::as_str)
+        "presentation.import" => crate::cmd::items::inline_text(params)
+            .ok()
+            .flatten()
             .filter(|t| STATISTIC_KEYS.iter().any(|key| t.contains(key)) || t.contains('\\'))
-            .and_then(|t| serde_json::from_str::<rustgis_map::presentation::Presentation>(t).ok())
+            .and_then(|t| serde_json::from_str::<rustgis_map::presentation::Presentation>(&t).ok())
             .is_some_and(|p| presentation_uses_text_statistics(&p)),
         "script.run" => params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, command_uses_text_statistics)),
         _ => false,
@@ -800,8 +800,8 @@ fn imported_layout_uses(params: &Value, keys: &[&str], uses: fn(&rustgis_map::la
 
 /// The layout a command carries inline, read only when its text names one of `keys` (or escapes,
 /// which could hide one). `data` (base64) goes before `text`, as `report.existingTemplate` reads
-/// them; one it refuses is no layout. The text is copied for each check, rather than changing the
-/// reader that import planning shares: a layout is small, and only a save asks.
+/// them; one it refuses is no layout. `data` is decoded for each check, rather than keeping it:
+/// only a step that carries it pays, and only on a save.
 fn imported_layout(params: &Value, keys: &[&str]) -> Option<rustgis_map::layout::Layout> {
     crate::cmd::items::inline_text(params)
         .ok()
@@ -3078,6 +3078,10 @@ mod tests {
         let blank_page = |title: &str| json!({"title": title, "kind": {"type": "blank", "text": "", "background": [255, 255, 255, 255]}});
         let presentation = |page: Value| json!({"name": "P", "width": 297, "height": 210, "pages": [page]}).to_string();
         let base = serde_json::to_value(Project::default()).unwrap();
+        let data = |title: &str| {
+            use base64::Engine;
+            base64::engine::general_purpose::STANDARD.encode(presentation(map_page(title)))
+        };
         for (page, required) in [(map_page("{count:Sites}"), true), (map_page("Sites"), false), (blank_page("{count:Sites}"), false)] {
             let mut document = base.clone();
             document["presentations"] = json!([{"name": "P", "width": 297, "height": 210, "pages": [page.clone()]}]);
@@ -3093,6 +3097,9 @@ mod tests {
             ("presentation.import", json!({"text": presentation(map_page("{count:Sites}"))}), true),
             ("presentation.import", json!({"text": presentation(map_page("Sites"))}), false),
             ("presentation.import", json!({"text": presentation(blank_page("{count:Sites}"))}), false),
+            // It reads `data` (base64) before `text`.
+            ("presentation.import", json!({"data": data("{count:Sites}")}), true),
+            ("presentation.import", json!({"data": data("Sites"), "text": presentation(map_page("{count:Sites}"))}), false),
         ] {
             let script = format!("{id} {params}");
             for value in [
