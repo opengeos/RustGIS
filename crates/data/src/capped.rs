@@ -54,13 +54,16 @@ impl Limit {
 
     /// Counts `n` more bytes held, refusing them past the limit, and gives how many are held.
     fn take(&self, n: usize) -> std::io::Result<usize> {
-        let before = self.held.fetch_add(n, Ordering::Relaxed);
-        if let Some(held) = before.checked_add(n).filter(|held| *held <= self.max) {
-            return Ok(held);
+        // In one update, so the count never holds a total past the limit, even for a moment
+        // another buffer on the same limit could see.
+        let grown = |held: usize| held.checked_add(n).filter(|total| *total <= self.max);
+        match self.held.try_update(Ordering::Relaxed, Ordering::Relaxed, grown) {
+            Ok(before) => Ok(before + n),
+            Err(_) => {
+                self.passed.store(true, Ordering::Relaxed);
+                Err(Error::other("the file passes the size it may come to"))
+            }
         }
-        self.held.fetch_sub(n, Ordering::Relaxed);
-        self.passed.store(true, Ordering::Relaxed);
-        Err(Error::other("the file passes the size it may come to"))
     }
 }
 
@@ -175,6 +178,17 @@ mod tests {
     use super::*;
     use crate::raster::{ColorHint, Crs, GeoTransform, Raster, cogwrite, geotiff};
     use crate::{Dataset, Field, FieldType, Geometry, GeometryType, Value};
+
+    /// A request past the limit, however large, is refused without changing what is counted.
+    #[test]
+    fn a_request_past_the_limit_leaves_the_count_as_it_was() {
+        let limit = Limit::new(10);
+        limit.take(8).unwrap();
+        assert!(limit.take(usize::MAX - 7).is_err());
+        assert_eq!(limit.held.load(Ordering::Relaxed), 8);
+        assert_eq!(limit.take(2).unwrap(), 10);
+        assert!(limit.take(1).is_err());
+    }
 
     /// A buffer holds what a file would after seeks and gaps, never allocates past its limit, and
     /// once a write is refused the limit says so, whatever the writer made of the refusal.
