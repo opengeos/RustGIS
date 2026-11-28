@@ -3608,6 +3608,12 @@ fn layout_groups(app: &mut RustGisApp, ui: &mut Ui) {
                 }
             });
         });
+        col(ui, |ui| {
+            let desc = "Add a raster's profile beside the map frame, along one of its section lines.";
+            if small(ui, app, "layout_profile", "Profile", desc, "ui.menu", Value::Null, false).clicked() {
+                add(app, json!({"kind": "profile"}));
+            }
+        });
     });
     group(ui, "Shapes", |ui| {
         // In the middle of the page, ready to be moved and sized.

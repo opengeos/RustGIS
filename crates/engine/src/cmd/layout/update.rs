@@ -147,6 +147,12 @@ pub(in crate::cmd::layout) fn restyle(kind: &ElementKind, p: &Value) -> Result<O
 
 pub(in crate::cmd::layout) fn update(s: &mut Session, p: &Value) -> CmdResult {
     let id = element_id(p)?;
+    // A profile reads its own keys (#2863 part 2), several of them other kinds' too.
+    if let Ok(li) = index(s, p)
+        && is_profile(s, li, id)
+    {
+        return update_profile(s, p, li, id);
+    }
     // The first frame's map as it is, to say what the texts lose only when it changes (#2853).
     let map_before = index(s, p).ok().and_then(|li| first_frame_map(s, li));
     // Checked before anything changes, so a bad value leaves the element as it was.
@@ -830,6 +836,14 @@ pub(in crate::cmd::layout) fn update(s: &mut Session, p: &Value) -> CmdResult {
     }
     if let Some((_, Some(name))) = &new_sections {
         say_section_not_drawn(s, li, id, name);
+    }
+    // A frame moved or resized takes its profiles with it, and a section line renamed its
+    // profiles (#2863).
+    if let Some(l) = s.project.layouts.get_mut(li) {
+        if let (Some((_, Some(new))), Some(old)) = (&new_sections, p.get("section").and_then(|v| ps(v, "name"))) {
+            profiles_follow_section(l, id, old.trim(), new);
+        }
+        l.fit_profiles();
     }
     say_held(s, "Element Properties", held);
     if let Some(w) = font_told {

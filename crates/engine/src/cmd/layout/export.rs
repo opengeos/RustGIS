@@ -83,6 +83,11 @@ pub fn layout_png(s: &mut Session, li: usize, dpi: f64, region: Option<[f64; 4]>
     if let Some(r) = region {
         gaps.retain(|g, _| layout.element(g.frame).is_some_and(|e| rustgis_render::layout::meets(e, r, 0.0)));
     }
+    let mut profiles: ProfileNotes =
+        rustgis_render::layout::profiles_not_drawn(&layout, &s.project.maps).into_iter().map(|n| (n, 1)).collect();
+    if let Some(r) = region {
+        profiles.retain(|n, _| layout.element(n.element).is_some_and(|e| rustgis_render::layout::meets(e, r, 0.0)));
+    }
     let ((img, mut unfitted), mut charts) = rustgis_render::layout::drawn_charts(|| {
         rustgis_render::layout::unfitted_legends(|| {
             crate::cmd::share::saying_shadows(s, "The layout", |s| match region {
@@ -104,6 +109,9 @@ pub fn layout_png(s: &mut Session, li: usize, dpi: f64, region: Option<[f64; 4]>
         s.warn(note);
     }
     if let Some(note) = rustgis_render::layout::sections_notice(&gaps, 1) {
+        s.warn(note);
+    }
+    for note in rustgis_render::layout::profiles_notice(&profiles, 1) {
         s.warn(note);
     }
     img.encode_png().map_err(|e| e.to_string())
@@ -152,6 +160,9 @@ pub(in crate::cmd) fn chart_notice_lines_in<'a>(
 
 /// The section lines an export doesn't draw, each with the pages it is missing from.
 type SectionGaps = BTreeMap<rustgis_render::layout::SectionGap, usize>;
+/// What an export's profiles say ([`rustgis_render::layout::profiles_not_drawn`]), each with the
+/// pages it is said on.
+type ProfileNotes = BTreeMap<rustgis_render::layout::ProfileNote, usize>;
 
 /// What `view_map` draws when it is given a `layout`: the layout's frames' maps and their tiles,
 /// as exporting it reads them, rather than the active map's. `None` without a `layout`.
@@ -211,6 +222,7 @@ pub(in crate::cmd::layout) fn layout_bytes_inner(
     let (mut left_out, mut by_corners): (Vec<(usize, u32, String, &'static str)>, Vec<(usize, u32, String)>) = (Vec::new(), Vec::new());
     let mut clipped = BTreeMap::new();
     let mut gaps = SectionGaps::new();
+    let mut profiles = ProfileNotes::new();
     let render_pages = || -> Result<(Vec<rustgis_render::pdf::Page>, Option<Vec<u8>>), String> {
         let mut out = Vec::new();
         let mut png = None;
@@ -235,6 +247,9 @@ pub(in crate::cmd::layout) fn layout_bytes_inner(
             clipped.extend(rustgis_render::layout::clipped_text(layout, &s.project.maps, dpi, &info));
             for gap in rustgis_render::layout::sections_not_drawn(layout, &s.project.maps) {
                 *gaps.entry(gap).or_default() += 1;
+            }
+            for note in rustgis_render::layout::profiles_not_drawn(layout, &s.project.maps) {
+                *profiles.entry(note).or_default() += 1;
             }
             // Each page is kept as vectors (its pictures compressed) as soon as it's drawn, within
             // a memory budget.
@@ -301,6 +316,9 @@ pub(in crate::cmd::layout) fn layout_bytes_inner(
         s.warn(note);
     }
     if let Some(note) = rustgis_render::layout::sections_notice(&gaps, pages.len()) {
+        s.warn(note);
+    }
+    for note in rustgis_render::layout::profiles_notice(&profiles, pages.len()) {
         s.warn(note);
     }
     say_unfitted_legends(s, &unfitted);
@@ -535,12 +553,16 @@ pub(in crate::cmd::layout) fn layout_svg(s: &mut Session, li: usize, dpi: f64) -
     let clipped = rustgis_render::layout::clipped_text(layout, &s.project.maps, dpi, &info);
     let note = rustgis_render::layout::clipped_text_notice(layout, &clipped);
     let gaps = rustgis_render::layout::sections_not_drawn(layout, &s.project.maps).into_iter().map(|g| (g, 1)).collect();
+    let profiles: ProfileNotes = rustgis_render::layout::profiles_not_drawn(layout, &s.project.maps).into_iter().map(|n| (n, 1)).collect();
     let ((drawn, unfitted), charts) = rustgis_render::layout::drawn_charts(|| {
         rustgis_render::layout::unfitted_legends(|| rustgis_render::svg::layout_svg(layout, &mut s.project.maps, dpi, &info))
     });
     let (text, pictured) = drawn?;
     let chart_notes = chart_notice_lines(layout, &charts);
     for note in [note, rustgis_render::layout::sections_notice(&gaps, 1)].into_iter().flatten() {
+        s.warn(note);
+    }
+    for note in rustgis_render::layout::profiles_notice(&profiles, 1) {
         s.warn(note);
     }
     say_unfitted_legends(s, &unfitted);

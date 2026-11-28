@@ -28,6 +28,7 @@ mod grid;
 mod legend;
 mod losses;
 mod north;
+mod profile;
 mod scale_bar;
 mod section;
 mod swatch;
@@ -43,6 +44,7 @@ pub use grid::*;
 pub use legend::*;
 pub use losses::*;
 use north::*;
+pub use profile::*;
 pub use scale_bar::*;
 pub use section::*;
 use swatch::*;
@@ -672,6 +674,10 @@ fn draw_page(
                     None => placeholder(&mut pm, r, "Chart", ppp),
                 }
             }
+            ElementKind::Profile(p) => match profile_samples(layout, maps, p) {
+                Ok((samples, section)) => draw_profile(&mut pm, r, p, (&samples, &section), layout.decimal_comma, ppp),
+                Err(_) => placeholder(&mut pm, r, "Profile", ppp),
+            },
             ElementKind::Rectangle { fill, outline, width, radius, dash } => {
                 // Square corners filled as before, so an existing layout draws to the same pixels.
                 let rounded = rounded_rect(r, (*radius * PT_PER_MM * ppp) as f32);

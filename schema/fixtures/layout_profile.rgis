@@ -1,0 +1,27 @@
+{
+  "format": 2,
+  "name": "Profile",
+  "requires": ["layout-section", "layout-profile"],
+  "active_map": 0,
+  "maps": [
+    {
+      "name": "Map",
+      "layers": [],
+      "basemap": "Paper",
+      "camera": {"center": {"x": 0, "y": 0}, "res": 30000}
+    }
+  ],
+  "layouts": [
+    {
+      "name": "Profiles",
+      "width": 200,
+      "height": 150,
+      "elements": [
+        {"id": 1, "name": "Map", "x": 10, "y": 10, "w": 120, "h": 90, "kind": {"MapFrame": {"map": "Map", "center": {"x": 0, "y": 0}, "scale": 1000000, "sections": [
+          {"name": "A", "line": {"Horizontal": {"x": 0.05, "y": 0.1}}, "color": [168, 67, 31, 255], "width": 1.5}
+        ]}}},
+        {"id": 2, "name": "Profile", "x": 10, "y": 103, "w": 120, "h": 30, "kind": {"Profile": {"frame": 1, "section": "A", "layer": "DEM", "side": "Bottom", "gap": 3, "thickness": 30, "title": "Elevation", "unit": "m", "line_color": [60, 50, 40, 255], "line_width": 1, "fill": [216, 200, 168, 255]}}}
+      ]
+    }
+  ]
+}

@@ -323,6 +323,31 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
   (the name defaults to the first free letter, the place to the frame's centre), then
   `layout.update={"element":1,"section":{"name":"A","at":[-44.7,-22.4],"color":"#1F5C84"}}`
   (`"newName"` renames it, and `"remove": true` removes it).
+- **Profiles**: **Profile** in *Publish › Map Surrounds* draws, beside a frame, the profile of a
+  raster along one of its section lines (#2863): under or over the frame for a horizontal line,
+  right or left of it for a vertical one. It is lined up with the map: each sample is read at its
+  point of the line on the page, taken back through the frame's projection to the ground, so each
+  point of the curve is straight across from the place it comes from, whatever the projection or
+  the frame's bearing. That line is neither a parallel nor a straight line between the longitudes
+  and latitudes of its ends, which `profile.create` follows: on a map in UTM 37 km wide the two
+  part by metres. The profile takes the frame's side along its length, and keeps to it when the
+  frame is moved or resized; dragged, it moves away from the frame or nearer, and resized, it grows
+  thicker or thinner. It reads one band of any raster held whole (not one read in place, such as a
+  web address's cloud-optimised GeoTIFF, which gives only the overview the view draws), bilinearly,
+  a sample a cell up to 10,000, nothing smoothed; where the raster has no data the curve breaks.
+  The curve can be filled under it in one colour; its value axis has round numbers on guide lines
+  (or the **min** and **max** given, so that two profiles share a scale), with a unit after them;
+  its distance axis counts along the ground from the line's A end in the units a scale bar takes;
+  and the section's names stand at its ends. A tilted frame or one on the globe takes no profile
+  (a line straight on the page there isn't a section of the ground), nor does a section line
+  running the other way: the profile draws its placeholder, and the layout view, its command and
+  exports say why. It follows its section line and layer when they are renamed, and goes with its
+  frame. From a command:
+  `layout.addElement={"kind":"profile","frame":1,"section":"A","layer":"DEM","side":"bottom","unit":"m"}`
+  (the section defaults to the frame's first, the layer to the top raster shown, the title to the
+  layer's name; `"band"`, `"gap"`, `"thickness"`, `"lineColor"`, `"lineWidth"`, `"fill"` (null for
+  none), `"min"`, `"max"`, `"units"`, `"guides"` and `"color"`, its ink, are its options), then
+  `layout.update` with the same keys.
 - **Measured grids**: a grid's **Type** is a **Graticule** (latitudes and longitudes, as above)
   or a **Measured grid**, as ArcGIS Pro has them: eastings and northings in a projected coordinate
   system, for maps read with UTM or national grid coordinates (a hiking map at 1:25,000 with a

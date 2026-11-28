@@ -81,6 +81,17 @@ pub(in crate::cmd::layout) fn series_page_inputs(input: &crate::cmd::InputContex
 pub(in crate::cmd::layout) fn element_inputs(input: &crate::cmd::InputContext<'_>, p: &Value) -> Result<crate::cmd::Inputs, String> {
     let s = input;
     let kind = ps(p, "kind").ok_or("kind is required")?;
+    // A profile reads the raster it draws (#2863 part 2).
+    if kind == "profile" {
+        let layout = s.project.layouts.get(index(input, p)?).ok_or("no layout")?;
+        let frame = frame_of(layout, p)?;
+        let map = frame_map(input, layout, frame)?;
+        let name = added_profile_layer(map, p)?;
+        let mut inputs = crate::cmd::Inputs::named(map, [name.as_str()])?;
+        inputs.maps.push(map.instance_id());
+        inputs.state = json!({"layout":index(input,p)?,"frame":frame});
+        return Ok(inputs);
+    }
     if !matches!(kind, "table" | "chart" | "colorbar" | "legend") {
         let mut inputs = object_inputs(input, p)?;
         if matches!(kind, "northArrow" | "scaleBar" | "extentIndicator" | "grid" | "section") {
@@ -222,6 +233,12 @@ pub(in crate::cmd::layout) fn update_inputs(input: &crate::cmd::InputContext<'_>
                 inputs.extend(crate::cmd::Inputs::named(frame_map(input, l, *frame)?, [name.as_str()])?);
             }
         }
+        // A profile's new raster (#2863 part 2).
+        Some(ElementKind::Profile(profile)) if ps(p, "layer").is_some_and(|n| !n.trim().is_empty()) => {
+            let map = frame_map(input, l, profile.frame)?;
+            let name = added_profile_layer(map, p)?;
+            inputs.extend(crate::cmd::Inputs::named(map, [name.as_str()])?);
+        }
         Some(ElementKind::Legend { frame, .. }) => {
             let (names, labels) = (legend_exclude(input, l, *frame, p)?, legend_labels(input, l, *frame, p)?);
             let classes = legend_class_labels(input, l, *frame, p)?;
@@ -282,6 +299,7 @@ pub(in crate::cmd::layout) fn element_selectors(kind: &ElementKind) -> Option<Va
             json!({"frame":frame,"exclude":exclude,"labels":labels,"classLabels":class_labels})
         }
         ElementKind::Colorbar { frame, layer, .. } => json!({"frame":frame,"layer":layer}),
+        ElementKind::Profile(p) => json!({"frame":p.frame,"layer":p.layer,"section":p.section}),
         ElementKind::NorthArrow { frame, .. } | ElementKind::ScaleBar { frame, .. } => json!({"frame":frame}),
         _ => return None,
     })

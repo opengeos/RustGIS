@@ -288,6 +288,13 @@ saved `layout.addElement` of a section requires it too, and so does a `layout.up
 `section` object, which an older reader warns that it ignores. A saved `layout.import` whose `text`
 has such a frame requires it as well.
 
+Projects with a profile beside a map frame (an element of kind `Profile`) require `layout-profile`,
+so an older reader refuses them instead of dropping the element (#2863 part 2). A saved
+`layout.addElement` of a profile requires it too, and so does a `layout.update` with a key only a
+profile reads (`band`, `side`, `gap`, `thickness`, `unit`, `lineColor`, `lineWidth`, `guides`,
+`min`, or a `section` given as a name). A saved `layout.import` whose `text` has one requires it as
+well.
+
 Projects with a legend, a scale bar or a grid whose text isn't its default size (`text_size` on
 a legend, 9 points by default, or on a scale bar, 8; `label_size` on a frame's grid, 8) require
 `layout-text-size`, so an older reader refuses them instead of drawing that text at the default

@@ -361,6 +361,8 @@ pub enum ElementKind {
         #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::symbology::de_dash")]
         dash: Option<Dash>,
     },
+    /// A raster's profile along a section line of a map frame, beside the frame (#2863 part 2).
+    Profile(Profile),
 }
 
 pub(super) fn rows() -> usize {
@@ -491,6 +493,7 @@ impl ElementKind {
             ElementKind::Rectangle { .. } => "rectangle",
             ElementKind::Ellipse { .. } => "ellipse",
             ElementKind::Line { .. } => "line",
+            ElementKind::Profile(_) => "profile",
         }
     }
     pub fn label(&self) -> &'static str {
@@ -507,6 +510,7 @@ impl ElementKind {
             ElementKind::Rectangle { .. } => "Rectangle",
             ElementKind::Ellipse { .. } => "Ellipse",
             ElementKind::Line { .. } => "Line",
+            ElementKind::Profile(_) => "Profile",
         }
     }
     /// Whether an element of this kind takes a background (#2257): all but a map frame, which
@@ -515,21 +519,31 @@ impl ElementKind {
         !matches!(self, ElementKind::MapFrame { .. })
     }
 
-    /// Whether an element of this kind takes an ink (#2257): a legend, colorbar, table or chart,
-    /// whose text and lines are otherwise dark grey. The other kinds' colours are their own options.
+    /// Whether an element of this kind takes an ink (#2257): a legend, colorbar, table, chart or
+    /// profile, whose text and lines are otherwise dark grey. The other kinds' colours are their own
+    /// options.
     pub fn takes_ink(&self) -> bool {
-        matches!(self, ElementKind::Legend { .. } | ElementKind::Colorbar { .. } | ElementKind::Table { .. } | ElementKind::Chart { .. })
+        matches!(
+            self,
+            ElementKind::Legend { .. }
+                | ElementKind::Colorbar { .. }
+                | ElementKind::Table { .. }
+                | ElementKind::Chart { .. }
+                | ElementKind::Profile(_)
+        )
     }
 
     /// Whether `key` given as null changes an element of this kind, giving it back its default:
     /// an ink's `color`, a chart's `title` (the title it is given), `barColor`, `max` (its bars'
     /// own scale) and `barOutline` (none), a legend's or scale bar's `textSize` (#2581), and a
-    /// scale bar's `unitLabel` (its unit's abbreviation).
+    /// scale bar's `unitLabel` (its unit's abbreviation), and a profile's `fill` (none), `min` and
+    /// `max` (its samples' own).
     pub fn null_resets(&self, key: &str) -> bool {
         (self.takes_ink() && key == "color")
             || (matches!(self, ElementKind::Chart { .. }) && matches!(key, "title" | "barColor" | "max" | "barOutline"))
             || (matches!(self, ElementKind::Legend { .. } | ElementKind::ScaleBar { .. }) && key == "textSize")
             || (matches!(self, ElementKind::ScaleBar { .. }) && key == "unitLabel")
+            || (self.is_profile() && matches!(key, "fill" | "min" | "max"))
     }
 
     /// Its ink, when it [takes one](ElementKind::takes_ink) and has one; `None` draws in [`INK`].
@@ -538,7 +552,8 @@ impl ElementKind {
             ElementKind::Legend { color, .. }
             | ElementKind::Colorbar { color, .. }
             | ElementKind::Table { color, .. }
-            | ElementKind::Chart { color, .. } => *color,
+            | ElementKind::Chart { color, .. }
+            | ElementKind::Profile(Profile { color, .. }) => *color,
             _ => None,
         }
     }
@@ -549,7 +564,8 @@ impl ElementKind {
             ElementKind::Legend { color, .. }
             | ElementKind::Colorbar { color, .. }
             | ElementKind::Table { color, .. }
-            | ElementKind::Chart { color, .. } => Some(color),
+            | ElementKind::Chart { color, .. }
+            | ElementKind::Profile(Profile { color, .. }) => Some(color),
             _ => None,
         }
     }
@@ -576,6 +592,11 @@ impl ElementKind {
         matches!(self, ElementKind::MapFrame { sections, .. } if !sections.is_empty())
     }
 
+    /// Whether it is a profile (#2863 part 2).
+    pub fn is_profile(&self) -> bool {
+        matches!(self, ElementKind::Profile(_))
+    }
+
     /// The map frame this element belongs to.
     pub fn frame(&self) -> Option<u32> {
         match self {
@@ -584,7 +605,8 @@ impl ElementKind {
             | ElementKind::Legend { frame, .. }
             | ElementKind::Colorbar { frame, .. }
             | ElementKind::Table { frame, .. }
-            | ElementKind::Chart { frame, .. } => Some(*frame),
+            | ElementKind::Chart { frame, .. }
+            | ElementKind::Profile(Profile { frame, .. }) => Some(*frame),
             _ => None,
         }
     }

@@ -611,21 +611,9 @@ fn dist_m(a: Coord, b: Coord) -> f64 {
     rustgis_geom::haversine_m(a, b)
 }
 
-/// Elevation (bilinear) at a longitude/latitude point.
+/// Elevation (bilinear) at a longitude/latitude point ([`Raster::bilinear`]).
 pub fn elevation_at(r: &Raster, b: usize, ll: Coord) -> Option<f64> {
-    let w = r.transformer().from_lonlat(ll)?;
-    let (x, y) = r.transform.to_pixel(w);
-    let (x, y) = (x - 0.5, y - 0.5);
-    let (c0, r0) = (x.floor() as i64, y.floor() as i64);
-    let (fx, fy) = (x - c0 as f64, y - r0 as f64);
-    let v = |c: i64, rr: i64| r.value(b, c, rr).map(f64::from);
-    let (a, b2, c, d) = (v(c0, r0), v(c0 + 1, r0), v(c0, r0 + 1), v(c0 + 1, r0 + 1));
-    match (a, b2, c, d) {
-        (Some(a), Some(b2), Some(c), Some(d)) => {
-            Some(a * (1.0 - fx) * (1.0 - fy) + b2 * fx * (1.0 - fy) + c * (1.0 - fx) * fy + d * fx * fy)
-        }
-        _ => v(x.round() as i64, y.round() as i64),
-    }
+    r.bilinear(b, ll)
 }
 
 /// An elevation profile along a path: (distance from the start in metres, point, elevation).

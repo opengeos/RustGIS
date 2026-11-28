@@ -2012,3 +2012,94 @@ fn legend_class_labels_save_only_when_set_and_load_into_range() {
     let (saved, _, cut) = load(&json!({"a": many}));
     assert_eq!((saved["a"].as_object().unwrap().len(), cut), (MAX_LEGEND_LABELS, 1));
 }
+
+/// A profile beside its frame (#2863 part 2): its box is the frame's side, which it takes back after
+/// the frame moves or is resized, a box asked of it read as its gap and thickness; saved with only
+/// what isn't its default, read back as saved; a hostile file's brought into range and counted,
+/// and one saved elsewhere than its frame's side put back there.
+#[test]
+fn a_profile_keeps_to_its_frames_side() {
+    let frame = (30.0, 34.0, 186.0, 112.0);
+    for (side, rect) in [
+        (ProfileSide::Bottom, (30.0, 149.0, 186.0, 30.0)),
+        (ProfileSide::Top, (30.0, 1.0, 186.0, 30.0)),
+        (ProfileSide::Right, (219.0, 34.0, 30.0, 112.0)),
+        (ProfileSide::Left, (-3.0, 34.0, 30.0, 112.0)),
+    ] {
+        let mut p = Profile::new(1, "A".into(), "DEM".into(), side);
+        assert_eq!(p.rect(frame), rect, "{side:?}");
+        // Dragged off along the frame, 5 mm further from it and 4 mm thicker: only the gap and
+        // thickness follow.
+        let (x, y, w, h) = rect;
+        let moved = match side {
+            ProfileSide::Bottom => (x + 40.0, y + 5.0, w, h + 4.0),
+            ProfileSide::Top => (x + 40.0, y - 9.0, w, h + 4.0),
+            ProfileSide::Right => (x + 5.0, y + 40.0, w + 4.0, h),
+            ProfileSide::Left => (x - 9.0, y + 40.0, w + 4.0, h),
+        };
+        assert!(!p.take_rect(frame, moved));
+        assert_eq!((p.gap, p.thickness), (8.0, 34.0), "{side:?}");
+        // Into the frame, or too thin: held.
+        assert!(p.take_rect(frame, if side.is_horizontal() { (x, 60.0, w, 2.0) } else { (100.0, y, 2.0, h) }));
+        assert_eq!((p.gap, p.thickness), (PROFILE_GAPS.0, PROFILE_THICKNESSES.0), "{side:?}");
+    }
+    assert!(ProfileSide::Bottom.suits(SectionLine::Horizontal(Coord::new(0.0, 0.0))));
+    assert!(!ProfileSide::Left.suits(SectionLine::Horizontal(Coord::new(0.0, 0.0))));
+    assert_eq!(ProfileSide::default_for(SectionLine::Vertical(Coord::new(0.0, 0.0))), ProfileSide::Right);
+    // On the page, it follows its frame.
+    let mut l = Layout::new("L", 297.0, 210.0);
+    let f = l.add(
+        "Map",
+        frame,
+        ElementKind::MapFrame {
+            map: "M".into(),
+            center: Coord::new(0.0, 0.0),
+            scale: 1e6,
+            shape: FrameShape::Rectangle,
+            grid: None,
+            sections: vec![Section::new("A".into(), SectionLine::Horizontal(Coord::new(0.0, 0.0)))],
+            extent_of: None,
+            extent_color: INDICATOR_COLOR,
+            extent_width: INDICATOR_WIDTH,
+            border_color: FRAME_BORDER_COLOR,
+            border_width: FRAME_BORDER_WIDTH,
+            bearing: 0.0,
+            pitch: 0.0,
+        },
+    );
+    let p = Profile::new(f, "A".into(), "DEM".into(), ProfileSide::Bottom);
+    let id = l.add("Profile", p.rect(frame), ElementKind::Profile(p));
+    if let Some(e) = l.element_mut(f) {
+        (e.x, e.y, e.w) = (10.0, 20.0, 150.0);
+    }
+    assert_eq!(l.fit_profiles(), 1);
+    let e = l.element(id).unwrap();
+    assert_eq!((e.x, e.y, e.w, e.h), (10.0, 135.0, 150.0, 30.0));
+    assert_eq!(l.fit_profiles(), 0, "already beside it");
+    // Saved with only what isn't its default; read back as saved; a repaired one needs nothing more.
+    let text = serde_json::to_string(&l).unwrap();
+    let saved = text.split("\"Profile\":").nth(1).unwrap();
+    for left_out in ["\"band\"", "\"min\"", "\"max\"", "\"units\"", "\"guides\"", "\"color\"", "\"title\"", "\"unit\""] {
+        assert!(!saved.contains(left_out), "{left_out} in {saved}");
+    }
+    let back: Layout = serde_json::from_str(&text).unwrap();
+    assert_eq!(back, l);
+    assert!(l.clamp().is_empty());
+    // A hostile file: out of range, a text too long, saved away from its frame.
+    let hostile = text
+        .replace("\"gap\":3.0", "\"gap\":-1e9")
+        .replace("\"line_width\":1.0", "\"line_width\":1e9,\"band\":0,\"title\":\"x\\ny\",\"unit\":\"%UNIT%\"")
+        .replace("\"y\":135.0", "\"y\":0.0")
+        .replace("%UNIT%", &"m".repeat(MAX_PROFILE_TEXT + 5));
+    let mut l: Layout = serde_json::from_str(&hostile).unwrap_or_else(|e| panic!("{e}: {hostile}"));
+    let repairs = l.clamp();
+    assert_eq!((repairs.elements_adjusted, repairs.elements_cut), (1, 1), "{repairs:?}");
+    let e = l.element(id).unwrap();
+    let ElementKind::Profile(p) = &e.kind else { panic!("a profile") };
+    assert_eq!((p.gap, p.line_width, p.band), (PROFILE_GAPS.0, PROFILE_LINE_WIDTHS.1, 1));
+    assert_eq!((p.title.as_str(), p.unit.chars().count()), ("x y", MAX_PROFILE_TEXT));
+    assert_eq!((e.x, e.y), (10.0, 132.0), "beside its frame again");
+    assert!(l.clamp().is_empty(), "a repaired profile needs nothing more");
+    // Its frame removed, it goes with it.
+    assert!(l.remove(f) && l.element(id).is_none());
+}

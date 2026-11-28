@@ -22,6 +22,7 @@ mod grid;
 mod legend;
 mod lines;
 mod north;
+mod profile;
 mod scale_bar;
 mod section;
 mod stats;
@@ -35,6 +36,7 @@ pub use grid::*;
 pub use legend::*;
 pub use lines::*;
 pub use north::*;
+pub use profile::*;
 pub use scale_bar::*;
 pub use section::*;
 pub use stats::*;
@@ -465,6 +467,31 @@ impl Layout {
         self.elements.len() != before
     }
 
+    /// Each map frame's box (x, y, w, h in mm), by its id.
+    fn frame_boxes(&self) -> BTreeMap<u32, (f64, f64, f64, f64)> {
+        let frames = self.elements.iter().filter(|e| matches!(e.kind, ElementKind::MapFrame { .. }));
+        frames.map(|e| (e.id, (e.x, e.y, e.w, e.h))).collect()
+    }
+
+    /// Puts each profile beside its frame (#2863), as [`Profile::rect`] lays it, after the frame
+    /// was moved or resized, or the profile's side, gap or thickness changed. How many moved.
+    pub fn fit_profiles(&mut self) -> usize {
+        let boxes = self.frame_boxes();
+        let mut moved = 0;
+        for e in &mut self.elements {
+            if let ElementKind::Profile(p) = &e.kind
+                && let Some(frame) = boxes.get(&p.frame)
+            {
+                let (x, y, w, h) = p.rect(*frame);
+                if (e.x, e.y, e.w, e.h) != (x, y, w, h) {
+                    (e.x, e.y, e.w, e.h) = (x, y, w, h);
+                    moved += 1;
+                }
+            }
+        }
+        moved
+    }
+
     /// Keeps the page and elements sane after loading or editing (layout files are untrusted):
     /// sizes in range, unique element ids, and no references to missing frames. Returns what it
     /// changed, so a project reader can say so.
@@ -663,6 +690,7 @@ impl Layout {
                     *width = finite_or(*width, 1.0).clamp(0.0, 50.0)
                 }
                 ElementKind::Line { width, .. } => *width = finite_or(*width, 1.0).clamp(0.1, 50.0),
+                ElementKind::Profile(p) => cut |= p.clamp(),
                 _ => {}
             }
             // A map frame draws its map and its paper itself: a background on one (a hand-edited
@@ -681,6 +709,9 @@ impl Layout {
         // References must point at map frames that exist.
         let frames: std::collections::HashSet<u32> =
             self.elements.iter().filter(|e| matches!(e.kind, ElementKind::MapFrame { .. })).map(|e| e.id).collect();
+        // A profile's box is its frame's side (#2863): one saved elsewhere (a hand-edited file) is
+        // put back beside it.
+        let boxes = self.frame_boxes();
         let (mut adjusted, mut cut_count) = (0usize, 0usize);
         let elements = std::mem::take(&mut self.elements);
         for (mut e, (mut changed, cut)) in elements.into_iter().zip(changed) {
@@ -692,6 +723,13 @@ impl Layout {
             {
                 *extent_of = None;
                 changed = true;
+            }
+            if let ElementKind::Profile(p) = &e.kind
+                && let Some(frame) = boxes.get(&p.frame)
+            {
+                let (x, y, w, h) = p.rect(*frame);
+                changed |= (e.x, e.y, e.w, e.h) != (x, y, w, h);
+                (e.x, e.y, e.w, e.h) = (x, y, w, h);
             }
             adjusted = adjusted.saturating_add(usize::from(changed));
             cut_count = cut_count.saturating_add(usize::from(cut));

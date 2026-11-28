@@ -111,6 +111,8 @@ mod elevation_tiles;
 
 #[path = "tests/layout_files.rs"]
 mod layout_files;
+#[path = "tests/layout_profiles.rs"]
+mod layout_profiles;
 #[path = "tests/layout_sections.rs"]
 mod layout_sections;
 

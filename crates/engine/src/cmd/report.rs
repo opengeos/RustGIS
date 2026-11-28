@@ -1273,6 +1273,30 @@ fn say_sections_not_drawn(s: &mut Session, pages: &[rustgis_render::report::Page
     if let Some(note) = rustgis_render::layout::sections_notice(&gaps, 1) {
         s.warn(format!("The report: {note}"));
     }
+    say_profiles_not_drawn(s, pages, n);
+}
+
+/// Says what the profiles (#2863 part 2) of the layouts of the first `n` of `pages` say, as
+/// [`say_sections_not_drawn`] says their section lines: one notice of a kind, each profile named
+/// with its layout.
+fn say_profiles_not_drawn(s: &mut Session, pages: &[rustgis_render::report::Page], n: usize) {
+    let mut seen = Vec::new();
+    let mut notes = std::collections::BTreeMap::new();
+    for page in pages.iter().take(n) {
+        let rustgis_render::report::Page::Layout(li) = page else { continue };
+        if seen.contains(li) {
+            continue;
+        }
+        seen.push(*li);
+        let Some(layout) = s.project.layouts.get(*li) else { continue };
+        for mut note in rustgis_render::layout::profiles_not_drawn(layout, &s.project.maps) {
+            note.layout.clone_from(&layout.name);
+            notes.insert(note, 1);
+        }
+    }
+    for note in rustgis_render::layout::profiles_notice(&notes, 1) {
+        s.warn(format!("The report: {note}"));
+    }
 }
 
 /// Runs `f`, and returns its result with the legends it drew under a fit still cut and the charts
