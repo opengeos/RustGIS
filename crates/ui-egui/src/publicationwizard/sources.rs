@@ -6,14 +6,31 @@ pub(super) fn sources_step(ui: &mut egui::Ui, d: &mut Draft, map: &Map) {
     egui::Grid::new("publication_wizard_sources").num_columns(2).spacing(egui::vec2(8.0, 8.0)).show(ui, |ui| {
         list(ui, d, tl!("Sources"), Field::Sources, "", 3);
         heading(ui, d, tl!("Sources heading"), 0);
-        list(ui, d, tl!("Reference"), Field::Reference, &PUBLICATION_DEFAULT_REFERENCE.join("\n"), 2);
-        ui.label("");
-        ui.checkbox(&mut d.no_reference, tl!("No cartographic reference"));
-        ui.end_row();
+        reference_rows(ui, d);
         heading(ui, d, tl!("Reference heading"), 1);
     });
     statistic_menu(ui, d, map, Field::Sources);
     limit_note(ui, d, &[Field::Sources, Field::Heading(0), Field::Reference, Field::Heading(1)]);
+}
+
+/// A figure's reference step: the one text it draws, with no heading.
+pub(super) fn reference_step(ui: &mut egui::Ui, d: &mut Draft) {
+    egui::Grid::new("publication_wizard_reference").num_columns(2).spacing(egui::vec2(8.0, 8.0)).show(ui, |ui| reference_rows(ui, d));
+    limit_note(ui, d, &[Field::Reference]);
+}
+
+/// The reference's box and the tick that leaves it out, as two rows of a step's grid.
+fn reference_rows(ui: &mut egui::Ui, d: &mut Draft) {
+    list(ui, d, tl!("Reference"), Field::Reference, &PUBLICATION_DEFAULT_REFERENCE.join("\n"), 2);
+    ui.label("");
+    // Wrapped to the column: a long label would widen the narrowed window.
+    let width = field_width(ui);
+    ui.horizontal(|ui| {
+        ui.set_max_width(width);
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+        ui.checkbox(&mut d.no_reference, tl!("No cartographic reference"));
+    });
+    ui.end_row();
 }
 
 /// A box taking one entry per line, with a note where it holds more than the command takes.
@@ -139,9 +156,10 @@ mod tests {
         assert_eq!(d.params()["headings"], json!([PUBLICATION_HEADINGS[0], PUBLICATION_HEADINGS[1], "Col"]));
     }
 
-    /// A section left out takes no heading with it: not the reference's where there is none.
+    /// A heading typed for a section left out isn't sent: where a later heading follows, the
+    /// command's own goes in its place.
     #[test]
-    fn a_section_left_out_sends_no_heading() {
+    fn a_heading_typed_for_a_section_left_out_isnt_sent() {
         let mut d = draft();
         d.headings = [String::new(), "Ref".into(), String::new()];
         d.no_reference = true;
@@ -151,22 +169,71 @@ mod tests {
         assert_eq!(d.params()["headings"], json!([PUBLICATION_HEADINGS[0], PUBLICATION_HEADINGS[1], "Col"]));
     }
 
-    /// A figure takes none of them.
+    /// A figure takes the reference, but no sources or headings.
     #[test]
-    fn a_figure_takes_no_sources_reference_or_headings() {
+    fn a_figure_takes_the_reference_but_no_sources_or_headings() {
         let mut d = draft();
-        (d.sources, d.reference, d.no_reference) = ("A".into(), "B".into(), true);
-        d.headings[0] = "S".into();
         d.size = "figure-1col".into();
         assert_eq!(d.params(), json!({"profile": "figure-1col"}));
+        (d.sources, d.reference) = ("A".into(), "UTM 23S\n\n X ".into());
+        d.headings = ["S".into(), "R".into(), "C".into()];
+        assert_eq!(d.params(), json!({"profile": "figure-1col", "reference": ["UTM 23S", "X"]}));
+        d.no_reference = true;
+        assert_eq!(d.params(), json!({"profile": "figure-1col", "reference": []}));
+        d.size = "a4".into();
+        d.no_reference = false;
+        assert_eq!(d.params()["reference"], json!(["UTM 23S", "X"]), "kept for the sheet");
+    }
+
+    /// A figure's step asks for the reference alone: no sources, no headings, no statistic menu.
+    #[test]
+    fn a_figures_step_asks_for_the_reference_alone() {
+        let mut h = at(Step::Reference, |d| d.size = "figure-1col".into());
+        for label in ["Sources", "Sources heading", "Reference heading"] {
+            assert!(h.query_by_role_and_label(Role::Label, label).is_none(), "{label}");
+        }
+        assert!(h.query_by_label("Insert Statistic").is_none());
+        assert!(!h.get_by_role_and_label(Role::MultilineTextInput, "Reference").accesskit_node().is_disabled());
+        h.get_by_role_and_label(Role::CheckBox, "No cartographic reference").click();
+        h.run_steps(4);
+        assert!(wizard(&h).no_reference);
+        assert!(h.get_by_role_and_label(Role::MultilineTextInput, "Reference").accesskit_node().is_disabled());
+    }
+
+    /// The figure's step says the command's limits, and not a statistic refused on the sheet's
+    /// sources step.
+    #[test]
+    fn a_figures_step_says_its_limits_only() {
+        let mut h = at(Step::Reference, |d| {
+            d.size = "figure-1col".into();
+            d.refused = [false, true];
+        });
+        assert!(h.query_by_label(&refusal()).is_none());
+        assert!(h.query_by_label("At most 50 lines.").is_none());
+        h.state_mut().dialogs.publication.as_mut().unwrap().reference = "a\n".repeat(51);
+        h.run_steps(4);
+        assert!(h.query_by_label("At most 50 lines.").is_some());
+        h.state_mut().dialogs.publication.as_mut().unwrap().reference = "x".repeat(MAX_PUBLICATION_TEXT);
+        h.run_steps(4);
+        assert!(h.query_by_label(&format!("Each field takes at most {MAX_PUBLICATION_TEXT} characters.")).is_some());
+    }
+
+    /// The cursor put in the reference on a figure's step leaves where the sheet's statistic goes.
+    #[test]
+    fn a_figures_step_leaves_the_sheets_statistic_target() {
+        let mut h = at(Step::Reference, |d| d.size = "figure-1col".into());
+        h.get_by_role_and_label(Role::MultilineTextInput, "Reference").focus();
+        h.run_steps(2);
+        assert_eq!(wizard(&h).targets, [None, None]);
     }
 
     /// The step has its fields, and No cartographic reference turns the reference's box off.
     #[test]
     fn the_step_asks_for_the_sources_the_reference_and_their_headings() {
         let mut h = at(Step::Sources, |_| {});
+        // By role: the step list has a button named "Sources" too.
         for label in ["Sources", "Sources heading", "Reference", "Reference heading"] {
-            assert!(h.query_by_label(label).is_some(), "{label}");
+            assert!(h.query_by_role_and_label(Role::Label, label).is_some(), "{label}");
         }
         assert!(!h.get_by_label("Reference").accesskit_node().is_disabled());
         h.get_by_role_and_label(Role::CheckBox, "No cartographic reference").click();
@@ -382,6 +449,50 @@ mod tests {
         h.state_mut().dialogs.publication.as_mut().unwrap().reference = "UTM 23S".into();
         h.run_steps(4);
         assert!(h.query_by_label(said).is_some());
+    }
+
+    /// A figure's review lists its reference as a sheet's does: the default, the lines, none, and
+    /// lines typed and then switched off said not to be used; no headings.
+    #[test]
+    fn a_figures_review_lists_its_reference() {
+        let default = "The default: projection, datum and graticule, filled in on the sheet";
+        let unused = "(none; the lines typed aren't used)";
+        let mut h = at(Step::Review, |d| {
+            d.size = "figure-1col".into();
+            d.headings[1] = "Ref".into();
+        });
+        assert!(h.query_by_label(default).is_some() && h.query_by_label_contains("Ref (not used").is_none());
+        h.state_mut().dialogs.publication.as_mut().unwrap().reference = "UTM 23S".into();
+        h.run_steps(4);
+        assert!(h.query_by_label("UTM 23S").is_some() && h.query_by_label(default).is_none());
+        h.state_mut().dialogs.publication.as_mut().unwrap().no_reference = true;
+        h.run_steps(4);
+        assert!(h.query_by_label(unused).is_some() && h.query_by_label("UTM 23S").is_none());
+        h.state_mut().dialogs.publication.as_mut().unwrap().reference.clear();
+        h.run_steps(4);
+        assert!(h.query_by_label("(none)").is_some() && h.query_by_label(unused).is_none());
+    }
+
+    /// Create puts a figure's reference under its map, or makes it with none, and Undo takes it
+    /// away.
+    #[test]
+    fn create_puts_a_figures_reference_on_it() {
+        for (no_reference, want) in [(false, "UTM 23S"), (true, "")] {
+            let mut h = at(Step::Review, |d| {
+                (d.size, d.reference, d.no_reference) = ("figure-1col".into(), "UTM 23S".into(), no_reference);
+            });
+            let before = h.state().session.project.layouts.len();
+            click(&mut h, "Create");
+            assert_eq!(h.state().session.project.layouts.len(), before + 1);
+            let layout = h.state().session.project.layouts.last().unwrap();
+            let text = layout.elements.iter().find(|e| e.name == "Reference").and_then(|e| match &e.kind {
+                ElementKind::Text { text, .. } => Some(text.as_str()),
+                _ => None,
+            });
+            assert_eq!(text, Some(want));
+            h.state_mut().run("edit.undo", Value::Null).unwrap();
+            assert_eq!(h.state().session.project.layouts.len(), before);
+        }
     }
 
     /// Create puts the sources, the reference and the heading given on the sheet, and Undo takes

@@ -1204,6 +1204,13 @@ pub struct Session {
     /// there. Its notices stay its own: the run there says them.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) requests_into: Option<rustgis_data::diagnostics::Capture>,
+    /// A QGIS project's import prepared for the read about to run it on a copy, its logins opened
+    /// before the read recorded the accounts (#2476): taken at once by that read.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) import_opened: Option<crate::cmd::qgis::ImportOpened>,
+    /// The project an import's first part read for it ([`cmd::reads::scan_import`]), while its read starts.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) import_scanned: Option<crate::cmd::qgis::ImportScan>,
     /// The tools run ahead that a model's run took, for the tests.
     #[cfg(test)]
     pub(crate) tools_taken: usize,
@@ -1617,6 +1624,10 @@ impl Session {
             zones_ahead: None,
             #[cfg(not(target_arch = "wasm32"))]
             requests_into: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            import_opened: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            import_scanned: None,
             #[cfg(test)]
             tools_taken: 0,
             #[cfg(test)]
@@ -1983,6 +1994,12 @@ impl Session {
             // A command may change a map's projection, or add layers to it.
             if s.depth == 0 {
                 s.note_shown_systems();
+                if !ui_owns_cjk_scan_notice()
+                    && let Some(summary) = take_cjk_scan_summary_for_session()
+                    && let Some(msg) = summary.notice()
+                {
+                    s.notify(msg, false);
+                }
             }
             // Native sessions without a drawing loop recover their own failed overviews.
             // Named callers and sealed completions do not initiate unrelated maintenance.
@@ -2401,9 +2418,15 @@ impl Session {
     /// failed to start, or their worker failed): only the session still holds it. It goes back
     /// while nothing else changed the project since, newest set aside first so the oldest ends
     /// in front, and is freed and said otherwise. Run before each command run by itself, and by
-    /// the desktop as its background jobs end, so Undo sees it.
+    /// the desktop as its background jobs end, so Undo sees it. Logins opened for an import that
+    /// ended without landing end again here too ([`service_logins::reclaim_held`]).
     pub fn reclaim_rooms(&mut self) {
-        if self.depth > 0 || self.rooms.is_empty() {
+        if self.depth > 0 {
+            return;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        service_logins::reclaim_held(self);
+        if self.rooms.is_empty() {
             return;
         }
         let (ended, running): (Vec<_>, Vec<_>) =
@@ -3691,7 +3714,7 @@ impl Session {
         if severity == rustgis_data::diagnostics::Severity::Error && self.rerun_said.iter().any(|said| said == text.as_str()) {
             return;
         }
-        self.diagnostics.push_redacted(severity, source.unwrap_or("Application"), &text);
+        self.diagnostics.push_redacted(severity, source.unwrap_or("Application"), &text, loss);
         self.notices.push(Notice {
             text: text.into_string(),
             error: severity == rustgis_data::diagnostics::Severity::Error,
@@ -4426,4 +4449,43 @@ impl Session {
         }
         self.project.gp_history.push(record);
     }
+}
+
+/// Process-wide ownership of the one-shot CJK font-folder scan summary. Set by a UI front end so
+/// neither the live session nor any temporary `Session::new` copy consumes the summary inside
+/// [`Session::run`] before the UI can translate and emit it.
+static UI_OWNS_CJK_SCAN_NOTICE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Marks this process as having a UI front end that takes and translates the one-shot CJK
+/// font-folder scan summary itself, leaving it untouched in [`Session::run`].
+pub fn claim_ui_cjk_scan_notice() {
+    UI_OWNS_CJK_SCAN_NOTICE.store(true, std::sync::atomic::Ordering::Release);
+}
+
+/// Whether a UI front end owns taking and translating the process-wide CJK scan summary.
+pub fn ui_owns_cjk_scan_notice() -> bool {
+    #[cfg(test)]
+    if let Some(overridden) = TEST_UI_OWNS_CJK_SCAN_NOTICE.get() {
+        return overridden;
+    }
+    UI_OWNS_CJK_SCAN_NOTICE.load(std::sync::atomic::Ordering::Acquire)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Thread-local override for [`take_cjk_scan_summary_for_session`] so tests can exercise
+    /// `Session::run`'s CJK scan notice wiring in parallel without mutating the global font cache.
+    static TEST_CJK_SCAN_SUMMARY: std::cell::RefCell<Option<Option<rustgis_render::fonts::CjkRootScanSummary>>> =
+        const { std::cell::RefCell::new(None) };
+    /// Thread-local override for [`ui_owns_cjk_scan_notice`] so parallel unit tests can cover
+    /// headless sessions even after another test claims UI ownership.
+    static TEST_UI_OWNS_CJK_SCAN_NOTICE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+fn take_cjk_scan_summary_for_session() -> Option<rustgis_render::fonts::CjkRootScanSummary> {
+    #[cfg(test)]
+    if let Some(summary) = TEST_CJK_SCAN_SUMMARY.with_borrow_mut(|slot| slot.as_mut().map(Option::take)) {
+        return summary;
+    }
+    rustgis_render::fonts::take_cjk_scan_summary()
 }

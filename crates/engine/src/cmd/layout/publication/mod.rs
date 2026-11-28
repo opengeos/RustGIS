@@ -126,6 +126,7 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
     let may_veil = publication_veil(p)?;
     let context_in_legend = publication_flag(p, "contextInLegend")?.unwrap_or(false);
     let (north_arrow, mut arrow_kind) = publication_north_arrow(p)?;
+    let legend = publication_legend(p, s.map())?;
     let legend_box_always = publication_legend_box(p)?;
     // A style or an accent that isn't text is refused, as an unknown one is, rather than left out.
     for k in ["style", "accent"] {
@@ -148,12 +149,13 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
     }
     // Only an edge sheet draws these: given to another, they are refused rather than left out.
     let edge = sheet && style == Style::Edge;
-    if let Some(k) = ["paper", "kicker"].into_iter().find(|k| !edge && p.get(*k).is_some_and(|v| !v.is_null())) {
+    if let Some(k) = ["paper", "kicker", "figures"].into_iter().find(|k| !edge && p.get(*k).is_some_and(|v| !v.is_null())) {
         return Err(format!("{k} is for a sheet with \"style\": \"edge\""));
     }
     // White is the page's own colour, kept as none, as `layout.page` keeps it.
     let page_colour = crate::cmd::opaque_color(p, "paper")?.flatten().filter(|c| *c != Rgba::rgb(0xFF, 0xFF, 0xFF));
     let kicker = one("kicker")?;
+    let headlines = headline_figures(p)?;
     // Where the coverage grid the placement searches is written as an image (#1379).
     let coverage_path = match p.get("coverage") {
         None | Some(Value::Null) => None,
@@ -204,11 +206,12 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
     let (map_name, crs) = (s.map().name.clone(), s.map().projection.label());
     // A layer statistic (#2853) by the figure it shows now, as `{map}` is by the map's name: the
     // layers are in the project, so the box is sized for what is drawn, not for the token written.
-    let figures = {
+    let stats = {
         let texts: Vec<&str> = [&kicker, &title, &subtitle, &note, &author]
             .into_iter()
             .filter_map(|t| t.as_deref())
             .chain(sources.iter().chain(&reference).chain(&headings).map(String::as_str))
+            .chain(headlines.iter().flat_map(|(value, label)| [Some(value), label.as_ref()]).flatten().map(String::as_str))
             .collect();
         crate::render::layout::statistic_figures(s.map(), comma, &texts)
     };
@@ -217,7 +220,7 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
         if !t.contains('{') {
             return t.to_string();
         }
-        let t = figures.iter().fold(t.to_string(), |t, (token, figure)| t.replace(token.as_str(), figure));
+        let t = stats.iter().fold(t.to_string(), |t, (token, figure)| t.replace(token.as_str(), figure));
         [
             ("{date}", "0000-00-00"),
             ("{time}", "00:00"),
@@ -392,7 +395,12 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
                 // The map's frame between `top` and `bottom`, at least 40 mm tall (on A4).
                 let room = |top: f64, bottom: f64| {
                     if bottom - top < 40.0 * k {
-                        Err("the texts leave the map no room: shorten the footer, the note or the subtitle".to_string())
+                        let texts = if headlines.is_empty() {
+                            "the footer, the note or the subtitle"
+                        } else {
+                            "the footer, the note, the subtitle or the figures"
+                        };
+                        Err(format!("the texts leave the map no room: shorten {texts}"))
                     } else {
                         Ok(bottom - top)
                     }
@@ -563,8 +571,9 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
                     }
                     Style::Edge => {
                         // A kicker, the title and the subtitle at the top left; the map from one side
-                        // of the page to the other; under a thin rule, the footer with no boxes. On a
-                        // dark paper (the rule a presentation's blank page uses) the texts are light.
+                        // of the page to the other; the headline figures; under a thin rule, the
+                        // footer with no boxes. On a dark paper (the rule a presentation's blank
+                        // page uses) the texts are light.
                         let dark = page_colour
                             .is_some_and(|c| 0.299 * f64::from(c.r()) + 0.587 * f64::from(c.g()) + 0.114 * f64::from(c.b()) < 140.0);
                         let (ink, soft) = if dark { (Rgba::rgb(0xF2, 0xEE, 0xE6), Rgba::rgb(0xCF, 0xC6, 0xB8)) } else { (ink, soft) };
@@ -576,8 +585,9 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
                             // As the renderer spaces them: 1.33 points of the drawing per point of spacing.
                             let added = spacing * 1.33 / rustgis_map::layout::PT_PER_MM;
                             let t = capitals(&fill(t));
+                            // Measured as drawn: what its tokens fill in is in capitals too.
                             let width = |x: &str| {
-                                let x = drawn(x);
+                                let x = drawn(x).to_uppercase();
                                 crate::render::report::width_mm(&x, pt as f32, true) + x.chars().count() as f64 * added
                             };
                             // As `broken`: a text with the map's name or a layer statistic is kept
@@ -591,8 +601,14 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
                             };
                             let kh = lines.lines.len() as f64 * pitch(pt) + 1.0 * k;
                             let mut kind = pub_text(lines, pt, accent, true, TextAlign::Left);
-                            if let ElementKind::Text { letter_spacing, .. } = &mut kind {
+                            // The stored text is in capitals but for its tokens, which the case
+                            // covers (#3126). With nothing left to raise, no case: a saved project
+                            // asks for none.
+                            if let ElementKind::Text { text, letter_spacing, case, .. } = &mut kind {
                                 *letter_spacing = spacing;
+                                if *text != text.to_uppercase() {
+                                    *case = TextCase::Upper;
+                                }
                             }
                             around.push(("Kicker".into(), (x0, y, iw, kh), kind));
                             y += kh;
@@ -618,7 +634,42 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
                             (x0, rule, iw, 1.0),
                             ElementKind::Line { color: soft, width: 0.5, dir: LineDir::Horizontal, head: LineHead::None, dash: None },
                         ));
-                        (page_w, page_h, (0.0, ft, page_w, room(ft, rule - 3.0 * k)?), None)
+                        // The headline figures, in columns of one width between the map and the rule,
+                        // as tall as the tallest.
+                        let mut bottom = rule - 3.0 * k;
+                        if !headlines.is_empty() {
+                            let (gap, value_pt) = (5.0 * k, 22.0 * k);
+                            let n = headlines.len() as f64;
+                            let cw = (iw - gap * (n - 1.0)) / n;
+                            let columns: Vec<(Broken, Broken)> = headlines
+                                .iter()
+                                .map(|(value, label)| {
+                                    let label = label.as_deref().map(|t| wrap(t, cw, body_pt)).unwrap_or_default();
+                                    (wrap_as(value, cw, value_pt, true), label)
+                                })
+                                .collect();
+                            let height = |b: &Broken, pt: f64| b.lines.len() as f64 * pitch(pt);
+                            let band = columns.iter().map(|(v, l)| height(v, value_pt) + height(l, body_pt)).fold(0.0, f64::max);
+                            let top = bottom - band;
+                            for (i, (value, label)) in columns.into_iter().enumerate() {
+                                let x = x0 + i as f64 * (cw + gap);
+                                let (vh, lh) = (height(&value, value_pt), height(&label, body_pt));
+                                around.push((
+                                    format!("Figure {} Value", i + 1),
+                                    (x, top, cw, vh),
+                                    pub_text(value, value_pt, ink, true, TextAlign::Left),
+                                ));
+                                if !label.lines.is_empty() {
+                                    around.push((
+                                        format!("Figure {} Label", i + 1),
+                                        (x, top + vh, cw, lh),
+                                        pub_text(label, body_pt, soft, false, TextAlign::Left),
+                                    ));
+                                }
+                            }
+                            bottom = top - 3.0 * k;
+                        }
+                        (page_w, page_h, (0.0, ft, page_w, room(ft, bottom)?), None)
                     }
                     Style::Panel => {
                         // The map at the left, as tall as the sheet allows; a pale panel at the right with
@@ -887,6 +938,7 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
             scale,
             shape: FrameShape::Rectangle,
             grid: grid.clone(),
+            sections: Vec::new(),
             extent_of: None,
             extent_color: rustgis_map::layout::INDICATOR_COLOR,
             extent_width: rustgis_map::layout::INDICATOR_WIDTH,
@@ -1085,18 +1137,24 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
     // placement already sets aside, is left out of the legend too, unless "contextInLegend" (#1379).
     // It is judged again at each other scale the search below draws the map at, as the placement
     // judges it there, and the legend takes the one at the scale settled on.
+    // Those "legend" already asks to leave out aren't among them, so the warning doesn't offer to
+    // list them; without a legend there are none.
     let context_at = |s: &Session, center: Coord, scale: f64| {
-        if context_in_legend { Vec::new() } else { legend_context(s.map(), center, scale, (fw, fh)) }
+        let Some(legend) = legend.as_ref().filter(|_| !context_in_legend) else { return Vec::new() };
+        let mut context = legend_context(s.map(), center, scale, (fw, fh));
+        context.retain(|c| !legend.exclude.iter().any(|n| n.eq_ignore_ascii_case(c)));
+        context
     };
+    // The legend's sizes at a render scale: nothing without one.
+    let legend_sizes = |s: &mut Session, scale: f64, context: &[String]| match &legend {
+        None => Some([(0.0, 0.0); PUBLICATION_LEGEND_COLUMNS]),
+        Some(legend) => legend.sizes(s.map_mut(), scale, context, legend_pt),
+    };
+    // Whether a legend picture still loading keeps its size at a render scale unknown.
+    let pictures_pending =
+        |s: &Session, scale: f64| legend.as_ref().is_some_and(|l| crate::render::layout::tile_legends_pending(s.map(), scale, &l.exclude));
     let mut context = context_at(s, center, scale);
-    let mut sizes = crate::render::layout::legend_sizes_in_columns_mm::<PUBLICATION_LEGEND_COLUMNS>(
-        s.map_mut(),
-        render_scale,
-        false,
-        false,
-        (false, legend_pt),
-        (&context, &Default::default()),
-    );
+    let mut sizes = legend_sizes(s, render_scale, &context);
     let (mut cw, mut ch) = match sizes {
         Some(sizes) => sizes[0],
         None => {
@@ -1105,12 +1163,16 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
             (fw * 0.3, fh * 0.25)
         }
     };
-    let listed = s.map().layers.iter().any(|l| s.map().shows(l) && crate::render::layout::legend_lists(l));
+    // Whether a layer the legend isn't asked to leave out may have rows in it.
+    let listed = legend.as_ref().is_some_and(|legend| {
+        let asked_out = |name: &str| legend.exclude.iter().any(|n| n.eq_ignore_ascii_case(name));
+        s.map().layers.iter().any(|l| s.map().shows(l) && crate::render::layout::legend_lists(l) && !asked_out(&l.name))
+    });
     if reading && listed {
         (cw, ch) = (cw.max(fw * 0.3), ch.max(fh * 0.25));
         sizes = None;
         warnings.push("the legend's classes aren't known yet (a layer still reading): it has a fixed size to fit by hand".into());
-    } else if crate::render::layout::tile_legends_pending(s.map(), render_scale, &[]) {
+    } else if pictures_pending(s, render_scale) {
         // Not waited for: a slow legend server would hold the command up.
         (cw, ch) = (cw.max(fw * 0.3), ch.max(fh * 0.25));
         sizes = None;
@@ -1176,7 +1238,10 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
     }
     // A colour table whose values can't be known (too many to list) gives the legend no class, and
     // the sheet no key for it; classes from an overview may miss a rare one: said, not left out.
-    warnings.extend(raster_key_notices(s.map(), &[], false));
+    // Of the rasters the legend keys: none without one.
+    if let Some(legend) = &legend {
+        warnings.extend(raster_key_notices(s.map(), &legend.exclude, false));
+    }
     // A page of cards gives the locator in its column a card of the column's width, and the legend
     // under it one as wide.
     let card = style == Style::Modular && column.is_some();
@@ -1362,28 +1427,20 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
                     let reading =
                         s.map_mut().sync_sources_in(&lonlat, own.as_ref(), render_scale, true, &rustgis_data::query::Env::default());
                     let here_context = if tried == asked_scale { context.clone() } else { context_at(s, centred, tried) };
-                    let here =
-                        if reading || (tried != asked_scale && crate::render::layout::tile_legends_pending(s.map(), render_scale, &[])) {
+                    let here = if reading || (tried != asked_scale && pictures_pending(s, render_scale)) {
+                        unknown_at.get_or_insert(tried);
+                        None
+                    } else if tried == asked_scale {
+                        Some(known)
+                    } else {
+                        // A legend that can't be measured there (a source that can't be read
+                        // through) leaves that scale untried too, which is said.
+                        let measured = legend_sizes(s, render_scale, &here_context);
+                        if measured.is_none() {
                             unknown_at.get_or_insert(tried);
-                            None
-                        } else if tried == asked_scale {
-                            Some(known)
-                        } else {
-                            // A legend that can't be measured there (a source that can't be read
-                            // through) leaves that scale untried too, which is said.
-                            let measured = crate::render::layout::legend_sizes_in_columns_mm::<PUBLICATION_LEGEND_COLUMNS>(
-                                s.map_mut(),
-                                render_scale,
-                                false,
-                                false,
-                                (false, legend_pt),
-                                (&here_context, &Default::default()),
-                            );
-                            if measured.is_none() {
-                                unknown_at.get_or_insert(tried);
-                            }
-                            measured
-                        };
+                        }
+                        measured
+                    };
                     let cells = (384.0 * wide.0.max(wide.1) / fw.max(fh)).round() as u32;
                     // What is context is judged on the frame asked for, not the wide drawing, so
                     // every move's cut leaves out the same layers.
@@ -1464,14 +1521,7 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
                             *here
                         } else {
                             let at_there = crate::render::layout::frame_render_scale(s.map(), there, tried);
-                            let measured = crate::render::layout::legend_sizes_in_columns_mm::<PUBLICATION_LEGEND_COLUMNS>(
-                                s.map_mut(),
-                                at_there,
-                                false,
-                                false,
-                                (false, legend_pt),
-                                (&own_context, &Default::default()),
-                            );
+                            let measured = legend_sizes(s, at_there, &own_context);
                             // A legend that can't be measured there leaves that move untried, which is
                             // said, as at a scale.
                             let Some(measured) = measured else {
@@ -1736,6 +1786,10 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
             .collect();
         arrangement_used = "veil".into();
     }
+    // A legend asked for some columns takes them, whichever of the equal sizes was picked.
+    if let Some(columns) = legend.as_ref().and_then(|l| l.columns) {
+        legend_cols = columns;
+    }
     if let Some(ElementKind::MapFrame { center: at, scale: drawn_at, .. }) = l.element_mut(frame).map(|e| &mut e.kind) {
         (*at, *drawn_at) = (center, scale);
     }
@@ -1770,6 +1824,9 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
                 .into(),
         );
     }
+    if ch <= 0.0 && legend.as_ref().is_some_and(|l| !l.title.is_empty()) {
+        warnings.push("the legend lists nothing, so it is left out, its title with it".into());
+    }
     let mut placed: Vec<(&'static str, (f64, f64, f64, f64))> = Vec::new();
     let spot_of = |what: Surround| spots.iter().find(|(kind, _)| *kind == what).map(|(_, r)| *r);
     // In a column, at its top, centred across it; otherwise in its corner over the map.
@@ -1795,6 +1852,7 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
                 scale: *locator_scale,
                 shape: shape.clone(),
                 grid: None,
+                sections: Vec::new(),
                 extent_of: Some(frame),
                 extent_color: rustgis_map::layout::INDICATOR_COLOR,
                 extent_width: rustgis_map::layout::INDICATOR_WIDTH,
@@ -1861,7 +1919,23 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
         let bar_need = bar.as_deref().map_or(0.0, |title| colorbar_mm(title, iw));
         let bar_fit = colorbar_fit(bar_need, ih, ch + bar_gap, over_map);
         let rows_h = (ih - bar_fit - if bar.is_some() { bar_gap } else { 0.0 }).max(0.0);
-        warnings.extend(legend_fit_warnings(LegendFit::Manual, legend_cols, overflows((cw, ch), (iw, rows_h))));
+        let (mut too_wide, too_tall) = overflows((cw, ch), (iw, rows_h));
+        // A title wider than the box is named: the width past it is the title's, unless the rows
+        // are wider still.
+        let title = legend.as_ref().map(|l| l.title.as_str()).filter(|t| ch > 0.0 && !t.is_empty());
+        let title_w = title.map_or(0.0, |t| crate::render::layout::legend_title_width_mm(t, legend_pt));
+        if title_w > iw + LEGEND_FIT_MM {
+            warnings.push("the legend's title is wider than its box: shorten it".into());
+            // `cw` holds the title's width too: where the title is the widest, the rows are
+            // measured on their own. Rows of unknown size aren't said to be wider.
+            if let Some(legend) = legend.as_ref().filter(|_| cw <= title_w + LEGEND_FIT_MM) {
+                let at = crate::render::layout::frame_render_scale(s.map(), center, scale);
+                let rows = sizes.and_then(|_| legend.rows_sizes(s.map_mut(), at, &context, legend_pt));
+                let column = legend_cols.min(PUBLICATION_LEGEND_COLUMNS) - 1;
+                too_wide = rows.is_some_and(|rows| rows[column].0 > iw + LEGEND_FIT_MM);
+            }
+        }
+        warnings.extend(legend_fit_warnings(LegendFit::Manual, legend_cols, (too_wide, too_tall)));
         let short = bar_need > bar_fit + LEGEND_FIT_MM;
         // In a column the colorbar takes the column's width, as its rows do.
         if let Some(layer) = bar.as_deref().filter(|_| (base_w > iw + LEGEND_FIT_MM && !legend_in_column) || short) {
@@ -1872,17 +1946,17 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
                 warnings.push(format!("the legend's box has no room for the colorbar of '{layer}': it is left out"));
             }
         }
-        if ch > 0.0 && rows_h >= 1.0 {
+        if let Some(legend) = legend.as_ref().filter(|_| ch > 0.0 && rows_h >= 1.0) {
             l.add(
                 "Legend",
                 (ix, iy, iw, rows_h),
                 ElementKind::Legend {
                     frame,
-                    title: String::new(),
+                    title: legend.title.clone(),
                     all_classes: false,
                     hide_other: false,
                     show_no_data: false,
-                    exclude: context.clone(),
+                    exclude: legend.left_out(&context),
                     columns: legend_cols,
                     labels: Default::default(),
                     color: None,
@@ -1990,7 +2064,7 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
     }
     let locator = locator_map.map(|(map, ..)| map);
     Ok(
-        json!({"layout": i, "name": name, "profile": profile.id, "page": [w, h], "scale": scale, "grid": step, "locator": locator, "style": style.code(), "arrangement": arrangement_used, "legendColumns": legend_cols, "mapShift": [map_shift.0, map_shift.1], "veiled": veiled.is_some(), "legendBox": legend_rect.is_some() && !legend_bare, "elements": elements, "moved": moved, "coverage": coverage_written, "warnings": warnings}),
+        json!({"layout": i, "name": name, "profile": profile.id, "page": [w, h], "scale": scale, "grid": step, "locator": locator, "style": style.code(), "arrangement": arrangement_used, "legendColumns": legend.as_ref().map(|_| legend_cols), "mapShift": [map_shift.0, map_shift.1], "veiled": veiled.is_some(), "legendBox": legend_rect.is_some() && !legend_bare, "elements": elements, "moved": moved, "coverage": coverage_written, "warnings": warnings}),
     )
 }
 

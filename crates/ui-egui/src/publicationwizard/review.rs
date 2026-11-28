@@ -1,18 +1,23 @@
 //! The wizard's review step.
+use super::map::{area_label, name_label};
 use super::*;
 
 /// The review step: what was picked, step by step.
-pub(super) fn review_step(ui: &mut egui::Ui, d: &Draft) {
+pub(super) fn review_step(ui: &mut egui::Ui, s: &Session, d: &Draft) {
     let none = tl!("(none)");
     let or_none = |t: &str| if t.trim().is_empty() { none.to_string() } else { t.trim().to_string() };
     egui::Grid::new("publication_wizard_review").num_columns(2).spacing(egui::vec2(12.0, 6.0)).show(ui, |ui| {
         let mut row = |key: &str, value: String| {
             ui.label(egui::RichText::new(key).weak());
-            ui.label(value);
+            // A long value wraps in what the keys leave rather than widening the window.
+            ui.add(egui::Label::new(value).wrap());
             ui.end_row();
         };
         row(tl!("Size"), size_label(&d.size));
+        row(tl!("Map extent"), area_label(s, &d.area));
+        row(tl!("Name"), name_label(s, &d.name));
         if d.figure() {
+            row(tl!("Reference"), reference_value(d));
             return;
         }
         let turned = match d.orientation {
@@ -29,14 +34,7 @@ pub(super) fn review_step(ui: &mut egui::Ui, d: &Draft) {
         let sources = lines(&d.sources).collect::<Vec<_>>().join("\n");
         row(tl!("Sources"), or_none(&sources));
         heading_row(&mut row, d, 0, tl!("Sources heading"), PUBLICATION_HEADINGS[0]);
-        let typed = lines(&d.reference).collect::<Vec<_>>().join("\n");
-        let reference = match d.left_out(Field::Reference) {
-            Some(_) if typed.is_empty() => none.to_string(),
-            Some(_) => tl!("(none; the lines typed aren't used)").to_string(),
-            None if typed.is_empty() => tl!("The default: projection, datum and graticule, filled in on the sheet").to_string(),
-            None => typed,
-        };
-        row(tl!("Reference"), reference);
+        row(tl!("Reference"), reference_value(d));
         heading_row(&mut row, d, 1, tl!("Reference heading"), PUBLICATION_HEADINGS[1]);
         heading_row(&mut row, d, 2, tl!("Column heading"), none);
         let credit = if d.no_author {
@@ -52,6 +50,18 @@ pub(super) fn review_step(ui: &mut egui::Ui, d: &Draft) {
     });
     if d.figure() {
         figure_note(ui);
+    }
+}
+
+/// The reference as it will be drawn: the lines typed, or the command's default; left out, none,
+/// but lines typed then are said not to be used.
+fn reference_value(d: &Draft) -> String {
+    let typed = lines(&d.reference).collect::<Vec<_>>().join("\n");
+    match d.left_out(Field::Reference) {
+        Some(_) if typed.is_empty() => tl!("(none)").to_string(),
+        Some(_) => tl!("(none; the lines typed aren't used)").to_string(),
+        None if typed.is_empty() => tl!("The default: projection, datum and graticule, filled in on the sheet").to_string(),
+        None => typed,
     }
 }
 

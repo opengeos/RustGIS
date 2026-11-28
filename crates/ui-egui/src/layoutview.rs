@@ -14,6 +14,7 @@ mod actions;
 mod format;
 mod handles;
 mod interact;
+mod section;
 mod snap;
 #[cfg(test)]
 mod tests;
@@ -25,6 +26,7 @@ pub use format::format;
 use format::*;
 use handles::*;
 use interact::*;
+use section::*;
 use snap::*;
 
 /// Width of the rulers along the view's top and left edges (points).
@@ -115,6 +117,8 @@ pub struct LayoutView {
     page_wait: Option<PageWait>,
     /// The last clipping warning shown, cleared when the text fits or another layout opens.
     text_warning: Option<String>,
+    /// The last notice of the section lines the page's frames don't draw.
+    section_warning: Option<String>,
     /// The texts of the layout drawn (by its index) cut off on its page, with their lines left
     /// out of their box, as the Format pane tells them (#2346).
     text_losses: Option<(usize, Vec<rustgis_engine::render::layout::TextLoss>)>,
@@ -207,6 +211,7 @@ pub(crate) fn follow_project(app: &mut RustGisApp) {
         app.layout.typing.clear();
         app.layout.viewed = None;
         app.layout.text_warning = None;
+        app.layout.section_warning = None;
         app.layout.text_losses = None;
         app.layout.views.clear();
     }
@@ -283,6 +288,7 @@ impl LayoutView {
             return;
         }
         self.text_warning = None;
+        self.section_warning = None;
         self.text_losses = None;
         if let Some(old) = self.viewed.replace(name.to_string()) {
             self.views.insert(old, (self.zoom, self.pan));
@@ -414,6 +420,15 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
                     app.session.warn(note.clone());
                 }
                 app.layout.text_warning = note;
+            }
+            let gaps = rustgis_engine::render::layout::sections_not_drawn(&layout, &app.session.project.maps);
+            let note = rustgis_engine::render::layout::sections_notice(&gaps.into_iter().map(|g| (g, 1)).collect(), 1);
+            if note != app.layout.section_warning {
+                // (The command that added or moved one has just said so.)
+                if let Some(note) = note.as_ref().filter(|n| app.session.notices.last().is_none_or(|last| last.text != **n)) {
+                    app.session.warn(note.clone());
+                }
+                app.layout.section_warning = note;
             }
             // The Format pane is drawn before the page: a count that changed shows on the next
             // frame, without waiting for an input event.
@@ -555,6 +570,14 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
         // The name over the turned box's topmost corner.
         let top = [rt, rb, lb].into_iter().fold(lt, |a, p| if p.y < a.y - 0.5 { p } else { a });
         painter.text(top + vec2(0.0, -4.0), Align2::LEFT_BOTTOM, &e.name, regular(11.0), accent);
+    }
+    // A section line being dragged: where it will be, and its place.
+    if let (Some(Drag::Section(id, i, line, start)), Some(p)) = (app.layout.drag, pointer)
+        && let Some((e, name, at, ends)) = section_landing(app, &layout, (id, i, line, start), to_mm(page, s, p))
+    {
+        painter.line_segment(section_on_screen(e, page, s, ends), Stroke::new(2.0, accent));
+        let label = format!("{name}: {:.4}°, {:.4}°", at.x, at.y);
+        painter.text(p + vec2(12.0, 12.0), Align2::LEFT_TOP, label, semibold(12.0), accent);
     }
     // A line being turned: where it will point, and its angle.
     if let (Some(Drag::Rotate(id, a0, from)), Some(p)) = (app.layout.drag, pointer)

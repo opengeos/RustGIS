@@ -80,6 +80,7 @@ pub const CAPABILITIES: &[&str] = &[
     "terrain-water",
     "terrain-water-shore",
     "terrain-block-water",
+    "terrain-block-water-bed",
     "terrain-block-walls-layer",
     "shaded-relief-effects",
     "normalized-legend-urls",
@@ -112,6 +113,7 @@ pub const CAPABILITIES: &[&str] = &[
     "zarr-window",
     "blank-paper",
     "layout-frame-border",
+    "layout-section",
     NATIVE_COORDINATES,
     "layout-text-size",
     "layout-legend-fit",
@@ -127,6 +129,7 @@ pub const CAPABILITIES: &[&str] = &[
     "layout-page-color",
     "layout-text-statistics",
     "layout-publication-parts",
+    "layout-publication-legend",
 ];
 /// An offline area keeping the versions that lost a sync or a Bring Back
 /// (`OfflineArea::conflicts`, #2468): an older reader would save it again without them.
@@ -2792,7 +2795,7 @@ pub(crate) fn layout_notices(
     let cut = total(|r| r.elements_cut);
     if cut > 0 {
         notices.push(format!(
-            "{name}: {cut} layout element(s) with a name, text, polygon points, legend exclusions, scale bar unit labels or legend labels cut to their limits {when} (in {})",
+            "{name}: {cut} layout element(s) with a name, text, polygon points, section lines, legend exclusions, scale bar unit labels or legend labels cut to their limits {when} (in {})",
             layout_names(repairs, |r| r.elements_cut)
         ));
     }

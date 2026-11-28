@@ -113,6 +113,7 @@ diagram cut to a circle or to polygons), `terrain-block-polygon` (one cut to pol
 `terrain-water`,
 `terrain-water-shore` (a terrain water's shore band other than the default),
 `terrain-block-water` (water in a block diagram's walls),
+`terrain-block-water-bed` (that water's floor read from a bed raster),
 `terrain-block-walls-layer` (the layer a block diagram's walls are coloured by),
 `shaded-relief-effects` (cast shadows, sky visibility, fill light or rock colour),
 `shaded-relief-light` (a Shaded Relief's ambient or balanced light),
@@ -279,6 +280,12 @@ without its own (#2557). A saved `layout.update` that gives a frame a `border` o
 too, since an older reader warns that it ignores the key; `"border": null` only gives the default
 back and needs nothing. A saved `layout.import` whose `text` has such a frame requires it as well.
 
+Projects with section lines on a map frame (`sections`) require `layout-section`, so an older
+reader refuses them instead of drawing the frame without them and saving it again so (#2863). A
+saved `layout.addElement` of a section requires it too, and so does a `layout.update` with a
+`section` object, which an older reader warns that it ignores. A saved `layout.import` whose `text`
+has such a frame requires it as well.
+
 Projects with a legend, a scale bar or a grid whose text isn't its default size (`text_size` on
 a legend, 9 points by default, or on a scale bar, 8; `label_size` on a frame's grid, 8) require
 `layout-text-size`, so an older reader refuses them instead of drawing that text at the default
@@ -356,6 +363,11 @@ A saved `layout.publication` that leaves out or sets up a part of the sheet (`gr
 requires `layout-publication-parts`, so an older reader refuses it instead of making the default
 sheet or failing on the object. `null`, a `grid` or `scaleBar` of `{}`, and the north arrow given
 as the text `"auto"`, `"always"` or `"none"` need nothing.
+
+A saved `layout.publication` that leaves out or sets up its legend (`legend` as `"none"` or an
+object that gives something, #3095) requires `layout-publication-legend`, so an older reader
+refuses it instead of making the default legend. `null`, a `legend` of `{}`, a blank `title` and
+an empty `exclude` need nothing.
 
 ## New dependencies
 
