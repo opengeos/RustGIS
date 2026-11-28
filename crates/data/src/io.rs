@@ -1,7 +1,9 @@
 //! Vector readers and writers: GeoJSON, CSV (with longitude/latitude columns) and Shapefile.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
+use serde::ser::{Serialize, SerializeMap, Serializer};
 use serde_json::{Map, Value as Json, json};
 
 use crate::capped::Limit;
@@ -1791,25 +1793,75 @@ pub fn geometry_from_geojson(mut g: &Json) -> Option<Geometry> {
     }
 }
 
+/// A geometry as a GeoJSON geometry object.
 pub fn geometry_to_geojson(g: &Geometry) -> Json {
-    fn c(c: &Coord) -> Json {
-        json!([c.x, c.y])
+    // Making a value can't fail: every key is text.
+    serde_json::to_value(GeoJsonGeometry(g)).unwrap_or_default()
+}
+
+/// A geometry as its GeoJSON object serializes, a coordinate at a time: written to a file, no
+/// copy of it is made. Its members are in sorted order, as a [`Json`] object holds them.
+struct GeoJsonGeometry<'a>(&'a Geometry);
+
+impl Serialize for GeoJsonGeometry<'_> {
+    /// A line or polygon of one part is the single kind, any other number the `Multi` one.
+    fn serialize<S: Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        let mut object = s.serialize_map(Some(2))?;
+        let kind = match self.0 {
+            Geometry::Point(p) => {
+                object.serialize_entry("coordinates", &[p.x, p.y])?;
+                "Point"
+            }
+            Geometry::MultiPoint(v) => {
+                object.serialize_entry("coordinates", &Positions(v))?;
+                "MultiPoint"
+            }
+            Geometry::Line(parts) if let [only] = parts.as_slice() => {
+                object.serialize_entry("coordinates", &Positions(only))?;
+                "LineString"
+            }
+            Geometry::Line(parts) => {
+                object.serialize_entry("coordinates", &Rings(parts))?;
+                "MultiLineString"
+            }
+            Geometry::Polygon(polys) if let [only] = polys.as_slice() => {
+                object.serialize_entry("coordinates", &Rings(only))?;
+                "Polygon"
+            }
+            Geometry::Polygon(polys) => {
+                object.serialize_entry("coordinates", &Polygons(polys))?;
+                "MultiPolygon"
+            }
+        };
+        object.serialize_entry("type", kind)?;
+        object.end()
     }
-    fn l(v: &[Coord]) -> Json {
-        Json::Array(v.iter().map(c).collect())
+}
+
+/// A line's or ring's positions, `[x, y]` each.
+struct Positions<'a>(&'a [Coord]);
+
+impl Serialize for Positions<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        s.collect_seq(self.0.iter().map(|c| [c.x, c.y]))
     }
-    match g {
-        Geometry::Point(p) => json!({"type": "Point", "coordinates": c(p)}),
-        Geometry::MultiPoint(v) => json!({"type": "MultiPoint", "coordinates": l(v)}),
-        Geometry::Line(parts) if let [only] = parts.as_slice() => json!({"type": "LineString", "coordinates": l(only)}),
-        Geometry::Line(parts) => json!({"type": "MultiLineString", "coordinates": parts.iter().map(|p| l(p)).collect::<Vec<_>>()}),
-        Geometry::Polygon(polys) if let [only] = polys.as_slice() => {
-            json!({"type": "Polygon", "coordinates": only.iter().map(|r| l(r)).collect::<Vec<_>>()})
-        }
-        Geometry::Polygon(polys) => json!({"type": "MultiPolygon", "coordinates": polys
-            .iter()
-            .map(|rings| rings.iter().map(|r| l(r)).collect::<Vec<_>>())
-            .collect::<Vec<_>>()}),
+}
+
+/// The lines of a MultiLineString, or the rings of a polygon.
+struct Rings<'a>(&'a [Vec<Coord>]);
+
+impl Serialize for Rings<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        s.collect_seq(self.0.iter().map(|r| Positions(r)))
+    }
+}
+
+/// The polygons of a MultiPolygon.
+struct Polygons<'a>(&'a [Vec<Vec<Coord>>]);
+
+impl Serialize for Polygons<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        s.collect_seq(self.0.iter().map(|p| Rings(p)))
     }
 }
 
@@ -2400,12 +2452,52 @@ fn write_geojson(ds: &Dataset, out: &mut impl std::io::Write) -> Result<()> {
 }
 
 /// A feature as a GeoJSON Feature, its attributes named by `fields`.
-fn feature_to_geojson(fields: &[Field], f: &crate::Feature) -> Json {
-    let mut props = Map::new();
-    for (field, v) in fields.iter().zip(&f.attrs) {
-        props.insert(field.name.clone(), v.to_json());
+fn feature_to_geojson(fields: &[Field], feature: &crate::Feature) -> Json {
+    // Making a value can't fail: every key is text.
+    serde_json::to_value(GeoJsonFeature { fields, feature }).unwrap_or_default()
+}
+
+/// [`feature_to_geojson`]'s object as it serializes, from the row itself: its geometry and text
+/// are written as they are walked, so a large feature is never held a second time, and a sink
+/// that refuses a write stops it there. Its members are in sorted order, as a [`Json`] object
+/// holds them.
+struct GeoJsonFeature<'a> {
+    fields: &'a [Field],
+    feature: &'a crate::Feature,
+}
+
+impl Serialize for GeoJsonFeature<'_> {
+    /// The properties borrow their names and values from the fields and the row.
+    fn serialize<S: Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        let f = self.feature;
+        // By name, in order; of two fields with one name, the last one's value.
+        let properties: BTreeMap<&str, Property> =
+            self.fields.iter().zip(&f.attrs).map(|(field, v)| (field.name.as_str(), Property(v))).collect();
+        let mut object = s.serialize_map(Some(4))?;
+        object.serialize_entry("geometry", &f.geometry.as_ref().map(GeoJsonGeometry))?;
+        object.serialize_entry("id", &f.id)?;
+        object.serialize_entry("properties", &properties)?;
+        object.serialize_entry("type", "Feature")?;
+        object.end()
     }
-    json!({"type": "Feature", "id": f.id, "properties": props, "geometry": f.geometry.as_ref().map(geometry_to_geojson)})
+}
+
+/// An attribute value as a GeoJSON property: what [`Value::to_json`] gives, its text not copied.
+struct Property<'a>(&'a Value);
+
+impl Serialize for Property<'_> {
+    /// A date or date-time is written as its text.
+    fn serialize<S: Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        match self.0 {
+            Value::Null => s.serialize_unit(),
+            Value::Int(i) => s.serialize_i64(*i),
+            // JSON writes a number that isn't finite as null.
+            Value::Float(f) => s.serialize_f64(*f),
+            Value::Text(t) => s.serialize_str(t),
+            Value::Bool(b) => s.serialize_bool(*b),
+            v @ (Value::Date(_) | Value::DateTime(_)) => s.collect_str(v),
+        }
+    }
 }
 
 /// Writes a GeoJSON FeatureCollection a run of features at a time, for exports that never hold
@@ -2433,7 +2525,8 @@ impl<W: std::io::Write> GeoJsonWriter<W> {
             if !std::mem::take(&mut self.first) {
                 self.out.write_all(b",")?;
             }
-            serde_json::to_writer(&mut self.out, &feature_to_geojson(&self.fields, f)).map_err(|e| DataError::Format(e.to_string()))?;
+            let feature = GeoJsonFeature { fields: &self.fields, feature: f };
+            serde_json::to_writer(&mut self.out, &feature).map_err(|e| DataError::Format(e.to_string()))?;
         }
         Ok(())
     }
@@ -7193,6 +7286,86 @@ mod tests {
         let back = read_geojson(&to_geojson(&ds).to_string(), "t").unwrap().0;
         assert_eq!(back.features.len(), 2);
         assert_eq!(back.value(1, 0), &Value::Text("B".into()));
+    }
+
+    /// The text of every geometry shape and value type: keys sorted, the last of two fields of one
+    /// name kept, and a number that isn't finite written as null.
+    #[test]
+    fn geojson_text_of_every_geometry_and_value_is_pinned() {
+        let fields = ["z", "int", "float \"q\"", "text", "bool", "day", "when", "z"].map(|n| Field::new(n, FieldType::Text));
+        let mut ds = Dataset::new("Shapes \"1\"\n", GeometryType::None, fields.to_vec());
+        let c = Coord::new;
+        let (a, b) = (c(1.5, -2.0), c(0.1 + 0.2, 1e-7));
+        let ring = vec![c(0.0, 0.0), c(4.0, 0.0), c(4.0, 4.0), c(0.0, 0.0)];
+        let hole = vec![c(1.0, 1.0), c(2.0, 1.0), c(1.0, 1.0)];
+        let geometries = [
+            None,
+            Some(Geometry::Point(a)),
+            Some(Geometry::Point(c(f64::NAN, f64::NEG_INFINITY))),
+            Some(Geometry::MultiPoint(vec![])),
+            Some(Geometry::MultiPoint(vec![a, b])),
+            Some(Geometry::Line(vec![])),
+            Some(Geometry::Line(vec![vec![]])),
+            Some(Geometry::Line(vec![vec![c(-0.0, 1e300)]])),
+            Some(Geometry::Line(vec![vec![a, b], vec![]])),
+            Some(Geometry::Polygon(vec![])),
+            Some(Geometry::Polygon(vec![vec![]])),
+            Some(Geometry::Polygon(vec![vec![ring.clone(), hole.clone()]])),
+            Some(Geometry::Polygon(vec![vec![ring, hole], vec![]])),
+        ];
+        let values = vec![
+            Value::Text("first z".into()),
+            Value::Int(i64::MIN),
+            Value::Float(2.0),
+            Value::Text("a\"b\\c\n\t\u{1}é€/".into()),
+            Value::Bool(true),
+            Value::Date(crate::date::Date::parse("2026-03-05").unwrap()),
+            Value::DateTime(crate::date::DateTime::parse("2026-03-05T12:30:00.5+02:00").unwrap()),
+            Value::Null,
+        ];
+        let others = [f64::NAN, f64::INFINITY, -0.0, 1e300, 5e-324].map(Value::Float);
+        for (i, g) in geometries.into_iter().enumerate() {
+            let mut row = values.clone();
+            if let Some(v) = i.checked_sub(1).and_then(|i| others.get(i)) {
+                row[2] = v.clone();
+                row[7] = Value::Int(7);
+            }
+            ds.push(g, row);
+        }
+        let ring = "[[0.0,0.0],[4.0,0.0],[4.0,4.0],[0.0,0.0]],[[1.0,1.0],[2.0,1.0],[1.0,1.0]]";
+        let geometries = [
+            "null".to_string(),
+            r#"{"coordinates":[1.5,-2.0],"type":"Point"}"#.into(),
+            r#"{"coordinates":[null,null],"type":"Point"}"#.into(),
+            r#"{"coordinates":[],"type":"MultiPoint"}"#.into(),
+            r#"{"coordinates":[[1.5,-2.0],[0.30000000000000004,1e-7]],"type":"MultiPoint"}"#.into(),
+            r#"{"coordinates":[],"type":"MultiLineString"}"#.into(),
+            r#"{"coordinates":[],"type":"LineString"}"#.into(),
+            r#"{"coordinates":[[-0.0,1e+300]],"type":"LineString"}"#.into(),
+            r#"{"coordinates":[[[1.5,-2.0],[0.30000000000000004,1e-7]],[]],"type":"MultiLineString"}"#.into(),
+            r#"{"coordinates":[],"type":"MultiPolygon"}"#.into(),
+            r#"{"coordinates":[],"type":"Polygon"}"#.into(),
+            format!(r#"{{"coordinates":[{ring}],"type":"Polygon"}}"#),
+            format!(r#"{{"coordinates":[[{ring}],[]],"type":"MultiPolygon"}}"#),
+        ];
+        let numbers = ["2.0", "null", "null", "-0.0", "1e+300", "5e-324"];
+        let features: Vec<String> = geometries
+            .iter()
+            .enumerate()
+            .map(|(i, g)| {
+                let float = numbers.get(i).unwrap_or(&"2.0");
+                let z = if (1..=5).contains(&i) { "7" } else { "null" };
+                let id = ds.features[i].id;
+                let properties = format!(
+                    r#"{{"bool":true,"day":"2026-03-05","float \"q\"":{float},"int":-9223372036854775808,"text":"a\"b\\c\n\t\u0001é€/","when":"2026-03-05T12:30:00.500+02:00","z":{z}}}"#
+                );
+                format!(r#"{{"geometry":{g},"id":{id},"properties":{properties},"type":"Feature"}}"#)
+            })
+            .collect();
+        let features = format!("[{}]", features.join(","));
+        let expected = format!(r#"{{"type":"FeatureCollection","name":"Shapes \"1\"\n","features":{features}}}"#);
+        assert_eq!(to_geojson_text(&ds).unwrap(), expected);
+        assert_eq!(to_geojson(&ds)["features"].to_string(), features);
     }
 
     #[test]

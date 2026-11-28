@@ -90,9 +90,15 @@ pub(crate) struct Buffer<'a> {
 impl Buffer<'_> {
     /// The file made, its spare room given back, no longer counted against the limit.
     pub(crate) fn into_inner(mut self) -> Vec<u8> {
-        self.file.shrink_to_fit();
-        self.limit.held.fetch_sub(self.charged, Ordering::Relaxed);
-        self.file
+        let mut file = std::mem::take(&mut self.file);
+        file.shrink_to_fit();
+        self.release();
+        file
+    }
+
+    /// Stops counting the buffer's allocation against the limit, once.
+    fn release(&mut self) {
+        self.limit.held.fetch_sub(std::mem::take(&mut self.charged), Ordering::Relaxed);
     }
 
     /// Makes room for the file to reach `end` bytes, within the limit, which counts the
@@ -111,6 +117,14 @@ impl Buffer<'_> {
         // For bytes, `try_reserve_exact` allocates what is asked.
         self.file.try_reserve_exact(room - self.file.len()).map_err(|_| Error::from(ErrorKind::OutOfMemory))?;
         Ok(())
+    }
+}
+
+impl Drop for Buffer<'_> {
+    /// A buffer dropped with its file, as after a refused write or a writer's error, gives back
+    /// what it held.
+    fn drop(&mut self) {
+        self.release();
     }
 }
 
@@ -292,8 +306,24 @@ mod tests {
         }
     }
 
-    /// One feature whose geometry text alone passes the limit: KML, GPX and WKT hand it over a
-    /// piece at a time, so it is refused at the limit without ever being made whole.
+    /// A buffer dropped without being handed over, as a refused write or a writer's error leaves
+    /// one, no longer counts against the limit, and a file handed over is released only once.
+    #[test]
+    fn a_dropped_buffer_gives_back_what_it_held() {
+        let limit = Limit::new(10);
+        let mut refused = limit.buffer();
+        refused.write_all(b"12345678").unwrap();
+        assert!(refused.write_all(b"abc").is_err() && limit.passed());
+        drop(refused);
+        let mut next = limit.buffer();
+        next.write_all(&[7; 10]).unwrap();
+        assert!(limit.buffer().write_all(b"1").is_err(), "the buffer held is still counted");
+        assert_eq!(next.into_inner(), [7; 10]);
+        assert_eq!(limit.held.load(Ordering::Relaxed), 0);
+    }
+
+    /// One feature whose geometry text alone passes the limit: GeoJSON, KML, GPX and WKT hand it
+    /// over a piece at a time, so it is refused at the limit without ever being made whole.
     #[test]
     fn one_large_geometry_stops_at_the_limit_without_its_text_made_whole() {
         const MAX: usize = 10_000;
@@ -301,10 +331,13 @@ mod tests {
         for g in [Geometry::MultiPoint(points.clone()), Geometry::Line(vec![points.clone()]), Geometry::Polygon(vec![vec![points]])] {
             let mut ds = Dataset::new("Coast", GeometryType::Polyline, vec![]);
             ds.push(Some(g), vec![]);
-            for format in ["kml", "gpx", "wkt"] {
+            for format in ["geojson", "kml", "gpx", "wkt"] {
                 let limit = Limit::new(MAX);
                 let mut out = Pieces { to: limit.buffer(), largest: 0 };
                 let made = match format {
+                    // Without the buffering `write_geojson` adds, to see each piece.
+                    "geojson" => crate::io::GeoJsonWriter::new(&mut out, &ds.name, &ds.fields)
+                        .and_then(|mut w| w.write(&ds.features).and_then(|()| w.finish().map(drop))),
                     "kml" => crate::interop::write_kml(&ds, None, &mut out),
                     "gpx" => crate::interop::write_gpx(&ds, None, &mut out),
                     _ => crate::interop::write_wkt_csv(&ds, &mut out),
