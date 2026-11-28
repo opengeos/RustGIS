@@ -45,7 +45,8 @@ pub struct AssistantState {
     pub(crate) send_when_ready: bool,
     /// Messages a command asked to send (`ui.pane.assistant {"ask": …}`), oldest first: each is sent
     /// by itself, as a suggestion would be, on the next frame once the key and pictures are read.
-    /// They never go into the message being written unless they can't be sent.
+    /// They never go into the message being written unless they can't be sent, as while the
+    /// assistant is busy with one before ([`AssistantState::hold`]).
     pub(crate) asked: Vec<String>,
     /// Pictures that landed while the extension was off, to be said once.
     pub(crate) late_pictures: usize,
@@ -191,7 +192,8 @@ impl AssistantState {
     /// and what a command asked to send goes into the box with it.
     pub(crate) fn hold(&mut self) {
         self.send_when_ready = false;
-        for text in std::mem::take(&mut self.asked) {
+        // Each goes above what the box holds, so the newest goes first and the oldest ends on top.
+        for text in std::mem::take(&mut self.asked).into_iter().rev() {
             to_box(self, &text);
         }
     }
@@ -819,8 +821,14 @@ pub(crate) fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
     }
     let ready = !key_loading(app) && !app.assistant.pictures.reading();
     if ready {
-        for text in std::mem::take(&mut app.assistant.asked) {
+        while !app.assistant.busy() && !app.assistant.asked.is_empty() {
+            let text = app.assistant.asked.remove(0);
             send_from(app, text, false, ctx);
+        }
+        // While it is busy the rest aren't sent, as no message is: they go into the box in order.
+        if !app.assistant.asked.is_empty() {
+            app.assistant.hold();
+            app.session.notify(tl!("The assistant is busy; stop it or wait for it to finish."), true);
         }
     }
     if app.assistant.send_when_ready && ready {

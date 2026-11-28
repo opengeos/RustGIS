@@ -1628,9 +1628,11 @@ pub(crate) mod tests {
         app.assistant.input = "waited".into();
         app.assistant.send_when_ready = true;
         app.assistant.asked.push("asked".into());
+        app.assistant.asked.push("asked next".into());
         assistant::forget_sign_in(&mut app, &mut cfg);
         assert!(!app.assistant.sending_when_ready() && app.assistant.asked.is_empty());
-        assert_eq!(app.assistant.input, "asked\nwaited");
+        // In the order they were asked for, above what was being written.
+        assert_eq!(app.assistant.input, "asked\nasked next\nwaited");
     }
 
     /// A new conversation, or a peer's project replacing this one, sends nothing still waiting

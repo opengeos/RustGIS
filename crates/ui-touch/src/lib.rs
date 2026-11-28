@@ -251,7 +251,9 @@ pub fn chrome(app: &mut RustGisApp, ui: &mut Ui) {
         }
         // Layers, at the map's top-right corner (where a desktop's zoom buttons are); on the bar
         // while ModelBuilder, with its own buttons there, is in the map's place.
-        if LAYERS_ON_THE_MAP && map && layers_button(ui, &t, above, shown == Sheet::Layers) {
+        // Not on a strip of map too short for it (a full sheet): it comes back as the sheet lowers.
+        let room = above.height() >= TARGET + 16.0;
+        if LAYERS_ON_THE_MAP && map && room && layers_button(ui, &t, above, shown == Sheet::Layers) {
             set_sheet(ui.ctx(), if shown == Sheet::Layers { Sheet::None } else { Sheet::Layers });
         }
         // While capturing, a cross marks the middle of the map: the point goes there, so the

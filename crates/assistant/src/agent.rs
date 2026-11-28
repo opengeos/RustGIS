@@ -1180,8 +1180,9 @@ impl Agent {
             return Step::Done;
         }
         if let Some(child) = self.child.as_mut() {
-            // The child's own approval was checked with this one's ([`Agent::asking`]).
-            let step = child.decide_unguarded(allow, always, s);
+            // The child's own approval was checked with this one's ([`Agent::asking`]); a panic
+            // in it ends the child, as its own guard says, not this run.
+            let step = child.guard(|c| c.decide_unguarded(allow, always, s));
             return self.after_child(step, s);
         }
         if allow

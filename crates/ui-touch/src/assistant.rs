@@ -221,7 +221,7 @@ pub(crate) fn strip(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
 /// What the Assistant is doing, in a few words.
 fn doing(app: &RustGisApp) -> String {
     if app.assistant.waiting_to_send() {
-        return tl!("Waiting to send: the key is still being read…").to_string();
+        return tl!("Waiting to send: the key or a picture is still being read…").to_string();
     }
     if assistant::pending(app).is_some() {
         return tl!("Waiting for your approval: tap to see it.").to_string();
@@ -497,8 +497,9 @@ fn typing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, state: &mut Chat) {
     let ctx = ui.ctx().clone();
     let busy = app.assistant.busy();
     let waiting = app.assistant.waiting_to_send();
-    if waiting {
-        ui.label(RichText::new(tl!("It is sent once the key is read.")).size(13.0).color(t.text_dim));
+    // The box's own message: one a command asked for waits apart.
+    if app.assistant.sending_when_ready() {
+        ui.label(RichText::new(tl!("It is sent once the key and any picture are read.")).size(13.0).color(t.text_dim));
     }
     let id = egui::Id::unique("touch_assistant_input");
     let mut send = false;
@@ -859,6 +860,39 @@ mod tests {
         held.app.typed.push(Typed::Closed { id: entry.id, failed: None });
         held.frame(Vec::new());
         assert_eq!(held.app.assistant.input, "");
+    }
+
+    /// Of several messages a command asks for in one frame, the first goes and, the Assistant busy
+    /// with it, the rest are put in the box in the order asked, said once, and aren't sent later.
+    #[test]
+    fn messages_a_command_asks_for_while_one_is_out_go_into_the_box_in_order() {
+        let mut held = Held::new();
+        provider(&mut held, "custom", "test");
+        // Requests whose replies are held back.
+        let out = Arc::new(Mutex::new(Vec::new()));
+        let asking = out.clone();
+        held.app.services.http = Some(Box::new(move |_, slot| asking.lock().unwrap().push(slot)));
+        let mark = held.app.session.notice_mark();
+        for ask in ["first", "second", "third"] {
+            crate::run(&mut held.app, "ui.pane.assistant", json!({"ask": ask}));
+        }
+        for _ in 0..3 {
+            held.frame(Vec::new());
+        }
+        let asked = |held: &Held| -> Vec<String> {
+            held.app.assistant.messages().iter().filter_map(|e| if let Entry::User(t) = e { Some(t.clone()) } else { None }).collect()
+        };
+        assert_eq!(asked(&held), ["first"]);
+        assert_eq!(held.app.assistant.input, "second\nthird");
+        assert_eq!(said(&held, mark).iter().filter(|n| n.contains("busy")).count(), 1, "{:?}", said(&held, mark));
+        let slot = out.lock().unwrap().remove(0);
+        *slot.lock().unwrap() = Some(Ok(HttpResponse { status: 200, body: say("Done.").to_string().into_bytes(), headers: vec![] }));
+        for _ in 0..3 {
+            held.frame(Vec::new());
+        }
+        assert!(out.lock().unwrap().is_empty(), "nothing more is sent by itself");
+        assert_eq!(asked(&held), ["first"]);
+        assert_eq!(held.app.assistant.input, "second\nthird");
     }
 
     #[test]

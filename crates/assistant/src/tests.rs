@@ -3596,6 +3596,27 @@ fn an_answer_to_an_approval_no_longer_waiting_is_refused() {
     assert!(matches!(answer(&mut a, false, false, &mut s), Step::Send(_)));
 }
 
+/// A panic in a subagent's call run on an answer to its approval ends the subagent, as its own
+/// guard says, and the run that delegated to it goes on with its report.
+#[test]
+fn a_panic_in_a_subagent_after_its_approval_ends_the_subagent_not_the_run() {
+    let mut s = sample();
+    let mut a = Agent::new(cfg("openai"), &s);
+    assert!(matches!(a.ask("delegate it", &s), Step::Send(_)));
+    assert!(matches!(a.receive(a.generation(), ok(calls("delegate", json!({"task": "Export, then fail"}))), &mut s), Step::Send(_)));
+    let never = std::env::temp_dir().join(format!("rustgis-assistant-child-panic-{}.png", std::process::id()));
+    let args = json!({"command": "share.exportMap", "params": {"path": never}}).to_string();
+    let two = json!({"choices": [{"message": {"role": "assistant", "content": null, "tool_calls": [
+        {"id": "c1", "type": "function", "function": {"name": "run_command", "arguments": args}},
+        {"id": "c2", "type": "function", "function": {"name": "test_panic", "arguments": "{}"}}
+    ]}, "finish_reason": "tool_calls"}]});
+    assert_eq!(a.receive(a.generation(), ok(two), &mut s), Step::Confirm);
+    // Declined, the subagent's next call panics: the subagent ends and the run asks its provider again.
+    assert!(matches!(answer(&mut a, false, false, &mut s), Step::Send(_)));
+    assert!(a.busy());
+    assert!(!never.exists());
+}
+
 #[test]
 fn a_subagent_uses_only_its_tools() {
     let mut s = sample();
