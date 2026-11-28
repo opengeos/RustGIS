@@ -10,6 +10,7 @@
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -78,17 +79,26 @@ fn find_asset(agent: &ureq::Agent, target: &str) -> Result<(String, String, Stri
 /// Downloads the runner, checks it and installs it; returns the installed program. `progress`
 /// gets the bytes received and the expected total.
 pub fn install(progress: &dyn Fn(u64, Option<u64>)) -> Result<PathBuf, String> {
+    install_cancellable(progress, &AtomicBool::new(false))
+}
+
+/// Installs as [`install`], checking Cancel between download chunks and before publication.
+/// A blocked HTTP read finishes or times out before Cancel can be observed.
+pub fn install_cancellable(progress: &dyn Fn(u64, Option<u64>), cancel: &AtomicBool) -> Result<PathBuf, String> {
+    check_cancel(cancel)?;
     let target = target().ok_or("there is no GeoLibre runner for this platform")?;
     let dir = install_dir().ok_or("can't find a folder to install the GeoLibre runner in")?;
     let agent = agent();
     let (tag, name, archive_url, sums_url) = find_asset(&agent, target)?;
 
+    check_cancel(cancel)?;
     let sums = get(&agent, &sums_url)?.body_mut().read_to_string().map_err(|e| e.to_string())?;
     let expected = sums.split_whitespace().next().unwrap_or("").to_ascii_lowercase();
     if expected.len() != 64 || !expected.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err(format!("{name}: unreadable checksum"));
     }
 
+    check_cancel(cancel)?;
     let mut resp = get(&agent, &archive_url)?;
     let total = resp.body().content_length();
     if total.is_some_and(|t| t > MAX_BYTES) {
@@ -98,6 +108,7 @@ pub fn install(progress: &dyn Fn(u64, Option<u64>)) -> Result<PathBuf, String> {
     let mut bytes = Vec::with_capacity(total.unwrap_or(0).min(MAX_BYTES) as usize);
     let mut buf = vec![0u8; 256 * 1024];
     loop {
+        check_cancel(cancel)?;
         let n = reader.read(&mut buf).map_err(|e| format!("{name}: {e}"))?;
         if n == 0 {
             break;
@@ -108,6 +119,7 @@ pub fn install(progress: &dyn Fn(u64, Option<u64>)) -> Result<PathBuf, String> {
         }
         progress(bytes.len() as u64, total);
     }
+    check_cancel(cancel)?;
     let actual: String = Sha256::digest(&bytes).iter().map(|b| format!("{b:02x}")).collect();
     if actual != expected {
         return Err(format!("{name}: the download doesn't match its published checksum"));
@@ -118,21 +130,29 @@ pub fn install(progress: &dyn Fn(u64, Option<u64>)) -> Result<PathBuf, String> {
     let staging = dir.join(format!(".download-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&staging);
     std::fs::create_dir_all(&staging).map_err(|e| format!("{}: {e}", staging.display()))?;
-    let unpacked = unpack(&bytes, target, &staging);
+    let unpacked = check_cancel(cancel).and_then(|()| unpack(&bytes, target, &staging));
     let exe_name = if target.contains("windows") { "geolibre.exe" } else { "geolibre" };
     let found = unpacked.and_then(|_| find_file(&staging, exe_name, 3).ok_or_else(|| format!("{name} has no {exe_name}")));
-    let result = found.and_then(|exe| put_in_place(&exe, &dir.join(exe_name), &tag));
+    let result = found.and_then(|exe| put_in_place(&exe, &dir.join(exe_name), &tag, cancel));
     let _ = std::fs::remove_dir_all(&staging);
     result
+}
+
+/// Cancellation never promotes a partial or staged runner to the installed path.
+/// The stable error text identifies cancellation to callers of this string-error API.
+fn check_cancel(cancel: &AtomicBool) -> Result<(), String> {
+    if cancel.load(Ordering::Relaxed) { Err("GeoLibre installation cancelled".into()) } else { Ok(()) }
 }
 
 /// Moves the unpacked runner `exe` to `dest`, replacing an installed one, but only once `exe`
 /// starts and reports a supported version ([`crate::runner::check_supported`]): a download that
 /// doesn't is refused and an installed runner is left as it was.
-fn put_in_place(exe: &Path, dest: &Path, tag: &str) -> Result<PathBuf, String> {
+fn put_in_place(exe: &Path, dest: &Path, tag: &str, cancel: &AtomicBool) -> Result<PathBuf, String> {
+    check_cancel(cancel)?;
     make_executable(exe)?;
     let version = crate::runner::version_of(exe).ok_or_else(|| format!("the downloaded {tag} runner doesn't start"))?;
     crate::runner::check_supported(&format!("the downloaded {tag} runner"), &version)?;
+    check_cancel(cancel)?;
     // Replace an older install without ever losing it: set it aside, move the new one in, and
     // put the old one back if that fails.
     let old = dest.with_file_name(format!("{}.old", crate::runner::exe_name()));
@@ -245,12 +265,15 @@ mod tests {
         let staged = tmp.0.join("staged");
         for (line, says) in [(Some("geolibre-cli 2.0.0"), "2.0.0"), (None, "doesn't start"), (Some("geolibre-cli soon"), "can't read")] {
             fake(&staged, line).unwrap();
-            let e = put_in_place(&staged, &dest, "v1.8.0").unwrap_err();
+            let e = put_in_place(&staged, &dest, "v1.8.0", &AtomicBool::new(false)).unwrap_err();
             assert!(e.contains("the downloaded v1.8.0 runner") && e.contains(says), "{e}");
             assert_eq!(crate::runner::version_of(&dest).as_deref(), Some("geolibre-cli 1.8.0"), "the installed runner is kept");
         }
         fake(&staged, Some("geolibre-cli 1.8.1")).unwrap();
-        assert_eq!(put_in_place(&staged, &dest, "v1.8.1").unwrap(), dest);
+        assert_eq!(put_in_place(&staged, &dest, "v1.8.1", &AtomicBool::new(true)).unwrap_err(), "GeoLibre installation cancelled");
+        assert_eq!(crate::runner::version_of(&dest).as_deref(), Some("geolibre-cli 1.8.0"));
+        assert!(staged.exists());
+        assert_eq!(put_in_place(&staged, &dest, "v1.8.1", &AtomicBool::new(false)).unwrap(), dest);
         assert_eq!(crate::runner::version_of(&dest).as_deref(), Some("geolibre-cli 1.8.1"));
         assert!(!staged.exists() && !tmp.0.join(format!("{}.old", crate::runner::exe_name())).exists());
     }

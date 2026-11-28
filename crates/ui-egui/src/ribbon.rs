@@ -4081,21 +4081,31 @@ fn settings_tab(app: &mut RustGisApp, ui: &mut Ui) {
     });
     group(ui, "Start-up", |ui| start_project_menu(app, ui));
     group(ui, "Datum Grids", |ui| {
-        let mut on = app.ui.download_grids;
-        // The browser keeps what it downloads for the session; a computer, in a folder.
-        let tip = if cfg!(target_arch = "wasm32") {
-            tl!(
-                "When a coordinate system's most accurate datum transformation needs a grid RustGIS doesn't have, download it from PROJ's grid server (cdn.proj.org). Grids already downloaded stay in use for this session when this is off."
-            )
-        } else {
-            tl!(
-                "When a coordinate system's most accurate datum transformation needs a grid RustGIS doesn't have, download it from PROJ's grid server (cdn.proj.org). Grids already downloaded stay in use when this is off: to stop using them, delete the datum-grids folder in RustGIS's app data and start RustGIS again (grids installed for PROJ are still used)."
-            )
-        };
-        let resp = ui.checkbox(&mut on, tl!("Download Datum Grids")).on_hover_text(tip);
-        if resp.clicked() {
-            let _ = app.run("ui.datumGrids", json!({"on": on}));
-        }
+        col(ui, |ui| {
+            let mut on = app.ui.download_grids;
+            // The browser keeps what it downloads for the session; a computer, in a folder.
+            let tip = if cfg!(target_arch = "wasm32") {
+                tl!(
+                    "When a coordinate system's most accurate datum transformation needs a grid RustGIS doesn't have, download it from PROJ's grid server (cdn.proj.org). Grids already downloaded stay in use for this session when this is off."
+                )
+            } else {
+                tl!(
+                    "When a coordinate system's most accurate datum transformation needs a grid RustGIS doesn't have, download it from PROJ's grid server (cdn.proj.org). Grids already downloaded stay in use when this is off: to stop using them, delete the datum-grids folder in RustGIS's app data and start RustGIS again (grids installed for PROJ are still used)."
+                )
+            };
+            let resp = ui.checkbox(&mut on, tl!("Download Datum Grids")).on_hover_text(tip);
+            if resp.clicked() {
+                let _ = app.run("ui.datumGrids", json!({"on": on}));
+            }
+            let (done, total, bytes, active) = rustgis_engine::grids::progress();
+            if active {
+                ui.small(crate::i18n::fmt(
+                    "{done} of {total} · {size}",
+                    &[("done", &done.to_string()), ("total", &total.to_string()), ("size", &rustgis_engine::grids::size_text(bytes))],
+                ));
+                ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
+            }
+        });
     });
     group(ui, "Map Tiles", |ui| {
         let mut on = app.ui.sharp_tiles;

@@ -2979,6 +2979,15 @@ impl Session {
             self.notify(text, error);
         }
         for n in &news {
+            if let crate::grids::News::Finished { grids, bytes } = n {
+                self.notify_text(
+                    crate::notice_text::NoticeText::format(
+                        if *grids == 1 { "Downloaded {count} datum grid, {size}" } else { "Downloaded {count} datum grids, {size}" },
+                        [("count", grids.to_string().into()), ("size", crate::grids::size_text(*bytes).into())],
+                    ),
+                    false,
+                );
+            }
             // Its download is over: one tried again (the setting turned on again) is said again.
             if let crate::grids::News::Got { name, .. } | crate::grids::News::Failed { name, .. } = n {
                 self.grid_downloads_said.remove(name);
