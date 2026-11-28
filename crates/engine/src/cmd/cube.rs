@@ -1219,9 +1219,10 @@ pub fn add_outputs(s: &mut Session, rasters: Vec<Raster>, dates: usize) -> CmdRe
         let name = r.name.clone();
         let tif = raster::geotiff::write_all(&r).map_err(|e| e.to_string())?;
         let file: String = name.chars().map(|c| if c.is_alphanumeric() || matches!(c, '-' | '_' | '.') { c } else { '_' }).collect();
-        let named = named_values(&r);
+        let named = class_values(&r);
         let mut layer = rustgis_map::raster::RasterLayer::from_written(r, format!("{file}.tif"), tif);
-        // Named classes (firstDate's dates): a colour and its name each, from the earliest.
+        // Named classes (firstDate's dates): a colour each for every value held, from the
+        // earliest, labelled by its name (a day before 1970, unnamed, by its number).
         if !named.is_empty() && named.len() <= rustgis_map::raster::MAX_UNIQUE_VALUES {
             let ramp = rustgis_map::color::Ramp::Viridis;
             let values = named.iter().enumerate().map(|(k, v)| (*v, ramp.pick(k, named.len()))).collect();
@@ -1235,9 +1236,14 @@ pub fn add_outputs(s: &mut Session, rasters: Vec<Raster>, dates: usize) -> CmdRe
     Ok(json!({ "layers": layers, "dates": dates }))
 }
 
-/// The values a raster's first band names (its classes), in order.
-fn named_values(r: &Raster) -> Vec<f64> {
-    r.bands.first().map_or_else(Vec::new, |b| b.classes.iter().enumerate().filter(|(_, n)| !n.is_empty()).map(|(v, _)| v as f64).collect())
+/// The values held by a raster's first band when it names its classes (firstDate's dates), in
+/// order, named or not; none when it names none.
+fn class_values(r: &Raster) -> Vec<f64> {
+    let Some(b) = r.bands.first().filter(|b| b.classes.iter().any(|n| !n.is_empty())) else { return Vec::new() };
+    let mut held: Vec<f64> = b.data.iter().filter(|v| v.is_finite()).map(|v| f64::from(*v)).collect();
+    held.sort_by(f64::total_cmp);
+    held.dedup();
+    held
 }
 
 // --- A summary over time of any cube -------------------------------------------------------------
@@ -2117,29 +2123,16 @@ impl ReduceRun {
                         Some(class) => format!("{name} class {class}"),
                         None => name.clone(),
                     };
-                    let mut r = Raster::new(
-                        name,
-                        grid.width,
-                        height,
-                        vec![band],
-                        grid.transform,
-                        grid.crs,
-                        None,
-                        raster::ColorHint::Gray,
-                        "Float32",
-                    )
-                    .map_err(|e| e.to_string())?;
-                    // FirstDate's legend: each date present named.
-                    if self.stat == Stat::FirstDate
-                        && let Some(b) = r.bands.first_mut()
-                    {
-                        b.classes = day_names(&b.data);
-                    }
-                    Ok(r)
+                    Raster::new(name, grid.width, height, vec![band], grid.transform, grid.crs, None, raster::ColorHint::Gray, "Float32")
+                        .map_err(|e| e.to_string())
                 })
             })
             .collect();
-        with_lost(outputs, self.cube.as_ref())
+        let mut outputs = with_lost(outputs, self.cube.as_ref())?;
+        if self.stat == Stat::FirstDate {
+            name_days(&mut outputs);
+        }
+        Ok(outputs)
     }
 
     /// Whether first (or firstDate) leaves out what can't change a cell: a date's piece where each
@@ -2168,6 +2161,37 @@ thread_local! {
 /// least one).
 fn needed(min_share: f64, dates: usize) -> u32 {
     (min_share.clamp(0.0, 1.0) * dates as f64 - 1e-9).ceil().max(1.0) as u32
+}
+
+/// The most names firstDate's layers hold in all: a band's names are indexed by day, each date
+/// taking the days since 1970 up to it (about 20,000 in 2025), some 24 bytes each.
+pub(crate) const MAX_DATE_NAMES: usize = 2_000_000;
+
+/// FirstDate's legends: each layer's dates named ([`day_names`]), in turn while their names keep
+/// within [`MAX_DATE_NAMES`]; the layers past it keep their days unnamed, said on the first.
+fn name_days(outputs: &mut [Raster]) {
+    let (mut held, mut unnamed) = (0usize, 0usize);
+    for r in outputs.iter_mut() {
+        let Some(b) = r.bands.first_mut() else { continue };
+        let names = day_names(&b.data);
+        if held + names.len() <= MAX_DATE_NAMES {
+            held += names.len();
+            b.classes = names;
+        } else {
+            unnamed += 1;
+        }
+    }
+    let all = outputs.len();
+    if unnamed > 0
+        && let Some(first) = outputs.first_mut()
+    {
+        first.lost.push(rustgis_data::loss::Note::loss(
+            rustgis_data::loss::LossCode::DroppedOverLimit,
+            format!(
+                "{unnamed} of the {all} date layers keep their dates unnamed, drawn as a stretch of days since 1970-01-01: naming them all would take more than {MAX_DATE_NAMES} names"
+            ),
+        ));
+    }
 }
 
 /// FirstDate's classes, by value: each day held (days since 1970-01-01) named by its date, the

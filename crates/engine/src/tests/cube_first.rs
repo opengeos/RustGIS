@@ -59,16 +59,14 @@ fn reduce(s: &mut Session, p: &Value) -> std::sync::Arc<rustgis_data::raster::Ra
 /// The band files of `files`' collection read during `run`, by their date (`b0` …), each once.
 fn bands_read<T>(files: &str, run: impl FnOnce() -> T) -> (T, Vec<String>) {
     use crate::cmd::stac::BANDS_READ;
-    let mine = |all: &[String]| all.iter().filter(|h| h.starts_with(files)).count();
+    // The separator too: one server's address can begin another's (port 4000, 40001).
+    let files = format!("{files}/");
+    let mine = |all: &[String]| all.iter().filter(|h| h.starts_with(&files)).count();
     let before = mine(&BANDS_READ.lock().unwrap());
     let out = run();
     let all = BANDS_READ.lock().unwrap();
-    let mut read: Vec<String> = all
-        .iter()
-        .filter(|h| h.starts_with(files))
-        .skip(before)
-        .map(|h| h.trim_start_matches(files).trim_matches('/').to_string())
-        .collect();
+    let mut read: Vec<String> =
+        all.iter().filter(|h| h.starts_with(&files)).skip(before).map(|h| h.trim_start_matches(&files).to_string()).collect();
     read.sort();
     read.dedup();
     (out, read)
@@ -185,4 +183,56 @@ fn first_date_of_a_stack() {
     assert!(e.contains("cube.reduce's"), "{e}");
     let e = s.run("cube.reduce", &json!({"layers": names, "stat": "mean", "order": "date"})).unwrap_err();
     assert!(e.contains("firstDate's"), "{e}");
+}
+
+/// Stack layers of two cells, a date each, added to `s`: their names.
+fn two_cell_stack(s: &mut Session, dates: &[(String, f32, f32)]) -> Vec<Value> {
+    use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster, geotiff};
+    let gt = GeoTransform { origin_x: 0.0, origin_y: 1.0, pixel_width: 1.0, pixel_height: -1.0 };
+    dates
+        .iter()
+        .map(|(date, a, b)| {
+            let name = format!("ndvi_{date}");
+            let r = Raster::new(&name, 2, 1, vec![vec![*a, *b]], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
+            let bytes = geotiff::write(&r, 0).unwrap();
+            crate::cmd::raster::add_raster(s, &name, rustgis_map::RasterLayer::from_bytes(r, format!("{name}.tif"), bytes)).unwrap();
+            json!(name)
+        })
+        .collect()
+}
+
+/// A day before 1970 has no name, but its cells are drawn and its number is in the legend with
+/// the named days.
+#[test]
+fn first_date_draws_a_day_before_1970() {
+    let mut s = Session::new(Project::default());
+    let names = two_cell_stack(&mut s, &[("1969-12-31".into(), 5.0, f32::NAN), ("1970-01-02".into(), f32::NAN, 6.0)]);
+    let r = s.run("cube.reduce", &json!({"layers": names, "stat": "firstDate", "order": "date"})).unwrap();
+    let l = s.map().layer(r["layers"][0].as_u64().unwrap() as u32).unwrap().raster.as_ref().unwrap();
+    assert_eq!(l.data.as_ref().unwrap().bands[0].data, [-1.0, 1.0]);
+    let legend: Vec<String> = l.legend_classes(false).unwrap().into_iter().map(|(_, label)| label).collect();
+    assert_eq!(legend, ["-1", "1970-01-02"]);
+}
+
+/// The dates' names a run's layers hold, indexed by day, stay within a budget however many
+/// groups it makes: past it, a layer keeps its days unnamed, and that is said.
+#[test]
+fn first_date_names_stay_within_a_budget() {
+    let mut s = Session::new(Project::default());
+    // A date a year from 1990 to 2089: one layer a year, each naming every day up to its date.
+    let dates: Vec<(String, f32, f32)> = (1990..2090).map(|y| (format!("{y}-06-01"), 1.0, 1.0)).collect();
+    let names = two_cell_stack(&mut s, &dates);
+    let mark = s.notice_mark();
+    let r = s.run("cube.reduce", &json!({"layers": names, "stat": "firstDate", "by": "year"})).unwrap();
+    let layers: Vec<u32> = r["layers"].as_array().unwrap().iter().map(|l| l.as_u64().unwrap() as u32).collect();
+    assert_eq!(layers.len(), 100);
+    let held = |s: &Session, id: u32| s.map().layer(id).unwrap().raster.as_ref().unwrap().data.clone().unwrap();
+    let slots: usize = layers.iter().map(|id| held(&s, *id).bands[0].classes.len()).sum();
+    assert!(slots <= 2_000_000, "{slots} names held");
+    // The first years named, the last not; said.
+    let first = held(&s, layers[0]);
+    assert_eq!(first.bands[0].class_name(f64::from(first.bands[0].data[0])), Some("1990-06-01"));
+    assert!(held(&s, layers[99]).bands[0].classes.is_empty());
+    let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+    assert!(said.iter().any(|t| t.contains("dates unnamed")), "{said:?}");
 }
