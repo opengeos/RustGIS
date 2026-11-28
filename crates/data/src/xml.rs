@@ -4,8 +4,8 @@
 //! [`NAMESPACE_WORK`] times its size to resolve, before parsing it. Nesting thousands of elements
 //! deep exhausts the stack while the document is parsed or walked, and crafted namespace
 //! declarations (or attributes) make the parse grow as their number times the elements they stand
-//! around; a hostile file must be an error, never a crash. Where a DTD is allowed, so are entities
-//! that expand to far more than the document is long.
+//! around; a hostile file must be an error, never a crash. Where a DTD is allowed, a document whose
+//! entities expand to far more than it is long is refused too.
 
 use std::collections::HashMap;
 
@@ -84,9 +84,9 @@ fn too_much() -> String {
 /// parser does (one declared again is the same prefix); where it can't tell, it counts too deep
 /// rather than too shallow, and too much work rather than too little (an attribute with no prefix
 /// counts as looked up). With a DTD allowed, an entity whose value holds markup is refused too:
-/// expanded, it would nest in ways the text doesn't show; so are entities whose uses after the
-/// DOCTYPE (in comments and CDATA too) expand to more than [`ENTITY_EXPANSION`] bytes a byte, and
-/// than [`MIN_ENTITY_EXPANSION`].
+/// expanded, it would nest in ways the text doesn't show. A document is refused as well when the
+/// uses of its entities after the DOCTYPE (in comments and CDATA too) expand to more than both
+/// [`ENTITY_EXPANSION`] bytes per byte of it and [`MIN_ENTITY_EXPANSION`].
 /// Returns the steps of namespace work it counted.
 pub fn check_limits(text: &str, allow_dtd: bool) -> Result<u64, String> {
     let b = text.as_bytes();
