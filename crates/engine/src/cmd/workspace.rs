@@ -233,8 +233,11 @@ pub fn commands() -> Vec<C> {
             }
             let out: Vec<Value> = lines.iter().take(MAX_PROFILED_LINES).map(|l| profile(s, p, l)).collect::<Result<_, _>>()?;
             if unplaced > 0 {
-                s.warn(format!(
-                    "Profile Along Selected Lines: {unplaced} line(s) have a place that can't be given in longitude/latitude, so they get no profile"
+                s.say(rustgis_data::loss::Note::loss(
+                    rustgis_data::loss::LossCode::DroppedCalculationResult,
+                    format!(
+                        "Profile Along Selected Lines: {unplaced} line(s) have a place that can't be given in longitude/latitude, so they get no profile"
+                    ),
                 ));
             }
             Ok(Value::Array(out))
@@ -252,6 +255,12 @@ pub fn commands() -> Vec<C> {
         C::new("offline.package", "Package for the Field", "Data › Offline", |s, p| {
             let written = s.notice_mark();
             let path = super::ps(p, "path").ok_or("path is required")?.to_string();
+            // Refused before the package, and its offline area, are made.
+            if s.downloads_files() {
+                return Err(format!(
+                    "{path}: the web app can't write a field package to a path, from a script or the Assistant either; use Package for the Field on the ribbon, which downloads it"
+                ));
+            }
             super::field::not_the_project(s, std::path::Path::new(&path))?;
             let had = s.project.offline_areas.len();
             let (area, bytes, notes) = super::field::package_output(s, p)?;
@@ -284,6 +293,7 @@ pub fn commands() -> Vec<C> {
         C::new("offline.remove", "Remove", "Data › Offline", |s, p| {
             let n = ps(p, "name").ok_or("name is required")?;
             let ai = s.project.offline_areas.iter().position(|a| a.name.eq_ignore_ascii_case(n)).ok_or_else(|| format!("no offline area '{n}'"))?;
+            let named = super::layout::maps_layouts_name(&s.project);
             let area = s.project.offline_areas.remove(ai);
             let kept = offline_map_index(&s.project, &area);
             // A copy kept as the only map is no longer the area's: neither its saved association
@@ -293,10 +303,11 @@ pub fn commands() -> Vec<C> {
                     m.offline_area_id = None;
                 }
             }
+            let mut gone = None;
             if let Some(i) = kept
                 && s.project.maps.len() > 1
             {
-                s.project.maps.remove(i);
+                gone = Some(s.project.maps.remove(i).name);
                 // The active map stays the same map; if it was the removed one, a neighbour.
                 let a = s.project.active_map;
                 s.project.active_map = if a > i { a - 1 } else { a.min(s.project.maps.len().saturating_sub(1)) };
@@ -311,6 +322,10 @@ pub fn commands() -> Vec<C> {
                 // Layouts, presentations and other areas made from it follow, as on a rename.
                 super::navigate::follow_renamed_map(s, &old, &kept);
                 s.notify(format!("The offline area's map was the only one, so it was kept as '{kept}'"), false);
+            }
+            super::layout::say_map_texts(s, &named);
+            if let Some(gone) = gone {
+                super::presentation::say_pages_without_their_map(s, super::presentation::PagesOf::Map(&gone));
             }
             Ok(Value::Null)
         }).roles(&[]).effects(crate::policy::Effects::NONE)

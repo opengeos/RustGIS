@@ -4,6 +4,8 @@
 use egui::{Align2, vec2};
 use rustgis_engine::Session;
 use rustgis_engine::cmd::service_added::Removal;
+use rustgis_engine::data::GeometryType;
+use rustgis_engine::project::Table;
 use rustgis_engine::render::rustgis_tiles::{address::Reach, cache};
 use serde_json::{Value, json};
 use std::collections::hash_map::DefaultHasher;
@@ -11,6 +13,41 @@ use std::hash::{Hash, Hasher};
 
 use crate::theme::{Tokens, semibold};
 use crate::{RustGisApp, i18n};
+
+/// A live map by what it is (`Map::instance_id`, whatever its place among the project's maps, so
+/// moving it is not another map) and its name, which a rename changes.
+pub(crate) type MapKey = (u64, String);
+
+/// The map in view, as a dialog, an import or a form remembers it to find it again.
+pub(crate) fn map_key(s: &Session) -> MapKey {
+    let map = s.map();
+    (map.instance_id(), map.name.clone())
+}
+
+/// The project (`Session::opened`) and the map in view a dialog or a form was opened on: layer ids
+/// are a map's own, so what it captured is only good while both are still in view.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MapOwner {
+    project: u64,
+    map: MapKey,
+}
+
+impl MapOwner {
+    pub(crate) fn of(s: &Session) -> Self {
+        Self { project: s.opened, map: map_key(s) }
+    }
+
+    /// Whether `s` still has the project open it was made in.
+    pub(crate) fn in_project(&self, s: &Session) -> bool {
+        self.project == s.opened
+    }
+
+    /// Whether `s` still has that project open with that map in view (a moved map is the same one).
+    pub(crate) fn holds(&self, s: &Session) -> bool {
+        let map = s.map();
+        self.in_project(s) && self.map.0 == map.instance_id() && self.map.1 == map.name
+    }
+}
 
 #[derive(Default)]
 pub struct Dialogs {
@@ -20,7 +57,7 @@ pub struct Dialogs {
     /// The layer captured when Define Projection opens; changing selection must not retarget it.
     pub projection_layer: Option<u32>,
     /// Map-local layer IDs require the dialog to retain its original project and map as well.
-    pub projection_map: Option<(u64, usize, String)>,
+    pub projection_map: Option<MapOwner>,
     pub geometry: Option<crate::geometrycalc::Form>,
     /// Publication Layout Wizard: what it has asked so far (#2850).
     pub publication: Option<crate::publicationwizard::Draft>,
@@ -39,7 +76,7 @@ pub struct Dialogs {
     /// The live instance captured with the map-local ID; Undo can make that ID reusable.
     pub source_instance: Option<u64>,
     /// Layer IDs are map-local; source writes must stay in the captured project and map.
-    pub source_map: Option<(u64, usize, String)>,
+    pub source_map: Option<MapOwner>,
     /// The source-backed layer last counted, by numeric ID.
     pub counted: String,
     /// Revision after the last count command, which itself advances the session revision.
@@ -66,6 +103,9 @@ pub struct Dialogs {
     /// The layer Export Features was opened on (its id and instance), exported whatever is
     /// selected while the dialog stays open.
     pub export_layer: Option<(u32, u64)>,
+    /// The standalone table picked in Export Table (its id and instance), refused once those
+    /// contents are gone: ids are reused by other projects.
+    pub export_table: Option<(u32, u64)>,
     pub flag: bool,
     pub error: Option<String>,
     pub info: Option<String>,
@@ -83,6 +123,11 @@ pub struct Dialogs {
     pub csv_crs_dirty: bool,
     /// Import DXF's file, picked before the dialog opens.
     pub dxf: Option<DxfFile>,
+    /// Select By Attributes' Values list: its field, and the values read for it.
+    pub values: crate::fieldvalues::Form,
+    /// Select By Attributes' count of the rows its clause matches: counted once per clause and
+    /// set of rows, off the frame (#2946).
+    pub matching: crate::matchcount::Count,
     /// Reset collapsed then closed dialogs when reopening
     pub reset_collapse: bool,
 }
@@ -114,21 +159,34 @@ pub enum DxfSource {
 }
 
 impl Dialogs {
-    /// Opens Add Field or Calculate Field (`which`) on standalone table `id`.
+    /// Opens Add Field, Calculate Field or Export Table (`which`) on standalone table `id`.
     pub fn open_on_table(&mut self, which: &str, s: &Session, id: u32) -> Result<(), String> {
         // The name kept is a `&'static str`, as `open` keeps it.
         let name: &'static str = match which {
             "addField" => "addField",
             "calculateField" => "calculateField",
+            "exportTable" => "exportTable",
             other => return Err(format!("dialog '{other}' doesn't open on a table")),
         };
-        let dataset = &s.project.table(id).ok_or("no such table")?.dataset;
+        let table = s.project.table(id).ok_or("no such table")?;
         *self = Dialogs { open: Some(name), mode: "new", reset_collapse: true, table: Some((s.opened, id)), ..Dialogs::default() };
         match name {
             "addField" => self.b = "Double".into(),
-            _ => self.a = calculation_fields(dataset).last().map(|f| f.name.clone()).unwrap_or_default(),
+            "exportTable" => {
+                // Every table can be written as CSV.
+                self.mode = "csv";
+                self.gpkg_mode = "newFile";
+                self.pick_export_table(table);
+            }
+            _ => self.a = calculation_fields(&table.dataset).last().map(|f| f.name.clone()).unwrap_or_default(),
         }
         Ok(())
+    }
+
+    /// Makes `table` the one Export Table writes, and names a GeoPackage's table after it.
+    fn pick_export_table(&mut self, table: &Table) {
+        self.export_table = Some((table.id, table.instance_id()));
+        self.text = table.dataset.name.clone();
     }
 
     /// The standalone table the dialog acts on, as `"table"` names it in `p`; refused once another
@@ -217,7 +275,7 @@ impl Dialogs {
         match name {
             "defineProjection" => {
                 self.projection_layer = active.map(|l| l.id);
-                self.projection_map = Some((s.opened, s.project.active_map, s.map().name.clone()));
+                self.projection_map = Some(MapOwner::of(s));
                 self.text = active.and_then(|l| l.dataset.crs).map(|c| c.definition_text()).unwrap_or_else(|| "EPSG:4326".into());
             }
             "coordinateSystem" => {
@@ -272,14 +330,14 @@ impl Dialogs {
                 let layer = active.filter(pg).or_else(|| s.map().layers.iter().find(pg));
                 self.source_layer = layer.map(|l| l.id);
                 self.source_instance = layer.map(|l| l.instance_id());
-                self.source_map = Some((s.opened, s.project.active_map, s.map().name.clone()));
+                self.source_map = Some(MapOwner::of(s));
             }
             "gpkgSave" | "gpkgDiscard" => {
                 let gpkg = |l: &&rustgis_engine::map::Layer| l.gpkg.is_some();
                 let layer = active.filter(gpkg).or_else(|| s.map().layers.iter().find(gpkg));
                 self.source_layer = layer.map(|l| l.id);
                 self.source_instance = layer.map(|l| l.instance_id());
-                self.source_map = Some((s.opened, s.project.active_map, s.map().name.clone()));
+                self.source_map = Some(MapOwner::of(s));
             }
             // A table of addresses is what's usually geocoded: picked by its id (`flag` says the
             // choice is a table), since names can repeat.
@@ -294,11 +352,7 @@ impl Dialogs {
     }
 
     fn source_owner(&self, s: &Session, prefix: &str) -> Result<(), String> {
-        if !self
-            .source_map
-            .as_ref()
-            .is_some_and(|(project, index, name)| *project == s.opened && *index == s.project.active_map && *name == s.map().name)
-        {
+        if !self.source_map.as_ref().is_some_and(|owner| owner.holds(s)) {
             let msg = if prefix == "pg" {
                 tl!("The active project or map changed; reopen the PostGIS dialog for the intended layer.")
             } else {
@@ -407,6 +461,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
         "s3Connections" => "Choose S3 connection",
         "zarr" => "Add Zarr Variable",
         "exportLayer" => "Export Features",
+        "exportTable" => "Export Table",
         "saveProject" => "Save Project As",
         "exportOrbit" => "Export Orbit",
         "renameMap" => "Rename Map",
@@ -640,9 +695,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                     }
                 }
                 close = buttons(app, ui, "Apply", |app| {
-                    if !app.dialogs.projection_map.as_ref().is_some_and(|(project, index, name)| {
-                        *project == app.session.opened && *index == app.session.project.active_map && *name == app.session.map().name
-                    }) {
+                    if !app.dialogs.projection_map.as_ref().is_some_and(|owner| owner.holds(&app.session)) {
                         return Err(tl!("The active project or map changed; reopen Define Projection for the intended layer.").into());
                     }
                     let id = app.dialogs.projection_layer.ok_or(tl!("No layer selected"))?;
@@ -754,7 +807,8 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
             "s3" => crate::s3ui::dialog(app, ui),
             "s3Connections" => close = crate::connectionui::s3_chooser(app, ui),
             "zarr" => close = crate::zarrui::dialog(app, ui),
-            "exportLayer" => close = export_layer(app, ui),
+            "exportLayer" => close = export_data(app, ui, false),
+            "exportTable" => close = export_data(app, ui, true),
             "camera" => {
                 egui::Grid::new("cam").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
                     for (label, v) in
@@ -1030,6 +1084,10 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
     });
     if (!open || close) && app.dialogs.open == Some(which) {
         app.dialogs.open = None;
+        // Its values read are dropped with the dialog.
+        app.dialogs.values = Default::default();
+        // And so is a count still on its way (dropping it stops the worker).
+        app.dialogs.matching = Default::default();
         if which == "addDatabase" {
             app.dialogs.b.clear();
         }
@@ -1094,21 +1152,83 @@ pub(crate) fn export_formats(web: bool) -> impl Iterator<Item = &'static (&'stat
     EXPORT_FORMATS.iter().filter(move |(_, e)| !(web && matches!(*e, "gpkg" | "fgb")))
 }
 
-/// Export Features: the active layer, in a format picked here (a file's type isn't changed by
-/// the filter chosen in a save dialog, and the web app has no save dialog).
-fn export_layer(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
+/// The formats Export Table offers: [`export_formats`], less, for a table without geometry,
+/// Shapefile and FlatGeobuf (which refuse it) and KML, KMZ and GPX (whose file would hold none
+/// of its rows).
+pub(crate) fn table_formats(web: bool, geometry: bool) -> impl Iterator<Item = &'static (&'static str, &'static str)> {
+    export_formats(web).filter(move |(_, e)| geometry || !matches!(*e, "shp" | "fgb" | "kml" | "kmz" | "gpx"))
+}
+
+/// Export Table's first row: the standalone table written, picked from the project's. One whose
+/// contents are gone shows none, and is refused on export.
+fn export_table_choice(app: &mut RustGisApp, ui: &mut egui::Ui) {
+    let label = ui.label(tl!("Table"));
+    let picked = app.dialogs.export_table;
+    let is_picked = |t: &Table| picked == Some((t.id, t.instance_id()));
+    let tables = &app.session.project.tables;
+    let shown = tables.iter().find(|t| is_picked(t)).map_or_else(String::new, |t| table_label(tables, t.id));
+    let mut chosen = None;
+    egui::ComboBox::from_id_salt("export_table_choice")
+        .selected_text(shown)
+        .width(220.0)
+        .show_ui(ui, |ui| {
+            for t in tables {
+                if ui.selectable_label(is_picked(t), table_label(tables, t.id)).clicked() {
+                    chosen = Some(t.id);
+                }
+            }
+        })
+        .response
+        .labelled_by(label.id);
+    if let Some(t) = chosen.and_then(|id| app.session.project.table(id)) {
+        app.dialogs.pick_export_table(t);
+    }
+}
+
+/// How Export Table names standalone table `id` among `tables`: its name, and where names repeat
+/// (the project allows it), which of them it is, in the Layers pane's order.
+fn table_label(tables: &[Table], id: u32) -> String {
+    let Some(name) = tables.iter().find(|t| t.id == id).map(|t| t.dataset.name.as_str()) else { return String::new() };
+    let same: Vec<u32> = tables.iter().filter(|t| t.dataset.name == name).map(|t| t.id).collect();
+    match same.iter().position(|&other| other == id) {
+        Some(k) if same.len() > 1 => {
+            crate::i18n::fmt("{name} ({k} of {n})", &[("name", name), ("k", &(k + 1).to_string()), ("n", &same.len().to_string())])
+        }
+        _ => name.to_string(),
+    }
+}
+
+/// Export Features (the active layer) and Export Table (`table`: a standalone table), in a format
+/// picked here (a file's type isn't changed by the filter chosen in a save dialog, and the web
+/// app has no save dialog).
+fn export_data(app: &mut RustGisApp, ui: &mut egui::Ui, table: bool) -> bool {
     let web = app.services.download.is_some();
-    egui::Grid::new("export_layer").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
-        ui.label(tl!("Layer"));
-        ui.label(&app.dialogs.layer);
+    egui::Grid::new("export_data").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
+        if table {
+            export_table_choice(app, ui);
+        } else {
+            ui.label(tl!("Layer"));
+            ui.label(&app.dialogs.layer);
+        }
         ui.end_row();
+        let geometry = !table
+            || app
+                .dialogs
+                .export_table
+                .and_then(|(id, _)| app.session.project.table(id))
+                .is_some_and(|t| t.dataset.geometry_type != GeometryType::None);
+        let formats = || table_formats(web, geometry);
+        // Another table picked may not take the format chosen for the last one.
+        if table && !formats().any(|(_, e)| *e == app.dialogs.mode) {
+            app.dialogs.mode = "csv";
+        }
         let input_label = ui.label(tl!("Format"));
         let shown = EXPORT_FORMATS.iter().find(|(_, e)| *e == app.dialogs.mode).map(|(l, _)| *l).unwrap_or("GeoJSON");
         egui::ComboBox::from_id_salt("export_format")
             .selected_text(shown)
             .width(220.0)
             .show_ui(ui, |ui| {
-                for (label, ext) in export_formats(web) {
+                for (label, ext) in formats() {
                     ui.selectable_value(&mut app.dialogs.mode, *ext, *label);
                 }
             })
@@ -1131,7 +1251,8 @@ fn export_layer(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
                 .labelled_by(into_label.id);
             ui.end_row();
             if !matches!(app.dialogs.gpkg_mode, "" | "newFile") {
-                let table_label = ui.label(tl!("Table"));
+                // Export Table's first row is already labelled "Table".
+                let table_label = ui.label(if table { tl!("Table name") } else { tl!("Table") });
                 ui.add(egui::TextEdit::singleline(&mut app.dialogs.text).desired_width(220.0)).labelled_by(table_label.id);
                 ui.end_row();
             }
@@ -1146,15 +1267,20 @@ fn export_layer(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
     }
     buttons(app, ui, if web { "Download" } else { "Export…" }, |app| {
         let mut p = json!({"format": app.dialogs.mode});
-        if let Some((layer, instance)) = app.dialogs.export_layer {
-            p["layer"] = json!(layer);
+        let (command, key, target) = if table {
+            ("ui.exportTable", "table", app.dialogs.export_table)
+        } else {
+            ("ui.exportLayer", "layer", app.dialogs.export_layer)
+        };
+        if let Some((id, instance)) = target {
+            p[key] = json!(id);
             p["instance"] = json!(instance);
         }
         if into_existing {
             p["mode"] = json!(app.dialogs.gpkg_mode);
             p["tableName"] = json!(app.dialogs.text);
         }
-        app.run("ui.exportLayer", p).map(|_| ())
+        app.run(command, p).map(|_| ())
     })
 }
 
@@ -2877,12 +3003,27 @@ const MAX_FIELD_CHIPS: usize = 40;
 /// offer. A field an earlier one shadows (`name` after `Name`: the expression reads the first,
 /// letter case aside) gets no button, as the completion list doesn't offer it.
 pub(crate) fn field_chips(ui: &mut egui::Ui, fields: &[rustgis_engine::data::Field], text: &mut String) {
+    field_chips_with(ui, fields, text, |_| {});
+}
+
+/// [`field_chips`] with `first` drawn right after the "Fields:" label, in the row of the buttons
+/// (Select By Attributes' Values button). Returns the name of the field whose button was clicked
+/// this frame, for what depends on the field last chosen.
+pub(crate) fn field_chips_with(
+    ui: &mut egui::Ui,
+    fields: &[rustgis_engine::data::Field],
+    text: &mut String,
+    first: impl FnOnce(&mut egui::Ui),
+) -> Option<String> {
+    let mut clicked = None;
     ui.horizontal_wrapped(|ui| {
         ui.label(egui::RichText::new(tl!("Fields:")).small().weak());
+        first(ui);
         let mut seen = std::collections::HashSet::new();
         for f in fields.iter().filter(|f| seen.insert(f.name.to_ascii_lowercase())).take(MAX_FIELD_CHIPS) {
             if ui.small_button(&f.name).clicked() {
                 add_word(text, &crate::exprcomplete::field_ref(&f.name));
+                clicked = Some(f.name.clone());
             }
         }
     });
@@ -2897,6 +3038,7 @@ pub(crate) fn field_chips(ui: &mut egui::Ui, fields: &[rustgis_engine::data::Fie
             add_word(text, &word);
         }
     });
+    clicked
 }
 
 fn select_by_attributes(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) -> bool {
@@ -2941,7 +3083,7 @@ fn select_by_attributes(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) -> 
     // Suggestions as it's typed: the fields, functions, variables and keywords (#1240).
     let ds = app.session.map().layer_by_name(&app.dialogs.layer).map(|l| &l.dataset);
     let id = egui::Id::unique("sba_where");
-    crate::exprcomplete::expr_edit_lines(ui, id, &mut app.dialogs.text, ds, |text| {
+    let edit = crate::exprcomplete::expr_edit_lines(ui, id, &mut app.dialogs.text, ds, |text| {
         text_box(text)
             .hint_text(tl!("e.g. pop_est > 100000000 AND continent = 'Asia'"))
             .desired_rows(3)
@@ -2949,29 +3091,52 @@ fn select_by_attributes(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) -> 
             .font(egui::TextStyle::Monospace)
     })
     .labelled_by(input_label.id);
+    // The Values list is of the field last clicked, or typed in the box.
+    app.dialogs.values.follow(&app.dialogs.layer);
+    if let Some(ds) = ds.filter(|_| edit.has_focus()) {
+        app.dialogs.values.follow_box(ui, id, &app.dialogs.text, ds);
+    }
     let fields = ds.map(|d| d.fields.as_slice()).unwrap_or_default();
-    field_chips(ui, fields, &mut app.dialogs.text);
+    let mut picked = None;
+    let clicked = field_chips_with(ui, fields, &mut app.dialogs.text, |ui| {
+        picked = crate::fieldvalues::button(ui, &mut app.dialogs.values, ds);
+    });
+    if let Some(field) = clicked {
+        app.dialogs.values.choose(&field);
+    }
+    if let (Some((field, value)), Some(ds)) = (picked, ds) {
+        app.dialogs.values.accept(&mut app.dialogs.text, &field, &value, ds);
+    }
+    crate::fieldvalues::said(ui, &app.dialogs.values);
     // Live validation, once no suggestion is offered: a word still being chosen isn't an error yet.
     let offering = crate::exprcomplete::offering(ui, id);
-    let check = app
+    // Counted once per clause and set of rows, off the frame (#2946); nothing while a word is
+    // still being chosen, nor for an empty clause.
+    let dialogs = &mut app.dialogs;
+    let shown = app
         .session
         .map()
-        .layer_by_name(&app.dialogs.layer)
-        .filter(|_| !offering)
-        .map(|l| rustgis_engine::data::query::select(&app.dialogs.text, &l.dataset));
-    match (&check, app.dialogs.text.trim().is_empty()) {
-        (_, true) => {}
-        (Some(Ok(rows)), _) => {
+        .layer_by_name(&dialogs.layer)
+        .filter(|_| !offering && !dialogs.text.trim().is_empty())
+        .map(|l| dialogs.matching.of(ui.ctx(), &dialogs.text, &l.name, &l.dataset, !cfg!(target_arch = "wasm32")));
+    match shown {
+        Some(crate::matchcount::Shown::Rows(n)) => {
             ui.label(
-                egui::RichText::new(crate::i18n::fmt("Valid expression · {n} matching rows", &[("n", &rows.len().to_string())]))
+                egui::RichText::new(crate::i18n::fmt("Valid expression · {n} matching rows", &[("n", &n.to_string())]))
                     .small()
                     .color(t.green),
             );
         }
-        (Some(Err(e)), _) => {
-            ui.label(egui::RichText::new(crate::i18n::fmt("Invalid: {error}", &[("error", e)])).small().color(t.red));
+        Some(crate::matchcount::Shown::Invalid(e)) => {
+            ui.label(egui::RichText::new(crate::i18n::fmt("Invalid: {error}", &[("error", &e)])).small().color(t.red));
         }
-        _ => {}
+        Some(crate::matchcount::Shown::Failed(e)) => {
+            ui.label(egui::RichText::new(e).small().color(t.red));
+        }
+        Some(crate::matchcount::Shown::Counting) => {
+            ui.label(egui::RichText::new(tl!("Counting matching rows…")).small().weak());
+        }
+        None => {}
     }
     buttons(app, ui, "Apply", |app| {
         let layer = app.dialogs.layer.clone();
@@ -3477,6 +3642,7 @@ fn calculation_preview(rows: &[rustgis_engine::cmd::edit::CalculationPreview]) -
                 PreviewLoss::NotANumber => tl_raw!("not a number"),
                 PreviewLoss::NotFinite => tl_raw!("not a finite number"),
                 PreviewLoss::Time => tl_raw!("time dropped"),
+                PreviewLoss::Rounded => tl_raw!("rounded"),
                 PreviewLoss::Unheld => tl_raw!("not a value the field holds"),
                 // The phrases the run's notices give for the same errors.
                 PreviewLoss::Error(fault) => tl_raw!(fault.describe()),
@@ -3498,6 +3664,37 @@ fn calculation_preview(rows: &[rustgis_engine::cmd::edit::CalculationPreview]) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Export Table's picker tells apart standalone tables that share a name, which the project
+    /// allows, so the one written is the one meant; a name used once stays as it is.
+    #[test]
+    fn export_table_labels_tell_tables_with_one_name_apart() {
+        use rustgis_engine::data::{Dataset, GeometryType};
+        let mut app = RustGisApp::with_sample();
+        let first = app.session.project.add_table(Dataset::new("totals", GeometryType::None, vec![]));
+        let other = app.session.project.add_table(Dataset::new("ranks", GeometryType::None, vec![]));
+        let second = app.session.project.add_table(Dataset::new("totals", GeometryType::None, vec![]));
+        let tables = &app.session.project.tables;
+        assert_eq!(table_label(tables, first), "totals (1 of 2)");
+        assert_eq!(table_label(tables, second), "totals (2 of 2)");
+        assert_eq!(table_label(tables, other), "ranks");
+    }
+
+    /// The GeoPackage prompt belongs to the map it opened on, wherever that map goes among the maps;
+    /// another map or project refuses it (#2959).
+    #[test]
+    fn the_gpkg_prompt_follows_its_map_when_the_map_moves() {
+        let mut app = RustGisApp::with_sample();
+        let first = app.session.map().name.clone();
+        let dialogs = Dialogs { source_map: Some(MapOwner::of(&app.session)), ..Dialogs::default() };
+        assert!(dialogs.source_owner(&app.session, "gpkg").is_ok());
+        app.run("map.new", json!({"name": "Second"})).unwrap();
+        assert!(dialogs.source_owner(&app.session, "gpkg").is_err(), "another map is in view");
+        app.run("map.activate", json!({"name": first})).unwrap();
+        app.run("map.move", json!({"name": first, "to": 1})).unwrap();
+        assert_eq!(app.session.project.active_map, 1, "the map in view moved to the end");
+        assert!(dialogs.source_owner(&app.session, "gpkg").is_ok(), "the same map, moved");
+    }
 
     #[test]
     fn narrow_desktop_dialog_remembers_its_dragged_position() {
@@ -3749,6 +3946,130 @@ mod tests {
 
     fn selected(app: &RustGisApp) -> usize {
         app.session.map().layer_by_name("Countries").map_or(0, |l| l.selection.len())
+    }
+
+    /// Frames until the count has landed (it runs on a thread of its own).
+    fn counted(h: &mut egui_kittest::Harness<'static, RustGisApp>) {
+        for _ in 0..400 {
+            h.step();
+            if !h.state().dialogs.matching.counting() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5)); // test-wait: the count runs on a thread of its own
+        }
+        panic!("the count never landed");
+    }
+
+    /// The count is made once for a clause and its rows, not once per frame, and reads as it
+    /// always did (#2946).
+    #[test]
+    fn select_by_attributes_counts_once_per_clause_not_per_frame() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = sba_ready();
+        counted(&mut h);
+        assert_eq!(h.state().dialogs.matching.starts, 1);
+        h.run_steps(10);
+        for x in [200.0, 300.0, 250.0] {
+            h.hover_at(egui::pos2(x, 300.0));
+            h.step();
+        }
+        assert_eq!(h.state().dialogs.matching.starts, 1, "not counted again by frames");
+        assert!(h.query_by_label("Valid expression · 14 matching rows").is_some(), "the number as before");
+    }
+
+    /// An edit to the layer, another clause or another layer is counted again; none is answered
+    /// with the number for what was before (#2946).
+    #[test]
+    fn select_by_attributes_count_follows_the_rows_and_the_clause() {
+        use egui_kittest::kittest::Queryable;
+        use rustgis_engine::data::Value;
+        let mut h = sba_ready();
+        counted(&mut h);
+        let (id, fields) = h.state().session.map().layer_by_name("Countries").map(|l| (l.id, l.dataset.fields.len())).unwrap();
+        let pop = h.state().session.map().layer_by_name("Countries").and_then(|l| l.dataset.field_index("pop_est")).unwrap();
+        let mut attrs = vec![Value::Null; fields];
+        attrs[pop] = Value::Int(1_000_000_000);
+        h.state_mut().session.map_mut().layer_mut(id).unwrap().dataset.push(None, attrs);
+        counted(&mut h);
+        assert_eq!(h.state().dialogs.matching.starts, 2, "a row added");
+        assert!(h.query_by_label("Valid expression · 15 matching rows").is_some(), "one more than before");
+        h.state_mut().dialogs.text = "pop_est > 2000000000".into();
+        counted(&mut h);
+        assert_eq!(h.state().dialogs.matching.starts, 3, "another clause");
+        assert!(h.query_by_label("Valid expression · 0 matching rows").is_some());
+        h.state_mut().dialogs.text.clear();
+        h.run_steps(3);
+        assert_eq!(h.state().dialogs.matching.starts, 3, "an empty clause starts nothing");
+        assert!(h.query_by_label_contains("matching rows").is_none(), "and says nothing");
+    }
+
+    /// A value edited in place (the rows' number and the fields as before), another layer and a
+    /// layer removed are never answered with the number for what was there before (#2946).
+    #[test]
+    fn select_by_attributes_count_follows_a_value_edit_a_layer_switch_and_a_removal() {
+        use egui_kittest::kittest::Queryable;
+        use rustgis_engine::data::Value;
+        let mut h = sba_ready();
+        counted(&mut h);
+        let (id, pop, row) = {
+            let l = h.state().session.map().layer_by_name("Countries").unwrap();
+            let rows = rustgis_engine::data::query::select("pop_est > 100000000", &l.dataset).unwrap();
+            (l.id, l.dataset.field_index("pop_est").unwrap(), rows[0])
+        };
+        h.state_mut().session.map_mut().layer_mut(id).unwrap().dataset.features.set_value(row, pop, Value::Int(0));
+        counted(&mut h);
+        assert!(h.query_by_label("Valid expression · 13 matching rows").is_some(), "one fewer, the same length");
+        h.state_mut().dialogs.layer = "Cities".into();
+        counted(&mut h);
+        assert!(h.query_by_label_contains("Valid expression · 13").is_none(), "not Countries' number for Cities");
+        assert!(
+            h.query_by_label_contains("matching rows").is_some() || h.query_by_label_contains("Invalid:").is_some(),
+            "Cities has its own answer"
+        );
+        h.state_mut().dialogs.layer = "Countries".into();
+        counted(&mut h);
+        h.state_mut().session.run("layer.remove", &json!({"layer": "Countries"})).unwrap();
+        h.run_steps(3);
+        assert!(h.query_by_label_contains("matching rows").is_none(), "a layer that is gone has no count");
+    }
+
+    /// A clause that doesn't read is said at once and starts no count (#2946).
+    #[test]
+    fn select_by_attributes_names_a_bad_clause_without_counting() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = sba_ready();
+        counted(&mut h);
+        h.state_mut().dialogs.text = "nope = 1".into();
+        h.step();
+        assert!(h.query_by_label("Invalid: no field named 'nope'").is_some(), "said in the frame that sees it");
+        assert_eq!(h.state().dialogs.matching.starts, 1, "no second count");
+    }
+
+    /// A clause typed is not counted in the frame that draws it (#2946): the count runs on a
+    /// thread of its own and is polled by a later frame, however fast it is.
+    #[test]
+    fn select_by_attributes_does_not_count_in_the_frame_that_draws_it() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = sba_ready();
+        h.state_mut().dialogs.text = "pop_est > 100000000 OR pop_est < 1".into();
+        h.step();
+        assert!(h.query_by_label_contains("Counting matching rows…").is_some(), "says it is counting");
+        assert!(h.query_by_label_contains("Valid expression").is_none(), "no count in the frame that starts it");
+    }
+
+    /// Closing the dialog while it counts stops the count (#2946): the worker is not left reading
+    /// the layer's rows for a dialog that is gone.
+    #[test]
+    fn cancelling_select_by_attributes_stops_its_count() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::Queryable;
+        let mut h = sba_ready();
+        let stop = h.state().dialogs.matching.stop_flag();
+        assert!(!stop.load(std::sync::atomic::Ordering::Relaxed), "counting for the open dialog");
+        h.get_by_role_and_label(Role::Button, "Cancel").click();
+        h.run();
+        assert_eq!(h.state().dialogs.open, None, "Cancel closed it");
+        assert!(stop.load(std::sync::atomic::Ordering::Relaxed), "and the count was told to stop");
     }
 
     /// Enter on a focused Cancel cancels: the dialog closes and selects nothing (#2599).
@@ -4415,6 +4736,304 @@ mod tests {
         assert!(h.query_by_label_contains("Invalid:").is_some(), "the error once the list is closed");
     }
 
+    /// Select By Attributes' Values list: the distinct values of the field last clicked, typed or
+    /// put the cursor in; a click writes the comparison with the field, or only the value after an
+    /// operator. Read once when the list is opened, not each frame it stays open, and dropped when
+    /// the field or the layer changes.
+    #[test]
+    fn select_by_attributes_values_list_writes_what_it_lists() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::Queryable;
+        let mut app = RustGisApp::with_sample();
+        app.run("ui.dialog", json!({"name": "selectByAttributes"})).unwrap();
+        app.dialogs.layer = "Countries".into();
+        let mut h = app_harness(app);
+        h.run_steps(3);
+        let values = |h: &mut egui_kittest::Harness<'static, RustGisApp>| {
+            h.get_by_role_and_label(Role::Button, "Values ▾").click();
+            h.run();
+        };
+        let pick = |h: &mut egui_kittest::Harness<'static, RustGisApp>, value: &str| {
+            h.get_by_role_and_label(Role::Button, value).click();
+            h.run();
+        };
+        // No field chosen yet: it says what to do, as the list has nothing to show.
+        values(&mut h);
+        assert!(h.query_by_label("Click a field, or put the cursor in one, to list its values").is_some());
+        // A field clicked: its values are listed, read once however long the list stays open.
+        h.get_by_role_and_label(Role::Button, "continent").click();
+        h.run();
+        assert!(h.query_by_label("Click a field, or put the cursor in one, to list its values").is_none(), "said no more");
+        // The button wrote the field into the box, and the box is not cleared: the value adds the
+        // comparison to it, not the field again.
+        assert_eq!(h.state().dialogs.text, "continent ");
+        values(&mut h);
+        h.run_steps(5);
+        assert_eq!(h.state().dialogs.values.reads, 1);
+        assert!(h.query_by_label_contains("evenly spread").is_none() && h.query_by_label_contains("read for the view").is_none());
+        pick(&mut h, "'Asia'");
+        assert_eq!(h.state().dialogs.text, "continent = 'Asia' ", "the comparison, the value quoted");
+        assert!(h.query_by_role_and_label(Role::Button, "'Africa'").is_none(), "the list closed");
+        // Opened again for the same field: the values are kept.
+        values(&mut h);
+        assert_eq!(h.state().dialogs.values.reads, 1, "kept while the dialog stays on the field");
+        // After an operator only the value goes.
+        h.state_mut().dialogs.text = "continent <> ".into();
+        pick(&mut h, "'Africa'");
+        assert_eq!(h.state().dialogs.text, "continent <> 'Africa' ");
+        h.state_mut().dialogs.text = "name IN (".into();
+        values(&mut h);
+        pick(&mut h, "'Asia'");
+        assert_eq!(h.state().dialogs.text, "name IN ('Asia') ", "a list of one, closed so the clause reads");
+        // Another field reads its own values.
+        h.get_by_role_and_label(Role::Button, "name").click();
+        h.run();
+        h.state_mut().dialogs.text.clear();
+        values(&mut h);
+        assert_eq!(h.state().dialogs.values.reads, 2);
+        assert!(h.query_by_role_and_label(Role::Button, "'Asia'").is_none(), "not the last field's values");
+        // Another layer has no field chosen: the list is dropped with the layer.
+        h.key_press(egui::Key::Escape);
+        h.run();
+        h.state_mut().dialogs.layer = "Cities".into();
+        h.run_steps(2);
+        values(&mut h);
+        assert!(h.query_by_label("Click a field, or put the cursor in one, to list its values").is_some());
+        // Dropped with the dialog.
+        h.state_mut().dialogs.layer = "Countries".into();
+        h.run_steps(2);
+        h.get_by_role_and_label(Role::Button, "continent").click();
+        h.run();
+        values(&mut h);
+        assert_eq!(h.state().dialogs.values.reads, 3);
+        h.key_press(egui::Key::Escape);
+        h.run();
+        h.get_by_role_and_label(Role::Button, "Cancel").click();
+        h.run();
+        assert_eq!((h.state().dialogs.open, h.state().dialogs.values.reads), (None, 0));
+    }
+
+    /// The value goes where the cursor was that the field came from, not at the end of the clause.
+    #[test]
+    fn select_by_attributes_values_list_fills_the_gap_at_the_cursor() {
+        use egui::accesskit::Role;
+        use egui::text::{CCursor, CCursorRange};
+        use egui_kittest::kittest::Queryable;
+        let mut app = RustGisApp::with_sample();
+        app.run("ui.dialog", json!({"name": "selectByAttributes"})).unwrap();
+        app.dialogs.layer = "Countries".into();
+        let mut h = app_harness(app);
+        h.run_steps(3);
+        let id = egui::Id::unique("sba_where");
+        h.state_mut().dialogs.text = "continent =  AND pop_est > 1".into();
+        h.ctx.memory_mut(|m| m.request_focus(id));
+        h.run();
+        let mut state = egui::widgets::text_edit::TextEditState::load(&h.ctx, id).unwrap_or_default();
+        state.cursor.set_char_range(Some(CCursorRange::one(CCursor::new(12))));
+        state.store(&h.ctx, id);
+        h.run();
+        h.get_by_role_and_label(Role::Button, "Values ▾").click();
+        h.run();
+        h.get_by_role_and_label(Role::Button, "'Asia'").click();
+        h.run();
+        assert_eq!(h.state().dialogs.text, "continent = 'Asia' AND pop_est > 1", "the gap filled, the rest kept");
+    }
+
+    /// Compared with something computed (`upper(name) = ▮`), there is no field to list: not the one
+    /// clicked before.
+    #[test]
+    fn select_by_attributes_values_list_lists_nothing_beside_a_computed_left_side() {
+        use egui::accesskit::Role;
+        use egui::text::{CCursor, CCursorRange};
+        use egui_kittest::kittest::Queryable;
+        let mut app = RustGisApp::with_sample();
+        app.run("ui.dialog", json!({"name": "selectByAttributes"})).unwrap();
+        app.dialogs.layer = "Countries".into();
+        let mut h = app_harness(app);
+        h.run_steps(3);
+        h.get_by_role_and_label(Role::Button, "continent").click();
+        h.run();
+        let id = egui::Id::unique("sba_where");
+        h.state_mut().dialogs.text = "upper(name) = ".into();
+        h.ctx.memory_mut(|m| m.request_focus(id));
+        h.run();
+        let mut state = egui::widgets::text_edit::TextEditState::load(&h.ctx, id).unwrap_or_default();
+        state.cursor.set_char_range(Some(CCursorRange::one(CCursor::new(14))));
+        state.store(&h.ctx, id);
+        h.run();
+        h.get_by_role_and_label(Role::Button, "Values ▾").click();
+        h.run();
+        assert!(h.query_by_label("Click a field, or put the cursor in one, to list its values").is_some(), "no field chosen");
+        assert!(h.query_by_role_and_label(Role::Button, "'Asia'").is_none(), "continent isn't listed");
+    }
+
+    /// The list stays as it was read while it is open: rows that change under it (a streamed
+    /// layer's next view) don't change what Enter takes. Opened again, it reads the rows then.
+    #[test]
+    fn select_by_attributes_values_list_does_not_change_while_open() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::Queryable;
+        use rustgis_engine::data::Value;
+        let mut app = RustGisApp::with_sample();
+        app.run("ui.dialog", json!({"name": "selectByAttributes"})).unwrap();
+        app.dialogs.layer = "Countries".into();
+        let mut h = app_harness(app);
+        h.run_steps(3);
+        let layer = |h: &egui_kittest::Harness<'static, RustGisApp>| {
+            h.state().session.map().layer_by_name("Countries").map(|l| (l.id, l.dataset.clone()))
+        };
+        let (id, ds) = layer(&h).unwrap();
+        let field = ds.fields.iter().position(|f| f.name == "continent").unwrap();
+        let first =
+            rustgis_engine::data::query::field_values(&ds, field, rustgis_engine::data::query::VALUES_READ).values[0].written.clone();
+        h.get_by_role_and_label(Role::Button, "continent").click();
+        h.run();
+        h.state_mut().dialogs.text.clear();
+        h.get_by_role_and_label(Role::Button, "Values ▾").click();
+        h.run();
+        assert_eq!(h.state().dialogs.values.reads, 1);
+        // A new value that sorts before the rest arrives while the list is open.
+        let mut attrs = vec![Value::Null; ds.fields.len()];
+        attrs[field] = Value::Text("Aaa".into());
+        h.state_mut().session.map_mut().layer_mut(id).unwrap().dataset.push(None, attrs);
+        h.run_steps(3);
+        assert!(h.query_by_role_and_label(Role::Button, "'Aaa'").is_none(), "the list is as it was opened");
+        assert_eq!(h.state().dialogs.values.reads, 1, "not read again while open");
+        h.key_press(egui::Key::Enter);
+        h.run();
+        assert_eq!(h.state().dialogs.text, format!("continent = {first} "), "Enter takes the value that was highlighted");
+        // Opened again: the rows now.
+        h.state_mut().dialogs.text.clear();
+        h.get_by_role_and_label(Role::Button, "Values ▾").click();
+        h.run();
+        assert_eq!(h.state().dialogs.values.reads, 2);
+        assert!(h.query_by_role_and_label(Role::Button, "'Aaa'").is_some(), "read again on the next opening");
+    }
+
+    /// A value with a `%` or `_` after `LIKE` is not written, and the box says why.
+    #[test]
+    fn select_by_attributes_values_list_says_why_a_wildcard_value_is_not_added_after_like() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::Queryable;
+        let features = ["a_b", "plain"]
+            .iter()
+            .map(|n| json!({"type": "Feature", "geometry": {"type": "Point", "coordinates": [0, 0]}, "properties": {"name": n}}));
+        let text = json!({"type": "FeatureCollection", "features": features.collect::<Vec<_>>()}).to_string();
+        let mut app = RustGisApp::new(Session::new(rustgis_engine::Project::default()));
+        app.run("layer.addDataText", json!({"fileName": "people.geojson", "text": text})).unwrap();
+        app.run("ui.dialog", json!({"name": "selectByAttributes"})).unwrap();
+        let mut h = app_harness(app);
+        h.run_steps(3);
+        // The match count repaints independently. Wait only for the requested menu entry.
+        let pick_value = |h: &mut egui_kittest::Harness<'static, RustGisApp>, value: &str| {
+            h.get_by_role_and_label(Role::Button, "Values ▾").click();
+            for _ in 0..10 {
+                h.step();
+                if h.query_by_role_and_label(Role::Button, value).is_some() {
+                    break;
+                }
+            }
+            h.get_by_role_and_label(Role::Button, value).click();
+            h.step();
+        };
+        h.get_by_role_and_label(Role::Button, "name").click();
+        h.step();
+        h.state_mut().dialogs.text = "name LIKE ".into();
+        pick_value(&mut h, "'a_b'");
+        assert_eq!(h.state().dialogs.text, "name LIKE ", "nothing written");
+        assert!(h.query_by_label_contains("matches more than itself").is_some(), "and it says why");
+        // Another value goes in, and the note goes.
+        pick_value(&mut h, "'plain'");
+        assert_eq!(h.state().dialogs.text, "name LIKE 'plain' ");
+        assert!(h.query_by_label_contains("matches more than itself").is_none());
+    }
+
+    /// A field typed in the box is the one listed, as one clicked is.
+    #[test]
+    fn select_by_attributes_values_list_follows_the_field_typed() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::Queryable;
+        let mut app = RustGisApp::with_sample();
+        app.run("ui.dialog", json!({"name": "selectByAttributes"})).unwrap();
+        app.dialogs.layer = "Countries".into();
+        let mut h = app_harness(app);
+        h.run_steps(3);
+        // Process each input even while the background match count requests repaints.
+        h.ctx.memory_mut(|m| m.request_focus(egui::Id::unique("sba_where")));
+        h.step();
+        h.event(egui::Event::Text("continent".into()));
+        h.step();
+        h.event(egui::Event::Text(" = ".into()));
+        h.step();
+        h.get_by_role_and_label(Role::Button, "Values ▾").click();
+        for _ in 0..10 {
+            h.step();
+            if h.query_by_role_and_label(Role::Button, "'Asia'").is_some() {
+                break;
+            }
+        }
+        h.get_by_role_and_label(Role::Button, "'Asia'").click();
+        h.step();
+        assert_eq!(h.state().dialogs.text, "continent = 'Asia' ", "the operator typed, only the value added");
+    }
+
+    /// A value holding a single quote is written with it doubled, and the clause picks the row.
+    /// A list of values read from a sample says so (`read` of `of` features), a streamed layer's
+    /// says they are of the features in view, and the whole of a layer says nothing.
+    #[test]
+    fn select_by_attributes_values_list_quotes_values_and_says_where_they_come_from() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::Queryable;
+        let points = |names: Vec<String>| {
+            let features = names.iter().enumerate().map(
+                |(i, n)| json!({"type": "Feature", "geometry": {"type": "Point", "coordinates": [i % 90, 0]}, "properties": {"name": n}}),
+            );
+            json!({"type": "FeatureCollection", "features": features.collect::<Vec<_>>()}).to_string()
+        };
+        let open = |text: String| {
+            let mut app = RustGisApp::new(Session::new(rustgis_engine::Project::default()));
+            app.run("layer.addDataText", json!({"fileName": "people.geojson", "text": text})).unwrap();
+            app.run("ui.dialog", json!({"name": "selectByAttributes"})).unwrap();
+            let mut h = app_harness(app);
+            h.run_steps(3);
+            h.get_by_role_and_label(Role::Button, "name").click();
+            h.run();
+            h.state_mut().dialogs.text.clear();
+            h.get_by_role_and_label(Role::Button, "Values ▾").click();
+            h.run();
+            h
+        };
+        let mut h = open(points(vec!["O'Brien".into(), "Paul".into()]));
+        h.get_by_role_and_label(Role::Button, "'O''Brien'").click();
+        h.run();
+        let text = h.state().dialogs.text.clone();
+        assert_eq!(text, "name = 'O''Brien' ");
+        let layer = h.state().session.map().layer_by_name(&h.state().dialogs.layer).map(|l| l.dataset.clone());
+        let layer = layer.unwrap();
+        assert_eq!(rustgis_engine::data::query::select(&text, &layer), Ok(vec![0]), "the clause picks the feature it was made from");
+
+        // All of the layer: nothing said. As a streamed layer's view: said.
+        let mut h = open(points(vec!["a".into(), "b".into(), "a".into()]));
+        assert!(h.query_by_label_contains("evenly spread").is_none() && h.query_by_label_contains("read for the view").is_none());
+        let id = h.state().session.map().layer_by_name(&h.state().dialogs.layer).map(|l| l.id).unwrap();
+        h.state_mut().session.map_mut().layer_mut(id).unwrap().dataset.windowed = true;
+        // The list stays as it was read while it is open; opened again, it says so.
+        h.get_by_role_and_label(Role::Button, "Values ▾").click();
+        h.run();
+        h.get_by_role_and_label(Role::Button, "Values ▾").click();
+        h.run();
+        assert!(h.query_by_label("Values of the 3 features read for the view").is_some());
+
+        // More features than are read: a sample, and how much of it.
+        let names = (0..rustgis_engine::data::query::VALUES_READ + 50).map(|i| format!("n{}", i % 7)).collect();
+        let h = open(points(names));
+        let layer = h.state().session.map().layer_by_name(&h.state().dialogs.layer).map(|l| l.dataset.clone()).unwrap();
+        let got = rustgis_engine::data::query::field_values(&layer, 0, rustgis_engine::data::query::VALUES_READ);
+        assert!(got.read < got.of, "a sample was read");
+        let said = format!("Values of {} of {} features, evenly spread", got.read, got.of);
+        assert!(h.query_by_label(&said).is_some(), "the list says {said:?}");
+    }
+
     /// Calculate Field previews what it would write (#2817): the first three rows of a table, as
     /// the field holds them, with what writing them loses; nothing for an expression that doesn't
     /// read, or while a suggestion is offered.
@@ -4691,6 +5310,42 @@ mod tests {
         }
         let web: Vec<&str> = export_formats(true).map(|(_, e)| *e).collect();
         assert_eq!(web, ["geojson", "parquet", "shp", "csv", "kml", "kmz", "gpx"]);
+    }
+
+    /// Export Table opened with no table named takes the last added; picking another renames a
+    /// GeoPackage's table after it and drops a format that one can't take.
+    #[test]
+    fn export_table_follows_the_table_picked() {
+        use egui_kittest::kittest::Queryable;
+        use rustgis_engine::data::{Dataset, Field, FieldType, Geometry, GeometryType, Value};
+        let mut app = RustGisApp::with_sample();
+        assert!(app.run("ui.exportTable", json!({})).unwrap_err().contains("no standalone tables"));
+        let plain = app.session.project.add_table(Dataset::new("plain", GeometryType::None, vec![]));
+        let mut ds = Dataset::new("sites", GeometryType::Point, vec![Field::new("n", FieldType::Integer)]);
+        ds.push(Some(Geometry::Point(rustgis_engine::geom::Coord::new(1.0, 2.0))), vec![Value::Int(1)]);
+        let sites = app.session.project.add_table(ds);
+        app.run("ui.exportTable", json!({})).unwrap();
+        assert_eq!(app.dialogs.export_table.map(|(id, _)| id), Some(sites));
+        assert_eq!((app.dialogs.mode, app.dialogs.text.as_str()), ("csv", "sites"));
+        app.dialogs.mode = "shp";
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(900.0, 700.0)).with_max_steps(64).build_ui_state(
+            |ui, app: &mut RustGisApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run_steps(4);
+        assert_eq!(h.state().dialogs.mode, "shp", "a table with geometry takes a Shapefile");
+        h.get_by_label("Table").click();
+        h.run_steps(4);
+        // The Layers pane lists the table by this name too: the choice is the one drawn last.
+        h.query_all_by_label("plain").last().unwrap().click();
+        h.run_steps(4);
+        let d = &h.state().dialogs;
+        assert_eq!(d.export_table.map(|(id, _)| id), Some(plain));
+        assert_eq!((d.mode, d.text.as_str()), ("csv", "plain"));
     }
 
     /// The Rename… dialog shows why a name over 200 characters isn't taken and stays open with

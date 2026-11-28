@@ -15,7 +15,7 @@ mod capabilities;
 #[path = "project_label_losses.rs"]
 pub(crate) mod label_losses;
 pub use capabilities::layout_file_bytes;
-pub(crate) use capabilities::{layer_file_bytes, map_file_bytes, model_capabilities};
+pub(crate) use capabilities::{layer_file_bytes, map_file_bytes, model_capabilities, task_capabilities};
 
 /// A map export cannot keep runtime-only download reservations, even in a larger project.
 pub(crate) fn ensure_map_imports_complete(map: &Map) -> Result<(), String> {
@@ -80,7 +80,9 @@ pub const CAPABILITIES: &[&str] = &[
     "terrain-water",
     "terrain-water-shore",
     "terrain-block-water",
+    "terrain-block-water-bed",
     "terrain-block-walls-layer",
+    "terrain-block-walls-top",
     "shaded-relief-effects",
     "normalized-legend-urls",
     "field-origin",
@@ -97,6 +99,7 @@ pub const CAPABILITIES: &[&str] = &[
     "graticule-color",
     "layout-element-ink",
     "layout-element-wrap",
+    "layout-text-block",
     "layout-chart-data",
     "layout-chart-look",
     "layout-chart-classes",
@@ -111,8 +114,12 @@ pub const CAPABILITIES: &[&str] = &[
     "zarr-window",
     "blank-paper",
     "layout-frame-border",
+    "layout-section",
     NATIVE_COORDINATES,
     "layout-text-size",
+    "layout-legend-fit",
+    "layout-legend-class-labels",
+    "layout-legend-counts",
     "layout-scale-bar-details",
     "label-guide",
     "label-weight",
@@ -122,6 +129,11 @@ pub const CAPABILITIES: &[&str] = &[
     "svg-markers",
     "label-duplicates",
     "tile-resampling",
+    "layout-page-color",
+    "layout-text-statistics",
+    "layout-publication-parts",
+    "layout-publication-legend",
+    "shaded-relief-shadow-softness",
 ];
 /// An offline area keeping the versions that lost a sync or a Bring Back
 /// (`OfflineArea::conflicts`, #2468): an older reader would save it again without them.
@@ -1529,9 +1541,14 @@ impl Project {
     /// those `map.addTiles` adds) as raster layers read in place: as the project opens only. A
     /// later repair (a layer file added, maps imported) leaves a tile layer added this session
     /// as it is. Returns a notice for each kind of change that removed, cut or renamed
-    /// something, with the part of the project it is about.
+    /// something, and one for the presentation pages whose map the project doesn't have, each
+    /// with the part of the project it is about.
     pub(crate) fn normalize_opened(&mut self) -> Vec<(ReadPart, NoticeText)> {
-        self.repair(true, "while opening the project")
+        let mut notices = self.repair(true, "while opening the project");
+        // Pages naming a map the project doesn't have are drawn over the active map (#3191).
+        use crate::cmd::presentation::{PagesOf, pages_without_their_map};
+        notices.extend(pages_without_their_map(self, PagesOf::All).map(|notice| (ReadPart::Items, notice)));
+        notices
     }
 
     /// Reports removed or shortened content, renamed items and repaired group display settings
@@ -2240,11 +2257,12 @@ pub(crate) fn picture_notices_by<'a>(
         *seen.borrow_mut().entry(p).or_insert_with(|| check(p))
     };
     // The names with an image refused so, by each refusal in `WHY`, in the order their notices go.
-    const WHY: [MarkerRefusal; 10] = [
+    const WHY: [MarkerRefusal; 11] = [
         MarkerRefusal::NotAnImage,
         MarkerRefusal::TooManyBytes,
         MarkerRefusal::TooManyPixels,
         MarkerRefusal::TooMuchToDraw,
+        MarkerRefusal::SvgTooMuchToRead,
         MarkerRefusal::SvgTooNested,
         MarkerRefusal::SvgUnknownRadius,
         MarkerRefusal::SvgTooSmall,
@@ -2293,7 +2311,8 @@ pub(crate) fn picture_notices_by<'a>(
             ],
         ));
     }
-    let [not_images, too_long, too_large, too_much, too_nested, unknown_radius, too_small, not_utf8, filtered, past_run] = &bad;
+    let [not_images, too_long, too_large, too_much, too_much_to_read, too_nested, unknown_radius, too_small, not_utf8, filtered, past_run] =
+        &bad;
     if !not_images.is_empty() {
         notices.push(NoticeText::format(
             "Image markers in {names} aren't PNG, JPEG or SVG images and are drawn as circles",
@@ -2320,6 +2339,10 @@ pub(crate) fn picture_notices_by<'a>(
     }
     // Each SVG's own cause (#2713), its figures as the renderer's phrase gives them.
     for (names, what) in [
+        (
+            too_much_to_read,
+            "Image markers in {names} are SVGs whose style sheets, element attributes, namespaces or entities take more to read than RustGIS allows and are drawn as circles",
+        ),
         (
             too_nested,
             "Image markers in {names} are SVGs with more than 40,000 XML nodes or nested deeper than 64 levels and are drawn as circles",
@@ -2781,7 +2804,7 @@ pub(crate) fn layout_notices(
     let cut = total(|r| r.elements_cut);
     if cut > 0 {
         notices.push(format!(
-            "{name}: {cut} layout element(s) with a name, text, polygon points, legend exclusions, scale bar unit labels or legend labels cut to their limits {when} (in {})",
+            "{name}: {cut} layout element(s) with a name, text, polygon points, section lines, legend exclusions, scale bar unit labels or legend labels cut to their limits {when} (in {})",
             layout_names(repairs, |r| r.elements_cut)
         ));
     }
@@ -2795,7 +2818,7 @@ pub(crate) fn layout_notices(
     let pages = total(|r| r.page_adjusted);
     if pages > 0 {
         notices.push(format!(
-            "{name}: the page size, guides or map series margin of {pages} layout(s) adjusted {when} (in {})",
+            "{name}: the page size, guides, page colour or map series margin of {pages} layout(s) adjusted {when} (in {})",
             layout_names(repairs, |r| r.page_adjusted)
         ));
     }

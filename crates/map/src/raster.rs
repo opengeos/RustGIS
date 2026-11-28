@@ -110,6 +110,11 @@ pub struct RasterLayer {
     /// [`RasterLayer::dropped_unsaid`]).
     #[serde(skip)]
     dropped: Vec<&'static str>,
+    /// The pixels and the file that `embedded` was written from them as, while both are still the
+    /// layer's (see [`RasterLayer::written_file`]): held weakly, so a change to either, which takes
+    /// a new allocation, breaks the pairing.
+    #[serde(skip)]
+    written: Option<(Weak<Raster>, Weak<Vec<u8>>)>,
 }
 
 /// Called once with a cloud-optimised GeoTIFF's overview, or why it couldn't be read.
@@ -253,6 +258,17 @@ impl RasterLayer {
         self.in_place || self.tiled
     }
 
+    /// Whether a read of its pixels is still under way.
+    pub fn is_reading(&self) -> bool {
+        self.opening.is_some()
+    }
+
+    /// Whether its style is a placeholder until its pixels land: how it draws, by classes or not,
+    /// isn't known yet.
+    pub fn awaits_style(&self) -> bool {
+        self.restyle
+    }
+
     /// Detaches a fully read replacement from the prior opening's pending reads and notices.
     pub fn reset_replacement_read(&mut self) {
         self.read_generation = next_read_generation();
@@ -333,6 +349,7 @@ impl RasterLayer {
             lost_said: false,
             look_lost: None,
             dropped: Vec::new(),
+            written: None,
         })
     }
 
@@ -383,12 +400,31 @@ impl RasterLayer {
             lost_said: false,
             look_lost: None,
             dropped: Vec::new(),
+            written: None,
         }
     }
 
     /// A raster from a file's bytes, kept in the project.
     pub fn from_bytes(raster: Raster, file_name: impl Into<String>, bytes: Vec<u8>) -> RasterLayer {
         Self::from_shared(raster, file_name, Arc::new(bytes))
+    }
+
+    /// A raster with the file [`rustgis_data::raster::geotiff::write_all`] wrote of it (or
+    /// [`rustgis_data::raster::geotiff::write`] of its first band, the same file when that writes every
+    /// band), kept in the project: [`RasterLayer::written_file`] gives that file back while neither
+    /// changes.
+    pub fn from_written(raster: Raster, file_name: impl Into<String>, bytes: Vec<u8>) -> RasterLayer {
+        let mut layer = Self::from_bytes(raster, file_name, bytes);
+        layer.written = layer.data.as_ref().map(Arc::downgrade).zip(layer.embedded.as_ref().map(Arc::downgrade));
+        layer
+    }
+
+    /// The embedded file, when it is the one [`RasterLayer::from_written`] was given for the
+    /// pixels the layer holds now: an export that writes every band writes those same bytes.
+    pub fn written_file(&self) -> Option<&Arc<Vec<u8>>> {
+        let (pixels, file) = self.written.as_ref()?;
+        let (data, embedded) = (self.data.as_ref()?, self.embedded.as_ref()?);
+        (Weak::as_ptr(pixels) == Arc::as_ptr(data) && Weak::as_ptr(file) == Arc::as_ptr(embedded)).then_some(embedded)
     }
 
     /// Keeps the original shared allocation used to decode an uploaded raster.
@@ -421,6 +457,7 @@ impl RasterLayer {
             lost_said: false,
             look_lost: None,
             dropped: Vec::new(),
+            written: None,
         }
     }
 
@@ -465,6 +502,7 @@ impl RasterLayer {
             lost_said: false,
             look_lost: None,
             dropped: Vec::new(),
+            written: None,
         }
     }
 
@@ -765,7 +803,7 @@ impl RasterLayer {
     /// What reading its pixels left out (`Raster::lost`), the first time it is asked for after
     /// they landed, so it is said once: as the layer is added, as its project opens, or when they
     /// land later (the browser).
-    pub fn lost_unsaid(&mut self) -> Vec<String> {
+    pub fn lost_unsaid(&mut self) -> rustgis_data::loss::Notes {
         if self.lost_said {
             // A look applied after the pixels' losses were said: what it asked for that the file
             // hasn't, on its own, not the pixels' losses again.
@@ -896,6 +934,7 @@ impl RasterLayer {
             lost_said: _,
             look_lost: _,
             dropped: _,
+            written: _,
         } = self;
         if *in_place || *tiled || opening.is_some() || read_still.is_some() || self.casts_shadows() {
             return None;
@@ -935,8 +974,8 @@ impl RasterLayer {
     }
 
     /// The light its cast shadows leave on each cell (see [`crate::shadow::light`]), when it is
-    /// drawn as Shaded Relief with shadows. Worked out once per pixels, band, sun, Z factor and
-    /// mask and kept: each owner's latest, and a few of suns left, for going back.
+    /// drawn as Shaded Relief with shadows. Worked out once per pixels, band, sun (its softness
+    /// too), Z factor and mask and kept: each owner's latest, and a few of suns left, for going back.
     /// `owner` is who draws it (its map's and its layer's live identities, see
     /// [`crate::Layer::instance_id`]; a layer's id repeats from map to map): a new sun from the
     /// same owner stops the work
@@ -945,11 +984,13 @@ impl RasterLayer {
     /// export does, this waits for it. The browser, which has one thread, works it out here, for
     /// at most [`crate::shadow::MAX_BROWSER_CELLS`] cells.
     pub fn cast_shadows(&self, wait: bool, owner: (u64, u64), landed: impl FnOnce() + Send + 'static) -> CastShadows {
-        let RasterRenderer::ShadedRelief { azimuth, altitude, shadow, .. } = self.style.renderer else {
+        let RasterRenderer::ShadedRelief { azimuth, altitude, shadow, shadow_softness, .. } = self.style.renderer else {
             return CastShadows::None;
         };
         let finite = azimuth.is_finite() && altitude.is_finite();
-        self.light_grid(Grid::Shadows { azimuth, altitude }, shadow > 0.0 && finite, wait, owner, landed)
+        // The half disc traced, not the setting: none and the default's own value share a grid.
+        let soft_edge = crate::shadow::soft_edge(shadow_softness);
+        self.light_grid(Grid::Shadows { azimuth, altitude, soft_edge }, shadow > 0.0 && finite, wait, owner, landed)
     }
 
     /// The share of the sky each cell sees (see [`crate::shadow::sky`]), when it is drawn as
@@ -1066,7 +1107,7 @@ struct LightKey {
 /// Which grid: the light cast shadows leave for a sun, or the sky seen.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Grid {
-    Shadows { azimuth: f64, altitude: f64 },
+    Shadows { azimuth: f64, altitude: f64, soft_edge: f64 },
     Sky,
 }
 
@@ -1232,8 +1273,8 @@ fn start_light(r: Arc<Raster>, key: LightKey, work: Arc<LightWork>) {
         drop(LIGHT_HOLD.read().unwrap_or_else(|e| e.into_inner()));
         let threads = rustgis_data::threads::max();
         let traced = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match key.grid {
-            Grid::Shadows { azimuth, altitude } => {
-                crate::shadow::light(&r, key.band, &key.mask, azimuth, altitude, key.z_factor, threads, &work.stop)
+            Grid::Shadows { azimuth, altitude, soft_edge } => {
+                crate::shadow::light(&r, key.band, &key.mask, azimuth, altitude, soft_edge, key.z_factor, threads, &work.stop)
             }
             Grid::Sky => crate::shadow::sky(&r, key.band, &key.mask, key.z_factor, threads, &work.stop),
         }));
@@ -1298,7 +1339,7 @@ impl RasterLayer {
         }
         let mut r = read_path_with(p, subdataset, crs)?;
         if reopening && !r.georeferenced {
-            r.lost.push("it has no coordinates now, though it had them when added: it is drawn at a stand-in place".into());
+            r.lost.push("it has no coordinates now, though it had them when added: it is drawn at a stand-in place");
         }
         Ok(r)
     }
@@ -1639,7 +1680,10 @@ pub enum RasterRenderer {
     /// share of the colour a slope turned fully from the sun keeps; none, the default, is
     /// [`relief_ambient`]'s. `balanced` divides the sun's light by its value on flat ground, so flat
     /// ground keeps the ramp's colour and slopes facing the sun brighten (#1977); off, the default,
-    /// lights as before.
+    /// lights as before. `shadow_softness` is half the sun's apparent size its cast shadows are
+    /// traced with, in degrees ([`crate::shadow::SOFT_EDGE_MIN`] to
+    /// [`crate::shadow::SOFT_EDGE_MAX`]): how soft their edges are (#3144); none, the default, is
+    /// [`crate::shadow::SOFT_EDGE`].
     ShadedRelief {
         band: usize,
         ramp: Option<Ramp>,
@@ -1658,6 +1702,8 @@ pub enum RasterRenderer {
         ambient: Option<f64>,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         balanced: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        shadow_softness: Option<f64>,
     },
 }
 
@@ -2602,6 +2648,7 @@ impl RasterLayer {
             lost_said: _,
             look_lost: _,
             dropped: _,
+            written: _,
         } = self;
         let mut out = Vec::new();
         if let Some(p) = path {
@@ -2688,6 +2735,7 @@ mod tests {
             rock: None,
             ambient: None,
             balanced: false,
+            shadow_softness: None,
         }
     }
 
@@ -2977,7 +3025,7 @@ mod tests {
     #[test]
     fn a_look_applied_after_the_losses_were_said_says_its_own_alone() {
         let mut r = dem();
-        r.lost.push("its colour table is left out".into());
+        r.lost.push("its colour table is left out");
         let mut rl = RasterLayer::in_place(r, "test://look-later.tif");
         assert_eq!(rl.lost_unsaid(), vec!["its colour table is left out".to_string()]);
         assert!(rl.lost_unsaid().is_empty());
@@ -2988,7 +3036,7 @@ mod tests {
         assert!(rl.lost_unsaid().is_empty());
         // A look applied before they are said is said with them, once.
         let mut r = dem();
-        r.lost.push("its colour table is left out".into());
+        r.lost.push("its colour table is left out");
         let mut rl = RasterLayer::in_place(r, "test://look-first.tif").with_look(AddressLook { bands: vec![9], range: None });
         assert_eq!(rl.lost_unsaid().len(), 2);
         assert!(rl.lost_unsaid().is_empty());
@@ -3217,6 +3265,25 @@ mod tests {
         assert!(missing.data.is_none());
     }
 
+    #[test]
+    fn a_written_file_is_given_back_only_while_its_pixels_and_bytes_are_the_layers() {
+        let r = dem();
+        let bytes = rustgis_data::raster::geotiff::write_all(&r).unwrap();
+        assert!(RasterLayer::from_bytes(r.clone(), "dem.tif", bytes.clone()).written_file().is_none());
+        let written = RasterLayer::from_written(r, "dem.tif", bytes.clone());
+        assert_eq!(written.written_file().map(|b| b.as_slice()), Some(bytes.as_slice()));
+        // A copy shares both, so it gives the file too.
+        assert!(written.clone().written_file().is_some());
+        let mut edited = written.clone();
+        if let Some(band) = edited.data.as_mut().and_then(|d| Arc::make_mut(d).bands.first_mut()) {
+            band.data[0] += 1.0;
+        }
+        assert!(edited.written_file().is_none());
+        let mut replaced = written.clone();
+        replaced.embedded = Some(Arc::new(bytes));
+        assert!(replaced.written_file().is_none());
+    }
+
     /// A plain web address is read as it was before logins: never downloaded whole on reload.
     #[test]
     fn reload_downloads_only_s3_and_login_wrapped_addresses() {
@@ -3259,6 +3326,7 @@ mod tests {
             rock,
             ambient: None,
             balanced: false,
+            shadow_softness: None,
         };
         let (mut rocky, mut plain) = (RasterStyle::default_for(&r), RasterStyle::default_for(&r));
         (rocky.renderer, plain.renderer) = (relief(Some(rock)), relief(None));
@@ -3314,6 +3382,7 @@ mod tests {
             rock: None,
             ambient,
             balanced,
+            shadow_softness: None,
         };
         let relief = |altitude, ambient, balanced| tinted_relief(None, altitude, ambient, balanced);
         // Grey relief: white shaded, so a channel is 255 times the light.
@@ -3405,6 +3474,21 @@ mod tests {
         if let RasterRenderer::ShadedRelief { shadow, .. } = &mut rl.style.renderer {
             *shadow = 0.3;
         }
+        assert!(matches!(rl.cast_shadows(false, (0, 1), || {}), CastShadows::Ready(g) if Arc::ptr_eq(&g, &grid)));
+        // The default softness set by its value traces the same disc: the grid is kept. Another
+        // softness is worked out again (another grid: this tower's shadow is whole under both),
+        // and going back to the default finds its grid kept (#3144).
+        let soften = |rl: &mut RasterLayer, to: Option<f64>| {
+            if let RasterRenderer::ShadedRelief { shadow_softness, .. } = &mut rl.style.renderer {
+                *shadow_softness = to;
+            }
+        };
+        soften(&mut rl, Some(crate::shadow::SOFT_EDGE));
+        assert!(matches!(rl.cast_shadows(false, (0, 1), || {}), CastShadows::Ready(g) if Arc::ptr_eq(&g, &grid)));
+        soften(&mut rl, Some(1.0));
+        let CastShadows::Ready(crisp) = rl.cast_shadows(true, (0, 1), || {}) else { panic!("waited for") };
+        assert!(!Arc::ptr_eq(&crisp, &grid), "another softness, another grid");
+        soften(&mut rl, None);
         assert!(matches!(rl.cast_shadows(false, (0, 1), || {}), CastShadows::Ready(g) if Arc::ptr_eq(&g, &grid)));
         // Another sun: worked out again, lit from the west now.
         if let RasterRenderer::ShadedRelief { azimuth, .. } = &mut rl.style.renderer {
@@ -3503,7 +3587,7 @@ mod tests {
         // The worker stops and says so (the map draws again), with no grid.
         assert!(landings.recv_timeout(std::time::Duration::from_secs(60)).is_ok(), "landed");
         let work = rl.cast.0.lock().unwrap().first().map(|j| j.work.clone()).unwrap();
-        assert!(work.was_stopped(Grid::Shadows { azimuth: 0.0, altitude: 0.0 }.stopped()));
+        assert!(work.was_stopped(Grid::Shadows { azimuth: 0.0, altitude: 0.0, soft_edge: 0.0 }.stopped()));
         // Asked again, it starts over.
         rl.cast_shadows(false, (0, 1), || {});
         let again = rl.cast.0.lock().unwrap().first().map(|j| j.work.clone()).unwrap();

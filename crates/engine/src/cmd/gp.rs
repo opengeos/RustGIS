@@ -1,5 +1,7 @@
 //! Analyze tab: run geoprocessing tools and keep their history.
 
+use std::sync::Arc;
+
 use rustgis_analysis::{Inputs, Output, OutputLayer, RasterInput};
 use rustgis_data::Dataset;
 use rustgis_data::loss::{LossCode, LossMessage};
@@ -395,7 +397,15 @@ pub fn external_start(s: &mut Session, tool: &str, params: &Value) -> Result<Ext
             return Err(format!("no GeoLibre tool '{tool}'"));
         }
         let params = params.clone();
-        let job = preparing(&continuation, || pin.prepare_suite(&map_inputs(s, Some(spec), &params, Tiled::ByPath)?, &params))?;
+        let (job, said, lost) = preparing(&continuation, || {
+            let inputs = map_inputs(s, Some(spec), &params, Tiled::ByPath)?;
+            Ok((pin.prepare_suite(&inputs, &params)?, inputs.messages.clone(), inputs.losses.clone()))
+        })?;
+        // What reading its inputs approximated or lost, said now, as a plugin tool's are.
+        if !said.is_empty() {
+            s.notify(format!("{}: {}", spec.name, said.join("; ")), false);
+        }
+        say_input_losses(s, spec.name, lost);
         s.next_pending = s.next_pending.wrapping_add(1);
         let id = s.next_pending;
         let run = ExternalRun {
@@ -479,8 +489,11 @@ impl PluginRun {
     pub fn run(&self, control: &rustgis_plugins::tools::Control) -> Result<rustgis_analysis::ToolResult, String> {
         self.continuation.check()?;
         // A bug in a tool must not take the app down.
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.job.run(control)))
-            .unwrap_or_else(|_| Err(format!("{} failed unexpectedly", self.job.name())))
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.job.run(control))).unwrap_or_else(|payload| {
+            // A bug in a tool run in the background: said as one, with its reference.
+            let incident = rustgis_data::incident::caught(payload.as_ref());
+            Err(rustgis_data::incident::message(self.job.name(), false, &incident.id))
+        })
     }
 }
 
@@ -534,19 +547,21 @@ pub fn plugin_start(s: &mut Session, tool: &str, params: &Value) -> Result<Plugi
     let spec = pin.spec();
     let plugin = pin.plugin().ok_or_else(|| format!("no plugin tool '{tool}'"))?;
     let (_, tid) = rustgis_plugins::split_id(spec.id).ok_or("invalid plugin tool id")?;
-    let (job, full_ids, said) = preparing(&continuation, || {
+    let (job, full_ids, said, lost) = preparing(&continuation, || {
         let inputs = map_inputs(s, Some(spec), resolved, Tiled::Overview)?;
         let job = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             rustgis_plugins::tools::prepare_pinned(plugin.plugin(), tid, &inputs, resolved)
         }))
-        .unwrap_or_else(|_| Err(format!("{} failed unexpectedly", spec.name)))?;
-        Ok((job, full_ids(&inputs.loaded), inputs.messages.clone()))
+        .unwrap_or_else(|payload| Err(crate::bug(spec.name, payload.as_ref())))?;
+        Ok((job, full_ids(&inputs.loaded), inputs.messages.clone(), inputs.losses.clone()))
     })?;
     // What reading its inputs approximated (a raster's overview read for a file read in place),
     // said now: the run's result is the plugin's own.
     if !said.is_empty() {
         s.notify(format!("{}: {}", spec.name, said.join("; ")), false);
     }
+    // What reading its inputs lost (a layer's rows or geometry left out), as a loss with its code.
+    say_input_losses(s, spec.name, lost);
     let read = read_layers(s, spec, resolved);
     s.next_pending = s.next_pending.wrapping_add(1);
     let id = s.next_pending;
@@ -735,9 +750,9 @@ impl ToolRun {
                 ToolDone { inputs: Vec::new(), result, full_ids: full_ids(&inputs.loaded) }
             })
         }))
-        .unwrap_or_else(|_| ToolDone {
+        .unwrap_or_else(|payload| ToolDone {
             inputs: Vec::new(),
-            result: Err(format!("{name} failed unexpectedly")),
+            result: Err(crate::bug(name, payload.as_ref())),
             full_ids: FullIds::new(),
         });
         done.inputs = captured.as_ref().map_or_else(Vec::new, rustgis_data::provenance::Capture::inputs);
@@ -1508,7 +1523,7 @@ fn inputs_of<'a>(
         }
     }
     let mut left_out_whole = std::collections::HashSet::new();
-    let work = work_inputs(&snap.map, &snap.tables, spec, params, &mut full, &mut messages, &mut left_out_whole)?;
+    let work = work_inputs(&snap.map, &snap.tables, spec, params, &mut full, &mut messages, &mut losses, &mut left_out_whole)?;
     let mut rows = env_inputs(&snap.map, &full, &snap.env, params)?;
     narrow_to_queries(&snap.map, spec, params, &full, &mut rows, &mut messages)?;
     let unread = if work == Crs::LonLat { std::collections::HashSet::new() } else { attributes_only(spec, params) };
@@ -1666,25 +1681,34 @@ pub(crate) struct ReadNote {
     rounded: u64,
     overview: Option<((u32, u32), (u32, u32))>,
     part: Option<(u32, u32)>,
+    /// The count of values rounded is at most `rounded`: some were read twice or more.
+    at_most: bool,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 impl ReadNote {
     pub(crate) fn of(name: &str, r: &rustgis_data::raster::Raster) -> ReadNote {
         let overview = r.overview.map(|full| ((r.width, r.height), full));
-        ReadNote { name: name.to_string(), rounded: r.rounded.iter().sum(), overview, part: None }
+        ReadNote { name: name.to_string(), rounded: r.rounded.iter().sum(), overview, part: None, at_most: false }
     }
 
     /// Of a part of a file ([`read_tiled_part`]): read from a level `level` pixels in size of the
     /// file's `full` image.
     pub(crate) fn of_part(name: &str, r: &rustgis_data::raster::Raster, level: (u32, u32), full: (u32, u32)) -> ReadNote {
         let overview = r.overview.map(|_| (level, full));
-        ReadNote { name: name.to_string(), rounded: r.rounded.iter().sum(), overview, part: Some((r.width, r.height)) }
+        ReadNote { name: name.to_string(), rounded: r.rounded.iter().sum(), overview, part: Some((r.width, r.height)), at_most: false }
     }
 
     /// Of a file read at its full size in pieces, `rounded` of its values rounded as they were.
     pub(crate) fn rounded(name: &str, rounded: u64) -> ReadNote {
-        ReadNote { name: name.to_string(), rounded, overview: None, part: None }
+        ReadNote { name: name.to_string(), rounded, overview: None, part: None, at_most: false }
+    }
+
+    /// Its count of values rounded is at most the one said when `at_most`: a block read with a
+    /// margin reads some values twice.
+    pub(crate) fn at_most(mut self, at_most: bool) -> ReadNote {
+        self.at_most = at_most;
+        self
     }
 }
 
@@ -1694,9 +1718,9 @@ impl ReadNote {
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn tiled_read_notes(read: &[ReadNote], whose: &str) -> Vec<String> {
     let (mut rounded, mut overviews) = (Vec::new(), Vec::new());
-    for ReadNote { name, rounded: n, overview, part } in read {
+    for ReadNote { name, rounded: n, overview, part, at_most } in read {
         if *n > 0 {
-            rounded.push(format!("{name} {n}"));
+            rounded.push(if *at_most { format!("{name} at most {n}") } else { format!("{name} {n}") });
         }
         if let Some(((w, h), (fw, fh))) = overview {
             let part = part.map_or_else(String::new, |(pw, ph)| format!(", a {pw} × {ph} part of it"));
@@ -2047,27 +2071,37 @@ fn work_inputs(
     params: &Value,
     full: &mut std::collections::HashMap<String, Dataset>,
     messages: &mut Vec<String>,
+    losses: &mut Vec<LossMessage>,
     left_out_whole: &mut std::collections::HashSet<String>,
 ) -> Result<Crs, String> {
+    // A loss with its code; the rest as messages.
+    let mut say = |said: Vec<rustgis_data::loss::Note>| {
+        for note in said {
+            match note.loss {
+                Some(code) => losses.push(LossMessage { code, text: note.text }),
+                None => messages.push(note.text),
+            }
+        }
+    };
     let work = work_system(map, spec, params, full);
     if work != Crs::LonLat {
         match inputs_in(map, tables, spec, params, full, work, left_out_whole) {
             Ok((converted, said)) => {
                 full.extend(converted);
-                messages.extend(said);
+                say(said);
                 return Ok(work);
             }
             Err(e) => {
                 // A Cancel isn't a place that can't be held.
                 rustgis_data::progress::check().map_err(|e| e.to_string())?;
                 let name = spec.map_or("The tool", |t| t.name);
-                messages.push(format!("{name} worked in longitude/latitude, not {}: {e}", work.label()));
+                say(vec![rustgis_data::loss::Note::plain(format!("{name} worked in longitude/latitude, not {}: {e}", work.label()))]);
             }
         }
     }
     let (converted, said) = inputs_in(map, tables, spec, params, full, Crs::LonLat, left_out_whole)?;
     full.extend(converted);
-    messages.extend(said);
+    say(said);
     Ok(Crs::LonLat)
 }
 
@@ -2084,7 +2118,7 @@ fn inputs_in(
     full: &std::collections::HashMap<String, Dataset>,
     work: Crs,
     left_out_whole: &mut std::collections::HashSet<String>,
-) -> Result<(std::collections::HashMap<String, Dataset>, Vec<String>), String> {
+) -> Result<(std::collections::HashMap<String, Dataset>, Vec<rustgis_data::loss::Note>), String> {
     let mut converted = std::collections::HashMap::new();
     // The converted inputs with edges that bend ([`bent_edges`]): name, how many, how far.
     let mut bent: Vec<(String, usize, f64)> = Vec::new();
@@ -2203,19 +2237,21 @@ fn inputs_in(
         let name = spec.map_or("The tool", |t| t.name);
         let n: usize = unplaced.iter().map(|(_, n)| n).sum();
         let layers = unplaced.iter().map(|(layer, n)| format!("'{layer}' ({n})")).collect::<Vec<_>>().join(", ");
-        said.push(format!(
+        // Counted over each whole layer, before the run's rows are narrowed to a selection: some may
+        // be rows the tool doesn't read, so it isn't a coded loss.
+        said.push(rustgis_data::loss::Note::plain(format!(
             "{name}: {n} feature(s) of {layers} have a place that can't be given in longitude/latitude, so the tool reads them without their geometry"
-        ));
+        )));
     }
     if !bent.is_empty() {
         let name = spec.map_or("The tool", |t| t.name);
         let n: usize = bent.iter().map(|(_, n, _)| n).sum();
         let far = bent.iter().map(|(.., far)| *far).fold(0.0, f64::max);
         let layers = bent.iter().map(|(layer, n, _)| format!("'{layer}' ({n})")).collect::<Vec<_>>().join(", ");
-        said.push(format!(
+        said.push(rustgis_data::loss::Note::plain(format!(
             "{name}: {n} edge(s) of {layers}, converted into {}, are taken straight there, up to {far:.0} m from where a run in longitude/latitude takes them (straight on a Web Mercator map); their vertices are where they were",
             work.label()
-        ));
+        )));
     }
     Ok((converted, said))
 }
@@ -3776,16 +3812,34 @@ pub fn writes_files(spec: &rustgis_analysis::ToolSpec) -> bool {
     spec.params.iter().any(|p| matches!(p.kind, rustgis_analysis::ParamKind::SaveFile { .. }))
 }
 
-/// A browser file export waiting for delivery, without a success record until acknowledged.
+/// A browser file waiting for delivery: a tool's output, without a success record until
+/// acknowledged, or an export's file, which says what it wrote only then.
 pub(crate) struct PendingFile {
     pub(crate) continuation: crate::policy::Continuation,
     pub(crate) id: u64,
     pub(crate) file_name: String,
-    pub(crate) bytes: Option<Vec<u8>>,
-    record: GpRecord,
-    losses: Vec<LossMessage>,
+    /// Shared with whatever else holds the file (a raster layer its own), until handed over.
+    pub(crate) bytes: Option<Arc<Vec<u8>>>,
+    from: Delivery,
 }
 
+impl PendingFile {
+    /// Whether an export command made it ([`queue_export`]).
+    pub(crate) fn is_export(&self) -> bool {
+        matches!(self.from, Delivery::Export(_))
+    }
+}
+
+/// What a pending file's acknowledgment completes.
+enum Delivery {
+    #[cfg_attr(not(any(target_arch = "wasm32", test)), expect(dead_code, reason = "the desktop writes a tool's file output itself"))]
+    Tool { record: Box<GpRecord>, losses: Vec<LossMessage> },
+    /// What the export says and does once its file is out, its bytes moved to the queue.
+    Export(Box<super::exports::Wrote>),
+}
+
+/// Queues a tool's file output for download under the name its `output` parameter gives (a name,
+/// not a path), else the tool's own.
 #[cfg(any(target_arch = "wasm32", test))]
 fn queue_file(s: &mut Session, file_name: String, bytes: Vec<u8>, record: GpRecord, losses: Vec<LossMessage>) -> CmdResult {
     let file_name =
@@ -3793,26 +3847,79 @@ fn queue_file(s: &mut Session, file_name: String, bytes: Vec<u8>, record: GpReco
     if file_name.is_empty() || file_name.contains(['/', '\\']) {
         return Err("output must be a file name, not a path, in the browser".into());
     }
-    const MAX_PENDING_BYTES: usize = 256 * 1024 * 1024;
-    let held = s.file_outputs.iter().filter_map(|f| f.bytes.as_ref()).map(Vec::len).sum::<usize>();
-    if s.file_outputs.len() >= 8 || bytes.len() > MAX_PENDING_BYTES.saturating_sub(held) {
-        return Err("file export queue limit reached (8 files or 256 MiB); split the task, model, or script into smaller runs".into());
+    queue(s, file_name, Arc::new(bytes), Delivery::Tool { record: Box::new(record), losses })
+}
+
+/// Queues an export's file for download under its name (`written_path`). The answer says it is
+/// pending, with what the file will say, for a caller that reads no notices later.
+pub(super) fn queue_export(s: &mut Session, mut wrote: super::exports::Wrote) -> CmdResult {
+    let (Some(bytes), Some(file_name)) = (wrote.download.take(), wrote.written_path.clone()) else {
+        return Err("this export made no file to download".into());
+    };
+    // Not exported until the download is taken: the claim goes from the pending answer, and what
+    // follows it (what the file leaves out) stays, under the file's name.
+    let exported = format!("Exported {file_name}");
+    let messages: Vec<String> = wrote
+        .completion_notes()
+        .into_iter()
+        .filter_map(|message| match message.strip_prefix(&exported) {
+            Some("") => None,
+            Some(note) if note.starts_with([' ', ';']) => Some(format!("{file_name}{note}")),
+            _ => Some(message),
+        })
+        .collect();
+    let mut out = queue(s, file_name, bytes, Delivery::Export(Box::new(wrote)))?;
+    out["messages"] = json!(messages);
+    Ok(out)
+}
+
+/// Why no more can wait for download, of the `cap` bytes that waiting files may hold in all.
+pub(crate) fn queue_full(cap: usize) -> String {
+    format!(
+        "file export queue limit reached ({} files or {} MiB); split the task, model, or script into smaller runs",
+        super::exports::MAX_DOWNLOADS,
+        super::exports::mib(cap)
+    )
+}
+
+/// Holds `bytes` for the front end to offer as the download `file_name` and acknowledge with
+/// `gp.fileDelivered`, within what the queue holds.
+fn queue(s: &mut Session, file_name: String, bytes: Arc<Vec<u8>>, from: Delivery) -> CmdResult {
+    use super::exports::{MAX_DOWNLOADS, mib};
+    // A file held only here gives back its spare room first: an encoder's buffer can be twice
+    // its length. One shared (a raster layer's own file) counts whole.
+    let bytes = match Arc::try_unwrap(bytes) {
+        Ok(mut file) => {
+            file.shrink_to_fit();
+            Arc::new(file)
+        }
+        Err(shared) => shared,
+    };
+    let cap = s.download_cap();
+    let held = s.waiting_download_bytes();
+    // An export whose writer takes a limit was stopped at it; this is what holds the others (a
+    // picture, an SVG, a PDF past its pages, the file a raster layer holds) to it.
+    // Measured as the queue counts what waits: by what the file holds, its spare room included.
+    let size = bytes.capacity();
+    if matches!(from, Delivery::Export(_)) && size > cap {
+        return Err(format!(
+            "{file_name}: {} MiB, more than the {} MiB a command can download in the browser; export less (a selection of features, a smaller size or fewer pages), use the Export buttons, or use the desktop app",
+            mib(size),
+            mib(cap)
+        ));
+    }
+    if s.waiting_download_count() >= MAX_DOWNLOADS || size > cap.saturating_sub(held) {
+        return Err(queue_full(cap));
     }
     s.next_pending = s.next_pending.wrapping_add(1);
     let id = s.next_pending;
-    s.file_outputs.push(PendingFile {
-        id,
-        file_name: file_name.clone(),
-        bytes: Some(bytes),
-        record,
-        losses,
-        continuation: s.continuation()?,
-    });
+    s.file_outputs.push(PendingFile { id, file_name: file_name.clone(), bytes: Some(bytes), from, continuation: s.continuation()? });
     s.request_only = true;
     Ok(json!({"pending": true, "download": id, "file": file_name}))
 }
 
-/// Records a completed file delivery through the generated-message history seam.
+/// Records a completed file delivery: a tool's through the generated-message history seam, an
+/// export's by saying what it wrote.
 fn file_delivered(s: &mut Session, p: &Value) -> CmdResult {
     let id = p.get("id").and_then(Value::as_u64).ok_or("id is required")?;
     let i = s.file_outputs.iter().position(|f| f.id == id).ok_or("no pending file with that id")?;
@@ -3820,32 +3927,49 @@ fn file_delivered(s: &mut Session, p: &Value) -> CmdResult {
     if s.file_outputs[i].bytes.is_some() {
         return Err("the file has not been handed to the download service".into());
     }
-    let mut file = s.file_outputs.remove(i);
+    let file = s.file_outputs.remove(i);
     let error = p.get("error").and_then(Value::as_str);
-    file.record.ok = error.is_none();
-    if let Some(error) = error {
-        file.record.messages.push(error.to_string());
-    }
     if let Some(report) = &mut s.model_run {
         report.file_delivered(id, error);
     }
-    for message in &file.record.messages {
-        if file.record.ok {
+    let (mut record, losses) = match file.from {
+        Delivery::Tool { record, losses } => (*record, losses),
+        Delivery::Export(wrote) => {
+            // An export leaves the project as it is: no Undo step for finishing one.
+            s.request_only = true;
+            let mut out = match error {
+                None => super::exports::said(s, *wrote)?,
+                Some(error) => {
+                    s.notify(error.to_string(), true);
+                    json!({"messages": [error]})
+                }
+            };
+            out["file"] = json!(file.file_name);
+            out["delivered"] = json!(error.is_none());
+            return Ok(out);
+        }
+    };
+    record.ok = error.is_none();
+    if let Some(error) = error {
+        record.messages.push(error.to_string());
+    }
+    for message in &record.messages {
+        if record.ok {
             s.notify_written(message.clone());
         } else {
             s.notify(message.clone(), true);
         }
     }
-    for loss in file.losses {
-        if file.record.ok {
+    for loss in losses {
+        if record.ok {
             publish_tool_loss(s, loss.code, &loss.text, true);
         } else {
             s.notify(loss.text.clone(), true);
         }
-        file.record.messages.push(loss.text);
+        record.messages.push(loss.text);
     }
-    let out = json!({"file": file.file_name, "delivered": file.record.ok, "messages": file.record.messages});
-    s.push_gp_record(file.record);
+    let out = json!({"file": file.file_name, "delivered": record.ok, "messages": record.messages});
+    s.push_gp_record(record);
     if s.project.gp_history.len() > 500 {
         s.project.gp_history.remove(0);
     }
@@ -4149,6 +4273,13 @@ fn apply_with(
     Ok((out, messages))
 }
 
+/// Says what reading a plugin tool's inputs lost, each as a loss with its code, under the tool's name.
+fn say_input_losses(s: &mut Session, tool: &str, lost: Vec<LossMessage>) {
+    for loss in lost {
+        publish_tool_loss(s, loss.code, &format!("{tool}: {}", loss.text), false);
+    }
+}
+
 /// Publishes a typed loss, retaining it through rollback when a file has already been delivered.
 fn publish_tool_loss(s: &mut Session, code: LossCode, text: &str, written: bool) {
     let mark = s.notice_mark();
@@ -4161,6 +4292,27 @@ fn publish_tool_loss(s: &mut Session, code: LossCode, text: &str, written: bool)
 #[cfg(test)]
 mod file_tests {
     use super::*;
+
+    #[test]
+    fn a_plugin_tools_input_losses_are_said_with_their_codes() {
+        let mut s = Session::new(crate::Project::default());
+        let mark = s.notice_mark();
+        say_input_losses(&mut s, "Make Points", Vec::new());
+        assert!(s.notices_since(mark).is_empty(), "a clean read says nothing");
+        let lost = vec![
+            LossMessage { code: LossCode::DroppedFeature, text: "Sites: 2 rows couldn't be read and were left out".into() },
+            LossMessage { code: LossCode::DroppedValue, text: "Sites: 1 value isn't a date and was read as empty, in 'day'".into() },
+        ];
+        say_input_losses(&mut s, "Make Points", lost);
+        let said: Vec<_> = s.notices_since(mark).iter().map(|n| (n.loss(), n.text.clone())).collect();
+        assert_eq!(
+            said,
+            [
+                (Some(LossCode::DroppedFeature), "Make Points: Sites: 2 rows couldn't be read and were left out".to_string()),
+                (Some(LossCode::DroppedValue), "Make Points: Sites: 1 value isn't a date and was read as empty, in 'day'".to_string()),
+            ]
+        );
+    }
 
     #[test]
     fn raster_to_pmtiles_queues_the_archive_without_changing_the_map() {
@@ -4194,7 +4346,7 @@ mod file_tests {
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].1, "Elevation.pmtiles");
         assert!(files[0].2.starts_with(b"PMTiles\x03"));
-        assert_eq!(files[0].2, expected, "layer and group transparency are both applied");
+        assert_eq!(*files[0].2, expected, "layer and group transparency are both applied");
         assert_eq!(s.map().layers.len(), 1);
         assert!(
             s.run("gp.run", &json!({"tool": "rasterToPmtiles", "params": {"input": "Elevation", "minZoom": 2, "maxZoom": 1}})).is_err()
@@ -4218,6 +4370,21 @@ mod file_tests {
             }));
         }
         s.run("test.queueFile", &json!({"name":name,"bytes":bytes,"record":record}))
+    }
+
+    /// A file queued with spare room (an encoder's buffer) gives it back before it is admitted,
+    /// so what waits never passes the limit the queue counts it against.
+    #[test]
+    fn a_queued_file_is_held_to_the_limit_by_what_it_holds() {
+        let mut s = Session::new(crate::Project::default());
+        s.download_cap = Some(50);
+        s.registry.commands.push(C::new("test.queueRoomy", "File export", "Test", |s, _| {
+            let mut file = Vec::with_capacity(100);
+            file.extend_from_slice(&[7; 10]);
+            super::queue_file(s, "roomy.bin".into(), file, record(), Vec::new())
+        }));
+        assert_eq!(s.run("test.queueRoomy", &Value::Null).unwrap()["pending"], true);
+        assert_eq!(s.waiting_download_bytes(), 10);
     }
 
     fn record() -> GpRecord {
@@ -4413,7 +4580,7 @@ mod file_tests {
         assert!(s.project.gp_history.is_empty());
         assert!(s.run("gp.fileDelivered", &json!({"id": id})).is_err());
         assert!(s.project.gp_history.is_empty());
-        assert_eq!(s.take_gp_files(), vec![(id, "cities.pmtiles".into(), vec![1, 2, 3])]);
+        assert_eq!(s.take_gp_files(), vec![(id, "cities.pmtiles".into(), std::sync::Arc::new(vec![1, 2, 3]))]);
         assert!(s.take_gp_files().is_empty(), "bytes are handed over once");
         let out = s.run("gp.fileDelivered", &json!({"id": id, "error": "browser rejected download"})).unwrap();
         assert_eq!(out["delivered"], false);

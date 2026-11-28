@@ -921,6 +921,7 @@ mod tests {
                 depth: Some(300.0),
                 walls: rustgis_map::view::BLOCK_WALLS,
                 walls_layer: None,
+                walls_top: None,
                 water: None,
                 shape: rustgis_map::view::BlockShape::Box,
             }),
@@ -1391,6 +1392,7 @@ mod tests {
                 rock: None,
                 ambient: None,
                 balanced: false,
+                shadow_softness: None,
             };
         };
         let camera = rustgis_map::Camera { center: lonlat_to_merc(Coord::new(0.35, -0.05)), res: 300.0, bearing: 0.0, pitch: 0.0 };
@@ -1446,6 +1448,7 @@ mod tests {
             rock: None,
             ambient: None,
             balanced: false,
+            shadow_softness: None,
         };
         camera.center = lonlat_to_merc(Coord::new(0.35, -0.3));
         let view = crate::View { width: 300.0, height: 200.0, pixels_per_point: 1.0, camera, sky: false };
@@ -1497,6 +1500,7 @@ mod tests {
             rock: None,
             ambient: None,
             balanced: false,
+            shadow_softness: None,
         };
         let camera = rustgis_map::Camera { center: lonlat_to_merc(Coord::new(0.25, -0.1)), res: 300.0, bearing: 0.0, pitch: 0.0 };
         let view = crate::View { width: 200.0, height: 200.0, pixels_per_point: 1.0, camera, sky: false };
@@ -1531,6 +1535,7 @@ mod tests {
             rock: None,
             ambient: None,
             balanced: false,
+            shadow_softness: None,
         };
         let camera = rustgis_map::Camera { center: lonlat_to_merc(Coord::new(0.35, -0.05)), res: 300.0, bearing: 0.0, pitch: 0.0 };
         let view = crate::View { width: 200.0, height: 200.0, pixels_per_point: 1.0, camera, sky: false };
@@ -1576,6 +1581,7 @@ mod tests {
             rock: None,
             ambient: None,
             balanced: false,
+            shadow_softness: None,
         };
         m.view.terrain.as_mut().unwrap().water.as_mut().unwrap().glint = glint;
         camera.center = lonlat_to_merc(Coord::new(0.35, -0.3));
