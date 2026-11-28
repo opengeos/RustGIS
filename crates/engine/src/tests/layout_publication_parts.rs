@@ -507,15 +507,15 @@ fn a_publication_legend_is_sized_while_only_a_layer_it_leaves_out_reads() {
     let listed = said(json!({}));
     assert!(listed.contains("classes aren't known yet"), "{listed}");
     let left_out = said(json!({"exclude": ["depth"]}));
-    let _ = std::fs::remove_file(points);
     assert!(!left_out.contains("classes aren't known yet"), "{left_out}");
+    let _ = std::fs::remove_file(points);
 }
 
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn a_publication_legend_is_sized_past_an_unreadable_source_it_leaves_out() {
     let path = temp("survey.shp");
-    let mut ds = rustgis_data::Dataset::new("survey", rustgis_data::GeometryType::Point, vec![]);
+    let mut ds = rustgis_data::Dataset::new("sites", rustgis_data::GeometryType::Point, vec![]);
     ds.push(Some(rustgis_data::Geometry::Point(rustgis_geom::Coord::new(5.0, 5.0))), vec![]);
     rustgis_data::io::write_path(&ds, &path).unwrap();
     let handle = rustgis_data::source::open_path(&path, None).unwrap();

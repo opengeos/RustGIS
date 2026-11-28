@@ -693,6 +693,7 @@ fn legend_sizing_reads_no_source_the_legend_leaves_out() {
     let source = SourceLayer::from_path(path.to_string_lossy(), None, rustgis_data::source::open_path(&path, None).unwrap());
     let mut map = Map::new("legend exclude");
     let id = map.add_streamed("Survey classes", source);
+    // A listed layer beside it, so the legend has rows to measure.
     map.add_dataset(ds);
     std::fs::remove_file(&path).unwrap();
     let mut sized = |exclude: &[String]| {
