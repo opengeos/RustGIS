@@ -3738,9 +3738,13 @@ impl Map {
         self.layers.iter().fold(Extent::EMPTY, |e, l| e.union(&l.selection_extent()))
     }
 
+    /// Clears visible row selections and ids parked for a streamed layer's next compatible read.
     pub fn clear_selection(&mut self) {
         for l in &mut self.layers {
             l.selection.clear();
+            if let Some(source) = &mut l.source {
+                source.saved_selection.clear();
+            }
         }
     }
 
@@ -4340,7 +4344,9 @@ mod tests {
     /// Repeated refusals retain parked ids, and the same view restores their selection on read.
     #[test]
     fn linked_source_schema_refusal_preserves_selection_until_recovery() {
-        let mut layer = linked_schema_layer(&["rank"], &["rank"]);
+        let mut map = Map::new("Sources");
+        let id = map.add_layer(linked_schema_layer(&["rank"], &["rank"]));
+        let layer = map.layer_mut(id).unwrap();
         let view = Extent::new(-180.0, -80.0, 180.0, 80.0);
         layer.sync_source(&view, true);
         layer.selection = vec![0];
@@ -4358,6 +4364,16 @@ mod tests {
         assert_eq!(layer.selection, [0]);
         assert_eq!(layer.selected_ids(), selected);
         assert!(layer.source.as_ref().unwrap().saved_selection.is_empty());
+        // An explicit Clear Selection during a later refusal cancels that restoration.
+        layer.dataset.fields[0].name = "saved_old_name".into();
+        layer.sync_source(&view, true);
+        assert_eq!(layer.selected_ids(), selected);
+        map.clear_selection();
+        let layer = map.layer_mut(id).unwrap();
+        assert!(layer.selected_ids().is_empty(), "Clear Selection also clears the parked ids");
+        layer.dataset.fields[0].name = "rank".into();
+        layer.sync_source(&view, true);
+        assert!(layer.selection.is_empty(), "cleared selection cannot reappear on recovery");
     }
 
     /// A saved native-date prefix can gain a trailing field before any view sync. Whole reads,
