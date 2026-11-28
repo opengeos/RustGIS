@@ -64,7 +64,7 @@ cloud cover line, and **Zoom** (to the item), the asset to add, **Add** and **De
 reads the item's own document from its address and shows it in two tabs: **Formatted** (what it is,
 its properties, its assets and its links, up to 200 rows a section with
 the rest counted; each asset has **Add to map**, **Download** (a link to its web address, not offered for
-an address that needs signing, such as Planetary Computer's) and **Copy link**) and **JSON** (the document as the catalog sent it, with **Copy JSON**; the first
+an address that needs signing, such as Planetary Computer's) and **Copy link**) and **JSON** (the document, pretty-printed with its keys sorted (a repeated key keeps its last value), with **Copy JSON**; the first
 200,000 bytes are drawn and Copy takes all of it). An item with no address of its own, or one the
 network reach it was found with doesn't allow reading, shows what RustGIS read of it instead (the first 100
 plain properties, long text cut), with a line saying so. The asset chosen at first is `visual` (true colour) when there is one, else the first
