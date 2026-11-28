@@ -286,7 +286,7 @@ mod tests {
             let why = app.run("ui.pane.assistant", params).unwrap_err();
             assert!(why.contains("AI Assistant extension, which is off"), "{why}");
         }
-        assert_eq!(app.assistant.queued, None);
+        assert!(app.assistant.asked.is_empty());
         // A saved pane set doesn't bring the pane back.
         app.run("ui.paneSet", json!({"load": "with chat"})).unwrap();
         close_panes(&mut app);

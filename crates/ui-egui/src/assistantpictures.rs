@@ -391,40 +391,83 @@ mod tests {
             spins += 1;
             std::thread::yield_now();
         }
-        app.assistant.queued = Some("like this".into());
+        app.assistant.input = "like this".into();
+        app.assistant.send_when_ready = true;
         crate::assistant::poll(&mut app, &egui::Context::default());
-        assert!(app.assistant.queued.is_none() && !app.assistant.pictures.reading());
+        assert!(!app.assistant.sending_when_ready() && !app.assistant.pictures.reading());
+        assert_eq!(app.assistant.input, "", "the message sent was the box's");
         let Some(rustgis_assistant::provider::Turn::User(_, sent)) = app.assistant.agent.as_ref().unwrap().turns().last() else {
             panic!("sent")
         };
         assert_eq!(sent.len(), 1);
     }
 
-    /// A second message sent while the first waits for a picture takes its place, and the first
-    /// goes back to the box rather than being lost.
+    /// While a picture is being read, the message waiting is the one in the box: a suggestion
+    /// clicked meanwhile becomes it, typing changes it, and once it goes it is sent once, as the
+    /// box held it, and the box is empty (#2991's review: a suggestion and then the box's own
+    /// message left the sent text in the box). A suggestion clicked while another message is
+    /// being written goes above it, unsent, and that is said.
     #[test]
-    fn a_message_replaced_while_waiting_goes_back_to_the_box() {
+    fn the_message_waiting_is_the_one_in_the_box() {
         let mut app = RustGisApp::with_sample();
-        app.assistant.agent = Some(rustgis_assistant::Agent::new(rustgis_assistant::Config::from_env("custom"), &app.session));
+        let mut cfg = rustgis_assistant::Config::from_env("custom");
+        cfg.model = "test".into();
+        app.assistant.agent = Some(rustgis_assistant::Agent::new(cfg.clone(), &app.session));
         app.assistant.loaded = true;
+        // The request goes nowhere: the test is about what is sent and what the box keeps.
+        app.services.http = Some(Box::new(|_, _| {}));
         received(&mut app, "map.png", png());
-        // Read in only by `take_read`, which nothing here calls: the messages keep waiting.
         assert!(app.assistant.pictures.reading());
         let ctx = egui::Context::default();
-        crate::assistant::send(&mut app, "first".into(), &ctx);
-        crate::assistant::send(&mut app, "second".into(), &ctx);
-        assert_eq!(app.assistant.queued.as_deref(), Some("second"));
-        assert_eq!(app.assistant.input, "first");
-        // Typed on in the box and sent again: the box's own draft isn't put back a second time.
-        app.assistant.input = "A".into();
-        crate::assistant::send(&mut app, "A".into(), &ctx);
-        app.assistant.input = "AB".into();
-        crate::assistant::send(&mut app, "AB".into(), &ctx);
-        assert_eq!((app.assistant.queued.as_deref(), app.assistant.input.as_str()), (Some("AB"), "AB"));
-        // The box cleared meanwhile: a new conversation puts the waiting draft back.
-        app.assistant.input.clear();
-        crate::assistant::new_conversation(&mut app);
-        assert_eq!((app.assistant.queued.as_deref(), app.assistant.input.as_str()), (None, "AB"));
+        crate::assistant::send(&mut app, "Zoom to Tokyo".into(), &ctx);
+        assert!(app.assistant.sending_when_ready());
+        assert_eq!(app.assistant.input, "Zoom to Tokyo");
+        // Typed on in the box, and sent from it.
+        app.assistant.input = "Zoom to Tokyo and label it".into();
+        crate::assistant::send(&mut app, "Zoom to Tokyo and label it".into(), &ctx);
+        assert!(app.assistant.sending_when_ready());
+        assert_eq!(app.assistant.input, "Zoom to Tokyo and label it");
+        let read = |app: &RustGisApp| app.assistant.pictures.reading.iter().all(|(_, slot)| slot.lock().is_ok_and(|s| s.is_some()));
+        let mut spins = 0;
+        while !read(&app) {
+            assert!(spins < 10_000_000, "the picture was never read");
+            spins += 1;
+            std::thread::yield_now();
+        }
+        crate::assistant::poll(&mut app, &ctx);
+        assert!(!app.assistant.sending_when_ready());
+        assert_eq!(app.assistant.input, "");
+        let sent: Vec<String> = app
+            .assistant
+            .agent
+            .as_ref()
+            .unwrap()
+            .turns()
+            .iter()
+            .filter_map(|t| match t {
+                rustgis_assistant::provider::Turn::User(text, _) => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(sent.len(), 1, "{sent:?}");
+        assert!(sent[0].ends_with("Zoom to Tokyo and label it"), "{sent:?}");
+        // Another message being written: a suggestion neither waits with it nor takes its place.
+        app.assistant.agent = Some(rustgis_assistant::Agent::new(cfg, &app.session));
+        received(&mut app, "sketch.png", png());
+        app.assistant.input = "a draft".into();
+        let mark = app.session.notice_mark();
+        crate::assistant::send(&mut app, "Zoom to Tokyo".into(), &ctx);
+        assert!(!app.assistant.sending_when_ready());
+        assert_eq!(app.assistant.input, "Zoom to Tokyo\na draft");
+        let said: Vec<&str> = app.session.notices_since(mark).iter().map(|n| n.text.as_str()).collect();
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(said[0].contains("above what was being written"), "{said:?}");
+        // Not without a reason: a message in the box alone waits and says nothing.
+        let mark = app.session.notice_mark();
+        app.assistant.input = "a draft".into();
+        crate::assistant::send(&mut app, "a draft".into(), &ctx);
+        assert!(app.assistant.sending_when_ready());
+        assert!(app.session.notices_since(mark).is_empty());
     }
 
     #[test]

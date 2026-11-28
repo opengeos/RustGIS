@@ -7,8 +7,11 @@
 //!   [`rustgis_assistant::Config::missing`] why it isn't set up;
 //! - [`AssistantState::messages`] and [`AssistantState::preview`] are what to draw, and
 //!   [`AssistantState::busy`] and [`AssistantState::waiting`] what is going on;
-//! - [`send`] a message, [`stop`] the run, start a [`new_conversation`] or [`compact`] it;
-//! - [`pending`] is the action waiting for approval, which [`decide`] answers.
+//! - [`AssistantState::input`] is the message being written, which [`send`] sends (or holds until
+//!   the key is read: [`AssistantState::sending_when_ready`]); [`stop`] the run, start a
+//!   [`new_conversation`] or [`compact`] it;
+//! - [`pending`] is the action waiting for approval, which [`decide`] answers;
+//! - [`choose_provider`] and [`apply_settings`] change the provider's settings.
 //!
 //! Requests go out off the frame: on a thread on the desktop, through `Services::http` (the
 //! browser's fetch) on the web. Their replies are taken in by [`RustGisApp::logic`] each frame.
@@ -16,6 +19,9 @@
 use rustgis_assistant::{Agent, Config, Entry, HttpRequest, HttpResponse, PRESETS, Step, chatgpt, provider};
 
 use crate::{RustGisApp, Slot};
+
+/// The desktop pane's pieces another interface draws the conversation with.
+pub use crate::assistantpane::{approval_details, error, reply};
 
 /// Where a response lands.
 pub(crate) type Reply = Slot<Result<HttpResponse, rustgis_assistant::Error>>;
@@ -26,18 +32,22 @@ pub(crate) type Chunks = std::sync::Arc<std::sync::Mutex<Vec<u8>>>;
 #[derive(Default)]
 pub struct AssistantState {
     pub(crate) agent: Option<Agent>,
-    /// The message being written.
+    /// The message being written. While it waits to be sent ([`AssistantState::sending_when_ready`])
+    /// it is the message that goes, as it is when the key and its pictures are read.
     pub input: String,
     /// The pictures attached to the message being written.
     pub(crate) pictures: crate::assistantpictures::Pictures,
     /// The input box's height, set by dragging the grip above it (0 until dragged: two lines).
     pub(crate) input_height: f32,
-    /// A message to send on the next frame (`ui.pane.assistant {"ask": …}`), or once the key or a
-    /// picture it waits for is read.
-    pub queued: Option<String>,
-    /// The message waiting is the input box's own draft (sent from the box, which keeps it until
-    /// it goes): nothing to put back if it isn't sent.
-    pub(crate) queued_from_box: bool,
+    /// The message being written ([`AssistantState::input`]) is sent once the key and the pictures
+    /// it waits for are read: what the box shows while it waits is what goes, and what a send
+    /// clears.
+    pub(crate) send_when_ready: bool,
+    /// Messages a command asked to send (`ui.pane.assistant {"ask": …}`), oldest first: each is sent
+    /// by itself, as a suggestion would be, on the next frame once the key and pictures are read.
+    /// They never go into the message being written unless they can't be sent, as while the
+    /// assistant is busy with one before ([`AssistantState::hold`]).
+    pub(crate) asked: Vec<String>,
     /// Pictures that landed while the extension was off, to be said once.
     pub(crate) late_pictures: usize,
     /// The request out: its generation and where its response lands.
@@ -149,6 +159,43 @@ impl AssistantState {
     /// The chosen provider's settings; `None` until it is loaded, which [`open`] and [`send`] do.
     pub fn config(&self) -> Option<&Config> {
         self.agent.as_ref().map(|a| &a.config)
+    }
+
+    /// The message being written waits to be sent until the key or a picture is read.
+    pub fn sending_when_ready(&self) -> bool {
+        self.send_when_ready
+    }
+
+    /// A message waits to be sent until the key or a picture is read: the one being written, or
+    /// one a command asked for.
+    pub fn waiting_to_send(&self) -> bool {
+        self.send_when_ready || !self.asked.is_empty()
+    }
+
+    /// Whether API keys are remembered on this device ("Remember the key"), which
+    /// [`apply_settings`] compares with what the form started from.
+    pub fn remember_key(&self) -> bool {
+        self.remember_key
+    }
+
+    /// Sets "Remember the key", for [`apply_settings`] to apply with the form's other changes.
+    pub fn set_remember_key(&mut self, on: bool) {
+        self.remember_key = on;
+    }
+
+    /// The models the provider listed, once it has.
+    pub fn models(&self) -> &[String] {
+        &self.models
+    }
+
+    /// Nothing waiting goes by itself any more: the message being written stays in the box, unsent,
+    /// and what a command asked to send goes into the box with it.
+    pub(crate) fn hold(&mut self) {
+        self.send_when_ready = false;
+        // Each goes above what the box holds, so the newest goes first and the oldest ends on top.
+        for text in std::mem::take(&mut self.asked).into_iter().rev() {
+            to_box(self, &text);
+        }
     }
 }
 
@@ -663,7 +710,7 @@ pub(crate) fn follow(app: &mut RustGisApp, step: Step, ctx: &egui::Context) {
 
 /// Runs `f` on the agent and the session; errors of the commands it ran show in the transcript,
 /// not as notices too.
-fn with_agent(app: &mut RustGisApp, f: impl FnOnce(&mut Agent, &mut rustgis_engine::Session) -> Step) -> Option<Step> {
+fn with_agent<T>(app: &mut RustGisApp, f: impl FnOnce(&mut Agent, &mut rustgis_engine::Session) -> T) -> Option<T> {
     let mut agent = app.assistant.agent.take()?;
     let before = app.session.notices.len();
     let step = f(&mut agent, &mut app.session);
@@ -692,8 +739,8 @@ pub(crate) fn turned_off(app: &mut RustGisApp) {
     let signing_in = app.assistant.login.take().is_some();
     #[cfg(target_arch = "wasm32")]
     let signing_in = false;
-    // A message not sent yet goes back to the message box.
-    unqueue(&mut app.assistant);
+    // A message not sent yet stays in the message box.
+    app.assistant.hold();
     if let Some(agent) = app.assistant.agent.as_mut() {
         agent.suspend();
     }
@@ -729,7 +776,8 @@ pub(crate) fn turned_off(app: &mut RustGisApp) {
     }
 }
 
-/// Per-frame: responses that arrived, a message queued by a command, and settings to save.
+/// Per-frame: responses that arrived, a message waiting or asked for by a command, and settings to
+/// save.
 pub(crate) fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
     // While the extension is off nothing is sent or run: what is already on its way (a model
     // list, a picture being read) waits for it to be on again. Keys and settings are still kept.
@@ -766,9 +814,27 @@ pub(crate) fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
     if crate::assistantpictures::take_read(app) {
         ctx.request_repaint_after(web_time::Duration::from_millis(100));
     }
-    let from_box = std::mem::take(&mut app.assistant.queued_from_box);
-    if let Some(text) = app.assistant.queued.take() {
-        send_from(app, text, from_box, ctx);
+    // A command's message is the first use of the Assistant, maybe: its provider is loaded (and
+    // its key read begun) before anything is judged ready.
+    if !app.assistant.asked.is_empty() {
+        ensure_loaded(app, ctx);
+    }
+    let ready = !key_loading(app) && !app.assistant.pictures.reading();
+    if ready {
+        while !app.assistant.busy() && !app.assistant.asked.is_empty() {
+            let text = app.assistant.asked.remove(0);
+            send_from(app, text, false, ctx);
+        }
+        // While it is busy the rest aren't sent, as no message is: they go into the box in order.
+        if !app.assistant.asked.is_empty() {
+            app.assistant.hold();
+            app.session.notify(tl!("The assistant is busy; stop it or wait for it to finish."), true);
+        }
+    }
+    if app.assistant.send_when_ready && ready {
+        app.assistant.send_when_ready = false;
+        let text = app.assistant.input.clone();
+        send_from(app, text, true, ctx);
     }
     // The reply's text so far, as it streams in.
     if let Some((generation, chunks)) = &app.assistant.chunks {
@@ -881,18 +947,20 @@ pub fn open(app: &mut RustGisApp, ctx: &egui::Context) {
 }
 
 /// Sends the user's message, with the pictures attached to it, to the selected provider (loading
-/// it the first time), and clears the draft ([`AssistantState::input`]). While the key or a picture
-/// is still being read, the message waits in [`AssistantState::queued`] and goes once it is;
-/// another sent meanwhile takes its place, the one it replaces going back to the box, and the
-/// draft is left as it is until then. Once sent, the draft is cleared only if it still holds that
-/// message: text typed while it waited stays. While the assistant is busy it isn't sent: a notice
-/// says so, and the message is in the box to send again.
+/// it the first time). The message being written ([`AssistantState::input`]) is cleared when it is
+/// the one sent; a message from elsewhere (a suggestion) leaves it as it is.
+///
+/// While the key or a picture is still being read, the message waits as the message being written
+/// ([`AssistantState::sending_when_ready`]) and goes, as the box then holds it, once they are. A
+/// message from elsewhere becomes the message being written when there is none; when there is one,
+/// it is put above it, and a notice says to send them from there. While the assistant is busy
+/// nothing is sent: a notice says so, and the message is in the box to send again.
 pub fn send(app: &mut RustGisApp, text: String, ctx: &egui::Context) {
     let from_box = text.trim() == app.assistant.input.trim();
     send_from(app, text, from_box, ctx);
 }
 
-/// [`send`], told whether `text` is the input box's own draft (`from_box`), which the box keeps
+/// [`send`], told whether `text` is the message being written (`from_box`), which the box keeps
 /// until it goes: a message from elsewhere (a suggestion, a command's) is put in the box when it
 /// isn't sent, the box's own is already there.
 fn send_from(app: &mut RustGisApp, text: String, from_box: bool, ctx: &egui::Context) {
@@ -910,12 +978,22 @@ fn send_from(app: &mut RustGisApp, text: String, from_box: bool, ctx: &egui::Con
         app.session.notify(tl!("The assistant is busy; stop it or wait for it to finish."), true);
         return;
     }
-    // A message waits for the key, and for a picture still being read, which goes with it (a
-    // suggestion clicked meanwhile, say).
+    // A message waits for the key, and for a picture still being read, which goes with it, as the
+    // message being written: there is one place for it, which the box shows.
     if key_loading(app) || app.assistant.pictures.reading() {
-        unqueue(&mut app.assistant);
-        app.assistant.queued = Some(text);
-        app.assistant.queued_from_box = from_box;
+        let state = &mut app.assistant;
+        let draft = state.input.trim();
+        if !from_box && !draft.is_empty() && draft != text.trim() {
+            // Not sent with what was being written, nor in its place: both stay to be sent.
+            to_box(state, &text);
+            state.send_when_ready = false;
+            app.session.notify(tl!("The message is in the message box, above what was being written: send it from there."), false);
+            return;
+        }
+        if !from_box && draft.is_empty() {
+            state.input = text.trim().to_string();
+        }
+        state.send_when_ready = true;
         return;
     }
     let text = text.trim().to_string();
@@ -937,13 +1015,14 @@ fn send_from(app: &mut RustGisApp, text: String, from_box: bool, ctx: &egui::Con
         return;
     };
     let step = agent.ask_with(&text, app.assistant.pictures.take(), session);
-    if app.assistant.input.trim() == text {
+    if from_box || app.assistant.input.trim() == text {
         app.assistant.input.clear();
     }
     follow(app, step, ctx);
 }
 
 /// An action waiting for the user's approval.
+#[derive(Clone)]
 pub struct Approval {
     /// What would run, in words.
     pub what: String,
@@ -953,42 +1032,38 @@ pub struct Approval {
     pub can_always: bool,
     /// The engine's structured card of it, where there is one, taken before it was asked about.
     pub review: Option<rustgis_engine::policy::Review>,
+    /// Which approval this is: [`decide`] answers it only while it is still the one waiting.
+    pub asked: rustgis_assistant::Asking,
 }
 
 /// The action waiting for approval, if one is.
 pub fn pending(app: &RustGisApp) -> Option<Approval> {
     let agent = app.assistant.agent.as_ref()?;
+    let asked = agent.asking()?;
     let (what, why, can_always) = agent.pending(&app.session)?;
-    Some(Approval { what, why, can_always, review: agent.pending_review().cloned() })
+    Some(Approval { what, why, can_always, review: agent.pending_review().cloned(), asked })
 }
 
-/// Answers the [`pending`] action: runs it, or declines it. With `always`, actions like it run
-/// without asking for the rest of the conversation, where [`Approval::can_always`] says so.
-pub fn decide(app: &mut RustGisApp, allow: bool, always: bool, ctx: &egui::Context) {
-    if let Some(step) = with_agent(app, |a, s| a.decide(allow, always, s)) {
-        follow(app, step, ctx);
+/// Answers the approval `asked` ([`Approval::asked`]): runs its action, or declines it. With
+/// `always`, actions like it run without asking for the rest of the conversation, where
+/// [`Approval::can_always`] says so. An approval no longer waiting (answered already, stopped, or
+/// followed by another) is answered by nothing, and a notice says so.
+pub fn decide(app: &mut RustGisApp, asked: &rustgis_assistant::Asking, allow: bool, always: bool, ctx: &egui::Context) {
+    match with_agent(app, |a, s| a.decide(asked, allow, always, s)) {
+        Some(Some(step)) => follow(app, step, ctx),
+        Some(None) => app.session.notify(tl!("That approval was no longer waiting, so nothing was run or declined."), false),
+        None => {}
     }
 }
 
-/// Stops the run: the request out is forgotten, and calls not yet run are skipped.
+/// Stops the run: the request out is forgotten, calls not yet run are skipped, and a message
+/// waiting for the key stays in the box unsent.
 pub fn stop(app: &mut RustGisApp) {
     if let Some(a) = app.assistant.agent.as_mut() {
         a.stop();
     }
     drop_request(&mut app.assistant);
-}
-
-/// Puts a message still waiting to be sent back into the input box, so it is never lost: as the
-/// draft when the box is empty or already holds it, above newer typing otherwise.
-pub(crate) fn unqueue(state: &mut AssistantState) {
-    let from_box = std::mem::take(&mut state.queued_from_box);
-    // The box's own draft is there still, or what the user typed over it; one they cleared
-    // comes back.
-    if let Some(text) = state.queued.take()
-        && (!from_box || state.input.trim().is_empty())
-    {
-        to_box(state, &text);
-    }
+    app.assistant.hold();
 }
 
 /// Puts a message that isn't being sent into the input box: as the draft when the box is empty
@@ -1002,12 +1077,13 @@ fn to_box(state: &mut AssistantState, text: &str) {
 }
 
 /// Forgets the conversation, and ends the agent threads it started. A message still waiting to
-/// be sent ([`AssistantState::queued`]) isn't sent into the new one: it goes back to the box.
+/// be sent ([`AssistantState::sending_when_ready`]) isn't sent into the new one: it stays in the
+/// box.
 pub fn new_conversation(app: &mut RustGisApp) {
     if let Some(a) = app.assistant.agent.as_mut() {
         a.clear();
     }
-    unqueue(&mut app.assistant);
+    app.assistant.hold();
     drop_request(&mut app.assistant);
     end_threads(app);
 }
@@ -1050,7 +1126,7 @@ pub(crate) fn fold_provider(app: &mut RustGisApp, closed: bool) {
 
 /// Puts another provider into the settings being edited (`cfg`, which [`apply_settings`] then
 /// takes), and drops what was read for the one before.
-pub(crate) fn choose_provider(app: &mut RustGisApp, cfg: &mut Config, id: &str, ctx: &egui::Context) {
+pub fn choose_provider(app: &mut RustGisApp, cfg: &mut Config, id: &str, ctx: &egui::Context) {
     #[cfg(not(target_arch = "wasm32"))]
     {
         app.assistant.login = None;
@@ -1073,7 +1149,7 @@ pub(crate) fn choose_provider(app: &mut RustGisApp, cfg: &mut Config, id: &str, 
 
 /// Applies what a settings form made of the provider's settings and of "Remember the key"; `before`
 /// is what the form started from. Nothing changes when they are the same.
-pub(crate) fn apply_settings(app: &mut RustGisApp, mut cfg: Config, before: (Config, bool), ctx: &egui::Context) {
+pub fn apply_settings(app: &mut RustGisApp, mut cfg: Config, before: (Config, bool), ctx: &egui::Context) {
     if cfg.login() {
         provider::use_catalog(&mut cfg, &app.assistant.catalog, true);
     }
@@ -1193,13 +1269,13 @@ fn revoke_later(app: &mut RustGisApp, revocation: Option<chatgpt::Revocation>, c
 }
 
 /// After signing out or removing the account: no tokens, no catalog, and nothing waiting to be
-/// sent with them (a queued message goes back to the input box, not to the provider).
+/// sent with them (a message waiting stays in the input box, unsent).
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn forget_sign_in(app: &mut RustGisApp, cfg: &mut Config) {
     app.assistant.sign_in_read = None;
     app.assistant.models_slot = None;
     app.assistant.catalog_pending = false;
-    unqueue(&mut app.assistant);
+    app.assistant.hold();
     cfg.key.clear();
     app.assistant.account = None;
     app.assistant.models.clear();
@@ -1239,7 +1315,7 @@ pub(crate) fn peer_replaced(app: &mut RustGisApp) {
     }
     app.assistant.inflight = None;
     app.assistant.chunks = None;
-    // Not sent into the peer's project: back to the box.
-    unqueue(&mut app.assistant);
+    // Not sent into the peer's project: it stays in the box.
+    app.assistant.hold();
     app.assistant.always = false;
 }

@@ -6,11 +6,13 @@
 //! the desktop interface's View › Touch Interface can bring it back. Dialogs, notices and the
 //! Project page stay the front end's.
 //!
-//! What is here: the map, the bar (Layers, Add Data, Capture, More), the Layers sheet (the
+//! What is here: the map, with a Layers button at its top-right corner; the bar (Add Data,
+//! Capture, the Assistant once it is set up, More); the Layers sheet (the
 //! project's maps and layouts; show, hide, zoom to, the active layer), the Capture sheet (a
 //! point, line or polygon placed by the cross on the map, with a form for its layer's attributes
 //! that follows the layer's data design: value lists, ranges and feature templates) and the More
-//! sheet (full extent, undo, the project, the device's position, the desktop interface). A sheet
+//! sheet (full extent, undo, the project, the device's position, the desktop interface) and the
+//! Assistant's sheet (see [`assistant`]). A sheet
 //! is lowered by its ×, a swipe down on its heading, a tap on the map above it, or the system's
 //! Back. Where a shell reports the device's position (`RustGisApp::position`), it is drawn on the
 //! map and the capture cross can be put on it.
@@ -27,6 +29,7 @@ use rustgis_ui_egui::theme::Tokens;
 use rustgis_ui_egui::{RustGisApp, i18n, icons, tl};
 use serde_json::{Value, json};
 
+mod assistant;
 mod copies;
 mod edit;
 mod form;
@@ -65,6 +68,8 @@ enum Sheet {
     /// Capturing a feature where the cross on the map is.
     Capture,
     More,
+    /// The AI Assistant's conversation, or its settings until it is set up.
+    Assistant,
 }
 
 /// The sheet shown, kept in egui's memory: the interface has no state of its own in the app.
@@ -112,10 +117,14 @@ pub fn chrome(app: &mut RustGisApp, ui: &mut Ui) {
     track::take(app, &ctx);
     // What Remove Unused Copies found or removed, off the window's thread.
     copies::poll(app, &ctx);
-    // What the system's text field sent back goes in the Capture form's field it was opened for.
+    // The Assistant's provider, loaded the first time, says whether it is set up.
+    assistant::prepare(app, &ctx);
+    // What the system's text field sent back goes in the field it was opened for: the
+    // Assistant's, or the Capture form's.
     if !app.typed.is_empty() {
-        let mut state = form(&ctx);
         let typed = std::mem::take(&mut app.typed);
+        let typed = assistant::take_typed(app, &ctx, typed);
+        let mut state = form(&ctx);
         state.take_typed(app, typed);
         set_form(&ctx, state);
     }
@@ -173,6 +182,16 @@ pub fn chrome(app: &mut RustGisApp, ui: &mut Ui) {
             egui::ScrollArea::horizontal().show(ui, |ui| ui.horizontal_centered(|ui| app.background_status(ui)));
         });
     }
+    // The Assistant working with its sheet lowered: what it is doing, and Stop.
+    if assistant::strip_shown(app, &ctx) {
+        let margin = egui::Margin::symmetric(12, 0);
+        egui::Panel::bottom("touch_assistant_strip")
+            .exact_size(TARGET + 8.0)
+            .frame(frame.inner_margin(margin))
+            .show(ui, |ui| assistant::strip(app, ui, &t));
+    }
+    // Lowered by the strip's Stop or its Show: read again.
+    let shown = sheet(&ctx);
     if shown != Sheet::None {
         // As tall as its rows, up to its share of the window: a longer list scrolls.
         let rows = match shown {
@@ -191,15 +210,20 @@ pub fn chrome(app: &mut RustGisApp, ui: &mut Ui) {
                     }
                     + usize::from(can_send_field_package(app))
                     + copies_rows(&ctx)
+                    + usize::from(assistant::setup(app) == assistant::Setup::Missing)
             }
             Sheet::Capture => capture_rows(app, &ctx),
-            Sheet::None => 0,
+            // As tall as its height, not its rows: the conversation scrolls.
+            Sheet::Assistant | Sheet::None => 0,
         };
         let spacing = ui.spacing().item_spacing.y;
         let groups = if shown == Sheet::More { MORE_GROUPS } else { 0 };
         let wanted = (rows + 1) as f32 * (TARGET + spacing) + groups as f32 * (GROUP + spacing) + 2.0 * SHEET_MARGIN;
         let share = if ctx.egui_wants_keyboard_input() { TYPING_SHARE } else { SHEET_SHARE };
-        let height = wanted.min(ui.available_height() * share);
+        let height = match shown {
+            Sheet::Assistant => ui.available_height() * assistant::height(&ctx).share().max(share),
+            _ => wanted.min(ui.available_height() * share),
+        };
         let margin = egui::Margin::symmetric(8, SHEET_MARGIN as i8);
         egui::Panel::bottom("touch_sheet").resizable(false).exact_size(height).frame(frame.inner_margin(margin)).show(
             ui,
@@ -207,6 +231,7 @@ pub fn chrome(app: &mut RustGisApp, ui: &mut Ui) {
                 Sheet::Layers => layers(app, ui, &t),
                 Sheet::More => more(app, ui, &t),
                 Sheet::Capture => capture(app, ui, &t),
+                Sheet::Assistant => assistant::show(app, ui, &t),
                 Sheet::None => {}
             },
         );
@@ -223,6 +248,13 @@ pub fn chrome(app: &mut RustGisApp, ui: &mut Ui) {
             if ui.interact(above, egui::Id::unique("touch_dismiss"), Sense::click()).clicked() && !pinched {
                 set_sheet(ui.ctx(), Sheet::None);
             }
+        }
+        // Layers, at the map's top-right corner (where a desktop's zoom buttons are); on the bar
+        // while ModelBuilder, with its own buttons there, is in the map's place.
+        // Not on a strip of map too short for it (a full sheet): it comes back as the sheet lowers.
+        let room = above.height() >= TARGET + 16.0;
+        if LAYERS_ON_THE_MAP && map && room && layers_button(ui, &t, above, shown == Sheet::Layers) {
+            set_sheet(ui.ctx(), if shown == Sheet::Layers { Sheet::None } else { Sheet::Layers });
         }
         // While capturing, a cross marks the middle of the map: the point goes there, so the
         // map is moved under the cross, which a finger does more exactly than a tap.
@@ -386,28 +418,74 @@ fn cross(painter: &egui::Painter, at: egui::Pos2, t: &Tokens) {
     }
 }
 
+/// Whether Layers is a button at the map's top-right corner, leaving the bar's room to the
+/// Assistant. `false` puts it back on the bar, first: five buttons with the Assistant.
+const LAYERS_ON_THE_MAP: bool = true;
+
+/// The bar's buttons, in order: Add Data, Capture, the Assistant once it is set up, and More,
+/// with Layers first when it isn't on the map ([`LAYERS_ON_THE_MAP`]) or ModelBuilder is in the
+/// map's place.
+fn bar_buttons(app: &RustGisApp) -> Vec<Sheet> {
+    let mut buttons = Vec::with_capacity(5);
+    if !LAYERS_ON_THE_MAP || app.mb.shown() {
+        buttons.push(Sheet::Layers);
+    }
+    // Add Data has no sheet of its own.
+    buttons.extend([Sheet::None, Sheet::Capture]);
+    if assistant::setup(app) == assistant::Setup::Ready {
+        buttons.push(Sheet::Assistant);
+    }
+    buttons.push(Sheet::More);
+    buttons
+}
+
 /// The bar: one large button for each thing done most, the sheet's own button marked while its
 /// sheet is up.
 fn bar(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, shown: Sheet) {
     let ctx = ui.ctx().clone();
-    let toggle = |to: Sheet| set_sheet(&ctx, if shown == to { Sheet::None } else { to });
-    ui.columns(4, |cols| {
-        if let [a, b, c, d] = cols {
-            if bar_button(a, t, "contents", tl!("Layers"), shown == Sheet::Layers) {
-                toggle(Sheet::Layers);
+    let buttons = bar_buttons(app);
+    ui.columns(buttons.len(), |cols| {
+        for (col, button) in cols.iter_mut().zip(buttons) {
+            let (icon, label) = match button {
+                Sheet::Layers => ("contents", tl!("Layers")),
+                Sheet::None => ("add_data", tl!("Add Data")),
+                Sheet::Capture => ("vertices", tl!("Capture")),
+                Sheet::Assistant => ("assistant", tl!("Assistant")),
+                Sheet::More => ("command", tl!("More")),
+            };
+            let on = button != Sheet::None && shown == button;
+            if !bar_button(col, t, icon, label, on) {
+                continue;
             }
-            if bar_button(b, t, "add_data", tl!("Add Data"), false) {
-                set_sheet(&ctx, Sheet::None);
-                run(app, "ui.addData", Value::Null);
-            }
-            if bar_button(c, t, "vertices", tl!("Capture"), shown == Sheet::Capture) {
-                toggle(Sheet::Capture);
-            }
-            if bar_button(d, t, "command", tl!("More"), shown == Sheet::More) {
-                toggle(Sheet::More);
+            match button {
+                Sheet::None => {
+                    set_sheet(&ctx, Sheet::None);
+                    run(app, "ui.addData", Value::Null);
+                }
+                _ if on => set_sheet(&ctx, Sheet::None),
+                Sheet::Assistant => assistant::raise(&ctx, assistant::height(&ctx)),
+                _ => set_sheet(&ctx, button),
             }
         }
     });
+}
+
+/// The Layers button at the top-right corner of `map`, a finger's size, marked while its sheet is
+/// up. Says whether it was tapped.
+fn layers_button(ui: &mut Ui, t: &Tokens, map: Rect, on: bool) -> bool {
+    let rect = Rect::from_min_size(egui::pos2(map.max.x - TARGET - 8.0, map.min.y + 8.0), Vec2::splat(TARGET));
+    let response = ui.interact(rect, egui::Id::unique("touch_layers_button"), Sense::click()).on_hover_text(tl!("Layers"));
+    let fill = if on {
+        t.checked
+    } else if response.is_pointer_button_down_on() {
+        t.pressed
+    } else {
+        t.pane
+    };
+    ui.painter().rect(rect, CornerRadius::same(8), fill, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+    let ink = if on { t.accent_text } else { t.icon };
+    icons::paint(ui.painter(), Rect::from_center_size(rect.center(), Vec2::splat(24.0)), "contents", ink, t.accent);
+    response.clicked()
 }
 
 /// One of the bar's buttons, as wide as its column: the icon over the label. Says whether it
@@ -429,7 +507,22 @@ fn bar_button(ui: &mut Ui, t: &Tokens, icon: &str, label: &str, on: bool) -> boo
 /// A sheet's heading, with its drag handle and the button that lowers it. A swipe down on the
 /// heading lowers the sheet too.
 fn heading(ui: &mut Ui, t: &Tokens, title: &str) {
-    // The drag is sensed under the heading's widgets, so the button still takes its tap.
+    if heading_row(ui, t, title, |_| {}) == Some(Swipe::Down) {
+        set_sheet(ui.ctx(), Sheet::None);
+    }
+}
+
+/// Which way a finger swiped.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Swipe {
+    Up,
+    Down,
+}
+
+/// A sheet's heading: its title, its drag handle, the button that lowers the sheet, and before
+/// that the sheet's own `buttons`, laid out right to left. Says which way a swipe on it went.
+fn heading_row(ui: &mut Ui, t: &Tokens, title: &str, buttons: impl FnOnce(&mut Ui)) -> Option<Swipe> {
+    // The drag is sensed under the heading's widgets, so the buttons still take their taps.
     let row = ui
         .scope_builder(egui::UiBuilder::new().id_salt("touch_heading").sense(Sense::drag()), |ui| {
             ui.horizontal(|ui| {
@@ -440,20 +533,19 @@ fn heading(ui: &mut Ui, t: &Tokens, title: &str) {
                     if icon_button(ui, t, "close", tl!("Close")) {
                         set_sheet(ui.ctx(), Sheet::None);
                     }
+                    buttons(ui);
                 });
             });
         })
         .response;
     let handle = Rect::from_center_size(egui::pos2(row.rect.center().x, row.rect.min.y + 4.0), Vec2::new(36.0, 4.0));
     ui.painter().rect_filled(handle, CornerRadius::same(2), t.border_strong);
-    if swiped_down(ui, &row) {
-        set_sheet(ui.ctx(), Sheet::None);
-    }
+    swiped(ui, &row)
 }
 
-/// Whether a drag on `row` ended this frame a finger's height or more below where it began, and
-/// further down than sideways.
-fn swiped_down(ui: &Ui, row: &egui::Response) -> bool {
+/// Which way a drag on `row` that ended this frame went, when it went a finger's height or more
+/// up or down, and further than sideways.
+fn swiped(ui: &Ui, row: &egui::Response) -> Option<Swipe> {
     let id = egui::Id::unique("touch_swipe");
     // Where the finger went down on the row, kept from the press: egui lets go of it as the
     // finger lifts. A drag the system takes away (a call, an edge gesture) ends only with the
@@ -469,13 +561,15 @@ fn swiped_down(ui: &Ui, row: &egui::Response) -> bool {
         });
     }
     if !row.drag_stopped() {
-        return false;
+        return None;
     }
     let from = ui.data_mut(|d| d.remove_temp::<egui::Pos2>(id));
-    from.zip(row.interact_pointer_pos()).is_some_and(|(from, to)| {
-        let moved = to - from;
-        moved.y >= TARGET && moved.y > moved.x.abs()
-    })
+    let moved = from.zip(row.interact_pointer_pos()).map(|(from, to)| to - from)?;
+    match moved.y {
+        y if y >= TARGET && y > moved.x.abs() => Some(Swipe::Down),
+        y if -y >= TARGET && -y > moved.x.abs() => Some(Swipe::Up),
+        _ => None,
+    }
 }
 
 /// A square button of the smallest size a finger taps, showing an icon. Says whether it was
@@ -1788,6 +1882,10 @@ fn more(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             }
         }
         group(ui, t, tl!("Tools"));
+        // The AI Assistant, until a provider is set up: then the bar has its button.
+        if assistant::setup(app) == assistant::Setup::Missing && row(ui, t, "assistant", tl!("Set Up the Assistant")) {
+            assistant::raise(&ctx, assistant::Height::Full);
+        }
         // The copies of picked files nothing in the project names, removed once agreed.
         if copies::folder().is_some_and(|f| f.is_dir()) {
             copies_row(app, ui, t, &ctx);
@@ -2062,7 +2160,7 @@ mod tests {
     fn every_sheet_draws_for_the_sample_and_for_an_empty_map() {
         let ctx = egui::Context::default();
         let mut app = RustGisApp::with_sample();
-        for shown in [Sheet::None, Sheet::Layers, Sheet::Capture, Sheet::More] {
+        for shown in [Sheet::None, Sheet::Layers, Sheet::Capture, Sheet::More, Sheet::Assistant] {
             frame(&mut app, &ctx, shown);
             assert_eq!(sheet(&ctx), shown);
         }
@@ -2108,15 +2206,18 @@ mod tests {
     }
 
     /// The whole app in the touch interface, in a phone's window, worked by one finger.
-    struct Held {
-        app: RustGisApp,
-        ctx: egui::Context,
+    pub(crate) struct Held {
+        pub(crate) app: RustGisApp,
+        pub(crate) ctx: egui::Context,
         time: f64,
+        /// The window's size.
+        pub(crate) screen: Vec2,
     }
 
     impl Held {
-        fn new() -> Held {
-            let mut held = Held { app: RustGisApp::with_sample(), ctx: egui::Context::default(), time: 0.0 };
+        pub(crate) fn new() -> Held {
+            let mut held =
+                Held { app: RustGisApp::with_sample(), ctx: egui::Context::default(), time: 0.0, screen: Vec2::new(411.0, 800.0) };
             held.app.chrome = Some(chrome);
             // The fonts and the panels take a few frames to settle.
             for _ in 0..5 {
@@ -2126,9 +2227,9 @@ mod tests {
         }
 
         /// Runs a frame with `events`, returning the words painted in sight, each with its place.
-        fn frame(&mut self, events: Vec<egui::Event>) -> Vec<(String, Rect)> {
+        pub(crate) fn frame(&mut self, events: Vec<egui::Event>) -> Vec<(String, Rect)> {
             self.time += 0.1;
-            let screen_rect = Some(Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(411.0, 800.0)));
+            let screen_rect = Some(Rect::from_min_size(egui::Pos2::ZERO, self.screen));
             let input = egui::RawInput { screen_rect, time: Some(self.time), events, ..Default::default() };
             let app = &mut self.app;
             let output = self.ctx.run_ui(input, |ui| {
@@ -2152,7 +2253,7 @@ mod tests {
 
         /// A finger put down at the first of `path`, moved through the rest and lifted, a frame
         /// for each step.
-        fn touch(&mut self, path: &[egui::Pos2]) {
+        pub(crate) fn touch(&mut self, path: &[egui::Pos2]) {
             use egui::TouchPhase::{End, Move, Start};
             let Some((&first, &last)) = path.first().zip(path.last()) else { return };
             let touch =
@@ -2236,12 +2337,12 @@ mod tests {
         }
 
         /// Where `word` is painted.
-        fn find(&mut self, word: &str) -> Option<Rect> {
+        pub(crate) fn find(&mut self, word: &str) -> Option<Rect> {
             self.frame(Vec::new()).into_iter().find(|(text, _)| text == word).map(|(_, at)| at)
         }
 
         /// Raises `to` and returns the middle of its heading's title.
-        fn raise(&mut self, to: Sheet, title: &str) -> egui::Pos2 {
+        pub(crate) fn raise(&mut self, to: Sheet, title: &str) -> egui::Pos2 {
             set_sheet(&self.ctx, to);
             // The bar has a button of the same word, below the heading: the heading comes first.
             self.frame(Vec::new());

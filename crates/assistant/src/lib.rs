@@ -37,5 +37,5 @@ pub mod skills;
 mod tests;
 pub mod tools;
 
-pub use agent::{Agent, Entry, Step};
+pub use agent::{Agent, Asking, Entry, Step};
 pub use provider::{Api, Config, HttpRequest, HttpResponse, Note, PRESETS, Preset};

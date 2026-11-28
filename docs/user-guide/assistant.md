@@ -46,6 +46,19 @@ controls.
 From the command line, `rustgis-cli ask` sends one request (see
 [Command Line](../cli.md#asking-the-ai-assistant)).
 
+## On a phone
+
+In the [touch interface](field-work.md#the-touch-interface) nothing of the assistant shows until
+a provider is set up: **Set Up the Assistant**, in the More sheet, chooses the provider, its model
+and its key. Then the bar has an **Assistant** button, which opens the conversation in a sheet.
+Tap the message box to type in Android's own text field (with its paste, suggestions and
+dictation), then **Send**. The sheet stands half up, to see the map with the conversation, or full
+for reading and typing: the arrow beside its **×** switches, and a swipe up or down on its heading
+moves it a step. Lowered while the assistant works, a strip over the bar says what it is doing and
+has **Stop**; tap its words to raise the sheet again. Approvals are a card with **Allow** and
+**Decline**. The gear in the sheet's heading opens the settings again. Signing in with ChatGPT is
+set up in the desktop interface.
+
 ## Turning the assistant off
 
 The AI Assistant is an [extension](index.md#extensions), on until you turn it off in
