@@ -788,7 +788,7 @@ fn command_uses_chart_outline(id: &str, params: &Value) -> bool {
     }
 }
 
-/// Whether a `layout.import` carries its layout as `"text"` with an element `uses`: an older
+/// Whether a command carries its layout inline with an element `uses`: an older
 /// reader reads it without the keys it doesn't know. One read from a `"path"` is a layout file,
 /// whose own header requires what it uses (#2277). Every save asks, so a text with none of the
 /// feature's `keys` (a saved layout writes them only when set) isn't read through, unless it has a
@@ -798,14 +798,16 @@ fn imported_layout_uses(params: &Value, keys: &[&str], uses: fn(&rustgis_map::la
     imported_layout(params, keys).is_some_and(|l| l.elements.iter().any(uses))
 }
 
-/// A `layout.import`'s layout, read only when its text names one of `keys` (or escapes, which
-/// could hide one).
+/// The layout a command carries inline, read only when its text names one of `keys` (or escapes,
+/// which could hide one). `data` (base64) goes before `text`, as `report.existingTemplate` reads
+/// them; one it refuses is no layout. The text is copied for each check, rather than changing the
+/// reader that import planning shares: a layout is small, and only a save asks.
 fn imported_layout(params: &Value, keys: &[&str]) -> Option<rustgis_map::layout::Layout> {
-    params
-        .get("text")
-        .and_then(Value::as_str)
+    crate::cmd::items::inline_text(params)
+        .ok()
+        .flatten()
         .filter(|t| keys.iter().any(|key| t.contains(key)) || t.contains('\\'))
-        .and_then(|t| serde_json::from_str::<rustgis_map::layout::Layout>(t).ok())
+        .and_then(|t| serde_json::from_str::<rustgis_map::layout::Layout>(&t).ok())
 }
 
 /// Require only executable payloads being saved: graph files omit steps, web tools omit graphs.
@@ -2254,6 +2256,10 @@ mod tests {
         let mut damaged = base["layouts"][0].clone();
         damaged["elements"][1]["kind"]["Legend"]["fit"] = json!("adjustFrame");
         damaged["elements"][1]["kind"]["Legend"]["show_layer_names"] = json!("no");
+        let data = |text: &str| {
+            use base64::Engine;
+            base64::engine::general_purpose::STANDARD.encode(text)
+        };
         for (id, params, required) in [
             ("layout.addElement", json!({"kind": "legend", "fit": "adjustSize"}), true),
             ("layout.addElement", json!({"kind": "legend", "showLayerNames": false, "fit": "shrink"}), true),
@@ -2275,6 +2281,20 @@ mod tests {
             // A report section's template is a layout file read as `layout.import` reads it.
             ("report.existingTemplate", json!({"text": saved["layouts"][0].to_string()}), true),
             ("report.existingTemplate", json!({"text": base["layouts"][0].to_string()}), false),
+            // It reads `data` (base64) before `text`.
+            ("report.existingTemplate", json!({"data": data(&saved["layouts"][0].to_string())}), true),
+            ("report.existingTemplate", json!({"data": data(&base["layouts"][0].to_string())}), false),
+            ("report.existingTemplate", json!({"data": "not base64"}), false),
+            (
+                "report.existingTemplate",
+                json!({"data": data(&saved["layouts"][0].to_string()), "text": base["layouts"][0].to_string()}),
+                true,
+            ),
+            (
+                "report.existingTemplate",
+                json!({"data": data(&base["layouts"][0].to_string()), "text": saved["layouts"][0].to_string()}),
+                false,
+            ),
         ] {
             // A scale bar's fit name is its details' to require, not this.
             let bar = params.get("fit") == Some(&json!("adjustWidth"));
@@ -3006,6 +3026,10 @@ mod tests {
         let base = with_text("{scale} {count:} {foo}");
         assert_eq!(base.get("requires"), None);
         let layout = saved["layouts"][0].to_string();
+        let data = {
+            use base64::Engine;
+            base64::engine::general_purpose::STANDARD.encode(&layout)
+        };
         for (id, params, required) in [
             ("layout.addElement", json!({"kind": "text", "text": "{sum:Sites:visits}"}), true),
             ("layout.addElement", json!({"kind": "text", "text": "{scale}"}), false),
@@ -3028,6 +3052,7 @@ mod tests {
             ("layout.import", json!({"text": layout}), true),
             // A report section's template is a layout file read as `layout.import` reads it.
             ("report.existingTemplate", json!({"text": layout}), true),
+            ("report.existingTemplate", json!({"data": data}), true),
         ] {
             let script = format!("{id} {params}");
             for value in [
