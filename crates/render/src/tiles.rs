@@ -988,7 +988,12 @@ pub(crate) mod tests {
                 let _ = tx.send(done);
                 return;
             }
-            if url.starts_with("https://tiles.test/red/") || url.starts_with("https://tiles.test/split/11/") {
+            // Under `gone/`, a retired service: no tile at all. Under `edge/`, one with the
+            // tiles of even columns only, as at its coverage's edge.
+            let column = url.strip_prefix("https://tiles.test/edge/").and_then(|p| p.split('/').nth(1)?.parse::<u32>().ok());
+            if url.starts_with("https://tiles.test/gone/") || column.is_some_and(|x| x % 2 == 1) {
+                done(Err("http status: 404".into()));
+            } else if url.starts_with("https://tiles.test/red/") || url.starts_with("https://tiles.test/split/11/") || column.is_some() {
                 done(Ok(color(220, 20, 20)));
             } else if url.starts_with("https://tiles.test/split/13/") {
                 done(Ok(color(20, 20, 220)));
@@ -1725,6 +1730,37 @@ pub(crate) mod tests {
         }
         assert_eq!(full.tile_errors, [format!("Broken style: {note}")]);
         assert!(!live.quads.is_empty(), "the valid raster layer still draws");
+    }
+
+    /// A tile layer whose server has none of the tiles in view (a retired service) says so, in the
+    /// drawing and in an export of it; one missing only some, as at its coverage's edge, doesn't.
+    #[test]
+    fn a_tile_layer_without_a_tile_in_view_says_so() {
+        serve();
+        // Centred where columns 33 and 34 of zoom 6 meet (67 and 68 of zoom 7): an odd and an
+        // even column in view at either.
+        let camera = Camera { center: lonlat_to_merc(Coord::new(11.25, 50.0)), res: 2000.0, bearing: 0.0, pitch: 0.0 };
+        let view = View { width: 200.0, height: 100.0, pixels_per_point: 1.0, camera, sky: false };
+        let mut map = Map::new("Map");
+        map.basemap = rustgis_map::Basemap::Blank;
+        map.tiles.push(TileLayer::new("Retired", TileKind::Raster, "https://tiles.test/gone/{z}/{x}/{y}.png"));
+        let r = crate::render_complete(&mut map, &view).unwrap();
+        let [error] = &r.tile_errors[..] else { panic!("{:?}", r.tile_errors) };
+        assert!(error.starts_with("Retired: none of the tiles in view are on the server (HTTP 404): "), "{error}");
+        let (png, said) = crate::shadows_said(|| crate::render_png(&mut map, &view));
+        assert!(png.is_ok());
+        assert_eq!(said.notices, [format!("a tile layer couldn't be drawn, so its part is empty: {error}")]);
+        let (placed, _) = crate::shadows_said(|| crate::render_placed(&mut map, &view));
+        assert_eq!(placed.unwrap().gaps, [format!("a tile layer couldn't be drawn, so its part is empty: {error}")], "said once");
+
+        map.tiles = vec![TileLayer::new("Edge", TileKind::Raster, "https://tiles.test/edge/{z}/{x}/{y}.png")];
+        let r = crate::render_complete(&mut map, &view).unwrap();
+        assert!(r.tile_errors.is_empty(), "{:?}", r.tile_errors);
+        let (_, said) = crate::shadows_said(|| crate::render_png(&mut map, &view));
+        assert!(said.notices.is_empty(), "{:?}", said.notices);
+        // Some of it drew: red where an even column's tile is, clear where an odd one's isn't.
+        let reds = (0..200).filter(|x| r.pixmap.pixel(*x, 50).is_some_and(|p| p.red() > 200 && p.green() < 60)).count();
+        assert!(reds > 0 && reds < 200, "{reds}");
     }
 
     /// A view across the antimeridian on the globe draws the tiles on both sides of it: the

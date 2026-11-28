@@ -6937,7 +6937,8 @@ Connection: close
         assert!(crate::s3::prepare(&child).is_err());
     }
 
-    /// A cached DNS refusal reaches the drawing, while ordinary missing tiles stay quiet.
+    /// A cached DNS refusal reaches the drawing, while a missing tile is said only as the server
+    /// having none of the tiles in view, not as a failure of its own.
     #[test]
     fn cached_destination_failures_reach_raster_drawing() {
         let _turn = turn();
@@ -6959,7 +6960,9 @@ Connection: close
             draw_cached_raster(&url, from.clone());
             wait(std::time::Duration::from_secs(2));
             let (image, drawn) = draw_cached_raster(&url, from.clone());
-            assert_eq!(drawn.error.is_some(), case == "local", "{case}: {:?}", drawn.error);
+            let missing = crate::draw::none_on_the_server(404);
+            assert_eq!(drawn.error.is_some(), case != "public", "{case}: {:?}", drawn.error);
+            assert_eq!(drawn.error.as_deref() == Some(missing.as_str()), case == "missing", "{case}: {:?}", drawn.error);
             assert_eq!(image.pixel(32, 32).unwrap().alpha() > 0, case == "public");
         }
     }
