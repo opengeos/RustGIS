@@ -23,7 +23,7 @@
 //! is read.
 
 use resvg::usvg;
-use rustgis_map::{Rgba, qgis::SvgColours};
+use rustgis_map::{Rgba, qgis::SvgColours, symbology::MAX_PICTURE_BYTES};
 use usvg::roxmltree;
 
 /// Why an SVG isn't taken.
@@ -130,8 +130,9 @@ fn parse(text: &str) -> Result<roxmltree::Document<'_>, Refusal> {
 /// text are left as they are, as QGIS leaves them (seen in what QGIS 4.4.0 writes).
 ///
 /// The text is edited where the values are (roxmltree writes no XML). A value set is shorter than
-/// the `param(…)` it replaces (one an entity gives may be shorter still, so the result isn't
-/// bounded by `text`'s length; [`read`] and the image's byte cap hold for it as for any SVG).
+/// the `param(…)` it replaces, but a `style` is written back with its text entities expanded, so
+/// the result isn't bounded by `text`'s length: it is refused once longer than a marker image may
+/// be.
 pub(super) fn with_params(text: &str, colours: &SvgColours) -> Result<Option<String>, Refusal> {
     let doc = parse(text)?;
     let width = outline_width(doc.root_element(), colours);
@@ -175,6 +176,10 @@ pub(super) fn with_params(text: &str, colours: &SvgColours) -> Result<Option<Str
         };
         let Some(new) = new else { continue };
         out.push_str(text.get(at..range.start).ok_or(Refusal::NotSvg)?);
+        // A `style` written back holds its text entities expanded, as often as they are used.
+        if out.len().saturating_add(new.len()) > MAX_PICTURE_BYTES / 4 * 3 {
+            return Err(Refusal::TooMuchToRead);
+        }
         out.push_str(&new);
         at = range.end;
     }
@@ -1148,6 +1153,17 @@ mod tests {
         ] {
             assert_eq!(with_params(&text, &COLOURS), Err(refusal));
         }
+    }
+
+    /// What a text entity expands to in `style` attributes is written out only as far as a marker
+    /// image may be long, then refused: a 100 KB entity in 20 of them would come to 2 MB.
+    #[test]
+    fn param_values_are_set_in_no_longer_an_svg_than_an_image_may_be() {
+        let long = "a".repeat(100_000);
+        let rects = |n: usize| r#"<rect style="x:&e;;fill:param(fill)"/>"#.repeat(n);
+        let svg = |n: usize| format!(r#"<!DOCTYPE svg [<!ENTITY e "{long}">]>{}"#, sized("", &rects(n)));
+        assert!(with_params(&svg(10), &COLOURS).is_ok_and(|set| set.is_some()));
+        assert_eq!(with_params(&svg(20), &COLOURS), Err(Refusal::TooMuchToRead));
     }
 
     /// [`elements`] of `body`.
