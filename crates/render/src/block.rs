@@ -1596,8 +1596,8 @@ pub(crate) fn draw_walls(
     // outlines are, once all its sides are filled ([`draw_bands`]); and whether it stopped at the
     // base anywhere.
     let (mut band_fills, mut band_lines): (Vec<(tiny_skia::Path, Rgba)>, Vec<(tiny_skia::Path, Rgba)>) = (Vec::new(), Vec::new());
-    // The band's stretches that stop at the base, by side and stretch (two runs, two classes,
-    // meeting inside one count it once), said once with the layer and how many.
+    // The band's stretches that stop at the base, by side and the stretch's ends along it (two
+    // runs, two classes, meeting inside one count it once), said once with the layer and how many.
     let mut band_at_base = std::collections::BTreeSet::new();
     // Where a side's band meets its neighbour's in its own colour: no contact there.
     let side_ends = |i: usize| {
@@ -1874,7 +1874,7 @@ pub(crate) fn draw_walls(
                 (run.hi, (run.hi - hi_end).abs() >= SEAM || down_hi || !goes_on(after_band, run, true)),
             ];
             let mut fill = PathBuilder::new();
-            for (q, (ends, _, [ta, tz])) in quads.iter().enumerate() {
+            for (ends, _, [ta, tz]) in &quads {
                 let (ca, cz) = (b.along(side, ends[0]), b.along(side, ends[1]));
                 let span = cz - ca;
                 if span.abs() < 1e-12 {
@@ -1948,7 +1948,9 @@ pub(crate) fn draw_walls(
                     .and_then(&mut under)
                     .map(|(p, _)| p);
                 if at_base {
-                    band_at_base.insert((s, q));
+                    // Keyed by where the stretch lies along its side, which holds across the runs
+                    // a long side is drawn in (`WALL_RUN`), not by its place among them.
+                    band_at_base.insert((s, ca.to_bits(), cz.to_bits()));
                 }
                 let (ta2, tz2) = (top_at(t0), top_at(t1));
                 let foot = match bend {
@@ -4179,6 +4181,27 @@ mod tests {
         let dry: WaterRuns = (0..b.sides()).map(|_| Vec::new()).collect();
         let before = crate::approximations::keep();
         let _ = south_wall(&m, &b, &g, res, &dry);
+        let said = crate::approximations::take();
+        crate::approximations::restore(before);
+        let at_base: Vec<_> = said.iter().filter(|t| t.contains("stops at the base")).collect();
+        assert!(at_base.len() == 1 && at_base[0].contains(" 20 stretches "), "{said:?}");
+    }
+
+    #[test]
+    fn a_polygon_blocks_long_side_counts_every_stretch_at_the_base() {
+        // #2607: a square polygon block's south side in 20 stretches, drawn in runs of
+        // `WALL_RUN` (8, 8 and 4), 150 m (300 doubled) of soil over a wall 200 m (doubled) high:
+        // the band stops at the base in all 20, and the notice counts 20, not the 8 of a run.
+        use rustgis_map::view::{BandThickness, BlockShape};
+        let red = Rgba::rgb(220, 30, 30);
+        let square: [(&[[f64; 4]], _); 1] = [(&[[-1000.0, -1000.0, 1000.0, 1000.0]], None)];
+        let base = block_over_lakes_shaped(&square, None, BlockShape::Polygon { layer: "lagos".into(), filter: None });
+        let soil = [([-3000.0, -1500.0, 3000.0, 3000.0], "argissolo", red, None)];
+        let (m, b, g, res) = with_soils(base, &soil, BandThickness::Metres(150.0));
+        assert!(b.outline.is_some() && WALL_RUN < 20);
+        let dry: WaterRuns = (0..b.sides()).map(|_| Vec::new()).collect();
+        let before = crate::approximations::keep();
+        let _ = south_wall_seen(&m, &b, &g, res, &dry, 0.0, 20, None);
         let said = crate::approximations::take();
         crate::approximations::restore(before);
         let at_base: Vec<_> = said.iter().filter(|t| t.contains("stops at the base")).collect();
