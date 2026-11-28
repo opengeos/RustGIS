@@ -1774,23 +1774,13 @@ impl Renderer {
 
     /// Classes present among the kept rows at the drawing scale and page.
     pub fn legend_with(&self, ds: &Dataset, rows: &[bool], env: rustgis_data::query::Env) -> Vec<LegendEntry> {
-        let Renderer::Unique {
-            classes,
-            other,
-            class_labels,
-            other_label,
-            expression,
-            other_fills,
-            other_strokes,
-            class_strokes,
-            class_fills,
-            ..
-        } = self
+        let Renderer::Unique { classes, other, class_labels, other_label, other_fills, other_strokes, class_strokes, class_fills, .. } =
+            self
         else {
             return self.legend();
         };
         let visible = self.fallback_draws(ds);
-        if expression.is_some() && ds.features.len().saturating_mul(classes.len().max(1)) > MAX_LEGEND_STEPS {
+        if self.too_many_to_class(ds.features.len()) {
             let mut all = self.legend();
             all.retain(|e| visible || !e.fallback);
             return all;
@@ -1877,43 +1867,30 @@ impl Renderer {
         }
     }
 
-    /// The rows of a legend that counts features (#3237): those [`Renderer::legend_with`] lists of
-    /// the kept `rows` (with `all`, every row of [`Renderer::legend`]), each with the number of
-    /// those rows it stands for. No number for Proportional sizes, nor by an expression past
-    /// [`MAX_LEGEND_STEPS`], which is listed without classing its features.
-    pub fn legend_counted(&self, ds: &Dataset, rows: &[bool], env: rustgis_data::query::Env, all: bool) -> Vec<LegendEntry> {
-        let listed = || if all { self.legend() } else { self.legend_with(ds, rows, env.clone()) };
+    /// Whether classing `features` features by expression takes more than [`MAX_LEGEND_STEPS`].
+    pub(crate) fn too_many_to_class(&self, features: usize) -> bool {
+        let Renderer::Unique { classes, expression, .. } = self else { return false };
+        expression.is_some() && features.saturating_mul(classes.len().max(1)) > MAX_LEGEND_STEPS
+    }
+
+    /// Adds to `counts` the kept `rows` of each class (#3237): Unique Values' in `classes` order,
+    /// then `<all other values>`; Graduated Colors' in the order of its breaks. Nothing for the
+    /// other renderers.
+    pub(crate) fn count_classes(&self, ds: &Dataset, rows: &[bool], env: rustgis_data::query::Env, counts: &mut Vec<u64>) {
         match self {
-            Renderer::Unique { classes, expression, .. } => {
-                if expression.is_some() && ds.features.len().saturating_mul(classes.len().max(1)) > MAX_LEGEND_STEPS {
-                    return listed();
-                }
-                let mut counts = vec![0u64; classes.len()];
-                let mut other = 0u64;
+            Renderer::Unique { classes, .. } => {
+                counts.resize(classes.len().saturating_add(1), 0);
                 self.visit_unique(ds, rows, env, |class| {
-                    match class.and_then(|i| counts.get_mut(i)) {
-                        Some(n) => *n += 1,
-                        None => other += 1,
+                    let slot = class.unwrap_or(classes.len()).min(classes.len());
+                    if let Some(n) = counts.get_mut(slot) {
+                        *n += 1;
                     }
                     true
                 });
-                // `legend()` lists the classes in `class_order`, then the fallback: so do the counts.
-                let counts = self.class_order().into_iter().filter_map(|i| counts.get(i).copied());
-                let mut entries: Vec<LegendEntry> = self.legend();
-                for (e, n) in entries.iter_mut().zip(counts.chain([other])) {
-                    e.count = Some(n);
-                }
-                if !all {
-                    // As `legend_with` lists them: the classes with a feature, and the fallback
-                    // when it has one and draws something.
-                    let visible = self.fallback_draws(ds);
-                    entries.retain(|e| e.count != Some(0) && (!e.fallback || visible));
-                }
-                entries
             }
             Renderer::Graduated { breaks, .. } => {
-                let classer = self.classer_with(ds, env.clone());
-                let mut counts = vec![0u64; breaks.len()];
+                counts.resize(breaks.len(), 0);
+                let classer = self.classer_with(ds, env);
                 for r in (0..ds.features.len()).filter(|r| rows.get(*r).copied().unwrap_or(true)) {
                     if let Some(Slot::Class(i)) = self.class_in(ds, r, &classer)
                         && let Some(n) = counts.get_mut(i)
@@ -1921,14 +1898,43 @@ impl Renderer {
                         *n += 1;
                     }
                 }
-                let mut entries = listed();
-                for (e, n) in entries.iter_mut().zip(counts) {
-                    e.count = Some(n);
-                }
-                entries
             }
-            Renderer::Single(_) | Renderer::Proportional { .. } => listed(),
+            Renderer::Single(_) | Renderer::Proportional { .. } => {}
         }
+    }
+
+    /// [`Renderer::legend`] with each entry's number of features, from [`Renderer::count_classes`];
+    /// without `all`, only the rows [`Renderer::legend_with`] would list. No `counts`, no numbers:
+    /// Unique Values by expression too large to class ([`Renderer::too_many_to_class`]). `ds` gives
+    /// the geometry family alone.
+    pub(crate) fn counted_entries(&self, ds: &Dataset, counts: Option<&[u64]>, all: bool) -> Vec<LegendEntry> {
+        let mut entries = self.legend();
+        match self {
+            Renderer::Unique { classes, .. } => {
+                if let Some(counts) = counts {
+                    // `legend()` lists the classes in `class_order`, then the fallback: so do these.
+                    let slots = self.class_order().into_iter().chain([classes.len()]);
+                    for (e, slot) in entries.iter_mut().zip(slots) {
+                        e.count = Some(counts.get(slot).copied().unwrap_or(0));
+                    }
+                }
+                if !all {
+                    // As `legend_with` lists them: the classes with a feature, and the fallback
+                    // when it has one and draws something.
+                    let visible = self.fallback_draws(ds);
+                    entries.retain(|e| e.count != Some(0) && (!e.fallback || visible));
+                }
+            }
+            Renderer::Graduated { .. } => {
+                if let Some(counts) = counts {
+                    for (slot, e) in entries.iter_mut().enumerate() {
+                        e.count = Some(counts.get(slot).copied().unwrap_or(0));
+                    }
+                }
+            }
+            Renderer::Single(_) | Renderer::Proportional { .. } => {}
+        }
+        entries
     }
 
     /// The order `legend()` lists the Unique Values classes in: their indices in `classes`, by

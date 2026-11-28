@@ -8409,7 +8409,7 @@ fn a_legend_counts_the_features_of_each_row() {
             exclude: &[],
             labels: &NO_LABELS,
             class_labels: own,
-            counts: counted.then_some(&env),
+            counts: counted.then_some(Counts { env: &env, streamed: &[] }),
             scale: 1e6,
             size: 1.0,
             text_size: 9.0,
