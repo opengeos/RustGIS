@@ -4189,6 +4189,8 @@ fn number_text_that_rounds_and_text_that_isnt_utf8_are_counted() {
         // A long fraction reads as the nearest decimal: no whole-number digit is lost.
         ("0.12345678901234567891", FieldType::Double),
         ("1.00000000000000001", FieldType::Double),
+        // Past a decimal's range: infinity, an overflow, not counted as rounded.
+        ("1e400", FieldType::Double),
     ] {
         super::number_text(text, ty, &mut unread, Some(&mut rounded), 0);
     }

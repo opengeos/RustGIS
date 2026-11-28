@@ -82,8 +82,12 @@ fn number_literals_are_exact_or_refused() {
         "9007199254740993.5",
         "12345678901234567000.0",
         "1.2345678901234567891e19",
-        // A fraction that rounds up into the whole number changes it.
+        // A fraction that rounds up into the whole number changes it, at any size.
         "1000000000000000.99",
+        "2.99999999999999999",
+        "99999999999999.99999999",
+        // Zeros written before an exponent count as digits.
+        "100000000000000000000000e1",
     ] {
         assert!(parse(text, &d).is_err_and(|e| e.contains("exact") || e.contains("rounded")), "{text}");
     }
@@ -92,6 +96,7 @@ fn number_literals_are_exact_or_refused() {
     assert_eq!(v("1e3"), Value::Int(1000));
     assert_eq!(v("1.5e3"), Value::Int(1500));
     assert_eq!(v("1e19"), Value::Float(1e19), "a decimal holds it exactly");
+    assert_eq!(v("1e24"), Value::Float(1e24), "only its written 1 needs holding");
     // Only whole-number digits are kept from rounding: a fraction past them reads as the nearest decimal.
     assert_eq!(v("1000000000000000.123456789"), Value::Float(1_000_000_000_000_000.1));
     assert_eq!(v("9007199254740992.0"), Value::Float(9_007_199_254_740_992.0));

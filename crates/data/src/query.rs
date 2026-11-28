@@ -803,9 +803,9 @@ fn lex_first(s: &str, tolerant: bool, most: usize) -> Result<Lexed, String> {
 /// The token of a number literal, refusing one that can't be held exactly rather than rounding it.
 /// A literal of digits only is an exact `i64`; past `i64::MAX`, a decimal that holds it exactly, or
 /// refused. Any other literal is a
-/// decimal (`f64`), refused only when it would lose whole-number digits: it is 1e15 or more, so
-/// has 16 or more of them however it is written, and a decimal doesn't hold them
-/// (`9007199254740993.0`, `1.2345678901234567891e19`); its fraction digits round as any do. One that merely has no
+/// decimal (`f64`), refused only when the decimal read would have other whole-number digits than
+/// written (`9007199254740993.0`, `1.2345678901234567891e19`, `2.99999999999999999`); its
+/// fraction digits round as any do. One that merely has no
 /// exact binary form (`0.1`) or many fraction digits (`0.12345678901234567891`) is read as the
 /// nearest decimal, as every number written in decimal is.
 fn number_token(t: &str) -> Result<Tok, String> {
@@ -821,10 +821,10 @@ fn number_token(t: &str) -> Result<Tok, String> {
         return t.parse().map(Tok::Num).map_err(|_| format!("bad number '{t}'"));
     }
     let n: f64 = t.parse().map_err(|_| format!("bad number '{t}'"))?;
-    // A number of 1e15 or more has 16 or more whole-number digits, whether written out or moved
-    // there by an exponent: refused when a decimal wouldn't hold them. Its fraction digits, past
-    // them, are read as the nearest decimal, as any fraction is.
-    if n.is_finite() && n.abs() >= 1e15 && whole_digits_round(t) {
+    // Refused when the decimal read has other whole-number digits than written: a decimal can't
+    // hold them, or the fraction rounds up into them (`2.99999999999999999` reads as 3). Its
+    // fraction digits read as the nearest decimal, as any fraction does.
+    if n.is_finite() && whole_digits_round(t) {
         return Err(format!("the number {t} has more whole-number digits than a decimal number holds exactly, so it would be rounded"));
     }
     Ok(Tok::Num(n))
@@ -836,6 +836,11 @@ fn number_token(t: &str) -> Result<Tok, String> {
 /// exponent adds past them (`1e307`) weren't written, so only the written digits need holding.
 /// `false` for one that isn't written in digits.
 pub(crate) fn whole_digits_round(t: &str) -> bool {
+    // An ordinary number, with at most 15 digits in all and no exponent, a decimal holds exactly,
+    // fraction included, so it can't round into the whole part.
+    if !t.contains(['e', 'E']) && t.trim_start_matches(['0', '.']).bytes().filter(u8::is_ascii_digit).count() <= 15 {
+        return false;
+    }
     let (mantissa, exp) = match t.split_once(['e', 'E']) {
         Some((m, e)) => match e.parse::<i64>() {
             Ok(e) => (m, e),
@@ -862,7 +867,18 @@ pub(crate) fn whole_digits_round(t: &str) -> bool {
         let written = if written.is_empty() { "0" } else { written };
         !t.parse::<f64>().is_ok_and(|x| x.is_finite() && format!("{:.0}", x.abs().trunc()) == written)
     } else {
-        !crate::io::double_holds(&format!("{written}e{added}"))
+        // Every digit written counts, trailing zeros too (`100000000000000000000000e1`): the decimal
+        // read, to as many significant digits, must give them back. The zeros the exponent adds
+        // weren't written, so `1e24` needs only its `1`.
+        let written = written.trim_start_matches('0');
+        if written.is_empty() {
+            return false;
+        }
+        let precision = written.len() - 1;
+        !t.parse::<f64>().is_ok_and(|x| {
+            let shown = format!("{:.*e}", precision, x.abs());
+            x.is_finite() && shown.split(['e', 'E']).next().is_some_and(|m| m.replace('.', "") == written)
+        })
     }
 }
 

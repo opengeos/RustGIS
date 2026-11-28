@@ -320,7 +320,9 @@ pub(crate) fn number_text(
     // counted in `rounded` ([`Batch::rounded_dates`]), as a whole number stored past 2^53 is. A
     // fraction past what a decimal holds reads as the nearest decimal, as a stored one does.
     let trimmed = text.trim().trim_start_matches(['-', '+']);
-    if let (crate::Value::Float(_), Some(rounded)) = (&v, rounded)
+    // Text past a decimal's range reads as infinity: an overflow, not a rounding.
+    if let (crate::Value::Float(f), Some(rounded)) = (&v, rounded)
+        && f.is_finite()
         && crate::query::whole_digits_round(trimmed)
     {
         unread_date(rounded, k);

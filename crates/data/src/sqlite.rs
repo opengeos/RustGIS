@@ -293,16 +293,18 @@ impl<B: AsRef<[u8]>> Db<B> {
         let mut out = Vec::new();
         let mut err = None;
         self.scan(1, |_, row| {
-            if let [Val::Text(kind), Val::Text(name), _, Val::Int(root), Val::Text(sql), ..] = row.as_slice()
+            // Text that isn't UTF-8 reads with U+FFFD, as it always did: such a table is still listed.
+            if let [kind, name, _, Val::Int(root), sql, ..] = row.as_slice()
+                && let (Some(kind), Some(name), Some(sql)) = (kind.text(), name.text(), sql.text())
                 && kind == "table"
             {
                 // Unparsable tables are passed over; another may be wanted.
-                if let Ok(p) = parse_table(sql) {
+                if let Ok(p) = parse_table(&sql) {
                     match u32::try_from(*root) {
                         // A virtual table (an R-tree index, say) has no pages of its own.
                         Ok(0) => {}
                         Ok(root) => out.push(Table {
-                            name: name.clone(),
+                            name: name.to_string(),
                             root,
                             columns: p.columns,
                             rowid_column: p.rowid_column,

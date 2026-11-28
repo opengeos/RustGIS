@@ -345,13 +345,10 @@ impl EditTable {
                 tx.execute(&format!("UPDATE {table} SET {} WHERE {pk} = ?", sets.join(", ")), params_from_iter(args)).map_err(err)? as u64;
             saved.updated += 1;
         }
-        // What the date columns of the updated rows held before the save, to tell a value the save
-        // changed from one the load already said; the rest of the rows isn't kept.
-        let dated: Vec<usize> = snapshot_columns
-            .iter()
-            .filter(|(i, _)| fields.get(*i).is_some_and(|f| matches!(f.ty, crate::FieldType::Date | crate::FieldType::DateTime)))
-            .map(|&(_, c)| c)
-            .collect();
+        // What the columns of the updated rows held before the save, to tell a value the save changed
+        // from one the load already said (a date that isn't one, a number that isn't, text that isn't
+        // UTF-8); the rest of the rows isn't kept.
+        let dated: Vec<usize> = snapshot_columns.iter().map(|&(_, c)| c).collect();
         let before: std::collections::HashMap<(i64, usize), Sql> =
             current.iter().flat_map(|(k, row)| dated.iter().filter_map(move |&c| row.get(c).map(|v| ((*k, c), v.clone())))).collect();
         drop(current);
