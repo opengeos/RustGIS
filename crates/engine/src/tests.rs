@@ -18420,6 +18420,32 @@ fn terrain_block_walls_follow_a_polygon_layer() {
 /// its thickness checked before anything changes, reported and saved with the walls, following
 /// its layer's renames, and said when it is removed or a saved project's is missing.
 #[test]
+fn imported_map_says_its_blocks_walls_and_top_band_have_no_layer() {
+    // #2173, #2607: a map whose block's walls and top band come from "solos", imported without
+    // that layer: both said as the map is imported, as when a project opens without it.
+    use base64::Engine;
+    let soils = json!({"type": "FeatureCollection", "features": [
+        {"type": "Feature", "properties": {"classe": "latossolo"}, "geometry": {"type": "Polygon", "coordinates": [[[10.0, 45.0], [10.02, 45.0], [10.02, 45.04], [10.0, 45.04], [10.0, 45.0]]]}},
+    ]});
+    let soils = base64::engine::general_purpose::STANDARD.encode(soils.to_string().as_bytes());
+    let mut s = Session::new(Project::default());
+    s.run("layer.addDataBytes", &json!({"fileName": "dem.tif", "data": dem_b64()})).unwrap();
+    let dem = s.map().layers.iter().find(|l| l.is_raster()).map(|l| l.name.clone()).unwrap();
+    s.run("layer.addDataBytes", &json!({"fileName": "solos.geojson", "data": soils})).unwrap();
+    let name = s.map().layers.iter().find(|l| !l.is_raster()).map(|l| l.name.clone()).unwrap();
+    s.run("map.terrain", &json!({"layer": dem, "block": {"walls": {"layer": name, "top": {"layer": name, "thickness": 150}}}})).unwrap();
+    let mut map = s.map().clone();
+    map.name = "Importado".into();
+    map.layers.retain(|l| l.name != name);
+    assert!(map.view.terrain.as_ref().and_then(|t| t.block.as_ref()).is_some_and(|b| b.walls_top.is_some()));
+    let mark = s.notice_mark();
+    s.run("map.import", &json!({"text": serde_json::to_string(&map).unwrap()})).unwrap();
+    let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+    assert!(said.iter().any(|t| t.contains("the block diagram's walls' top layer is missing")), "{said:?}");
+    assert!(said.iter().any(|t| t.contains("the block diagram's walls layer is missing")), "{said:?}");
+}
+
+#[test]
 fn terrain_block_says_a_removal_that_leaves_no_layer_to_colour_its_walls() {
     // #2173, #2607: the walls and their top band both from "solos". Removing it while a raster of
     // that name stays, or while two polygon layers of that name stay, leaves no layer they can
