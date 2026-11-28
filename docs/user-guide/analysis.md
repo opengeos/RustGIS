@@ -5,16 +5,17 @@
 **Home › Select** picks features by clicking or dragging a box. Open **Select options** to choose
 **Select by Polygon** (click vertices; click the first vertex or double-click to finish), **Select by
 Lasso** (drag a freehand outline), or **Select by Radius**. For a radius, enter a distance and click
-its centre, or drag from the centre to an edge. A drag replaces the box's value, so its distance can
-be reused or corrected. Bare numbers use metres or feet, following the measurement setting;
-`m`, `km`, `ft` and `mi` suffixes select units explicitly. Use a decimal point and no thousands
-separators. Shift adds to the selection; Ctrl/Cmd removes; Esc cancels an unfinished outline.
-Area tools use even-odd fill, so a self-crossing outline selects its alternating filled regions.
-Radius uses the Neighborhood Explorer's local Mercator distance and retained geographic
-prefilter; its outline and readout are approximate and some features near the outline may be
-excluded. A feature reaching beyond 85.05°, where Web Mercator stops, is measured on the ground
-instead, so it may be selected outside the outline, which stops at 85.05°, or left out inside
-it. The main Select button remains click/rectangle selection.
+its centre, or drag from the centre to an edge. A drag replaces the box's value; click another
+centre to reuse that distance or edit the box to correct it. Bare numbers use metres or feet,
+following the measurement setting; `m`, `km`, `ft` and `mi` suffixes select units explicitly.
+Use a decimal point and no thousands separators. Shift adds to the selection; Ctrl/Cmd removes;
+Esc cancels an unfinished outline. Area tools use even-odd fill, so a self-crossing outline
+selects its alternating filled regions. Radius uses the Neighborhood Explorer's local Mercator
+distance and retained geographic prefilter; its outline and readout are approximate and some
+features near the outline may be excluded. The radius outline must stay between 85.05°S and
+85.05°N; a radius crossing that limit is refused. A feature reaching beyond 85.05°, where Web
+Mercator stops, is measured on the ground instead, so it may be selected outside the outline or
+left out inside it. The main Select button remains click/rectangle selection.
 All selection tools take only features that are drawn, in selectable layers: a definition query or
 a display filter hiding a feature keeps it out, and a click picks the feature drawn on top among the
 selectable layers. **Select By Attributes** takes a SQL clause and checks it as you type and shows how many rows
