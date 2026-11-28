@@ -82,6 +82,7 @@ pub const CAPABILITIES: &[&str] = &[
     "terrain-block-water",
     "terrain-block-water-bed",
     "terrain-block-walls-layer",
+    "terrain-block-walls-top",
     "shaded-relief-effects",
     "normalized-legend-urls",
     "field-origin",
@@ -118,6 +119,7 @@ pub const CAPABILITIES: &[&str] = &[
     "layout-text-size",
     "layout-legend-fit",
     "layout-legend-class-labels",
+    "layout-legend-counts",
     "layout-scale-bar-details",
     "label-guide",
     "label-weight",
@@ -1542,9 +1544,14 @@ impl Project {
     /// those `map.addTiles` adds) as raster layers read in place: as the project opens only. A
     /// later repair (a layer file added, maps imported) leaves a tile layer added this session
     /// as it is. Returns a notice for each kind of change that removed, cut or renamed
-    /// something, with the part of the project it is about.
+    /// something, and one for the presentation pages whose map the project doesn't have, each
+    /// with the part of the project it is about.
     pub(crate) fn normalize_opened(&mut self) -> Vec<(ReadPart, NoticeText)> {
-        self.repair(true, "while opening the project")
+        let mut notices = self.repair(true, "while opening the project");
+        // Pages naming a map the project doesn't have are drawn over the active map (#3191).
+        use crate::cmd::presentation::{PagesOf, pages_without_their_map};
+        notices.extend(pages_without_their_map(self, PagesOf::All).map(|notice| (ReadPart::Items, notice)));
+        notices
     }
 
     /// Reports removed or shortened content, renamed items and repaired group display settings
@@ -2340,7 +2347,7 @@ pub(crate) fn picture_notices_by<'a>(
     for (names, what) in [
         (
             too_much_to_read,
-            "Image markers in {names} are SVGs whose style sheets, element attributes or entities holding tags take more to read than RustGIS allows and are drawn as circles",
+            "Image markers in {names} are SVGs whose style sheets, element attributes, namespaces or entities take more to read than RustGIS allows and are drawn as circles",
         ),
         (
             too_nested,

@@ -386,7 +386,9 @@ fn draw_page(
             let scale = map.ground_res_at(&cam) / rustgis_geom::PIXEL_M;
             map.sync_sources_in(&lonlat, own.as_ref(), scale, true, env);
             let mut failed_source = None;
-            let Some(entries) = complete_shown_legends(map, scale, *show_no_data, &mut failed_source, env) else {
+            // Every layer, those a legend leaves out too: the frame draws them, and the legends of
+            // a frame share this read, each leaving out its own as it lists its rows.
+            let Some(entries) = complete_shown_legends(map, scale, *show_no_data, &[], &mut failed_source, env) else {
                 *source_error = failed_source_error(map, failed_source);
                 return None;
             };
@@ -525,6 +527,7 @@ fn draw_page(
                 fit,
                 show_layer_names,
                 class_labels,
+                show_counts,
             } => {
                 if let Some(&(_, mi, cam, ..)) = frame(*f)
                     && let Some(map) = maps.get(mi)
@@ -554,6 +557,7 @@ fn draw_page(
                         exclude,
                         labels,
                         class_labels,
+                        counts: show_counts.shown().then_some(env),
                         scale,
                         size,
                         text_size: *text_size,
@@ -1013,6 +1017,7 @@ pub(crate) fn legend_pin_pages() -> Vec<(Layout, Vec<Map>)> {
             fit: rustgis_map::layout::LegendFit::Manual,
             show_layer_names: rustgis_map::layout::LayerNames::Shown,
             class_labels: Default::default(),
+            show_counts: Default::default(),
         };
         f(&mut kind);
         l.add("Legend", at, kind);

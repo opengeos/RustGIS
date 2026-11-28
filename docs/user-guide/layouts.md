@@ -57,10 +57,13 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
     `Publication`; the review says when a layout has that name, so the new one is numbered. The
     **elements** are what is drawn around the map: the locator (the default, named as what it will
     be, a globe, an inset or none), the north arrow (auto, always or none), the legend or not, which
-    can be set always on a box and to list the context layers, the colorbar and the scale bar or
-    not, whether the map may be veiled for the legend's room, and the decimal mark; a choice the
-    sheet can't use is off and isn't sent. Under them, the north arrow's style, the scale bar's
-    units and style, and the legend's title and columns (Auto, or 1 to 6) can be picked. The
+    can be set always on a box and to list the context layers, the colorbar, the scale bar and the
+    frame grid or not (without it the default reference leaves the graticule out; the map's own
+    graticule is still drawn when on), whether the map may be veiled for the legend's room, and the
+    decimal mark; a choice the sheet can't use is off and isn't sent. Under them, the north
+    arrow's style, the scale bar's units and style, and the legend's title and columns (Auto, or 1
+    to 6) can be picked, and layers ticked to be left out of the legend (every layer of that
+    name). The
     **placement** is the arrangement (below): `best`, the favourite, one by name or one saved, or
     **Custom**, a corner for each surround (a corner another has swaps the two; on Panel, Editorial
     and Modular only the north arrow and scale bar take one, the locator and legend sitting in the
@@ -200,8 +203,9 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
     font (the title and headings bold, as drawn) and wrapped to their box, so none runs past it,
     and each box grows to hold them. `{projection}`, `{datum}` and
     `{grid}` are filled from the map when the layout is made. `{date}` and the other dynamic text
-    tokens stay live. The reference defaults to the projection, datum and graticule, and the
-    authorship to "Made with RustGIS · {date}" (`"author": ""` leaves it out). `headings` renames the two columns.
+    tokens stay live. The reference defaults to the projection, datum and graticule (the
+    projection and datum alone with `"grid": "none"`), and the authorship to
+    "Made with RustGIS · {date}" (`"author": ""` leaves it out). `headings` renames the two columns.
   - **The locator** (at the frame's top left unless the data is there): `"locator": "globe"` (a
     sheet's default) adds a separate globe map with simplified copies of the map's visible polygon
     layers held in the project. Streamed layers, rasters, points, lines and labels are left out.
@@ -216,8 +220,11 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
     It uses the map's basemap, not its web tiles, in a round frame, the globe
     nearly filling it and the area outlined in red; `"inset"` shows the surrounding region (about
     four times the area across) on the map itself, outlined the same way; `"none"` (a figure's
-    default) leaves it out. The legend stops short of it; a frame with no room for a legend beside
-    it leaves the legend out, with a warning. Undo takes the globe's map away with the layout; a
+    default) leaves it out. `["inset", "globe"]` draws both side by side in the locator's corner
+    (or at the top of a style's column, sharing its width): the inset outlines the area, and the
+    globe outlines the inset. Their order in the list changes nothing, and the answer's `locator`
+    names both maps, the inset's first. The legend stops short of the locator; a frame with no room
+    for a legend beside it leaves the legend out, with a warning. Undo takes the globe's map away with the layout; a
     globe map no layout shows any more (its layout deleted) is replaced by the next sheet's rather
     than left beside it, which a warning says.
   - **The style** (`"style"`, on any sheet, portrait or landscape): `"classic"` (the default) sets
@@ -236,8 +243,10 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
     one the texts are light), `"kicker"` (a short line in spaced capitals over the title) and
     `"figures"` (up to three `{"value", "label"}`, the label optional, in columns of one width
     under the map, the value large and bold; a value or label may hold layer statistics such as
-    `{count:Cities}`); other styles and figures refuse the three. Its graticule labels sit at the
-    page's side edges, so a printer with no bleed may clip them. `"accent"` (`#RRGGBB`) colours the
+    `{count:Cities}`). A panel sheet takes `"figures"` too, stacked in its panel under the title
+    and subtitle, over the locator and the legend; it refuses `"paper"` and `"kicker"`, and the
+    other styles and figures refuse all three. An edge sheet's graticule labels sit at the page's side
+    edges, so a printer with no bleed may clip them. `"accent"` (`#RRGGBB`) colours the
     band, the panel's tint, the headings and rules, a poster's page and an edge sheet's kicker (a
     deep brown, green or blue by default, a brick red on an edge sheet).
     A figure leaves the style to its caption. In the menu, each sheet opens a list of the seven
@@ -432,7 +441,7 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
     short fills each column in turn and leaves out the last rows (a **Fit**, below, can change
     that).
     A legend says when its box loses rows or closes its columns up when it is given `"columns"`,
-    `"textSize"` (`null` included), `"showNoData"`, `"labels"`, `"classLabels"`, `"fit"` or `"showLayerNames"`, and,
+    `"textSize"` (`null` included), `"showNoData"`, `"labels"`, `"classLabels"`, `"fit"`, `"showLayerNames"` or `"showCounts"`, and,
     in columns, at a text size of its own or with a fit, when its box or what it lists changes. A
     legend in one column at the default size and with no fit is told so only when given one of
     those. A manual legend is checked when it is added or changed, as it always has been, not again
@@ -458,6 +467,14 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
     and over a web layer's legend picture, is left off. A layer drawn in one symbol keeps its name
     beside its swatch, since that is what labels it; classes that carry no label of their own
     (some raster classes) are then drawn as bare swatches.
+  - **Feature counts** (`"showCounts"`, off by default): on, each class row, and the row of a
+    layer drawn in one symbol, ends in the number of features it stands for, such as
+    `Highway (12)`: those the layer's definition query, display filters and time window keep (the
+    page's in a map series), wherever the frame looks. A class with none shows `(0)` where every
+    class is listed. Rasters, web layers, size and diagram rows, streamed layers (read in place, a
+    view at a time), and Unique Values by an expression over too many features and classes show no
+    number.
+    A project with such a legend can't be opened by an older RustGIS.
   - **In scripts and files**: scripts set `"fit": "adjustSize"` and `"showLayerNames": false` on
     `layout.addElement` and `layout.update` (a scale bar's `fit` takes its own values); an unknown
     fit is refused, and `null` leaves each as it is. Each change is one undo step, and a value set
@@ -985,8 +1002,8 @@ previews, edits and plays it.
   URL with an optional poster picture.
 - Each page has a title, speaker notes and a duration (for **Play**), and can move up or down.
 - A **Map** page follows its map by name. While the project has no map of that name, the page is
-  drawn over the active map; deleting the map (or the offline area that goes with it), or
-  importing a presentation that names it, says which pages.
+  drawn over the active map; deleting the map (or the offline area that goes with it),
+  importing a presentation that names it, or opening a project with such a page says which pages.
 - **Publish › Output › Presentation › Export Presentation** writes an HTML slideshow (arrow
   keys, `N` for notes, `P` to play; videos play in place), a PDF (kept as vectors as a layout's
   is), or the first page as PNG.

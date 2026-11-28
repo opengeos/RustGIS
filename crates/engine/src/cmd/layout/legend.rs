@@ -5,6 +5,7 @@ use super::*;
 pub(in crate::cmd::layout) const ONLY_LEGEND_COLUMNS: &str = "only legends have columns";
 /// A legend's layer names given to another element.
 pub(in crate::cmd::layout) const ONLY_LEGEND_NAMES: &str = "only legends take showLayerNames";
+pub(in crate::cmd::layout) const ONLY_LEGEND_COUNTS: &str = "only legends take showCounts";
 /// A fit given to an element that is neither a legend nor a scale bar, each of which reads `fit`
 /// as its own.
 pub(in crate::cmd::layout) const ONLY_FIT: &str = "only legends and scale bars take fit";
@@ -120,7 +121,7 @@ pub(in crate::cmd::layout) fn tells_legend_fit(kind: &ElementKind, p: &Value) ->
     let given = |k: &str| p.get(k).is_some_and(|v| !v.is_null());
     let watched = *columns > 1 || *text_size != rustgis_map::layout::LEGEND_TEXT_PT || fit.kept() != LegendFit::Manual;
     let refitted = ["w", "h", "title", "allClasses", "hideOther", "exclude", "labels", "classLabels"].iter().any(|k| given(k));
-    ["columns", "showNoData", "labels", "classLabels", "fit", "showLayerNames"].iter().any(|k| given(k))
+    ["columns", "showNoData", "labels", "classLabels", "fit", "showLayerNames", "showCounts"].iter().any(|k| given(k))
         || p.get("textSize").is_some()
         || (watched && refitted)
 }
@@ -145,6 +146,7 @@ pub(in crate::cmd::layout) fn say_legend_fit(s: &mut Session, li: usize, id: u32
         fit,
         show_layer_names,
         class_labels,
+        show_counts,
         ..
     } = &e.kind
     else {
@@ -158,6 +160,7 @@ pub(in crate::cmd::layout) fn say_legend_fit(s: &mut Session, li: usize, id: u32
     let (all_classes, hide_other, show_no_data, exclude, columns, labels, text_size) =
         (*all_classes, *hide_other, *show_no_data, exclude.clone(), *columns, labels.clone(), *text_size);
     let (fit, layer_names, class_labels) = (fit.kept(), show_layer_names.shown(), class_labels.clone());
+    let show_counts = show_counts.shown();
     let found = shown
         .and_then(|(name, center, scale)| Some((s.project.maps.iter_mut().find(|m| m.name.eq_ignore_ascii_case(&name))?, center, scale)));
     let Some((map, center, scale)) = found else {
@@ -174,6 +177,7 @@ pub(in crate::cmd::layout) fn say_legend_fit(s: &mut Session, li: usize, id: u32
         exclude: &exclude,
         labels: &labels,
         class_labels: &class_labels,
+        show_counts,
     };
     let measured = if fit == LegendFit::Manual {
         let n = rustgis_map::layout::legend_columns_in_range(columns);
@@ -281,6 +285,16 @@ pub(crate) fn legend_names_param(p: &Value) -> Result<Option<bool>, String> {
     }
 }
 
+/// The `"showCounts"` a legend is given, `true` or `false` only (`null` is not given): the one
+/// reader the commands and the `layout-legend-counts` capability check share.
+pub(crate) fn legend_counts_param(p: &Value) -> Result<Option<bool>, String> {
+    match p.get("showCounts") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Bool(shown)) => Ok(Some(*shown)),
+        Some(_) => Err("showCounts is true or false".into()),
+    }
+}
+
 /// What a colorbar with no layer of its own on `frame` says when the frame's map shows no raster
 /// with a colour scale for it but one drawn by classes (#1679): it draws an empty placeholder; the
 /// legend lists those classes, unless a colour table has more values than it can list. `None`
@@ -383,14 +397,15 @@ pub(in crate::cmd::layout) fn legend_map<'m>(input: &'m impl crate::cmd::InputSo
     s.project.maps.iter().find(|m| m.name.eq_ignore_ascii_case(map_name)).ok_or_else(|| format!("no map '{map_name}'"))
 }
 
-/// The name of the layer `n` (any case, ends trimmed) of a legend's `map`, as the map spells it:
-/// one of its layers, or a WMS or WMTS layer's (whose legend is its service's picture). One the
-/// map hasn't is an error.
+/// The name of the layer `n` (any case) of a legend's `map`, as the map spells it: one of its
+/// layers, or a WMS or WMTS layer's (whose legend is its service's picture). `n` is looked up as
+/// given first, as a layer's name may begin or end with a space, then with its ends trimmed. One
+/// the map hasn't is an error.
 pub(in crate::cmd::layout) fn legend_layer<'m>(map: &'m Map, n: &str) -> Result<&'m String, String> {
-    map.layer_by_name(n.trim())
-        .map(|l| &l.name)
-        .or_else(|| map.tiles.iter().find(|t| t.name.eq_ignore_ascii_case(n.trim())).map(|t| &t.name))
-        .ok_or_else(|| format!("no layer '{n}' in map '{}'", map.name))
+    let named = |n: &str| {
+        map.layer_by_name(n).map(|l| &l.name).or_else(|| map.tiles.iter().find(|t| t.name.eq_ignore_ascii_case(n)).map(|t| &t.name))
+    };
+    named(n).or_else(|| named(n.trim())).ok_or_else(|| format!("no layer '{n}' in map '{}'", map.name))
 }
 
 /// The shape a legend's `labels` takes.
