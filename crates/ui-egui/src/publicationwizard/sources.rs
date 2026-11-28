@@ -19,20 +19,9 @@ pub(super) fn reference_step(ui: &mut egui::Ui, d: &mut Draft) {
     limit_note(ui, d, &[Field::Reference]);
 }
 
-/// The default reference's second line without a graticule, as `layout.publication` writes it.
-const DATUM_ALONE: &str = "Datum: {datum}";
-
-impl Draft {
-    /// The lines `layout.publication` writes when no reference is typed.
-    pub(super) fn default_reference(&self) -> [&'static str; 2] {
-        let [projection, datum_and_grid] = PUBLICATION_DEFAULT_REFERENCE;
-        [projection, if self.elements.graticule { datum_and_grid } else { DATUM_ALONE }]
-    }
-}
-
 /// The reference's box and the tick that leaves it out, as two rows of a step's grid.
 fn reference_rows(ui: &mut egui::Ui, d: &mut Draft) {
-    let hint = d.default_reference().join("\n");
+    let hint = publication_default_reference(d.elements.graticule).join("\n");
     list(ui, d, tl!("Reference"), Field::Reference, &hint, 2);
     ui.label("");
     // Wrapped to the column: a long label would widen the narrowed window.
@@ -527,37 +516,46 @@ mod tests {
         }
     }
 
-    /// Create draws the default reference the box hints, with a graticule and without one; the
-    /// frame's grid follows, and Undo takes the layout away.
+    /// The reference's box hints the default's lines, following the graticule's tick, on a sheet
+    /// and on a figure.
     #[test]
-    fn create_draws_the_default_reference_hinted() {
-        // Whether `text` is `pattern` with each `{token}` filled.
-        fn fills(pattern: &str, text: &str) -> bool {
-            let mut parts = pattern.split('{').enumerate().map(|(i, p)| if i == 0 { p } else { p.split_once('}').unwrap().1 });
-            let Some(mut rest) = text.strip_prefix(parts.next().unwrap()) else { return false };
-            parts.all(|part| match rest.find(part).filter(|_| !part.is_empty()) {
-                Some(at) => {
-                    rest = &rest[at + part.len()..];
-                    true
-                }
-                None => part.is_empty(),
-            })
+    fn the_reference_box_hints_the_default() {
+        let with = "Projection: {projection}\nDatum: {datum} · Graticule: {grid}";
+        let without = "Projection: {projection}\nDatum: {datum}";
+        for (step, size) in [(Step::Sources, "a4"), (Step::Reference, "figure-1col")] {
+            let mut h = at(step, |d| d.size = size.into());
+            let hint = |h: &Wizard| {
+                let edit = h.get_by_role_and_label(Role::MultilineTextInput, "Reference");
+                edit.accesskit_node().placeholder().map(str::to_owned)
+            };
+            assert_eq!(hint(&h).as_deref(), Some(with), "{size}");
+            h.state_mut().dialogs.publication.as_mut().unwrap().elements.graticule = false;
+            h.run_steps(4);
+            assert_eq!(hint(&h).as_deref(), Some(without), "{size}");
         }
-        for (size, graticule) in [("a4", true), ("a4", false), ("figure-1col", true), ("figure-1col", false)] {
+    }
+
+    /// Create draws the default reference with a graticule and without one, a figure's on one
+    /// line; the frame's grid follows, and Undo takes the layout away.
+    #[test]
+    fn create_draws_the_default_reference() {
+        let sheet = "Projection: Web Mercator\nDatum: WGS 84";
+        let figure = "Projection: Web Mercator · Datum: WGS 84";
+        for (size, graticule, want) in [
+            ("a4", true, format!("{sheet} · Graticule: 30°")),
+            ("a4", false, sheet.to_string()),
+            ("figure-1col", true, format!("{figure} · Graticule: 30°")),
+            ("figure-1col", false, figure.to_string()),
+        ] {
             let mut h = at(Step::Review, |d| (d.size, d.elements.graticule) = (size.into(), graticule));
-            let hint = wizard(&h).default_reference();
             let before = h.state().session.project.layouts.len();
             click(&mut h, "Create");
             let layout = h.state().session.project.layouts.last().unwrap();
             let text = layout.elements.iter().find_map(|e| match &e.kind {
-                ElementKind::Text { text, .. } if e.name == "Reference" => Some(text.clone()),
+                ElementKind::Text { text, .. } if e.name == "Reference" => Some(text.as_str()),
                 _ => None,
             });
-            let text = text.expect("a reference");
-            // A figure runs the lines together as one.
-            let between = if size == "a4" { "\n" } else { " · " };
-            assert!(fills(&hint.join(between), &text), "{size} {graticule}: {hint:?} / {text}");
-            assert_eq!(text.contains("Graticule"), graticule, "{size}: {text}");
+            assert_eq!(text, Some(want.as_str()), "{size} {graticule}");
             let grid = layout.elements.iter().find_map(|e| match &e.kind {
                 ElementKind::MapFrame { grid, extent_of: None, .. } => Some(grid.is_some()),
                 _ => None,
