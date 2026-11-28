@@ -52,15 +52,17 @@ pub fn write_within(entries: &[(String, Vec<u8>)], limit: &Limit) -> crate::Resu
     limit.file(|out| write_to(entries, out).map_err(crate::DataError::Format))
 }
 
-/// [`write`]'s archive, written to `out` as it is made (a buffer held to a limit stops it there).
-/// Besides `out`, it holds the central directory and one entry's compressed bytes at a time.
+/// [`write`]'s archive, written to `out` as it is made (a buffer held to a limit stops it there),
+/// the central directory too. Besides `out`, it holds a few numbers for each entry, and one
+/// entry's compressed bytes at a time.
 fn write_to(entries: &[(String, Vec<u8>)], out: &mut (impl std::io::Write + ?Sized)) -> Result<(), String> {
     let too_big = || "the archive is too large for a zip file".to_string();
     let failed = |e: std::io::Error| e.to_string();
     let count = u16::try_from(entries.len()).map_err(|_| too_big())?;
     // How much of the archive is written: where the next entry starts.
     let mut written: usize = 0;
-    let mut central = Vec::new();
+    // What each entry's central record repeats of it.
+    let mut records = Vec::with_capacity(entries.len());
     for (name, data) in entries {
         let n = name.as_bytes();
         let name_len = u16::try_from(n.len()).map_err(|_| too_big())?;
@@ -70,41 +72,23 @@ fn write_to(entries: &[(String, Vec<u8>)], out: &mut (impl std::io::Write + ?Siz
         let (method, body): (u16, &[u8]) = if z.len() < data.len() { (8, &z) } else { (0, data) };
         let offset = u32::try_from(written).map_err(|_| too_big())?;
         let body_len = u32::try_from(body.len()).map_err(|_| too_big())?;
-        let header = |sig: u32, central: bool| {
-            let mut h = Vec::new();
-            h.extend_from_slice(&sig.to_le_bytes());
-            if central {
-                h.extend_from_slice(&20u16.to_le_bytes()); // made by
-            }
-            h.extend_from_slice(&20u16.to_le_bytes()); // needed to extract
-            h.extend_from_slice(&0x0800u16.to_le_bytes()); // UTF-8 names
-            h.extend_from_slice(&method.to_le_bytes());
-            h.extend_from_slice(&0u16.to_le_bytes()); // time
-            h.extend_from_slice(&0x21u16.to_le_bytes()); // date: 1980-01-01
-            h.extend_from_slice(&crc.to_le_bytes());
-            h.extend_from_slice(&body_len.to_le_bytes());
-            h.extend_from_slice(&data_len.to_le_bytes());
-            h.extend_from_slice(&name_len.to_le_bytes());
-            h.extend_from_slice(&0u16.to_le_bytes()); // extra
-            if central {
-                h.extend_from_slice(&0u16.to_le_bytes()); // comment
-                h.extend_from_slice(&0u16.to_le_bytes()); // disk
-                h.extend_from_slice(&0u16.to_le_bytes()); // internal attributes
-                h.extend_from_slice(&0u32.to_le_bytes()); // external attributes
-                h.extend_from_slice(&offset.to_le_bytes());
-            }
-            h.extend_from_slice(n);
-            h
-        };
-        let local = header(0x0403_4B50, false);
+        let record = Record { method, crc, body_len, data_len, name_len, offset };
+        let local = record.header(n, false);
         out.write_all(&local).map_err(failed)?;
         out.write_all(body).map_err(failed)?;
         written = written.saturating_add(local.len()).saturating_add(body.len());
-        central.extend_from_slice(&header(0x0201_4B50, true));
+        records.push(record);
     }
     let cd_offset = u32::try_from(written).map_err(|_| too_big())?;
-    let cd_len = u32::try_from(central.len()).map_err(|_| too_big())?;
-    let mut end = central;
+    // A record at a time: a directory of many entries is never held apart from `out`.
+    let mut cd_size: usize = 0;
+    for ((name, _), record) in entries.iter().zip(&records) {
+        let central = record.header(name.as_bytes(), true);
+        out.write_all(&central).map_err(failed)?;
+        cd_size = cd_size.saturating_add(central.len());
+    }
+    let cd_len = u32::try_from(cd_size).map_err(|_| too_big())?;
+    let mut end = Vec::new();
     end.extend_from_slice(&0x0605_4B50u32.to_le_bytes());
     end.extend_from_slice(&[0, 0, 0, 0]);
     end.extend_from_slice(&count.to_le_bytes());
@@ -113,6 +97,46 @@ fn write_to(entries: &[(String, Vec<u8>)], out: &mut (impl std::io::Write + ?Siz
     end.extend_from_slice(&cd_offset.to_le_bytes());
     end.extend_from_slice(&0u16.to_le_bytes());
     out.write_all(&end).map_err(failed)
+}
+
+/// An entry as its local header and its central record describe it.
+struct Record {
+    method: u16,
+    crc: u32,
+    body_len: u32,
+    data_len: u32,
+    name_len: u16,
+    offset: u32,
+}
+
+impl Record {
+    /// The entry's central record, or its local header, followed by its name `n`.
+    fn header(&self, n: &[u8], central: bool) -> Vec<u8> {
+        let mut h = Vec::new();
+        h.extend_from_slice(&if central { 0x0201_4B50u32 } else { 0x0403_4B50 }.to_le_bytes());
+        if central {
+            h.extend_from_slice(&20u16.to_le_bytes()); // made by
+        }
+        h.extend_from_slice(&20u16.to_le_bytes()); // needed to extract
+        h.extend_from_slice(&0x0800u16.to_le_bytes()); // UTF-8 names
+        h.extend_from_slice(&self.method.to_le_bytes());
+        h.extend_from_slice(&0u16.to_le_bytes()); // time
+        h.extend_from_slice(&0x21u16.to_le_bytes()); // date: 1980-01-01
+        h.extend_from_slice(&self.crc.to_le_bytes());
+        h.extend_from_slice(&self.body_len.to_le_bytes());
+        h.extend_from_slice(&self.data_len.to_le_bytes());
+        h.extend_from_slice(&self.name_len.to_le_bytes());
+        h.extend_from_slice(&0u16.to_le_bytes()); // extra
+        if central {
+            h.extend_from_slice(&0u16.to_le_bytes()); // comment
+            h.extend_from_slice(&0u16.to_le_bytes()); // disk
+            h.extend_from_slice(&0u16.to_le_bytes()); // internal attributes
+            h.extend_from_slice(&0u32.to_le_bytes()); // external attributes
+            h.extend_from_slice(&self.offset.to_le_bytes());
+        }
+        h.extend_from_slice(n);
+        h
+    }
 }
 
 fn u16_at(b: &[u8], i: usize) -> Option<usize> {
@@ -363,6 +387,41 @@ fn read_within(bytes: &[u8], want: impl Fn(&str) -> bool, budget: usize, spreads
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An archive that notes the largest piece offered to it.
+    #[derive(Default)]
+    struct Pieces {
+        archive: Vec<u8>,
+        largest: usize,
+    }
+
+    impl std::io::Write for Pieces {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.largest = self.largest.max(bytes.len());
+            self.archive.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Many small entries make a large central directory: it is handed to the output a record at
+    /// a time, so a limit on the output stops it there, and it is never held apart.
+    #[test]
+    fn the_central_directory_is_written_a_record_at_a_time() {
+        let entries: Vec<(String, Vec<u8>)> = (0..500).map(|i| (format!("entry-{i:04}"), vec![b'x'])).collect();
+        let mut out = Pieces::default();
+        write_to(&entries, &mut out).unwrap();
+        // A central record is 46 bytes and the 10 of its name; the directory is 28,000.
+        assert_eq!(out.largest, 56);
+        assert_eq!(read(&out.archive).unwrap(), entries);
+        // Room for every entry and all but the last of the directory is refused.
+        let held: usize = entries.iter().map(|(_, bytes)| bytes.capacity()).sum();
+        let limit = Limit::new(held + out.archive.len() - 1);
+        assert!(write_within(&entries, &limit).is_err() && limit.passed());
+    }
 
     #[test]
     fn spreadsheet_members_use_unicode_path_names() {
