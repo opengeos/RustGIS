@@ -3573,6 +3573,12 @@ impl LabelPlacement {
 }
 
 impl LabelClass {
+    /// Whether this class's polygon labels have a place inside to try before their own (#3268):
+    /// not those curved or along a guide, whose course is their place.
+    pub fn places_inside_polygons(&self) -> bool {
+        self.placement != LabelPlacement::Curved && self.guide.is_none()
+    }
+
     /// The Default class: on the first text field that looks like a name.
     pub fn default_for(ds: &Dataset) -> LabelClass {
         let field = ds

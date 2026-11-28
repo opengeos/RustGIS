@@ -272,3 +272,18 @@ fn turned_and_tilted_views_place_the_pole() {
         assert!(!near(on, off), "turned {bearing}, tilted {pitch}: {on:?}");
     }
 }
+
+/// A lock that took the label point (place 1) still finds it in a frame with no pole, as with a
+/// vertex behind the globe.
+#[test]
+fn a_lock_on_the_label_point_holds_without_a_pole() {
+    let g = Geometry::Polygon(vec![vec![ring(&[(-0.2, 0.0), (0.0, 0.0), (0.2, 0.0)])]]);
+    let (mut m, _) = map(g, true);
+    let v = view();
+    m.label_display.locked = true;
+    let at_lock = one(&mut m, &v);
+    for (_, place) in m.label_lock.as_mut().unwrap() {
+        place.place = 1;
+    }
+    assert!(near(one(&mut m, &v), at_lock));
+}

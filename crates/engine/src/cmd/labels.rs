@@ -671,9 +671,7 @@ fn label_guide(s: &Session, p: &Value, labelled: &Layer) -> Result<Option<Option
 /// middle (#1187), or inside a polygon for a label neither curved nor along a guide (#3268). Each
 /// repeat is already a place of its own, so repeats get none.
 fn tries_other_places((points, lines, polygons): (bool, bool, bool), c: &LabelClass) -> bool {
-    points
-        || (lines && c.placement.along_line() && c.repeat.is_none())
-        || (polygons && c.placement != LabelPlacement::Curved && c.guide.is_none())
+    points || (lines && c.placement.along_line() && c.repeat.is_none()) || (polygons && c.places_inside_polygons())
 }
 
 /// `labels.by`: sets a label class's expressions, each checked against the layer's fields.

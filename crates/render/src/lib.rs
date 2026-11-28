@@ -6526,10 +6526,11 @@ fn render_frame(
                             // A polygon's label trying other places (#3268) goes first where its
                             // shape fits best inside (a pole of inaccessibility), then here. A curved
                             // or guided one has its own course, which this is only what's left of.
-                            let pole = (class.other_positions
+                            let tries = class.other_positions
                                 && moved.is_none()
-                                && class.guide.is_none()
-                                && class.placement != LabelPlacement::Curved)
+                                && class.places_inside_polygons()
+                                && matches!(g, Geometry::Polygon(_));
+                            let pole = tries
                                 .then(|| area_labels::pole(ctx, g, bw / bh))
                                 .flatten()
                                 // Out of view it isn't tried, so View Unplaced shows the label here.
@@ -6538,13 +6539,13 @@ fn render_frame(
                                 .filter(|&(px, py)| {
                                     display.locked || ((0.0..=vw).contains(&f64::from(px)) && (0.0..=vh).contains(&f64::from(py)))
                                 });
-                            if let Some(pole) = pole {
-                                let (px, py) = place_at(pole, class.placement);
-                                places.push((0, px, py, turned, Vec::new()));
+                            // Here again as the place after the pole's, with a pole this frame or
+                            // without, so a lock that took it second still finds it.
+                            if tries {
                                 line_alternatives.push(LabelPlace { x: lx, y: ly, angle: turned, glyphs: Vec::new() });
-                            } else {
-                                places.push((0, lx, ly, turned, Vec::new()));
                             }
+                            let (px, py) = pole.map_or((lx, ly), |pole| place_at(pole, class.placement));
+                            places.push((0, px, py, turned, Vec::new()));
                         }
                         // Heavier classes first (#2803; labels moved by hand before all of them,
                         // so the others keep off them), then, among equals, layers above, the

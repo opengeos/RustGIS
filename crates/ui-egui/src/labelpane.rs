@@ -883,7 +883,7 @@ fn position(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
     }
     // Polygons: where the text fits best inside, tried before the label's own place (#3268). Not for
     // a label curved or along a guide, whose course is its place.
-    if l.geometry_type() == rustgis_engine::data::GeometryType::Polygon && cur != LabelPlacement::Curved && c.it.guide.is_none() {
+    if l.geometry_type() == rustgis_engine::data::GeometryType::Polygon && c.it.places_inside_polygons() {
         ui.add_space(4.0);
         let mut on = c.it.other_positions;
         let help = tl!("The label goes where it fits best inside the polygon; if that is taken, where it goes without this.");

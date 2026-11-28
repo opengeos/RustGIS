@@ -770,8 +770,8 @@ Turn labels on per layer (Labeling › Labels › **Label**), then:
   Where another label takes that place, it goes where it goes without this setting, and
   is left out if that is taken too (Labeling pane › Position › **Try other places inside the
   polygon**, for polygon layers). With that point out of view, the label stays where it goes
-  without this. Not for Curved labels or labels along a guide, where the box is hidden and the
-  setting does nothing. Off by default, as round points; the class's position and offset apply from
+  without this. Not for Curved labels or labels along a guide, where the box is hidden,
+  turning the setting on is refused and one already on does nothing. Off by default, as round points; the class's position and offset apply from
   each of the two places (Above sets the name above that point), and Lock keeps the place each label
   took
   (`labels.placement={"layer": "Lakes", "otherPositions": true}`).
