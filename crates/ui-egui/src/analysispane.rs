@@ -2011,7 +2011,7 @@ fn trend(app: &mut RustGisApp, ui: &mut Ui, rasters: &[String]) {
                 let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     job.run(&cancel, &done).map(|rasters| (rasters, job.dates()))
                 }))
-                .unwrap_or_else(|payload| Err(rustgis_engine::data::incident::bug(tl!("The trend"), payload.as_ref())));
+                .unwrap_or_else(|payload| Err(crate::bug(tl!("The trend"), payload.as_ref())));
                 if let Ok(mut g) = result.lock() {
                     *g = Some(out);
                 }
@@ -2059,7 +2059,13 @@ pub fn land_trend(app: &mut RustGisApp) -> bool {
             show_job(app, "trend", result);
         }
         Err(_) if cancelled => {}
-        Err(e) => show_job(app, "trend", Err(e)),
+        Err(e) => {
+            // A bug's failure, said as it lands, so Messages keeps its details.
+            if rustgis_engine::data::incident::named(&e).is_some() {
+                app.session.notify(e.clone(), true);
+            }
+            show_job(app, "trend", Err(e))
+        }
     }
     false
 }

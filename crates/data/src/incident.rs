@@ -73,26 +73,15 @@ fn keep(incident: Incident) {
     recent.push_back(incident);
 }
 
-/// The most of a panic's message kept: a report needs its start, and a long one stays in memory
-/// until [`KEPT`] newer incidents push it out.
-const MESSAGE_BYTES: usize = 4096;
-
-/// A panic's message, cut to [`MESSAGE_BYTES`] at a character boundary.
+/// A panic's message, whole: matched whole to tell one panic from another, and scrubbed whole
+/// (a login cut in two isn't recognised) before Messages bounds it for showing. A session keeps
+/// [`KEPT`] at most.
 fn payload_text(payload: &(dyn std::any::Any + Send)) -> String {
-    let mut text = payload
+    payload
         .downcast_ref::<&str>()
         .map(|s| (*s).to_string())
         .or_else(|| payload.downcast_ref::<String>().cloned())
-        .unwrap_or_else(|| "a panic without a message".to_string());
-    if text.len() > MESSAGE_BYTES {
-        let mut cut = MESSAGE_BYTES;
-        while !text.is_char_boundary(cut) {
-            cut -= 1;
-        }
-        text.truncate(cut);
-        text.push('…');
-    }
-    text
+        .unwrap_or_else(|| "a panic without a message".to_string())
 }
 
 /// Records every panic as an incident before the hook that was there runs (the app's crash log,
@@ -156,6 +145,12 @@ pub fn message(what: &str, restored: bool, id: &str) -> String {
 pub fn bug(what: &str, payload: &(dyn std::any::Any + Send)) -> String {
     let incident = caught(payload);
     message(what, false, &incident.id)
+}
+
+/// The kept incident `text` names by its reference (`… (incident 7F3A2C)…`, in any language the
+/// message is said in), the newest if several.
+pub fn named(text: &str) -> Option<Incident> {
+    lock(&RECENT).iter().rev().find(|i| text.contains(&format!("{})", i.id))).cloned()
 }
 
 /// The reference a message from [`message`] names, if it names one.

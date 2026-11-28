@@ -260,6 +260,17 @@ const LAYOUT_ARRANGEMENTS_PREF: &str = "layout_saved_arrangements";
 /// A result an asynchronous service fills in when it's done (the app polls it each frame).
 pub type Slot<T> = std::sync::Arc<std::sync::Mutex<Option<T>>>;
 
+/// What a bug RustGIS caught while doing `what` says, in the interface's language, with its
+/// incident's reference: the session finds the incident by it and keeps its details in Messages
+/// once the text is said ([`rustgis_engine::data::incident`]).
+pub(crate) fn bug(what: &str, payload: &(dyn std::any::Any + Send)) -> String {
+    let incident = rustgis_engine::data::incident::caught(payload);
+    crate::i18n::fmt(
+        "{what} failed unexpectedly, a bug in RustGIS (incident {id}). The details are in Messages; please include them in a bug report",
+        &[("what", what), ("id", &incident.id)],
+    )
+}
+
 /// Runs `work` on a thread of its own named `name`, off the frame. When the system refuses one,
 /// `slot` gets the refusal as its error instead and `work` is dropped unrun, so the job ends with
 /// an error rather than the app (AGENTS.md › Use the threads). In the browser, which has no
@@ -385,7 +396,7 @@ fn read_download(
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         rustgis_engine::cmd::raster::read_download_shared_page(name, bytes.clone(), page, place)
     }))
-    .unwrap_or_else(|payload| Err(rustgis_engine::data::incident::bug(tl!("Reading the download"), payload.as_ref())))
+    .unwrap_or_else(|payload| Err(crate::bug(tl!("Reading the download"), payload.as_ref())))
 }
 
 /// A shell's overrides of the Settings › Start-up preferences for one launch.
@@ -2642,7 +2653,7 @@ impl RustGisApp {
                 rustgis_engine::render::pdf::Options::default(),
             )
         }))
-        .unwrap_or_else(|payload| Err(rustgis_engine::data::incident::bug("the layout export", payload.as_ref())));
+        .unwrap_or_else(|payload| Err(crate::bug("the layout export", payload.as_ref())));
         if let Err(e) = &r {
             self.session.notify(e.clone(), true);
         }
@@ -5234,7 +5245,7 @@ impl RustGisApp {
                     let bytes = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         rustgis_engine::cmd::report::report_bytes(session, i, 150.0, true)
                     }))
-                    .unwrap_or_else(|payload| Err(rustgis_engine::data::incident::bug("the report export", payload.as_ref())))
+                    .unwrap_or_else(|payload| Err(crate::bug("the report export", payload.as_ref())))
                     .inspect_err(|e| self.session.notify(e.clone(), true))?
                     .0;
                     self.download(&format!("{name}.pdf"), bytes);
@@ -5324,7 +5335,7 @@ impl RustGisApp {
                 let session = &mut self.session;
                 let (name, bytes, notes) =
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rustgis_engine::cmd::items::item_output(session, kind, p)))
-                        .unwrap_or_else(|payload| Err(rustgis_engine::data::incident::bug("saving", payload.as_ref())))
+                        .unwrap_or_else(|payload| Err(crate::bug("saving", payload.as_ref())))
                         .inspect_err(|e| {
                             // An area a field package made before it failed goes too.
                             rustgis_engine::cmd::field::forget_new_areas(&mut self.session, areas);
@@ -5413,7 +5424,7 @@ impl RustGisApp {
                 let session = &mut self.session;
                 let png =
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rustgis_engine::cmd::share::map_png_fitted(session, 192.0)))
-                        .unwrap_or_else(|payload| Err(rustgis_engine::data::incident::bug("the capture", payload.as_ref())))?;
+                        .unwrap_or_else(|payload| Err(crate::bug("the capture", payload.as_ref())))?;
                 let pm = rustgis_engine::render::decode_png(&png).ok_or("could not draw the map")?;
                 let size = [pm.width() as usize, pm.height() as usize];
                 self.ui.copy_image = Some(egui::ColorImage::from_rgba_premultiplied(size, pm.data()));
@@ -5443,7 +5454,7 @@ impl RustGisApp {
                 let png = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     rustgis_engine::cmd::layout::layout_bytes(session, li, false, dpi, false)
                 }))
-                .unwrap_or_else(|payload| Err(rustgis_engine::data::incident::bug(tl!("the capture"), payload.as_ref())))?;
+                .unwrap_or_else(|payload| Err(crate::bug(tl!("the capture"), payload.as_ref())))?;
                 let pm = rustgis_engine::render::decode_png(&png).ok_or_else(|| tl!("could not draw the layout").to_string())?;
                 let size = [pm.width() as usize, pm.height() as usize];
                 self.ui.copy_image = Some(egui::ColorImage::from_rgba_premultiplied(size, pm.data()));
@@ -5467,7 +5478,7 @@ impl RustGisApp {
             "ui.printMap" => {
                 let session = &mut self.session;
                 let pdf = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rustgis_engine::cmd::share::map_pdf(session, 300.0)))
-                    .unwrap_or_else(|payload| Err(rustgis_engine::data::incident::bug("printing", payload.as_ref())))
+                    .unwrap_or_else(|payload| Err(crate::bug("printing", payload.as_ref())))
                     .inspect_err(|e| self.session.notify(e.clone(), true))?;
                 let name = format!("{}.pdf", self.session.map().name);
                 if self.services.download.is_some() {
@@ -5625,7 +5636,7 @@ impl RustGisApp {
                     let bytes = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         rustgis_engine::cmd::presentation::export_bytes(session, i, "html", 110.0)
                     }))
-                    .unwrap_or_else(|payload| Err(rustgis_engine::data::incident::bug("the presentation export", payload.as_ref())))
+                    .unwrap_or_else(|payload| Err(crate::bug("the presentation export", payload.as_ref())))
                     .inspect_err(|e| self.session.notify(e.clone(), true))?
                     .0;
                     self.download(&format!("{name}.html"), bytes);
@@ -5779,7 +5790,7 @@ impl RustGisApp {
                 let session = &mut self.session;
                 let png =
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rustgis_engine::cmd::share::map_png_fitted(session, 192.0)))
-                        .unwrap_or_else(|payload| Err(rustgis_engine::data::incident::bug("Export Map", payload.as_ref())));
+                        .unwrap_or_else(|payload| Err(crate::bug("Export Map", payload.as_ref())));
                 let png = match png {
                     Ok(p) => p,
                     Err(e) => {
@@ -6856,8 +6867,7 @@ impl RustGisApp {
                 let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     rustgis_engine::cmd::layer::read_cog_window_until(&asked, &leaving)
                 }));
-                let read =
-                    read.unwrap_or_else(|payload| Err(rustgis_engine::data::incident::bug(tl!("Reading the window"), payload.as_ref())));
+                let read = read.unwrap_or_else(|payload| Err(crate::bug(tl!("Reading the window"), payload.as_ref())));
                 // Stopped by `left`: said as one given up before its turn is. A read that failed
                 // for its own reason keeps it.
                 read.map_err(|e| {

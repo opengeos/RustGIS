@@ -315,7 +315,14 @@ fn preview(app: &mut RustGisApp, ui: &mut Ui, i: usize, t: &Tokens) {
         if app.reports.built.as_ref().is_none_or(|b| b.0 != built_for) {
             let s = &app.session;
             let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rustgis_engine::cmd::report::pages(s, i)))
-                .unwrap_or_else(|payload| Err(rustgis_engine::data::incident::bug("the preview", payload.as_ref())));
+                .unwrap_or_else(|payload| Err(crate::bug("the preview", payload.as_ref())));
+            // A bug's failure, said once as it's made (the pane draws it each frame), so Messages
+            // keeps its details.
+            if let Err(e) = &built
+                && rustgis_engine::data::incident::named(e).is_some()
+            {
+                app.session.notify(e.clone(), true);
+            }
             // A failure is kept too, so it isn't retried every frame until something changes.
             app.reports.built = Some((built_for, built));
         }
@@ -336,9 +343,16 @@ fn preview(app: &mut RustGisApp, ui: &mut Ui, i: usize, t: &Tokens) {
                     rustgis_engine::render::report::draw_page(doc, pages, page, 60.0, &s.project.layouts, &mut s.project.maps)?;
                 Ok((pm, page, pages.len()))
             }))
-            .unwrap_or_else(|payload| Err(rustgis_engine::data::incident::bug("the preview", payload.as_ref())))
+            .unwrap_or_else(|payload| Err(crate::bug("the preview", payload.as_ref())))
         });
         crate::layoutview::say_frame_shadows(app, &said);
+        // A bug's failure, said once as it's made (the pane draws it each frame), so Messages
+        // keeps its details.
+        if let Err(e) = &drawn
+            && rustgis_engine::data::incident::named(e).is_some()
+        {
+            app.session.notify(e.clone(), true);
+        }
         match drawn {
             Ok((pm, page, total)) => {
                 app.reports.page = page;

@@ -342,7 +342,14 @@ mod running {
             options.read(true).write(true).create(true).truncate(false);
             #[cfg(unix)]
             std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-            options.open(dir.join("running"))
+            let file = options.open(dir.join("running"))?;
+            // `mode` applies only when the file is made: one an earlier version made is set too.
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+            }
+            Ok(file)
         });
         let mut file = match file {
             Ok(f) => f,

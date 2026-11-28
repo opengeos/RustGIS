@@ -3694,7 +3694,7 @@ impl Session {
         // A bug's failure keeps its details (the panic's message and place) under it, for a report,
         // scrubbed as a message is, logins in use included.
         if severity == rustgis_data::diagnostics::Severity::Error
-            && let Some(incident) = rustgis_data::incident::named_in(text.as_str()).and_then(rustgis_data::incident::find)
+            && let Some(incident) = rustgis_data::incident::named(text.as_str())
         {
             self.diagnostics.detail(record, Self::redacted(&incident.details()).as_str());
         }
