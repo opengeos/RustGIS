@@ -764,9 +764,10 @@ Turn labels on per layer (Labeling › Labels › **Label**), then:
   take the place a less important one had. The class's offset applies to every place, and Lock
   keeps the place each label took
   (`labels.placement={"layer": "Cities", "otherPositions": true}`).
-- **Other places inside polygons**: a polygon's label goes to the point inside it farthest from
-  its edges, as seen on the screen, so a name sits in the body of a lake or bay rather than against
-  a shore. Where another label takes that point, it goes where it goes without this setting, and
+- **Other places inside polygons**: a polygon's label goes where its shape fits best inside the
+  polygon, as seen on the screen (the point with the most room round it for something as wide and
+  tall as the text), so a name sits in the body of a lake or bay rather than against a shore.
+  Where another label takes that place, it goes where it goes without this setting, and
   is left out if that is taken too (Labeling pane › Position › **Try other places inside the
   polygon**, for polygon layers). With that point out of view, the label stays where it goes
   without this. Not for Curved labels or labels along a guide, where the box is hidden and the

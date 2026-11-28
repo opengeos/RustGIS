@@ -14,7 +14,7 @@ fn ring(points: &[(f64, f64)]) -> Vec<Coord> {
 }
 
 /// A U open to the north, in degrees: arms and base 0.1 wide. Its label point is in the widest
-/// span, the base's, against its south edge; its pole is in a corner of the base, farther in.
+/// span, the base's, against its south edge; a name fits best half way up the base.
 fn u() -> Vec<Vec<Coord>> {
     vec![ring(&[(-0.25, -0.2), (0.25, -0.2), (0.25, 0.2), (0.15, 0.2), (0.15, -0.1), (-0.15, -0.1), (-0.15, 0.2), (-0.25, 0.2)])]
 }
@@ -25,9 +25,13 @@ fn square(x: f64, y: f64, half: f64) -> Vec<Coord> {
 
 /// A map with one polygon layer labelled "Lake", trying other places when `on`.
 fn map(geometry: Geometry, on: bool) -> (Map, u32) {
+    named(geometry, on, "Lake")
+}
+
+fn named(geometry: Geometry, on: bool, name: &str) -> (Map, u32) {
     let mut m = Map::new("Map");
     let mut d = Dataset::new("areas", GeometryType::Polygon, vec![Field::new("name", FieldType::Text)]);
-    d.push(Some(geometry), vec![Value::Text("Lake".into())]);
+    d.push(Some(geometry), vec![Value::Text(name.into())]);
     let id = m.add_dataset(d);
     if let Some(l) = m.layer_mut(id) {
         l.labels.enabled = true;
@@ -118,9 +122,31 @@ fn on_it_goes_to_the_point_farthest_from_the_edges() {
     let v = view();
     let placed = one(&mut m, &v);
     assert!(!near(placed, today(&v, &g)), "{placed:?}");
-    // The widest circle fits a corner of the base, radius 0.0586; an arm's is 0.05.
+    // Half way across the base, which is 0.1 tall.
     let d = depth(&u(), at(&v, placed));
-    assert!(d > 0.054, "{d}");
+    assert!(d > 0.045, "{d}");
+}
+
+/// The place is the one the label's shape fits best, not the largest circle's: a wide name stays
+/// whole inside a U or an L, whose largest circles sit in a corner.
+#[test]
+fn a_wide_name_stays_inside_its_polygon() {
+    let l = vec![ring(&[(-0.25, -0.2), (0.25, -0.2), (0.25, -0.1), (-0.1, -0.1), (-0.1, 0.2), (-0.25, 0.2)])];
+    let name = "Horseshoe Lake";
+    // Zoomed out: the arms and base are about as wide as half the name.
+    let mut v = view();
+    v.camera.res = 200.0;
+    for rings in [u(), l] {
+        let (mut m, _) = named(Geometry::Polygon(vec![rings.clone()]), true, name);
+        let placed = render(&mut m, &v).unwrap().labels;
+        let p = placed.iter().find(|l| l.text == name).unwrap();
+        let face = text::Face { bold: false, italic: false, serif: false, family: None };
+        let (hw, hh) = (text::spaced_block_width(name, p.size, face, 0.0) / 2.0, text::block_height(name, p.size) / 2.0);
+        for (dx, dy) in [(-hw, -hh), (hw, -hh), (-hw, hh), (hw, hh)] {
+            let corner = at(&v, (p.x + dx, p.y + dy));
+            assert!(depth(&rings, corner) > 0.0, "{corner:?} of the box at {:?}", (p.x, p.y));
+        }
+    }
 }
 
 #[test]
@@ -150,12 +176,13 @@ fn with_both_taken_it_is_unplaced_once_at_its_pole() {
 
 #[test]
 fn a_polygons_pole_keeps_out_of_its_hole() {
-    // A ring wider on the west: the hole is off centre.
+    // A ring with its hole off centre.
     let rings = vec![square(0.0, 0.0, 0.2), square(0.05, 0.0, 0.1)];
     let (mut m, _) = map(Geometry::Polygon(vec![rings.clone()]), true);
     let v = view();
     let d = depth(&rings, at(&v, one(&mut m, &v)));
-    assert!(d > 0.065, "in the wide side, away from the hole: {d}");
+    // The widest bands round the hole are those north and south of it, 0.1 tall.
+    assert!(d > 0.045, "in a band, away from the hole: {d}");
 }
 
 #[test]
@@ -164,7 +191,7 @@ fn a_multipolygons_pole_is_in_the_part_its_label_point_picks() {
     let (mut m, _) = map(g, true);
     let v = view();
     let d = depth(&u(), at(&v, one(&mut m, &v)));
-    assert!(d > 0.054, "{d}");
+    assert!(d > 0.045, "{d}");
 }
 
 #[test]

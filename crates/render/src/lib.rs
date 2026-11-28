@@ -6523,14 +6523,14 @@ fn render_frame(
                                 .filter(|a| *a != 0.0)
                                 .map(|a| rustgis_tiles::symbols::upright(a.to_radians()))
                                 .filter(|a| *a != 0.0);
-                            // A polygon's label trying other places (#3268) goes to its pole of
-                            // inaccessibility first, then here. A curved or guided one has its own
-                            // course, which this is only what's left of.
+                            // A polygon's label trying other places (#3268) goes first where its
+                            // shape fits best inside (a pole of inaccessibility), then here. A curved
+                            // or guided one has its own course, which this is only what's left of.
                             let pole = (class.other_positions
                                 && moved.is_none()
                                 && class.guide.is_none()
                                 && class.placement != LabelPlacement::Curved)
-                                .then(|| area_labels::pole(ctx, g))
+                                .then(|| area_labels::pole(ctx, g, bw / bh))
                                 .flatten()
                                 // Out of view it isn't tried, so View Unplaced shows the label here.
                                 // Locked, it is: the lock names a place by its number, the pole's
