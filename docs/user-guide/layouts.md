@@ -432,13 +432,17 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
     short fills each column in turn and leaves out the last rows (a **Fit**, below, can change
     that).
     A legend says when its box loses rows or closes its columns up when it is given `"columns"`,
-    `"textSize"` (`null` included), `"showNoData"`, `"labels"`, `"classLabels"`, `"fit"` or `"showLayerNames"`, and,
-    in columns, at a text size of its own or with a fit, when its box or what it lists changes. A
+    `"textSize"` (`null` included), `"showNoData"`, `"labels"`, `"classLabels"`, `"fit"`,
+    `"showLayerNames"` or `"title"`, and, in columns, at a text size of its own or with a fit, when
+    its box or what it lists changes. A
     legend in one column at the default size and with no fit is told so only when given one of
     those. A manual legend is checked when it is added or changed, as it always has been, not again
     when the map's layers change later. A legend with a fit is checked then too, and again by every
     export, which says, in the same words, when its fit no longer makes it fit (a layer added to the
     map, the frame's scale changed); the drawing itself fits again on every draw, as below.
+  - **Title** (`"title"`): a title wider than the legend's box wraps to it, as a colorbar's does,
+    and the rows start under its last line, so a long title leaves them less room (said as above).
+    Lines that don't fit the box's height are left out, and the cut-off notice counts the legend.
   - **Fit** (`"fit"`): what gives way when the rows don't fit the box. **Manual** (`"manual"`, the
     default) keeps the text's size and the columns and leaves out the last rows, as legends always
     have. **Shrink the text** (`"adjustSize"`) draws the rows' text a quarter point smaller at a
@@ -575,14 +579,15 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
   `layout.addElement={"kind":"arrow","angle":30,"length":60}`, or
   `layout.update={"element":7,"angle":-90}` to turn one.
 - **Text clipping**: the layout view and PNG, PDF and SVG exports warn when a text element or
-  legend title runs off the page, or a text element has more lines than its height allows.
+  legend title runs off the page or loses lines to its box, or a text element has more lines than
+  its height allows.
   The notice counts and names the affected elements with their IDs. Exporting a report that draws
   a layout as a page says the same of that page's texts, in a notice for each such layout that
   names it. A line may extend beyond its element's width while remaining on the page; that alone
   is not clipped. Reduce the size, add line breaks, turn on **Wrap to the box**, or resize or move
   the element to keep all its text;
-  when every text it names is already wrapped, the notice suggests only the size and the box, and
-  a legend's title, which has no wrap, is told to add line breaks. Lines left out below a text's
+  when every text it names is already wrapped (a legend's and a colorbar's titles always are), the
+  notice suggests only the size and the box. Lines left out below a text's
   box are said as soon as they are: `layout.addElement` and `layout.update` warn how many lines
   don't fit when they set a text, its size, font or fallback font, bold, italic, alignment,
   spacing, line spacing, case, wrap or box, or show it, and the Format pane shows the count under

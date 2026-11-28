@@ -165,21 +165,24 @@ pub(super) fn losses(layout: &Layout, maps: &[Map], dpi: f64, info: &PageInfo, o
                         (style.valign, style.line_spacing),
                     )
                 }
-                // Its title at the size it is drawn at, its legend's text size (#2581).
+                // Its title at the size it is drawn at, its legend's text size (#2581), in the
+                // lines it is wrapped to and draws in its box's height (#3129).
                 ElementKind::Legend { title, frame, text_size, .. } => {
                     let ElementKind::MapFrame { map, .. } = &layout.element(*frame)?.kind else { return None };
                     map_index(maps, map)?;
                     let size = LEGEND_TITLE_PT * legend_size(*text_size);
+                    let lines = legend_title_lines(title, e.w, *text_size);
+                    let fits = legend_title_drawn(lines.len(), r.height(), legend_size(*text_size), ppp);
                     (
-                        title.clone(),
+                        lines.join("\n"),
                         size,
                         text::Face { bold: true, ..Default::default() },
                         TextAlign::Left,
                         0.0,
                         0.0,
                         true,
-                        false,
-                        None,
+                        true,
+                        Some(fits),
                         (TextVAlign::Top, USUAL_LINE_SPACING),
                     )
                 }
@@ -235,8 +238,7 @@ pub(super) fn losses(layout: &Layout, maps: &[Map], dpi: f64, info: &PageInfo, o
                 r.y() + shift + px * 0.6
             };
             let turn = Transform::from_rotate_at(rotation, r.x() + r.width() / 2.0, r.y() + r.height() / 2.0);
-            // Legend titles are drawn on one line, unlike text elements' explicit line breaks.
-            let lines = std::iter::once(s.as_str()).filter(|_| title).chain(s.lines().filter(|_| !title));
+            let lines = s.lines();
             let (mut cut, mut left_out, mut below_box, mut past_limit, mut off_page) = (false, 0, false, false, false);
             for (i, line) in lines.enumerate() {
                 let drawn = match fits {
@@ -295,8 +297,7 @@ pub(super) fn losses(layout: &Layout, maps: &[Map], dpi: f64, info: &PageInfo, o
 /// can merge repeated element IDs across series pages before calling this, so a PDF's fallback
 /// rendering and repeated pages never multiply the count. Its advice fits the texts of `layout`
 /// named: breaking lines by hand or wrapping them for a text not wrapped (#2346), only the box or
-/// the size when all are wrapped to their boxes, and line breaks without the wrap for a legend's
-/// title, which has none.
+/// the size when all are wrapped to their boxes, a legend's and a colorbar's titles being so.
 pub fn clipped_text_notice(layout: &Layout, clipped: &[(u32, String)]) -> Option<String> {
     if clipped.is_empty() {
         return None;
@@ -305,12 +306,13 @@ pub fn clipped_text_notice(layout: &Layout, clipped: &[(u32, String)]) -> Option
     if clipped.len() > 10 {
         names.push_str(&format!(" and {} more", clipped.len() - 10));
     }
-    // Each text's wrap; `None` for a legend's or a colorbar's title, or an element gone since,
-    // which keep the advice they always had.
+    // Each text's wrap; `None` for an element gone since, which keeps the advice it always had.
     let wraps = clipped
         .iter()
         .map(|(id, _)| match layout.element(*id).map(|e| &e.kind) {
             Some(ElementKind::Text { wrap, .. }) => Some(*wrap),
+            // A legend's title (#3129) and a colorbar's wrap to their boxes.
+            Some(ElementKind::Legend { .. } | ElementKind::Colorbar { .. }) => Some(true),
             _ => None,
         })
         .collect::<Vec<_>>();

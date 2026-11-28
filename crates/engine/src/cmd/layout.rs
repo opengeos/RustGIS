@@ -200,7 +200,7 @@ pub fn commands() -> Vec<C> {
                 r##""case"?: "none"|"upper"|"lower" (text, dynamicText: drawn in upper or lower case once its dynamic text is filled in, its text kept as typed; default none; refused for other kinds), "##,
                 r##""font"?: "sans"|"serif"|an installed font family's name, as labels.fonts lists them (text, dynamicText; a family not installed here is drawn in its fallback, and a serif where none is installed in the sans, with a warning; refused for other kinds), "##,
                 r##""fallback"?: "sans"|"serif" (a named font's, where it isn't installed; default its own class, else sans), "##,
-                r##""title"?: legend title (default "Legend"); chart: its own title ("" for none; default: its field, or the statistic of its field by the group), "##,
+                r##""title"?: legend title (default "Legend"; wrapped within the legend's box); chart: its own title ("" for none; default: its field, or the statistic of its field by the group), "##,
                 r##""allClasses"?: bool (legend: every class, not only those the frame draws), "##,
                 r##""hideOther"?: bool (legend: leave out <all other values>), "##,
                 r##""showNoData"?: bool (legend: include Graduated Colors’ missing-value symbol; default false), "##,

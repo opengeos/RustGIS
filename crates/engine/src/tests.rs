@@ -13222,6 +13222,45 @@ fn legend_said(s: &Session, mark: u64) -> Vec<String> {
     s.notices_since(mark).iter().map(|n| n.text.clone()).filter(|n| n.starts_with("the legend")).collect()
 }
 
+/// A title that wraps to a legend's box takes the rows' room (#3129): the legend whose box held
+/// its rows under a title of one line says what it loses when its title is made long, as it would
+/// when its rows grew, and says nothing for a title that fits in a line.
+#[test]
+fn a_legend_titled_past_its_box_says_the_rows_the_wrapped_title_takes() {
+    use std::collections::BTreeMap;
+    let mut s = world();
+    s.run("layout.new", &json!({"page": "a4", "orientation": "landscape", "template": "map"})).unwrap();
+    let frame = s.project.layouts[0].first_frame().unwrap();
+    let labels = BTreeMap::new();
+    let asked = crate::render::layout::LegendAsked {
+        all_classes: true,
+        hide_other: false,
+        show_no_data: false,
+        layer_names: true,
+        text_size: 9.0,
+        exclude: &[],
+        labels: &labels,
+        class_labels: &NO_CLASS_LABELS,
+    };
+    let rows = legend_sizes(&mut s, frame, &asked)[0];
+    let title = crate::render::layout::legend_title_mm(9.0);
+    let mark = s.notice_mark();
+    let added = json!({"kind": "legend", "allClasses": true, "columns": 1, "title": "Key", "x": 10, "y": 10, "w": rows.0 + 5.0, "h": title + rows.1 + 0.5});
+    let id = s.run("layout.addElement", &added).unwrap()["element"].clone();
+    assert_eq!(legend_said(&s, mark), Vec::<String>::new());
+    let long = "A very long legend title that is much wider than the legend itself";
+    let mark = s.notice_mark();
+    s.run("layout.update", &json!({"element": id, "title": long})).unwrap();
+    assert_eq!(legend_said(&s, mark), ["the legend lists more than fits its box: its last rows or the ends of long labels are left out"]);
+    // Back to a title of one line, it fits again; and a box that is taller holds the long one.
+    let mark = s.notice_mark();
+    s.run("layout.update", &json!({"element": id, "title": "Key"})).unwrap();
+    assert_eq!(legend_said(&s, mark), Vec::<String>::new());
+    let mark = s.notice_mark();
+    s.run("layout.update", &json!({"element": id, "title": long, "h": 200.0})).unwrap();
+    assert_eq!(legend_said(&s, mark), Vec::<String>::new());
+}
+
 /// A manual legend that overflows its box says so as it always has; the same legend set to a fit
 /// that makes it fit says nothing, made a little smaller still nothing; given back manual, it says
 /// so again, word for word.

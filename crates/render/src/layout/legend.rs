@@ -1036,9 +1036,16 @@ pub(super) fn legend_missing(
     let ppp = ppp as f32;
     let mut y = r.y();
     if !title.is_empty() {
+        // Wrapped to the box (#3129), as a colorbar's is: the rows start under its last line.
+        let lines = legend_title_lines(title, f64::from(r.width()) / (f64::from(ppp) * PT_PER_MM), opts.text_size);
+        let drawn = legend_title_drawn(lines.len(), r.height(), opts.size, ppp);
         let line = LEGEND_ROW * opts.size * ppp;
-        text::text_at(pm, title, r.x(), y + line / 2.0, LEGEND_TITLE_PT * opts.size * 1.33 * ppp, ink, true, text::Align::Left, false);
-        y += line * LEGEND_TITLE_ROWS;
+        let pitch = title_pitch(opts.size, ppp);
+        for (i, text) in lines.iter().take(drawn).enumerate() {
+            let at = y + line / 2.0 + pitch * i as f32;
+            text::text_at(pm, text, r.x(), at, LEGEND_TITLE_PT * opts.size * 1.33 * ppp, ink, true, text::Align::Left, false);
+        }
+        y += title_block(drawn, opts.size, ppp);
     }
     let (rows, missing) = legend_rows_missing(map, drawn, &opts);
     let sides = symbol_sides(&rows, opts.scale);
@@ -1369,8 +1376,65 @@ pub fn legend_title_width_mm(title: &str, text_size: f64) -> f64 {
     f64::from(text::measure(title, LEGEND_TITLE_PT * legend_size(text_size), true)) / PT_PER_MM
 }
 
-/// The height in mm [`legend`] gives a title above its rows, which [`legend_sizes_mm`] leaves out,
-/// in a legend whose text is `text_size` points (#2581).
+/// The height in mm [`legend`] gives a title of one line above its rows, which [`legend_sizes_mm`]
+/// leaves out, in a legend whose text is `text_size` points (#2581).
 pub fn legend_title_mm(text_size: f64) -> f64 {
     f64::from(LEGEND_ROW * legend_size(text_size)) * f64::from(LEGEND_TITLE_ROWS) * 25.4 / 96.0
+}
+
+/// The distance between two lines of a legend's title, in pixels at `ppp`, for a legend `size`
+/// times the default ([`line_pitch_mm`]'s, at the title's size).
+fn title_pitch(size: f32, ppp: f32) -> f32 {
+    (line_pitch_mm(f64::from(LEGEND_TITLE_PT * size)) * PT_PER_MM) as f32 * ppp
+}
+
+/// The room in pixels a title of `lines` lines takes above a legend's rows: [`LEGEND_TITLE_ROWS`]
+/// rows for one, and a line's pitch more for each line past the first (#3129).
+fn title_block(lines: usize, size: f32, ppp: f32) -> f32 {
+    LEGEND_ROW * size * ppp * LEGEND_TITLE_ROWS + lines.saturating_sub(1) as f32 * title_pitch(size, ppp)
+}
+
+/// A legend's title as the lines it is drawn in (#3129): broken at spaces to fit `width_mm`, a
+/// word wider than that across lines, as a colorbar's title is ([`colorbar_title_lines`]), at one
+/// resolution whatever it is drawn at, in a legend whose text is `text_size` points. A title with
+/// no text is one empty line, which takes the room it always took; none for no title.
+pub fn legend_title_lines(title: &str, width_mm: f64, text_size: f64) -> Vec<String> {
+    if title.is_empty() {
+        return Vec::new();
+    }
+    let lines = title_lines(title, width_mm, f64::from(LEGEND_TITLE_PT * legend_size(text_size)));
+    if lines.is_empty() { vec![String::new()] } else { lines }
+}
+
+/// How many of a legend title's `lines` it draws in a box `height` pixels high, its text `size`
+/// times the default (#3129): the first always, as a title is always drawn, each further one only
+/// when the title's block, with the room it leaves the rows, still ends inside the box; at most 200.
+/// The page's cut-off check ([`text_losses`]) counts the lines left out the same way.
+pub(super) fn legend_title_drawn(lines: usize, height: f32, size: f32, ppp: f32) -> usize {
+    let most = lines.min(MAX_TEXT_LINES);
+    if most == 0 {
+        return 0;
+    }
+    1 + (2..=most).take_while(|n| title_block(*n, size, ppp) <= height).count()
+}
+
+/// The height in mm [`legend`] gives a title above its rows in a box `w` × `h` mm, in a legend
+/// whose text is `text_size` points: [`legend_title_mm`] for one line, a line's pitch more for each
+/// line it wraps to that the box has the height to draw (#3129). 0 for no title.
+pub fn legend_title_block_mm(title: &str, (w, h): (f64, f64), text_size: f64) -> f64 {
+    let lines = legend_title_lines(title, w, text_size).len();
+    if lines == 0 {
+        return 0.0;
+    }
+    let size = legend_size(text_size);
+    let drawn = legend_title_drawn(lines, (h * PT_PER_MM) as f32, size, 1.0);
+    legend_title_mm(text_size) + drawn.saturating_sub(1) as f64 * line_pitch_mm(f64::from(LEGEND_TITLE_PT * size))
+}
+
+/// The height in mm a title wraps to in a legend `w` mm wide above what [`legend_title_mm`] gives
+/// it, whatever the height of the box: what a box sized for a title of one line is short by
+/// (#3129).
+pub fn legend_title_extra_mm(title: &str, w: f64, text_size: f64) -> f64 {
+    let lines = legend_title_lines(title, w, text_size).len().min(MAX_TEXT_LINES);
+    lines.saturating_sub(1) as f64 * line_pitch_mm(f64::from(LEGEND_TITLE_PT * legend_size(text_size)))
 }

@@ -111,23 +111,24 @@ pub(in crate::cmd::layout) fn say_raster_keys(s: &mut Session, li: usize, id: u3
 
 /// Whether a legend `kind`, after a command with `p`, says what it loses in its box (#2581): the
 /// one rule `layout.addElement` and `layout.update` both take. Told when it is given what sets
-/// what it needs of its box (its columns, its missing-value row, its fit, its layer names, or its
-/// text size, `null` included, which gives the default back) or labels (text chosen for the box),
+/// what it needs of its box (its columns, its missing-value row, its fit, its layer names, its
+/// title, which wraps to the box and takes the rows' room (#3129), or its text size, `null`
+/// included, which gives the default back) or labels (text chosen for the box),
 /// and, in columns, at a text size of its own or under a fit, which can stop fitting, when its box
 /// or what it lists changes. A move changes neither.
 pub(in crate::cmd::layout) fn tells_legend_fit(kind: &ElementKind, p: &Value) -> bool {
     let ElementKind::Legend { columns, text_size, fit, .. } = kind else { return false };
     let given = |k: &str| p.get(k).is_some_and(|v| !v.is_null());
     let watched = *columns > 1 || *text_size != rustgis_map::layout::LEGEND_TEXT_PT || fit.kept() != LegendFit::Manual;
-    let refitted = ["w", "h", "title", "allClasses", "hideOther", "exclude", "labels", "classLabels"].iter().any(|k| given(k));
-    ["columns", "showNoData", "labels", "classLabels", "fit", "showLayerNames"].iter().any(|k| given(k))
+    let refitted = ["w", "h", "allClasses", "hideOther", "exclude", "labels", "classLabels"].iter().any(|k| given(k));
+    ["columns", "showNoData", "labels", "classLabels", "fit", "showLayerNames", "title"].iter().any(|k| given(k))
         || p.get("textSize").is_some()
         || (watched && refitted)
 }
 
 /// Says what a legend loses in its box, as `layout.publication` does for its own, or that it can't
 /// tell. A manual legend is measured in its own columns at its own size; a fitted one by the
-/// drawing's own fit ([`crate::render::layout::legend_fitted_mm`]), in the room its title leaves,
+/// drawing's own fit ([`crate::render::layout::legend_fitted_mm`]), in the room its wrapped title leaves,
 /// so it says nothing when the page draws it whole and what it tried when it can't.
 pub(in crate::cmd::layout) fn say_legend_fit(s: &mut Session, li: usize, id: u32) {
     let Some(l) = s.project.layouts.get(li) else { return };
@@ -154,7 +155,8 @@ pub(in crate::cmd::layout) fn say_legend_fit(s: &mut Session, li: usize, id: u32
         Some(ElementKind::MapFrame { map, center, scale, .. }) => Some((map.clone(), *center, *scale)),
         _ => None,
     };
-    let room = (e.w, e.h - if title.is_empty() { 0.0 } else { crate::render::layout::legend_title_mm(*text_size) });
+    // The title wraps to the box (#3129): the rows have what is left under its lines.
+    let room = (e.w, e.h - crate::render::layout::legend_title_block_mm(title, (e.w, e.h), *text_size));
     let (all_classes, hide_other, show_no_data, exclude, columns, labels, text_size) =
         (*all_classes, *hide_other, *show_no_data, exclude.clone(), *columns, labels.clone(), *text_size);
     let (fit, layer_names, class_labels) = (fit.kept(), show_layer_names.shown(), class_labels.clone());

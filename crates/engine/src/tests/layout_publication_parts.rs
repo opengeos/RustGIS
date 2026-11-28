@@ -454,6 +454,37 @@ fn the_publication_legend_fixture_opens_and_keeps_its_requirement() {
     assert_eq!(serde_json::to_value(&fixture).unwrap()["requires"], json!(["layout-publication-legend"]));
 }
 
+/// A title wider than a side column's box wraps (#3129), and its lines past the first take the
+/// room of the rows, which the sheet then says it left out: a title of two lines in a panel's one
+/// column used to say only that it was wider than its box.
+#[test]
+fn a_publication_legend_title_wrapped_in_its_box_says_the_rows_it_loses() {
+    let (_, r) = sheet(json!({"legend": {"title": "A legend title ".repeat(2), "columns": 1}, "style": "panel"}));
+    let said = r["warnings"].to_string();
+    assert!(said.contains("the legend's title is wider than its box: shorten it"), "{said}");
+    assert!(said.contains("the legend lists more than fits its box: its last rows or the ends of long labels are left out"), "{said}");
+    // A title that fits its box in one line loses nothing to it.
+    let (_, r) = sheet(json!({"legend": {"title": "Key", "columns": 1}, "style": "panel"}));
+    assert!(!r["warnings"].to_string().contains("legend lists more"), "{}", r["warnings"]);
+}
+
+/// A title line the box has no height to draw is left out (#3129), so it takes no room from the
+/// rows: with one row and a two-line title in a box that holds the first line and the row, every
+/// row is drawn and the sheet doesn't say rows are lost.
+#[test]
+fn a_publication_legend_title_line_left_out_does_not_say_a_drawn_row_is_lost() {
+    // One layer drawn in one plain colour: a single row.
+    let mut w = world();
+    w.map_mut().layers.retain(|l| l.name == "Rivers");
+    let (s, r) = {
+        let r = publish(&mut w, json!({"legend": {"title": "A legend title ".repeat(2), "columns": 1}, "style": "panel"})).unwrap();
+        (w, r)
+    };
+    let said = r["warnings"].to_string();
+    assert!(find(&s, "Legend").is_some(), "{said}");
+    assert!(!said.contains("the legend lists more than fits its box"), "{said}");
+}
+
 #[test]
 fn a_publication_legend_title_wider_than_its_box_is_named() {
     let long = "A very long legend title ".repeat(8);
@@ -461,7 +492,10 @@ fn a_publication_legend_title_wider_than_its_box_is_named() {
         let (_, r) = sheet(json!({"legend": {"title": long, "columns": columns}, "style": style}));
         let said = r["warnings"].to_string();
         assert!(said.contains("the legend's title is wider than its box: shorten it"), "{columns} {style}: {said}");
-        assert!(!said.contains("columns are wider") && !said.contains("ends of long labels"), "{columns} {style}: {said}");
+        // The title is named, not the rows' columns as wider than the box; its lines, wrapped to the
+        // box (#3129), take the rows' room, which is said.
+        assert!(!said.contains("columns are wider"), "{columns} {style}: {said}");
+        assert!(said.contains("its last rows"), "{columns} {style}: {said}");
     }
     let (_, r) = sheet(json!({"legend": {"title": "Key"}}));
     assert!(!r["warnings"].to_string().contains("wider than its box"), "{}", r["warnings"]);

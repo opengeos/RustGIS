@@ -231,7 +231,12 @@ pub(super) fn colorbar_title_style() -> TextStyle {
 /// A colorbar's title's width in mm, its widest line, measured as [`colorbar_title_lines`] breaks
 /// it.
 pub fn colorbar_title_width_mm(title: &str) -> f64 {
-    let px = (COLORBAR_TITLE_PT * 1.33 * WRAP_PX_PER_MM / PT_PER_MM) as f32;
+    title_width_mm(title, COLORBAR_TITLE_PT)
+}
+
+/// A bold title's width in mm at `pt` points, its widest line, at the resolution titles are broken at.
+fn title_width_mm(title: &str, pt: f64) -> f64 {
+    let px = (pt * 1.33 * WRAP_PX_PER_MM / PT_PER_MM) as f32;
     let face = colorbar_title_style().face;
     title.lines().map(|line| f64::from(text::styled_extent(line, px, face, 0.0).1)).fold(0.0, f64::max) / WRAP_PX_PER_MM
 }
@@ -246,11 +251,18 @@ pub(super) const COLORBAR_TITLE_SLACK_MM: f64 = 0.01;
 /// title of one line that fits is that line, as it is. Past 200 lines, one more line with text
 /// says it goes on, as for a wrapped text.
 pub fn colorbar_title_lines(title: &str, width: f64) -> Vec<String> {
+    title_lines(title, width, COLORBAR_TITLE_PT)
+}
+
+/// A bold title of `pt` points as the lines it is drawn in, broken to fit `width` mm
+/// ([`colorbar_title_lines`], and a legend's, #3129, which differ only in size).
+pub(super) fn title_lines(title: &str, width: f64, pt: f64) -> Vec<String> {
+    let pt = pt.clamp(2.0, 400.0);
     let width = width + COLORBAR_TITLE_SLACK_MM;
-    if !title.contains('\n') && colorbar_title_width_mm(title) <= width {
+    if !title.contains('\n') && title_width_mm(title, pt) <= width {
         return vec![title.to_string()];
     }
-    wrapped(title, width, COLORBAR_TITLE_PT, colorbar_title_style()).lines().map(str::to_string).collect()
+    wrapped(title, width, pt, colorbar_title_style()).lines().map(str::to_string).collect()
 }
 
 /// How many of a colorbar's `lines` of title it draws in an element from `top` (pixels), its

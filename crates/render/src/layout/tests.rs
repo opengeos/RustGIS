@@ -861,7 +861,7 @@ fn layout_text_clipping_uses_ink_and_visibility() {
     );
     let legend = l.add(
         "Legend",
-        (115.0, 10.0, 5.0, 40.0),
+        (115.0, 10.0, 40.0, 40.0),
         ElementKind::Legend {
             frame,
             title: "Long legend title".into(),
@@ -879,8 +879,8 @@ fn layout_text_clipping_uses_ink_and_visibility() {
         },
     );
     assert_eq!(clipped_text(&l, &[Map::new("m")], 96.0, &info), vec![(legend, "Legend".into())]);
-    // Its title is measured at the size it is drawn at (#2581): one that fits on the page at
-    // 9 points runs past its edge at 36.
+    // Its title is measured at the size it is drawn at (#2581): one that fits its box at 9 points
+    // loses lines, wrapped to the box, at 36 (#3129).
     l.element_mut(legend).unwrap().x = 60.0;
     assert!(clipped_text(&l, &[Map::new("m")], 96.0, &info).is_empty(), "fits at 9 points");
     if let ElementKind::Legend { text_size, .. } = &mut l.element_mut(legend).unwrap().kind {
@@ -3729,7 +3729,8 @@ fn the_cut_off_notice_suggests_wrapping_a_text_not_wrapped() {
         assert_eq!(note.contains("add line breaks"), !wrap, "{note}");
         assert!(note.contains("reduce its size"), "{note}");
     }
-    // A legend's title, or an element gone since, has no wrap to turn on: line breaks, as before.
+    // An element gone since has no wrap to turn on: line breaks, as before. (A legend's title
+    // wraps to its box, and gets the wrapped text's advice: `a_legends_title_lines_past_its_box_are_left_out_and_said`.)
     let l = note_page(NOTE, true, TextAlign::Left, 0.0);
     let note = clipped_text_notice(&l, &[(999, "Gone".into())]).unwrap();
     assert!(note.ends_with("resize or move the text, reduce its size, or add line breaks"), "{note}");
@@ -4750,6 +4751,127 @@ fn a_flat_frame_wider_than_the_world_is_outlined_where_it_is() {
 
 fn rgb(pm: &Pixmap, x: u32, y: u32) -> (u8, u8, u8) {
     pm.pixel(x, y).map(|p| (p.red(), p.green(), p.blue())).unwrap_or((255, 255, 255))
+}
+
+/// The long title of the legend in #3129.
+const LONG_LEGEND_TITLE: &str = "A very long legend title that is much wider than the legend itself";
+
+/// The columns from `x0` to `x1` and rows from `y0` to `y1` of `pm` holding dark ink.
+fn dark_in(pm: &Pixmap, (x0, x1): (u32, u32), (y0, y1): (u32, u32)) -> bool {
+    (y0..y1).any(|y| (x0..x1).any(|x| pm.pixel(x, y).is_some_and(|p| p.alpha() > 128 && p.red() < 120 && p.green() < 120)))
+}
+
+/// A legend's title longer than its box is wide wraps inside it (#3129), every word kept, as a
+/// colorbar's does: no ink past the box's right edge, and a second line under the first.
+#[test]
+fn a_legends_long_title_wraps_inside_its_box() {
+    let pm = titled(&Map::new("m"), LONG_LEGEND_TITLE, (200.0, 300.0), (1, LegendFit::Manual), 9.0);
+    assert!(!dark_in(&pm, (201, 600), (0, 600)), "the title's ink past the box's right edge");
+    let lines = legend_title_lines(LONG_LEGEND_TITLE, 200.0 / PT_PER_MM, 9.0);
+    assert!(lines.len() >= 2, "{lines:?}");
+    assert_eq!(lines.join(" "), LONG_LEGEND_TITLE, "every word is kept");
+    let pitch = (LEGEND_TITLE_PT * 1.33 * 1.25) as u32;
+    for k in 0..lines.len() as u32 {
+        assert!(dark_in(&pm, (0, 200), (k * pitch + 6, k * pitch + 14)), "line {k} of the title");
+    }
+    // One that fits is the one line, as it was drawn.
+    assert_eq!(legend_title_lines("Key", 200.0 / PT_PER_MM, 9.0), ["Key"]);
+    assert_eq!(legend_title_lines("", 200.0 / PT_PER_MM, 9.0), Vec::<String>::new());
+}
+
+/// A legend's rows start under the last line of its title (#3129): as much lower as the lines it
+/// wraps to past the first, and where they always did under a title of one line.
+#[test]
+fn a_legends_rows_start_under_its_last_title_line() {
+    let map = point_rows_map(5, None);
+    let rows_bottom = |title: &str| ink_bounds(&titled(&map, title, (200.0, 400.0), (1, LegendFit::Manual), 9.0)).3;
+    let one = rows_bottom("Key");
+    let lines = legend_title_lines(LONG_LEGEND_TITLE, 200.0 / PT_PER_MM, 9.0).len();
+    let pitch = LEGEND_TITLE_PT * 1.33 * 1.25;
+    let moved = rows_bottom(LONG_LEGEND_TITLE) as f32 - one as f32;
+    assert!((moved - (lines - 1) as f32 * pitch).abs() <= 2.0, "{moved} px lower for {lines} lines of {pitch} px");
+    // Under a title of one line they are where they were: the title's block is 1.3 rows. A title
+    // of only spaces has no ink and takes the same room.
+    let top = |title: &str| ink_bounds(&titled(&map, title, (200.0, 400.0), (1, LegendFit::Manual), 9.0)).1 as f32;
+    assert!((top("   ") - top("") - LEGEND_ROW * LEGEND_TITLE_ROWS).abs() <= 1.0, "{} against {}", top("   "), top(""));
+}
+
+/// The same lines at every resolution: a legend's title is measured at one (#3129), as a text's
+/// is, so the layout view, an image export and a print break it alike.
+#[test]
+fn a_legends_title_breaks_alike_at_every_resolution() {
+    let map = Map::new("m");
+    let lines = |ppp: f32| {
+        let mut pm = Pixmap::new(1800, 1800).unwrap();
+        pm.fill(tiny_skia::Color::WHITE);
+        let opts = LegendOptions { size: 1.0, text_size: 9.0, ..opts(true) };
+        crate::canvas::with_canvas(&mut pm, |c| {
+            let r = Rect::from_xywh(0.0, 0.0, 200.0 * ppp, 600.0 * ppp).unwrap();
+            legend_missing(c, r, &map, (LONG_LEGEND_TITLE, 1, LegendFit::Manual), None, opts, INK, f64::from(ppp));
+        });
+        (ink_bounds(&pm).3 as f32 / ppp, pm)
+    };
+    let (one, _) = lines(1.0);
+    let (three, pm) = lines(3.0);
+    assert!((one - three).abs() <= 3.0, "{one} against {three} px at 96 dpi");
+    assert!(!dark_in(&pm, (601, 1800), (0, 1800)), "no ink past the box at 3x");
+}
+
+/// A legend whose box is too short for the lines its title wraps to draws those that fit, and the
+/// cut-off check counts the rest (#3129) with a wrapped text's advice; a box tall enough loses
+/// none. A title in a box of no width, or of 200 letters with no space, stays within 200 lines.
+#[test]
+fn a_legends_title_lines_past_its_box_are_left_out_and_said() {
+    let info = PageInfo::default();
+    let page = |title: &str, (w, h): (f64, f64)| {
+        let mut l = Layout::new("Page", 120.0, 90.0);
+        let frame = l.add(
+            "Frame",
+            (60.0, 60.0, 50.0, 25.0),
+            serde_json::from_value(serde_json::json!({"MapFrame":{"map":"m", "center":{"x":0,"y":0}, "scale":1000000}})).unwrap(),
+        );
+        let kind = ElementKind::Legend {
+            frame,
+            title: title.into(),
+            all_classes: false,
+            hide_other: false,
+            show_no_data: false,
+            exclude: vec![],
+            columns: 1,
+            labels: BTreeMap::new(),
+            class_labels: Default::default(),
+            color: None,
+            text_size: rustgis_map::layout::LEGEND_TEXT_PT,
+            fit: LegendFit::Manual,
+            show_layer_names: rustgis_map::layout::LayerNames::Shown,
+        };
+        let id = l.add("Legend", (10.0, 10.0, w, h), kind);
+        (l, id)
+    };
+    let losses = |l: &Layout| text_losses(l, &[Map::new("m")], 96.0, &info);
+    let lines = legend_title_lines(LONG_LEGEND_TITLE, 30.0, 9.0).len();
+    assert!(lines >= 4, "{lines} lines");
+    // 15 mm is 57 px: the block of two lines (19.5 + 20 px) ends in it, of three (59.5) doesn't.
+    let (l, id) = page(LONG_LEGEND_TITLE, (30.0, 15.0));
+    let loss = losses(&l);
+    assert_eq!(loss.len(), 1, "{loss:?}");
+    assert_eq!((loss[0].id, loss[0].left_out, loss[0].below_box, loss[0].off_page), (id, lines - 2, true, false), "{loss:?}");
+    let note = clipped_text_notice(&l, &clipped_text(&l, &[Map::new("m")], 96.0, &info)).unwrap();
+    assert_eq!(note, format!("Text is cut off in 1 layout element(s): Legend ({id}); resize or move the text, or reduce its size"));
+    // Tall enough for every line, or a title that fits: nothing is lost.
+    assert!(losses(&page(LONG_LEGEND_TITLE, (30.0, 60.0)).0).is_empty());
+    assert!(losses(&page("Key", (30.0, 6.0)).0).is_empty());
+    assert!(losses(&page("", (30.0, 6.0)).0).is_empty());
+    // Hostile titles and boxes: counted within the 200 a text draws, none a panic.
+    for title in ["x".repeat(200), "word ".repeat(40), "a\nb\n\nc".to_string(), "  ".into()] {
+        for w in [0.0, 0.01, 1.0] {
+            let (l, _) = page(&title, (w, 20.0));
+            assert!(losses(&l).iter().all(|loss| loss.left_out <= 200), "{title:?} {w}");
+            let _ = render(&l, &mut [Map::new("m")], 96.0, &info).unwrap();
+        }
+    }
+    // And drawn in a box one pixel across.
+    let _ = titled(&Map::new("m"), &"x".repeat(200), (1.0, 1.0), (1, LegendFit::Manual), 9.0);
 }
 
 /// A colorbar's title longer than the element is wide wraps inside it (#2493), every word kept;
