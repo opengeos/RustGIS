@@ -1043,7 +1043,9 @@ impl Item {
             (Some(scheme), false) => format!("a {scheme}: address"),
             (None, _) => "a relative address that couldn't be made absolute".to_string(),
         };
-        Err(format!("{}: asset '{key}' is at {href} ({what}); RustGIS adds assets by their web or s3:// address", self.id))
+        let cut = href.chars().count() > 200;
+        let shown: String = href.chars().take(200).chain(cut.then_some('…')).collect();
+        Err(format!("{}: asset '{key}' is at {shown} ({what}); RustGIS adds assets by their web or s3:// address", self.id))
     }
 }
 
