@@ -26,7 +26,7 @@ mod ios;
 pub use ios::main as ios_main;
 
 /// The files of `picked` to open, each by its path: all but the parts another of them reads from
-/// beside it (a Shapefile's `.dbf`, `.shx`, `.prj` and `.cpg`, a MapInfo file's `.mid`), matched
+/// beside it (a Shapefile's `.dbf`, `.shx`, `.prj`, `.cpg` and `.cst`, a MapInfo file's `.mid`), matched
 /// by name whatever the case. A part picked without its main file stays, and is refused by name.
 #[cfg_attr(not(any(target_os = "android", target_os = "ios", test)), expect(dead_code, reason = "only a phone picks files"))]
 fn without_sidecars(picked: Vec<std::path::PathBuf>) -> Vec<std::path::PathBuf> {
@@ -36,7 +36,7 @@ fn without_sidecars(picked: Vec<std::path::PathBuf>) -> Vec<std::path::PathBuf> 
     let mut kept = Vec::new();
     for (path, (stem, extension)) in picked.iter().zip(&named) {
         let read_by = match extension.as_str() {
-            "dbf" | "shx" | "prj" | "cpg" => "shp",
+            "dbf" | "shx" | "prj" | "cpg" | "cst" => "shp",
             "mid" => "mif",
             _ => "",
         };
@@ -239,7 +239,7 @@ mod tests {
 
     #[test]
     fn parts_picked_with_their_file_are_left_to_it() {
-        assert_eq!(kept(&["roads.shp", "roads.dbf", "roads.shx", "roads.prj", "roads.cpg"]), ["roads.shp"]);
+        assert_eq!(kept(&["roads.shp", "roads.dbf", "roads.shx", "roads.prj", "roads.cpg", "roads.CsT"]), ["roads.shp"]);
         assert_eq!(kept(&["ROADS.SHP", "Roads.DBF", "parcels.mif", "parcels.MID"]), ["ROADS.SHP", "parcels.mif"]);
     }
 

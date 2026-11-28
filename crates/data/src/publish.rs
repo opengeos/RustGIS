@@ -23,7 +23,7 @@
 //! Only then are the new parts written beside the old ones, checked again against the bytes
 //! meant, and renamed into place, the `.shp` last; any failure puts the old parts back
 //! ([`crate::io::place_shapefile`]). The file keeps its code page, column widths, decimals,
-//! `.prj` and `.cpg` where the edits allow; sidecars RustGIS doesn't write (`.shp.xml`) are left.
+//! `.prj` and text declarations where the edits allow; sidecars RustGIS doesn't write (`.shp.xml`) are left.
 
 use crate::dbf::{Column, RawTable};
 use crate::io::{DbfStyle, ShapefileParts};
@@ -149,6 +149,7 @@ struct Original {
     dbf_path: PathBuf,
     prj: Option<Vec<u8>>,
     cpg: Option<(PathBuf, Vec<u8>)>,
+    cst: Option<Vec<u8>>,
 }
 
 /// Reads an original file at `p`, `None` when absent. The caller supplies format-specific size advice.
@@ -163,7 +164,7 @@ fn read_part(p: &Path, size_error: fn(&str, u64) -> String) -> Result<Option<Vec
 
 impl Original {
     /// Reads the parts of the Shapefile at `path`: its `.shp` and `.dbf` must be there; its
-    /// `.shx`, `.prj` and `.cpg` (in whichever case it is spelled) may be.
+    /// `.shx`, `.prj`, `.cpg` and `.cst` (the declarations in whichever case they are spelled) may be.
     fn read(path: &Path) -> Result<Original> {
         let read = |part: &Path| read_part(part, crate::io::shapefile_size_error);
         let missing = |ext: &str| refused(path, format!("its .{ext} isn't there"));
@@ -180,7 +181,12 @@ impl Original {
                 break;
             }
         }
-        Ok(Original { shp, shx, dbf, dbf_path, prj, cpg })
+        let cst = if crate::dbf::sidecar_encoding(cpg.as_ref().map(|(_, b)| b.as_slice())).is_none() {
+            crate::dbf::try_read_code_page(path, crate::dbf::CST_SPELLINGS)?
+        } else {
+            None
+        };
+        Ok(Original { shp, shx, dbf, dbf_path, prj, cpg, cst })
     }
 
     /// Its parts as the reader takes them.
@@ -191,6 +197,7 @@ impl Original {
             dbf: self.dbf.clone(),
             prj: self.prj.as_ref().and_then(|p| String::from_utf8(p.clone()).ok()),
             cpg: self.cpg.as_ref().map(|(_, b)| b.clone()),
+            cst: self.cst.clone(),
         }
     }
 
@@ -216,7 +223,7 @@ pub fn shapefile(ds: &Dataset, path: &Path, synced: &Synced) -> Result<Published
     let _lock = source_lock(path)?;
     let unchanged = |when: &str| -> Result<()> {
         refuse_link(path, path)?;
-        for ext in ["shx", "dbf", "prj"].into_iter().chain(crate::dbf::CPG_SPELLINGS) {
+        for ext in ["shx", "dbf", "prj"].into_iter().chain(crate::dbf::CPG_SPELLINGS).chain(crate::dbf::CST_SPELLINGS) {
             refuse_link(path, &path.with_extension(ext))?;
         }
         refuse_link(path, &crate::io::dbf_sidecar(path))?;
@@ -245,16 +252,13 @@ pub fn shapefile(ds: &Dataset, path: &Path, synced: &Synced) -> Result<Published
     }
     let mut encoding_notes = crate::loss::Notes::new();
     let ldid = original.dbf.get(29).copied().unwrap_or(0);
-    let style = DbfStyle {
-        encoding: crate::dbf::encoding(original.cpg.as_ref().map(|(_, b)| b.as_slice()), ldid, &mut encoding_notes),
-        ldid,
-        columns: table.columns.clone(),
-    };
-    // A code page RustGIS can't write (one it reads as UTF-8 for want of a decoder): edited text
-    // would be written in UTF-8 under the file's language driver.
-    if let Some(note) = encoding_notes.first() {
-        return Err(refused(path, format!("{}, so its text can't be written in its own code page", note.as_str())));
+    let (encoding, publishable) =
+        crate::dbf::encoding(original.cpg.as_ref().map(|(_, b)| b.as_slice()), original.cst.as_deref(), ldid, &mut encoding_notes);
+    if !publishable {
+        let reason = encoding_notes.first().map_or("unsupported code page", crate::loss::Note::as_str);
+        return Err(refused(path, format!("{reason}, so its text can't be written in its own code page")));
     }
+    let style = DbfStyle { encoding, ldid, columns: table.columns.clone() };
 
     // 1. It reads as the layer was read: in the layer's system, and in the file's own
     // coordinates (the system taken for longitude/latitude, which converts nothing).
@@ -312,6 +316,7 @@ pub fn shapefile(ds: &Dataset, path: &Path, synced: &Synced) -> Result<Published
         dbf: part(&parts, "dbf"),
         prj: None,
         cpg: original.cpg.as_ref().map(|(_, b)| b.clone()),
+        cst: original.cst.clone(),
     };
     let (read_back, _) = crate::io::read_shapefile_parts(back, &name, crs)?;
     // Compared as they are when the layer holds its coordinates in the system the file is read
@@ -1433,6 +1438,102 @@ mod tests {
         let e = shapefile(&ds, &path, &synced).err().unwrap().to_string();
         assert!(e.contains("couldn't hold the layer") && e.contains("Łukasz"), "{e}");
         assert_eq!(std::fs::read(path.with_extension("dbf")).unwrap(), dbf);
+    }
+
+    /// A mixed-case Latin-1 declaration follows the data from loose and zipped reads through publish.
+    #[test]
+    fn shapefile_cst_code_page_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("parcels.shp");
+        crate::io::write_path(&parcels(), &path).unwrap();
+        let cpg = path.with_extension("cpg");
+        std::fs::remove_file(&cpg).unwrap();
+        let cst = path.with_extension("cSt");
+        let cst_changed = |files: &FileSync| {
+            let names = files.changed(&path).unwrap();
+            assert_eq!(names.len(), 1);
+            assert!(names[0].eq_ignore_ascii_case("parcels.cst"), "{names:?}");
+        };
+        let dbf_path = path.with_extension("dbf");
+        let mut dbf = std::fs::read(&dbf_path).unwrap();
+        let owner = dbf.windows(5).position(|b| b == b"Smith").unwrap();
+        dbf[owner..owner + 5].copy_from_slice(b"Mu\xf1oz");
+        dbf[29] = 0;
+        std::fs::write(&dbf_path, dbf).unwrap();
+
+        let invalid_text = |messages: &[crate::loss::Note]| messages.iter().any(|m| m.contains("1 text value") && m.contains("U+FFFD"));
+        let (_, assumed) = crate::io::read_path(&path).unwrap();
+        assert!(invalid_text(&assumed.messages), "{:?}", assumed.messages);
+        assert!(!assumed.messages.iter().any(|m| m.contains("code page taken from the .cst")));
+        let (assumed, sync) = read(&path);
+        assert!(shapefile(&assumed, &path, &sync).is_err());
+
+        std::fs::write(&cst, "ISO-8859-1").unwrap();
+        let (loose, report) = crate::io::read_path(&path).unwrap();
+        let clean_read = |ds: &Dataset, messages: &[crate::loss::Note]| {
+            assert_eq!(ds.features[0].attrs[0], Value::Text("Muñoz".into()));
+            assert!(messages.iter().any(|m| m.loss.is_none() && m.contains("code page taken from the .cst")), "{messages:?}");
+            assert!(!messages.iter().any(|m| m.loss == Some(crate::loss::LossCode::ChangedEncoding)), "{messages:?}");
+        };
+        clean_read(&loose, &report.messages);
+        cst_changed(&sync.files);
+
+        let source = crate::source::open_path(&path, None).unwrap();
+        let (streamed, report) = crate::source::materialize(source.as_ref()).unwrap();
+        clean_read(&streamed, &report.messages);
+        drop(source);
+
+        let files = [&path, &dbf_path, &cst, &path.with_extension("shx"), &path.with_extension("prj")]
+            .map(|p| (p.file_name().unwrap().to_str().unwrap().to_string(), std::fs::read(p).unwrap()));
+        let (gathered, problems) = crate::io::gather_shapefiles(files.into());
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(gathered.len(), 1);
+        assert!(crate::io::shapefile_zip_lacks(&gathered[0].1).is_empty());
+        let (zipped, report) = crate::io::read_zip(&gathered[0].0, &gathered[0].1).unwrap().pop().unwrap();
+        clean_read(&zipped, &report.messages);
+
+        let (mut edited, sync) = read(&path);
+        edited.features.set_value(0, 0, Value::Text("Café".into())).unwrap();
+        let published = shapefile(&edited, &path, &sync).unwrap();
+        assert_eq!(published.read.features[0].attrs[0], Value::Text("Café".into()));
+        assert_eq!(std::fs::read(&cst).unwrap(), b"ISO-8859-1");
+        let mut dbf = std::fs::read(&dbf_path).unwrap();
+        assert!(dbf.windows(4).any(|b| b == b"Caf\xe9"));
+        assert!(!cpg.exists());
+        assert!(published.files.changed(&path).unwrap().is_empty());
+
+        std::fs::write(&cst, "not-a-code-page").unwrap();
+        cst_changed(&published.files);
+        let (_, report) = crate::io::read_path(&path).unwrap();
+        assert!(
+            report
+                .messages
+                .iter()
+                .any(|m| m.loss == Some(crate::loss::LossCode::AssumedEncoding) && m.contains("unsupported or empty .cst")),
+            "{:?}",
+            report.messages
+        );
+        assert!(invalid_text(&report.messages), "{:?}", report.messages);
+
+        dbf[29] = 0xF0; // UTF-8 in the header must lose to a usable .cst.
+        std::fs::write(&dbf_path, &dbf).unwrap();
+        std::fs::write(&cst, "ISO-8859-1").unwrap();
+        std::fs::write(&cpg, "not-a-code-page").unwrap();
+        let (read, report) = crate::io::read_path(&path).unwrap();
+        assert_eq!(read.features[0].attrs[0], Value::Text("Café".into()));
+        assert!(report.messages.iter().any(|m| m.contains("unsupported or empty .cpg")), "{:?}", report.messages);
+        assert!(report.messages.iter().any(|m| m.loss.is_none() && m.contains("code page taken from the .cst")), "{:?}", report.messages);
+
+        std::fs::write(&cpg, "UTF-8").unwrap();
+        let (_, report) = crate::io::read_path(&path).unwrap();
+        assert!(invalid_text(&report.messages), "{:?}", report.messages);
+        assert!(!report.messages.iter().any(|m| m.contains("code page taken from the .cst")), "{:?}", report.messages);
+
+        std::fs::remove_file(&cpg).unwrap();
+        std::fs::write(&cst, "UTF-8").unwrap();
+        let (_, report) = crate::io::read_path(&path).unwrap();
+        assert!(report.messages.iter().any(|m| m.loss.is_none() && m.contains("code page taken from the .cst")), "{:?}", report.messages);
+        assert!(invalid_text(&report.messages), "{:?}", report.messages);
     }
 
     /// What a read loses is refused before the edits are: text a read trims, a feature without a

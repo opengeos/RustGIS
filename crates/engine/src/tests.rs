@@ -26203,7 +26203,7 @@ fn unreadable_plugin_blocklist_warns() {
 }
 
 /// A Shapefile published as loose files is added by its `.shp` address (#1238): its `.dbf`,
-/// `.shx`, `.prj` and `.cpg` are fetched beside it with the address's query, and its `.prj` places
+/// `.shx`, `.prj` and the encoding declaration are fetched beside it with the address's query, and its `.prj` places
 /// it; the parts that aren't there are done without, said, but not its `.dbf`, nor a part a
 /// signed address is refused. An address answering with a zip is read as one. Left to the app (a
 /// plugin's command), the address waits for the app, which fetches the parts the same way.
@@ -26219,6 +26219,8 @@ fn shapefile_by_its_shp_address() {
     let (parts, _) = rustgis_data::io::shapefile_parts_in(&utm, Crs::from_epsg(31983).unwrap()).unwrap();
     let mut files: Vec<(String, Vec<u8>)> =
         parts.iter().map(|(e, b)| (format!("/PI/TERESINA/HIDROGRAFIA/PI_2211001_RIOS.{e}?token=1"), b.clone())).collect();
+    files.extend(parts.iter().filter(|(e, _)| *e != "cpg").map(|(e, b)| (format!("/cst/rios.{e}"), b.clone())));
+    files.push(("/cst/rios.cst".into(), b"ISO-8859-1".to_vec()));
     // The same without its .prj and .cpg, and one without its .dbf.
     files.extend(parts.iter().filter(|(e, _)| !matches!(*e, "prj" | "cpg")).map(|(e, b)| (format!("/plain/rios.{e}"), b.clone())));
     files.extend(parts.iter().filter(|(e, _)| !matches!(*e, "prj" | "cpg")).map(|(e, b)| (format!("/keyed/rios.{e}?token=zz"), b.clone())));
@@ -26261,6 +26263,12 @@ fn shapefile_by_its_shp_address() {
     for ext in ["shp", "dbf", "shx", "prj", "cpg"] {
         assert!(asked_for.contains(&format!("/PI/TERESINA/HIDROGRAFIA/PI_2211001_RIOS.{ext}?token=1")), "{ext}: {asked_for:?}");
     }
+    assert!(!asked_for.iter().any(|path| path.contains(".cst")), "{asked_for:?}");
+    let mark = s.notice_mark();
+    s.run("layer.addUrl", &json!({"url": format!("{base}/cst/rios.shp"), "name": "Com cst"})).unwrap();
+    let said = s.notices_since(mark);
+    assert!(said.iter().any(|n| n.text.contains("code page taken from the .cst")), "{said:?}");
+    assert!(!said.iter().any(|n| n.text.contains("optional files")), "{said:?}");
     // Without a .prj or .cpg (404), it is read as a local Shapefile without them.
     let r = s.run("layer.addUrl", &json!({"url": format!("{base}/plain/rios.shp"), "name": "Sem prj"})).unwrap();
     assert_eq!(r["features"], 1, "{r}");
@@ -26384,6 +26392,14 @@ fn shapefile_by_its_shp_address() {
     assert_eq!(r["features"], 1, "{r}");
     assert!(s.map().layer_by_name("Pela janela").is_some());
     let said = s.notices_since(mark);
+    assert!(!said.iter().any(|n| n.text.contains("optional files")), "{said:?}");
+    let cst = format!("{base}/cst/rios.shp");
+    let id = s.download_started();
+    assert!(s.download_landed(id, fetch(&cst, 1 << 20).unwrap()));
+    let mark = s.notice_mark();
+    s.run("layer.addDownload", &json!({"id": id, "url": cst, "name": "Com cst pela janela"})).unwrap();
+    let said = s.notices_since(mark);
+    assert!(said.iter().any(|n| n.text.contains("code page taken from the .cst")), "{said:?}");
     assert!(!said.iter().any(|n| n.text.contains("optional files")), "{said:?}");
     // Through the app too, what was left out is said.
     let plain = format!("{base}/plain/rios.shp");

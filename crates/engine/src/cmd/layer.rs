@@ -51,7 +51,7 @@ pub fn commands() -> Vec<C> {
             .params(r#"{"layer"?: name|id, "crs": "EPSG:… or WKT; reinterpret native coordinates, without rewriting the source file"}"#),
         C::new("layer.loadAll", "Load All Features", "Layers", load_all).roles(&[]).effects(crate::policy::Effects::NONE).when(need_streamed).params(r#"{"layer"?: name|id}"#),
         C::new("layer.addUrl", "Add Data From URL", "Home › Add › Add Data", add_url).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Network)).params(
-            r#"{"url": "https://…/data.geojson|.csv|.parquet|.fgb|.gpkg|.zip|.shp (its .dbf fetched beside it, and its .shx, .prj and .cpg when there)|.kml|.kmz|.gpx|.tif|.grb|.grib|.grb2|.grib2 (GRIB)|.jp2 (JPEG 2000: desktop, through GDAL) (the format from the address, else the contents) | a .pmtiles archive", "bytes"?: "[first, last]: only these octets of a GRIB file (counted from 0, both included, as HTTP's Range and curl -r write them; at most 64 MB), read as the file (desktop and command line): a record found in its wgrib inventory; with bbox (desktop and command line), only the rows of the box are downloaded from a record of simple packing without a bitmap, and any other record is downloaded whole and cut to the box, with a notice", "format"?: "grib: with bytes, the address is a GRIB file whatever its name says", "name"?: text, "layer"?: "one layer of a zip, KML or GPX", "zoom"?: "bool: true frames everything added; false keeps the view, even on an empty map; omitted, the first content on an empty map is framed (a GeoParquet, FlatGeobuf or cloud-optimised GeoTIFF read in place likewise; a PMTiles or MBTiles archive ignores zoom and is framed on its bounds unless it covers the whole world)", "x"?, "y"?, "wkt"?, "crs"?, "delimiter"?, "paperSpace"?, "blocks"?, "stream"?, "as"? (as layer.addData), "whole"?: "bool: download a cloud-optimised GeoTIFF whole (as a raster layer) instead of reading it in place (an address without a file name is read in place when its first bytes are a cloud-optimised GeoTIFF)", "cog"?: "bool: the address is a cloud-optimised GeoTIFF whatever its name says (the app's probe found it so)", "bbox"?: "[west, south, east, north] in degrees | "view": a cloud-optimised GeoTIFF's window as a raster layer (desktop and command line), read by range at full resolution, in the file's coordinate system, with its colour table and class names; at most 64 million values (all bands); with bytes, the cells of a GRIB record the box touches", "cellSize"?: "with bbox: the coarsest overview whose cells are at most this size is read (the file's units; metres for longitude/latitude, a degree taken as 111.32 km)", "cube"?: "bool: a data cube's file: a tile layer that follows the time slider (stac.addCube adds them), kept one when the project opens again", "start"?, "end"?, "unit"?, "interval"?, "dates"?: "a GeoTIFF address with date placeholders ({date:YYYY}, {YYYY}{MM}{DD}), one file per date: the dates it spans and steps through (as time.set), turning the time slider on", "connection"?: "the id of the saved web-service connection it comes from (as service.add)", "service"?: "bool: a web service's features (an ArcGIS query, OGC API Features items): read in pages as service.add reads them, known by the address as its layers are, and an ArcGIS layer drawn as its description says", "bounds"?: "with service: [west, south, east, north], the layer's longitude/latitude bounds its axes are checked against", "from"?: "the web document address that named url (internal: enforces public-address reach)", "fromDocument"?: bool, "anonymous"?: bool (internal: a plugin-origin download must never adopt a saved login), "coverage"?: bool (a WCS coverage's GetCoverage address, service.coverage's: a GeoTIFF, else the service's error; one that doesn't say its system is read in the one the address asks for), "coverageCrs"?: "EPSG:<code> (with coverage: the system it was asked in, service.coverage's coverageCrs, when the address doesn't say it)", "request"?: "number (internal: the download a plugin command left to the app, #1202)"}"#,
+            r#"{"url": "https://…/data.geojson|.csv|.parquet|.fgb|.gpkg|.zip|.shp (its .dbf fetched beside it, and its .shx, .prj and code-page declaration when there)|.kml|.kmz|.gpx|.tif|.grb|.grib|.grb2|.grib2 (GRIB)|.jp2 (JPEG 2000: desktop, through GDAL) (the format from the address, else the contents) | a .pmtiles archive", "bytes"?: "[first, last]: only these octets of a GRIB file (counted from 0, both included, as HTTP's Range and curl -r write them; at most 64 MB), read as the file (desktop and command line): a record found in its wgrib inventory; with bbox (desktop and command line), only the rows of the box are downloaded from a record of simple packing without a bitmap, and any other record is downloaded whole and cut to the box, with a notice", "format"?: "grib: with bytes, the address is a GRIB file whatever its name says", "name"?: text, "layer"?: "one layer of a zip, KML or GPX", "zoom"?: "bool: true frames everything added; false keeps the view, even on an empty map; omitted, the first content on an empty map is framed (a GeoParquet, FlatGeobuf or cloud-optimised GeoTIFF read in place likewise; a PMTiles or MBTiles archive ignores zoom and is framed on its bounds unless it covers the whole world)", "x"?, "y"?, "wkt"?, "crs"?, "delimiter"?, "paperSpace"?, "blocks"?, "stream"?, "as"? (as layer.addData), "whole"?: "bool: download a cloud-optimised GeoTIFF whole (as a raster layer) instead of reading it in place (an address without a file name is read in place when its first bytes are a cloud-optimised GeoTIFF)", "cog"?: "bool: the address is a cloud-optimised GeoTIFF whatever its name says (the app's probe found it so)", "bbox"?: "[west, south, east, north] in degrees | "view": a cloud-optimised GeoTIFF's window as a raster layer (desktop and command line), read by range at full resolution, in the file's coordinate system, with its colour table and class names; at most 64 million values (all bands); with bytes, the cells of a GRIB record the box touches", "cellSize"?: "with bbox: the coarsest overview whose cells are at most this size is read (the file's units; metres for longitude/latitude, a degree taken as 111.32 km)", "cube"?: "bool: a data cube's file: a tile layer that follows the time slider (stac.addCube adds them), kept one when the project opens again", "start"?, "end"?, "unit"?, "interval"?, "dates"?: "a GeoTIFF address with date placeholders ({date:YYYY}, {YYYY}{MM}{DD}), one file per date: the dates it spans and steps through (as time.set), turning the time slider on", "connection"?: "the id of the saved web-service connection it comes from (as service.add)", "service"?: "bool: a web service's features (an ArcGIS query, OGC API Features items): read in pages as service.add reads them, known by the address as its layers are, and an ArcGIS layer drawn as its description says", "bounds"?: "with service: [west, south, east, north], the layer's longitude/latitude bounds its axes are checked against", "from"?: "the web document address that named url (internal: enforces public-address reach)", "fromDocument"?: bool, "anonymous"?: bool (internal: a plugin-origin download must never adopt a saved login), "coverage"?: bool (a WCS coverage's GetCoverage address, service.coverage's: a GeoTIFF, else the service's error; one that doesn't say its system is read in the one the address asks for), "coverageCrs"?: "EPSG:<code> (with coverage: the system it was asked in, service.coverage's coverageCrs, when the address doesn't say it)", "request"?: "number (internal: the download a plugin command left to the app, #1202)"}"#,
         ),
         C::new("layer.addDownload", "Add Downloaded Data", "Home › Add", add_download).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Reserved).with(crate::policy::Effect::Files))
             .params(r#"{"id": a download the app finished (Home › Add › Add Data › From URL), "url": its address, "name"?: text, "layer"?: text, "zoom"?: bool, "x"?, "y"?, "wkt"?, "crs"?, "delimiter"?, "paperSpace"?, "blocks"?, "stream"?, "as"? (as layer.addData), "service"?: bool (a service's features: their axes (when they came as GeoJSON) and paging are checked, and the address is kept as the layer's source), "bounds"?: [west, south, east, north] (with service: the layer's longitude/latitude bounds from its capabilities, which its axes are checked against; without bounds they are left as they come; ignored without service), "coverage"?: bool (a WCS coverage: a GeoTIFF, else the service's error, and its request kept as the layer's source), "coverageCrs"?: "EPSG:<code>" (internal, with coverage: the system service.coverage's request asks it in (its coverageCrs), for an answer that doesn't say its own, when the address doesn't say it), "drawingInfo"?: object (internal, with service: an ArcGIS layer's drawingInfo from its description, which the layer is drawn with), "geolibreProject"?: bool (internal: downloaded project JSON), "geolibreLayer"?: {"token", "record"} (internal: reserved imported layer and its saved style), "geolibreZarr"?: bool (internal: an imported Zarr slice as GeoTIFF), "connection"?: "as layer.addUrl", "anonymous"?: bool (internal: preserves a plugin-origin download's anonymous reads), "request"?: number (internal: the download a plugin command left to the app, #1202), "window"?: {"bbox", "cellSize"?, "cog"?} (internal: what a cloud-optimised GeoTIFF's window the app read off the frame asked for, for a task to read it again, #1330)}"#),
@@ -2581,7 +2581,7 @@ fn link_choice(path: &str, tables: &[String]) -> Option<Value> {
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct Opened {
     /// The size and modification time of the file and those beside it of its name (a
-    /// Shapefile's `.dbf`, `.prj` and `.cpg`) as it was opened: an opening of files changed since
+    /// Shapefile's `.dbf`, `.prj` and code-page declaration) as it was opened: an opening of files changed since
     /// isn't taken, as its features' places, boxes and fields are those of what they held then.
     stamp: Option<Vec<(std::ffi::OsString, u64, Option<std::time::SystemTime>)>>,
     source: Result<Box<dyn rustgis_data::source::FeatureSource>, rustgis_data::DataError>,
@@ -5861,7 +5861,7 @@ fn over_shared_limit(e: String) -> String {
 }
 
 /// What a Shapefile added by its `.shp` address (#1238) was read without, said: its `.shx`, `.prj`
-/// or `.cpg` when they weren't found beside it. The address is said without its keys or signature;
+/// or encoding declaration when they weren't found beside it. The address is said without its keys or signature;
 /// a `crs` given (`p`) stands for the `.prj`.
 fn parts_left_out(url: &str, bytes: &[u8], p: &Value) -> Option<String> {
     rustgis_data::io::shapefile_part_urls(url)?;
@@ -5903,7 +5903,7 @@ fn parts_left_out(url: &str, bytes: &[u8], p: &Value) -> Option<String> {
 }
 
 /// A Shapefile by its `.shp` address, waited for (#1238): the `.shp`, then its `.dbf`, `.shx`,
-/// `.prj` and `.cpg` beside it (each but the `.dbf` only when it is there), zipped, within one
+/// `.prj` and its encoding declaration beside it (each but the `.dbf` only when it is there), zipped, within one
 /// download's budget together.
 #[cfg(not(target_arch = "wasm32"))]
 fn download_shapefile_blocking_with(url: &str, public: bool) -> Result<Vec<u8>, String> {
@@ -5935,6 +5935,9 @@ fn download_shapefile_blocking_with(url: &str, public: bool) -> Result<Vec<u8>, 
     let mut left = cache::MAX_DOWNLOAD.saturating_sub(shp.len());
     let mut got = Vec::new();
     for (ext, u) in parts {
+        if skip_cst(ext, &got) {
+            continue;
+        }
         match within(&u, left, part_absences(ext, &u)).and_then(|b| page_part(ext, b)) {
             Ok(None) => {}
             Ok(Some(b)) => {
@@ -5951,7 +5954,7 @@ fn download_shapefile_blocking_with(url: &str, public: bool) -> Result<Vec<u8>, 
 
 /// Downloads a file the user named by its address off the frame, as `cache::download_limited`
 /// does, for the app to add when it lands: a Shapefile's `.shp` address brings its `.dbf`, `.shx`,
-/// `.prj` and `.cpg` too, one after another, and `done` gets them zipped (#1238), within `max`
+/// `.prj` and its encoding declaration too, one after another, and `done` gets them zipped (#1238), within `max`
 /// bytes together.
 pub fn download_data(url: &str, max: usize, done: crate::render::rustgis_tiles::cache::Done) {
     download_data_from(url, false, max, done);
@@ -6006,6 +6009,11 @@ fn zipped_within(name: &str, shp: Vec<u8>, got: Vec<(&'static str, Vec<u8>)>, le
     Ok(zip)
 }
 
+/// A .cst is only needed when the earlier .cpg could not select an encoding.
+fn skip_cst(ext: &str, got: &[(&str, Vec<u8>)]) -> bool {
+    ext == "cst" && got.iter().any(|(e, b)| *e == "cpg" && rustgis_data::io::shapefile_cpg_is_usable(b))
+}
+
 /// The next of a Shapefile's parts for [`download_data`], then the zip once they are all in: the
 /// steps of `download_shapefile_blocking_with` as callbacks, sharing its rules (`part_not_there`,
 /// `part_failed`, `zipped_within`), so a change to one goes in both.
@@ -6022,6 +6030,9 @@ fn download_parts(
         done(zipped_within(&name, shp, got, left));
         return;
     };
+    if skip_cst(ext, &got) {
+        return download_parts(name, shp, parts, got, left, public, done);
+    }
     let next = url.clone();
     let omit = part_absences(ext, &url);
     let step: crate::render::rustgis_tiles::cache::Done = Box::new(move |r| match r.and_then(|b| page_part(ext, b)) {

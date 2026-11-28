@@ -39,6 +39,7 @@ const DATA_EXTS: &[&str] = &[
     "shx",
     "prj",
     "cpg",
+    "cst",
     "kml",
     "kmz",
     "gpx",
@@ -1378,7 +1379,7 @@ fn services(inbox: Inbox, font_inbox: Inbox, notes: Notes, ctx: egui::Context, e
             } else if purpose == "script" {
                 rfd::AsyncFileDialog::new().add_filter(rustgis_ui_egui::tl!("Script"), &["txt"])
             } else if purpose == "shapefile" {
-                rfd::AsyncFileDialog::new().add_filter("Shapefile", &["shp", "dbf", "shx", "prj", "cpg", "zip"])
+                rfd::AsyncFileDialog::new().add_filter("Shapefile", &["shp", "dbf", "shx", "prj", "cpg", "cst", "zip"])
             } else if purpose == "project" {
                 rfd::AsyncFileDialog::new().add_filter(
                     rustgis_ui_egui::tl!("Projects and JSON data (RustGIS, GeoLibre)"),

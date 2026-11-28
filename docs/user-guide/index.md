@@ -319,7 +319,7 @@ Reload Data even when the folder's timestamp has not changed.
 **Changed on disk (desktop).** While the app is open, RustGIS looks at the files its linked
 layers and local tile archives read every 5 seconds and when its window regains focus, in every
 map of the project. It reads only metadata (size, modification time and the file's identity: on
-Linux and macOS its status-change time too, on Windows its creation time), never the data: a Shapefile's `.dbf`, `.shx`, `.prj` and `.cpg` count with its
+Linux and macOS its status-change time too, on Windows its creation time), never the data: a Shapefile's `.dbf`, `.shx`, `.prj`, `.cpg` and `.cst` count with its
 `.shp`, a MapInfo file's `.mid` with its `.mif`, a GeoPackage, MBTiles or `.sqlite` file's `-wal`
 and `-journal` with it, and a DuckDB database's `.wal` with it (a `.db` file gets both). Other
 sidecars (a raster's `.aux.xml` or `.prj`) aren't watched. A change is reported once two looks in a row agree:
@@ -464,7 +464,7 @@ refuses, with nothing written, when:
 - the file can't hold the layer as it is: a feature without a shape, a field name longer than 10
   bytes, text in characters the file's code page lacks.
 
-The file keeps its code page (its `.cpg` and the language driver in its `.dbf`), each column's
+The file keeps its code page (its `.cpg`, `.cst` and the language driver in its `.dbf`), each column's
 width, decimals and type where the values still fit, and its `.prj`. A column that can't hold
 an edited value gets one that can, and a notice names it with its old and new form; a field
 deleted or renamed in the layer leaves its column out of the file, and a notice names it too. A layer read in another

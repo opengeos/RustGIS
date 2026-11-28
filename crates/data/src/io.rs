@@ -451,11 +451,11 @@ pub fn read_bytes(file_name: &str, bytes: &[u8]) -> Result<(Dataset, ReadReport)
         // Picked or dropped with its .dbf, a Shapefile comes zipped (`gather_shapefiles`).
         "shp" => {
             return Err(DataError::Unsupported(
-                "shp on its own: add it together with its .dbf, which it needs, and its .shx and .prj if it has them (pick or drop them at once), or add them zipped".into(),
+                "shp on its own: add it together with its .dbf, which it needs, and its .shx, .prj, .cpg and .cst if it has them (pick or drop them at once), or add them zipped".into(),
             ));
         }
-        "dbf" => read_dbf(bytes.to_vec(), None, &name, &mut csv_memory_budget())?,
-        "shx" | "prj" | "cpg" => {
+        "dbf" => read_dbf(bytes.to_vec(), None, None, &name, &mut csv_memory_budget())?,
+        "shx" | "prj" | "cpg" | "cst" => {
             return Err(DataError::Unsupported(format!("{ext} on its own: it is part of a Shapefile; add it together with its .shp")));
         }
         // The first layer (`read_layers` reads them all), saying what else the file holds.
@@ -521,8 +521,8 @@ pub fn read_path(path: &Path) -> Result<(Dataset, ReadReport)> {
         "dbf" => {
             check_size(path)?;
             let mut notes = crate::loss::Notes::new();
-            let cpg = crate::dbf::read_cpg(path, &mut notes);
-            let (ds, mut report) = read_dbf(std::fs::read(path)?, cpg.as_deref(), &name, &mut csv_memory_budget())?;
+            let (cpg, cst) = crate::dbf::read_sidecars(path, &mut notes);
+            let (ds, mut report) = read_dbf(std::fs::read(path)?, cpg.as_deref(), cst.as_deref(), &name, &mut csv_memory_budget())?;
             report.messages.extend(notes.prefixed(&name));
             (ds, report)
         }
@@ -3830,12 +3830,14 @@ pub fn read_shapefile_in(path: &Path, name: &str, crs: Option<Crs>) -> Result<(D
         check_size_with(&shx, shapefile_size_error)?;
     }
     let mut notes = crate::loss::Notes::new();
+    let (cpg, cst) = crate::dbf::read_sidecars(path, &mut notes);
     let parts = ShapefileParts {
         shp: crate::provenance::read(path)?,
         shx: if shx.is_file() { Some(crate::provenance::read(shx)?) } else { None },
         dbf: crate::provenance::read(dbf)?,
         prj: crate::raster::read_prj(path),
-        cpg: crate::dbf::read_cpg(path, &mut notes),
+        cpg,
+        cst,
     };
     let (ds, mut report) = read_shapefile_parts(parts, name, crs)?;
     report.messages.extend(notes.prefixed(name));
@@ -3843,13 +3845,13 @@ pub fn read_shapefile_in(path: &Path, name: &str, crs: Option<Crs>) -> Result<(D
 }
 
 /// The files of a Shapefile besides its `.shp` that [`gather_shapefiles`] zips with it.
-const SHAPEFILE_SIDECARS: [&str; 4] = ["dbf", "shx", "prj", "cpg"];
+const SHAPEFILE_SIDECARS: [&str; 5] = ["dbf", "shx", "prj", "cpg", "cst"];
 
 /// Gathers each Shapefile among files given together (several picked at once in the browser, or
 /// dropped at once) into a zip that reads as a zipped Shapefile: a `.shp` with the `.dbf` of the
-/// same base name, ignoring case, and its `.shx`, `.prj` and `.cpg` when they are there. The zip,
+/// same base name, ignoring case, and its `.shx`, `.prj`, `.cpg` and `.cst` when they are there. The zip,
 /// named after the `.shp`, takes its place; its parts go. Other files, and a `.shp` without its
-/// `.dbf`, pass through as they came. A standalone `.dbf` with a `.cpg` is zipped with it too.
+/// `.dbf`, pass through as they came. A standalone `.dbf` is zipped with its code-page declarations too.
 /// Files whose parts are too large to read together (more than [`max_bytes`], or the zip
 /// reader's limit) are left out, with an explanation in the messages returned with the files.
 pub fn gather_shapefiles(files: Vec<(String, Vec<u8>)>) -> (Vec<(String, Vec<u8>)>, Vec<String>) {
@@ -3879,14 +3881,19 @@ pub fn gather_shapefiles(files: Vec<(String, Vec<u8>)>) -> (Vec<(String, Vec<u8>
             *slot = Some(parts);
         }
     }
-    // A standalone DBF's .cpg travels through the browser's Services inbox in the same zip.
+    // A standalone DBF's code-page declaration travels through the browser's Services inbox in the same zip.
     for i in 0..files.len() {
         let Some(base) = files.get(i).and_then(Option::as_ref).filter(|(n, _)| ext_of(n) == "dbf").map(|(n, _)| stem(n)) else {
             continue;
         };
-        let Some(j) = sidecar(&files, &base, "cpg") else { continue };
+        let declarations = ["cpg", "cst"].map(|ext| sidecar(&files, &base, ext));
+        if declarations.iter().all(Option::is_none) {
+            continue;
+        }
         let mut parts: Vec<_> = files.get_mut(i).and_then(Option::take).into_iter().collect();
-        parts.extend(files.get_mut(j).and_then(Option::take));
+        for j in declarations.into_iter().flatten() {
+            parts.extend(files.get_mut(j).and_then(Option::take));
+        }
         if let Some(slot) = zips.get_mut(i) {
             *slot = Some(parts);
         }
@@ -3952,6 +3959,11 @@ pub fn shapefile_part_urls(url: &str) -> Option<Vec<(&'static str, String)>> {
     )
 }
 
+/// Whether a downloaded .cpg is enough to select a decoder without fetching a .cst.
+pub fn shapefile_cpg_is_usable(bytes: &[u8]) -> bool {
+    crate::dbf::sidecar_encoding(Some(bytes)).is_some()
+}
+
 /// A Shapefile fetched by its files' addresses as one zipped Shapefile ([`gather_shapefiles`]):
 /// the `.shp` named `file_name`, and the parts that answered, by extension. An error when the
 /// `.dbf` isn't among them or they are too large to read together.
@@ -3974,7 +3986,7 @@ fn is_resource_fork(name: &str) -> bool {
     name.split('/').any(|part| part == "__MACOSX" || part.starts_with("._"))
 }
 
-/// Which of its optional parts (`.shx`, `.prj`, `.cpg`) each Shapefile in a zip lacks, beside it
+/// Which of its optional parts (`.shx`, `.prj`, a code-page declaration) each Shapefile in a zip lacks, beside it
 /// by its name: what a Shapefile added by its `.shp` address (#1238) was read without, to say so.
 /// One entry per `.shp` that lacks any, its name as in the zip, in name order. Only the `.shp`s
 /// [`read_zip`] reads count: those with their `.dbf`, not a macOS resource fork, the first
@@ -4007,7 +4019,10 @@ pub fn shapefile_zip_lacks(bytes: &[u8]) -> Vec<(String, Vec<&'static str>)> {
     shps.into_iter()
         .take(MAX_ZIP_LAYERS)
         .filter_map(|(n, s)| {
-            let lacks: Vec<&'static str> = ["shx", "prj", "cpg"].into_iter().filter(|e| !lower.contains(&format!("{s}.{e}"))).collect();
+            let lacks: Vec<&'static str> = ["shx", "prj", "cpg"]
+                .into_iter()
+                .filter(|e| !lower.contains(&format!("{s}.{e}")) && (*e != "cpg" || !lower.contains(&format!("{s}.cst"))))
+                .collect();
             (!lacks.is_empty()).then(|| (n.clone(), lacks))
         })
         .collect()
@@ -4106,7 +4121,7 @@ fn read_zip_layers_budget(file_name: &str, bytes: &[u8], opts: &CsvOptions, budg
         }
         let e = ext_of(n);
         !is_resource_fork(n)
-            && (matches!(e.as_str(), "shp" | "shx" | "dbf" | "prj" | "cpg" | "mid")
+            && (matches!(e.as_str(), "shp" | "shx" | "dbf" | "prj" | "cpg" | "cst" | "mid")
                 || (e == "pbf" && lower(n).ends_with(".osm.pbf"))
                 || (!matches!(e.as_str(), "zip" | "pbf") && READ_EXTENSIONS.contains(&e.as_str())))
     };
@@ -4140,11 +4155,12 @@ fn read_zip_layers_budget(file_name: &str, bytes: &[u8], opts: &CsvOptions, budg
         let shx = take(&mut entries, &base, "shx").map(|(_, b)| b);
         let prj = take(&mut entries, &base, "prj").map(|(_, b)| String::from_utf8_lossy(&b).into_owned());
         let cpg = take(&mut entries, &base, "cpg").map(|(_, b)| b);
+        let cst = take(&mut entries, &base, "cst").map(|(_, b)| b);
         let Some((_, dbf)) = take(&mut entries, &base, "dbf") else {
             skipped.push(format!("{n} (no .dbf beside it)"));
             continue;
         };
-        match read_shapefile_parts(ShapefileParts { shp, shx, dbf, prj, cpg }, &name, crs) {
+        match read_shapefile_parts(ShapefileParts { shp, shx, dbf, prj, cpg, cst }, &name, crs) {
             Ok((mut dataset, report)) => {
                 dataset.source = Some(format!("{file_name}/{n}"));
                 out.push(LayerRead { dataset, report, styles: Vec::new() });
@@ -4177,7 +4193,7 @@ fn read_zip_layers_budget(file_name: &str, bytes: &[u8], opts: &CsvOptions, budg
     }
     let mut others: Vec<(String, Vec<u8>)> = entries
         .iter_mut()
-        .filter(|e| e.as_ref().is_some_and(|(n, _)| !matches!(ext_of(n).as_str(), "shp" | "shx" | "prj" | "cpg")))
+        .filter(|e| e.as_ref().is_some_and(|(n, _)| !matches!(ext_of(n).as_str(), "shp" | "shx" | "prj" | "cpg" | "cst")))
         .filter_map(Option::take)
         .collect();
     others.sort_by(|a, b| a.0.cmp(&b.0));
@@ -4211,8 +4227,9 @@ fn read_zip_layers_budget(file_name: &str, bytes: &[u8], opts: &CsvOptions, budg
         // A city model has many layers.
         let read = if ext_of(&n) == "dbf" {
             let cpg = take(&mut entries, &stem(&n), "cpg").map(|(_, b)| b);
+            let cst = take(&mut entries, &stem(&n), "cst").map(|(_, b)| b);
             let name = Path::new(leaf).file_stem().and_then(|s| s.to_str()).unwrap_or("table");
-            read_dbf(b, cpg.as_deref(), name, budget).map(|r| plain(vec![r]))
+            read_dbf(b, cpg.as_deref(), cst.as_deref(), name, budget).map(|r| plain(vec![r]))
         } else if is_city_model(leaf, &b) {
             read_city_member(leaf, &b, crs).map(plain)
         } else if is_delimited_name(leaf) {
@@ -4400,10 +4417,10 @@ struct DbfRead {
 
 /// Opens dBASE attributes with the Shapefile reader's code-page and date/number handling.
 /// `name` is the layer's, for the error of a `.dbf` it can't open.
-fn dbf_reader(mut bytes: Vec<u8>, cpg: Option<&[u8]>, name: &str) -> Result<DbfRead> {
+fn dbf_reader(mut bytes: Vec<u8>, cpg: Option<&[u8]>, cst: Option<&[u8]>, name: &str) -> Result<DbfRead> {
     use std::io::Cursor;
     let mut declared = crate::loss::Notes::new();
-    let encoding = crate::dbf::encoding(cpg, bytes.get(29).copied().unwrap_or(0), &mut declared);
+    let (encoding, _) = crate::dbf::encoding(cpg, cst, bytes.get(29).copied().unwrap_or(0), &mut declared);
     let mut encoding_notes = declared;
     // Counted before a date column is marked a character one below: its values aren't text.
     let (names, not_utf8) = crate::dbf::not_utf8(&bytes, &encoding);
@@ -4446,8 +4463,8 @@ fn dbf_reader(mut bytes: Vec<u8>, cpg: Option<&[u8]>, name: &str) -> Result<DbfR
 /// Charges retained rows and cell allocations, with room for vector capacity, against the
 /// same budget as delimited tables; archive members share the remaining allowance.
 /// The bounded file read and header decoding finish before cancellation can be observed.
-fn read_dbf(bytes: Vec<u8>, cpg: Option<&[u8]>, name: &str, budget: &mut usize) -> Result<(Dataset, ReadReport)> {
-    let DbfRead { mut reader, fields, decimals, mut report, not_utf8, deleted, encoding } = dbf_reader(bytes, cpg, name)?;
+fn read_dbf(bytes: Vec<u8>, cpg: Option<&[u8]>, cst: Option<&[u8]>, name: &str, budget: &mut usize) -> Result<(Dataset, ReadReport)> {
+    let DbfRead { mut reader, fields, decimals, mut report, not_utf8, deleted, encoding } = dbf_reader(bytes, cpg, cst, name)?;
     let mut ds = Dataset::new(name, GeometryType::None, fields);
     let mut counts = DbfCounts::new(ds.fields.len(), not_utf8, encoding);
     let allowance = *budget;
@@ -4622,6 +4639,7 @@ pub(crate) struct ShapefileParts {
     pub dbf: Vec<u8>,
     pub prj: Option<String>,
     pub cpg: Option<Vec<u8>>,
+    pub cst: Option<Vec<u8>>,
 }
 
 /// Decodes attributes and shapes together, tracking geometry lost during CRS conversion so
@@ -4631,7 +4649,7 @@ pub(crate) fn read_shapefile_parts(parts: ShapefileParts, name: &str, crs: Optio
     use std::io::Cursor;
     let fmt = |e: shapefile::Error| DataError::Format(format!("Shapefile: {e}"));
     let DbfRead { reader: mut dbf, fields, decimals, mut report, not_utf8, deleted, encoding } =
-        dbf_reader(parts.dbf, parts.cpg.as_deref(), name)?;
+        dbf_reader(parts.dbf, parts.cpg.as_deref(), parts.cst.as_deref(), name)?;
     let mut shapes = match parts.shx {
         Some(shx) => shapefile::ShapeReader::with_shx(Cursor::new(parts.shp), Cursor::new(shx)),
         None => shapefile::ShapeReader::new(Cursor::new(parts.shp)),
@@ -10123,11 +10141,11 @@ mod tests {
         let (parts, _) = shapefile_parts(&ds).unwrap();
         let bytes = &parts.iter().find(|(ext, _)| *ext == "dbf").unwrap().1;
         let mut left = 1 << 20;
-        let (table, report) = read_dbf(bytes.clone(), None, "small", &mut left).unwrap();
+        let (table, report) = read_dbf(bytes.clone(), None, None, "small", &mut left).unwrap();
         assert_eq!(table.features.len(), 32);
         assert!(report.messages.is_empty());
         let cost = (1 << 20) - left;
-        let error = read_dbf(bytes.clone(), None, "small", &mut (cost - 1)).unwrap_err();
+        let error = read_dbf(bytes.clone(), None, None, "small", &mut (cost - 1)).unwrap_err();
         assert!(matches!(error, DataError::Format(_)) && error.to_string().contains("memory budget"), "{error}");
         let zip = crate::zip::write(&[("a.dbf".into(), bytes.clone()), ("b.dbf".into(), bytes.clone())]).unwrap();
         let limited = read_zip_budget("tables.zip", &zip, None, &mut { cost }).unwrap();
@@ -10423,7 +10441,8 @@ mod tests {
         let urls = |u: &str| shapefile_part_urls(u).map(|v| v.into_iter().map(|(_, u)| u).collect::<Vec<_>>());
         assert_eq!(
             urls("https://geo.example.org/PI/TERESINA/HIDROGRAFIA/PI_2211001_RIOS_SIMPLES.shp").unwrap(),
-            ["dbf", "shx", "prj", "cpg"].map(|e| format!("https://geo.example.org/PI/TERESINA/HIDROGRAFIA/PI_2211001_RIOS_SIMPLES.{e}"))
+            ["dbf", "shx", "prj", "cpg", "cst"]
+                .map(|e| format!("https://geo.example.org/PI/TERESINA/HIDROGRAFIA/PI_2211001_RIOS_SIMPLES.{e}"))
         );
         assert_eq!(urls("https://x.org/a/RIOS.SHP?token=1#f").unwrap()[0], "https://x.org/a/RIOS.DBF?token=1#f");
         assert_eq!(urls("s3://bucket/rios.shp").unwrap()[2], "s3://bucket/rios.prj");

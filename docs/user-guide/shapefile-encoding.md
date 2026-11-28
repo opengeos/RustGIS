@@ -1,9 +1,10 @@
 # Shapefile DBF language drivers
 
-A valid `.cpg` takes precedence over the language driver ID (LDID, byte 29 of the `.dbf`
-header). Without a usable `.cpg`, the following inventory describes RustGIS's LDID decoding.
+RustGIS chooses a supported `.cpg` first, then a supported `.cst`, then the language driver ID
+(LDID, byte 29 of the `.dbf` header). The following inventory describes RustGIS's LDID decoding
+when neither sidecar provides a usable declaration.
 All numbers in the marker column are hexadecimal. These are language-driver identifiers,
-not the numeric code-page labels accepted in a `.cpg`.
+not the numeric code-page labels accepted in a `.cpg` or `.cst`.
 
 ## Decoded markers
 
@@ -55,19 +56,18 @@ Cyrillic character. The test uses `8A E8 E5 E2` → `Киев`, which both mappi
 
 These markers emit a diagnostic naming the marker and code page, then use lossy UTF-8.
 Unknown markers also emit a diagnostic and use lossy UTF-8. Valid UTF-8 survives, malformed
-bytes become replacement characters, and the records remain available. An unusable `.cpg`
-adds its own diagnostic before falling back to the LDID. Supplying a valid `.cpg` bypasses
-the LDID and its unsupported-code-page diagnostic.
+bytes become replacement characters, and the records remain available. An unusable sidecar
+adds its own diagnostic before falling back to the next source. A usable sidecar takes precedence
+over the LDID, and a notice identifies an encoding taken from a `.cst`.
 
 Whenever text is read as UTF-8 (the markers in this section, unknown markers, `00`, `F0` or a
-UTF-8 `.cpg`), a notice counts the text values whose bytes aren't valid UTF-8 and names their
+UTF-8 declaration), a notice counts the text values whose bytes aren't valid UTF-8 and names their
 fields, and another counts such field names. A file whose text is all valid UTF-8 gives neither.
 
 Text read in a code page that is decoded here (932 Shift_JIS, 936 GBK, 949 EUC-KR, 950 Big5, the
 Windows pages and the rest) is counted the same way when its bytes aren't valid in that page: the
-notices say how many values and field names, in which fields, and that the `.cpg` or the `.dbf`'s
-language driver declares it. The DOS pages (437, 850, 852, 861, 865) give every byte a
-character, so nothing in them is replaced.
+notices say how many values and field names were affected, which fields they were in, and which
+encoding the file declares. The DOS pages (437, 850, 852, 861, 865) give every byte a character.
 
 The existing transitive `yore` 1.4.0 package has CP737, CP857, CP860 and CP863 decoders,
 but RustGIS's current `dbase` adapter does not expose them. Making these available would
