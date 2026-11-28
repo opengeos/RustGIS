@@ -1036,18 +1036,20 @@ mod tests {
     }
 
     /// A download the queue refuses (a file not made within the room, past the limit) says what
-    /// making it said, as one that isn't made does.
+    /// making it said, as one that isn't made does. The command here only reads the project, so
+    /// its failure withdraws no warnings.
     #[test]
     fn a_download_the_queue_refuses_says_what_making_it_said() {
         let mut s = Session::new(crate::Project::default());
         s.queue_gp_files = true;
         s.download_cap = Some(10);
-        s.registry.commands.push(crate::CommandSpec::new("test.bigFile", "Big file", "Test", |s, p| {
+        let big_file = crate::CommandSpec::new("test.bigFile", "Big file", "Test", |s, p| {
             download_command(s, "test.bigFile", p, |s, _| {
                 s.warn("made it with a note");
                 Ok(Made::new(vec![0; 100], serde_json::Value::Null))
             })
-        }));
+        });
+        s.registry.commands.push(big_file.view());
         let mark = s.notice_mark();
         let err = s.run("test.bigFile", &serde_json::json!({"path": "big.bin"})).unwrap_err();
         assert!(err.contains("big.bin"), "{err}");
