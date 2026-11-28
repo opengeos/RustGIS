@@ -496,27 +496,46 @@ pub fn draw(pm: &mut Canvas, ds: &Dataset, row: usize, (x0, y0, x1, y1): (f32, f
 /// Base64 PNG or JPEG bytes decoded ([`decode`]), from this thread's cache of decoded pictures:
 /// decoded on the first look, and again only after the cache let it go. The cache keeps each
 /// picture's base64 with its pixels, or with none for one that doesn't decode (so that one isn't
-/// tried again either), at most [`CACHE`] of them and, oldest let go first, at most about
-/// [`CACHE_BYTES`] held ([`held`]: the base64 kept counts with the pixels). Graphics pictures
-/// and layout pictures share it.
+/// tried again either), at most [`CACHE`] of them, oldest let go first. It holds at most
+/// [`CACHE_BYTES`] ([`held`]: the base64 kept counts with the pixels), or the newest picture alone
+/// where that one holds more, so a picture past the budget isn't decoded on every draw. Graphics
+/// pictures and layout pictures share it.
 pub(crate) fn decoded(b64: &str) -> Option<Arc<Pixmap>> {
+    decoded_within(b64, CACHE_BYTES)
+}
+
+/// [`decoded`], the cache holding at most `budget` bytes or the newest picture alone.
+fn decoded_within(b64: &str, budget: usize) -> Option<Arc<Pixmap>> {
     let key = key(b64);
     DECODED.with(|cache| {
         let mut cache = cache.borrow_mut();
         if cache.images.get(&key).is_none_or(|(src, _)| src.as_str() != b64) {
-            // Evict the oldest pictures (not all of them) to stay within the count and memory budget.
-            while cache.images.len() >= CACHE || (!cache.images.is_empty() && held(&cache) > CACHE_BYTES) {
+            // The oldest pictures let go (not all of them) to make room within the count, and a
+            // picture held alone past the budget before this one is decoded.
+            while cache.images.len() >= CACHE || (!cache.images.is_empty() && held(&cache) > budget) {
                 let Some(old) = cache.order.pop_front() else { break };
                 cache.images.remove(&old);
             }
             #[cfg(test)]
             DECODES.with(|n| n.set(n.get() + 1));
+            // A picture under a key already kept (whose base64 differs) keeps that key's place.
             if cache.images.insert(key, (b64.to_string(), decode(b64).map(Arc::new))).is_none() {
                 cache.order.push_back(key);
             }
+            fit(&mut cache, key, budget);
         }
         cache.images.get(&key).and_then(|(_, img)| img.clone())
     })
+}
+
+/// Lets the oldest pictures but `newest` go while `cache` holds more than `budget` bytes.
+fn fit(cache: &mut Cache, newest: u64, budget: usize) {
+    while held(cache) > budget {
+        let Some(i) = cache.order.iter().position(|k| *k != newest) else { break };
+        if let Some(old) = cache.order.remove(i) {
+            cache.images.remove(&old);
+        }
+    }
 }
 
 /// The bytes `cache` holds: each picture's pixels and the base64 it keeps.
@@ -528,6 +547,12 @@ fn held(cache: &Cache) -> usize {
 #[cfg(test)]
 pub(crate) fn decodes() -> usize {
     DECODES.with(std::cell::Cell::get)
+}
+
+/// The bytes this thread's cache of decoded pictures holds ([`held`]).
+#[cfg(test)]
+fn held_here() -> usize {
+    DECODED.with(|cache| held(&cache.borrow()))
 }
 
 /// Runs `f` on picture marker `p`'s decoded image, its height for its width and, with `pack`, the
@@ -1082,5 +1107,35 @@ mod tests {
         let gif = "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
         assert_eq!(decode(gif).is_some(), image::ImageFormat::Gif.reading_enabled());
         assert!(check(gif).is_err());
+    }
+
+    /// The decoded pictures' cache holds at most its budget, or the newest picture alone where that
+    /// one holds more: under the budget none is let go early; a picture past it is kept alone, and
+    /// let go when the next is decoded. Told with a small budget, on a thread of its own.
+    #[test]
+    fn decoded_pictures_are_kept_within_the_budget_or_the_newest_alone() {
+        std::thread::spawn(|| {
+            let size = |b64: &str| b64.len() + decode(b64).unwrap().data().len();
+            let (a, b, c, big) = (png(4, 4), png(5, 5), png(6, 6), png(40, 40));
+            let budget = size(&a) + size(&b) + size(&c);
+            assert!(size(&big) > budget);
+            for p in [&a, &b, &c] {
+                assert!(decoded_within(p, budget).is_some());
+            }
+            assert_eq!(held_here(), budget);
+            let n = decodes();
+            for p in [&a, &b, &c] {
+                assert!(decoded_within(p, budget).is_some());
+            }
+            assert_eq!(decodes(), n, "under the budget, none let go");
+            assert!(decoded_within(&big, budget).is_some());
+            assert_eq!(held_here(), size(&big), "the others let go, the large one kept alone");
+            assert!(decoded_within(&big, budget).is_some());
+            assert_eq!(decodes(), n + 1, "the large one drawn again isn't decoded again");
+            assert!(decoded_within(&a, budget).is_some());
+            assert_eq!((held_here(), decodes()), (size(&a), n + 2), "the large one let go for the next");
+        })
+        .join()
+        .unwrap();
     }
 }
