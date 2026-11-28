@@ -2006,7 +2006,10 @@ fn trend(app: &mut RustGisApp, ui: &mut Ui, rasters: &[String]) {
             // A panic on the thread (a hostile store) lands as an error, so the run always ends;
             // a thread the system can't start is said.
             let diagnostics = app.session.diagnostics.capture();
+            // The interface's language, which is the thread's own: a bug's message is in it.
+            let lang = crate::i18n::current();
             let spawned = std::thread::Builder::new().name("trend".into()).spawn(move || {
+                crate::i18n::set_current(lang);
                 let _diagnostics = diagnostics.enter();
                 let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     job.run(&cancel, &done).map(|rasters| (rasters, job.dates()))

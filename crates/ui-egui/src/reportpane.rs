@@ -14,6 +14,9 @@ pub struct ReportState {
     pub page: usize,
     /// The preview: what it shows (report JSON and page), its texture and the page count.
     pub preview: Option<(String, egui::TextureHandle, usize)>,
+    /// A page that failed to draw, for the report, page and project revision it was drawn for: not
+    /// drawn again, nor said again, until one of them changes.
+    pub failed_draw: Option<(String, String)>,
     /// The built report and its pages, for the report and project revision they were built from:
     /// turning pages only redraws a page, it doesn't rebuild the report.
     pub built: Option<((usize, u64), Result<(rustgis_engine::map::report::Doc, Vec<rustgis_engine::render::report::Page>), String>)>,
@@ -334,6 +337,12 @@ fn preview(app: &mut RustGisApp, ui: &mut Ui, i: usize, t: &Tokens) {
             }
             None => return,
         };
+        if let Some((failed, e)) = &app.reports.failed_draw
+            && *failed == key
+        {
+            ui.label(egui::RichText::new(e.as_str()).small().color(Color32::from_rgb(0xC0, 0x30, 0x30)));
+            return;
+        }
         let (s, page) = (&mut app.session, app.reports.page);
         let drawn_at = rustgis_engine::render::rustgis_tiles::cache::generation();
         let (drawn, said) = rustgis_engine::render::shadows_said(|| {
@@ -362,7 +371,8 @@ fn preview(app: &mut RustGisApp, ui: &mut Ui, i: usize, t: &Tokens) {
                 app.reports.preview = Some((crate::layoutview::preview_key(&key, &said, drawn_at), tex, total));
             }
             Err(e) => {
-                ui.label(egui::RichText::new(e).small().color(Color32::from_rgb(0xC0, 0x30, 0x30)));
+                ui.label(egui::RichText::new(e.as_str()).small().color(Color32::from_rgb(0xC0, 0x30, 0x30)));
+                app.reports.failed_draw = Some((key, e));
                 return;
             }
         }
