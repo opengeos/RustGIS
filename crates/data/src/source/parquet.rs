@@ -18,7 +18,7 @@ use crate::{DataError, Feature, Field, FieldType, GeometryType, Result, Value, w
 use bytes::Bytes;
 use parquet::basic::{ConvertedType, Encoding, LogicalType, Type as Physical};
 use parquet::column::reader::{ColumnReader, ColumnReaderImpl};
-use parquet::data_type::DataType as PqType;
+use parquet::data_type::{ByteArray, DataType as PqType};
 use parquet::file::metadata::ParquetMetaData;
 use parquet::file::reader::{FileReader, RowGroupReader, SerializedFileReader};
 use parquet::file::statistics::Statistics;
@@ -27,6 +27,7 @@ use rustgis_geom::Extent;
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 /// Values read per call.
 const BATCH: usize = 8192;
@@ -36,6 +37,47 @@ const MAX_GROUP_ROWS: usize = if cfg!(target_arch = "wasm32") { 1 << 21 } else {
 
 /// Conservative decoded-column budget for one group scanned without native view bounds.
 const MAX_SCAN_BYTES: u64 = if cfg!(target_arch = "wasm32") { 64 << 20 } else { 256 << 20 };
+
+/// The least [`max_decoded_bytes`] allows, and its limit in the browser.
+const DECODED_FLOOR: usize = if cfg!(target_arch = "wasm32") { 128 << 20 } else { 512 << 20 };
+/// The most [`max_decoded_bytes`] allows, however much the computer has.
+const DECODED_CEILING: usize = 3 << 30;
+
+/// Most bytes of text and geometry one row group's read may decode into owned values, whatever the
+/// view: on the desktop a quarter of the computer's memory, from [`DECODED_FLOOR`] up to
+/// [`DECODED_CEILING`]; less once RustGIS holds more than half of it ([`crate::memory::planned`], #2431).
+/// A file's sizes don't bound it: one long dictionary entry used by every row is copied for each.
+fn max_decoded_bytes() -> u64 {
+    u64::try_from(crate::memory::planned(DECODED_FLOOR, DECODED_CEILING, 1)).unwrap_or(u64::MAX)
+}
+
+/// What one row group's read may still decode into owned values ([`max_decoded_bytes`]), shared
+/// by the columns decoded together.
+struct Budget {
+    left: std::cell::Cell<u64>,
+    limit: u64,
+    group: usize,
+}
+
+impl Budget {
+    fn new(limit: u64, group: usize) -> Self {
+        Budget { left: std::cell::Cell::new(limit), limit, group }
+    }
+
+    /// Takes `bytes` of the budget for a value of `column`, or refuses the group.
+    fn charge(&self, bytes: usize, column: &str) -> Result<()> {
+        let left = self.left.get().checked_sub(u64::try_from(bytes).unwrap_or(u64::MAX)).ok_or_else(|| self.refusal(column))?;
+        self.left.set(left);
+        Ok(())
+    }
+
+    fn refusal(&self, column: &str) -> DataError {
+        DataError::Format(format!(
+            "GeoParquet: row group {} exceeds the {} byte decoded-column budget in column '{column}'; rewrite the file with smaller row groups",
+            self.group, self.limit
+        ))
+    }
+}
 
 /// What a GeoParquet source's reads are attributed to ([`ParquetSource::attribute`]).
 #[derive(Clone, Debug)]
@@ -74,6 +116,9 @@ pub struct ParquetSource {
     group_rows: usize,
     /// Decoded-column budget for an unbounded spatial scan; lowered by tests.
     scan_bytes: u64,
+    /// Decoded bytes one row group's text and geometry values may take in any read, else
+    /// [`max_decoded_bytes`] as each read finds it; set by tests.
+    decoded_bytes: Option<u64>,
     /// Declared after `reader`: Windows must close its file before removing the workspace.
     #[cfg(not(target_arch = "wasm32"))]
     _workspace: Option<Arc<super::duckdb::ReloadWorkspace>>,
@@ -343,6 +388,7 @@ impl ParquetSource {
             exact: false,
             group_rows: MAX_GROUP_ROWS,
             scan_bytes: MAX_SCAN_BYTES,
+            decoded_bytes: None,
             #[cfg(not(target_arch = "wasm32"))]
             _workspace: None,
         };
@@ -373,12 +419,19 @@ impl ParquetSource {
         }
         let rows = usize::try_from(md.row_group(0).num_rows()).unwrap_or(0).min(16);
         let rg = self.reader.get_row_group(0).ok()?;
-        let geoms = read_bytes(rg.as_ref(), self.geom_col, &vec![true; rows]).ok()?;
+        let geoms = read_bytes(rg.as_ref(), self.geom_col, &vec![true; rows], &Budget::new(self.decoded_limit(), 0)).ok()?;
         Some(geoms.iter().filter_map(|b| b.as_deref()).any(wkb::has_zm))
     }
 }
 
 impl ParquetSource {
+    /// The decoded bytes a row group may take in the read starting now: asked once a read, when it
+    /// first reads a row group (a read that reads none never asks), as the memory the process holds
+    /// changes between reads ([`crate::memory::planned`]).
+    fn decoded_limit(&self) -> u64 {
+        self.decoded_bytes.unwrap_or_else(max_decoded_bytes)
+    }
+
     /// A source that reads at most `rows` of a row group, for tests of the cap.
     #[cfg(test)]
     pub(crate) fn with_group_rows(mut self, rows: usize) -> Self {
@@ -390,6 +443,13 @@ impl ParquetSource {
     #[cfg(test)]
     pub(crate) fn with_scan_bytes(mut self, bytes: u64) -> Self {
         self.scan_bytes = bytes;
+        self
+    }
+
+    /// A lower decoded-byte budget for any read, for tests without large allocations.
+    #[cfg(test)]
+    pub(crate) fn with_decoded_bytes(mut self, bytes: u64) -> Self {
+        self.decoded_bytes = Some(bytes);
         self
     }
 
@@ -540,6 +600,7 @@ impl FeatureSource for ParquetSource {
     /// and fields before sampling matches; a refused view therefore scans the selected file.
     fn read(&self, req: &Request) -> Result<Batch> {
         self.attribute();
+        let decoded = std::cell::LazyCell::new(|| self.decoded_limit());
         let limit = clamp_limit(req.limit);
         let md = self.reader.metadata();
         let native = self.reproject.request_box(req);
@@ -691,15 +752,67 @@ impl FeatureSource for ParquetSource {
                 self.check_scan_bytes(md, g, true)?;
             }
             let rg = self.reader.get_row_group(g).map_err(err)?;
-            let geoms = read_bytes(rg.as_ref(), self.geom_col, take)?;
-            let attrs: Vec<ColumnValues> = self.field_cols.iter().map(|&c| read_values(rg.as_ref(), c, take)).collect::<Result<_>>()?;
+            let budget = Budget::new(*decoded, g);
+            let geoms = read_bytes(rg.as_ref(), self.geom_col, take, &budget)?;
+            let base = starts.get(g).copied().unwrap_or(0);
+            let wanted = take.iter().filter(|&&t| t).count();
+            if late {
+                // The geometry test and the sampler choose the rows first; only their attributes
+                // are decoded, and so charged.
+                if geoms.len() != wanted {
+                    return Err(DataError::Format(format!("GeoParquet: row group {g} has columns shorter than its rows")));
+                }
+                for (k, (r, _)) in take.iter().enumerate().filter(|(_, t)| **t).enumerate() {
+                    if unbounded {
+                        crate::progress::step(1)?;
+                    }
+                    let geometry = match geoms.get(k).and_then(|b| b.as_deref()) {
+                        Some(bytes) => {
+                            let Some(geometry) = wkb::decode(bytes).and_then(|g| self.reproject.place(g, req)) else {
+                                skipped += 1;
+                                continue;
+                            };
+                            Some(geometry)
+                        }
+                        None => None,
+                    };
+                    if !geometry.as_ref().map_or(req.extent.is_none(), |g| g.inside) || !sample.wants() {
+                        continue;
+                    }
+                    sample.keep(Feature {
+                        id: base.saturating_add(r as u64 + 1),
+                        geometry: geometry.map(|p| p.geometry),
+                        attrs: Vec::new(),
+                    });
+                }
+                // The rows of this group the sample still holds, in order (it may have dropped some).
+                let (chosen, mine) = rows_held(&sample.items, |f| f.id, base, take.len());
+                if mine.is_empty() {
+                    continue;
+                }
+                let attrs: Vec<ColumnValues> =
+                    self.field_cols.iter().map(|&c| read_values(rg.as_ref(), c, &chosen, &budget)).collect::<Result<_>>()?;
+                if attrs.iter().any(|a| a.values.len() != mine.len()) {
+                    return Err(DataError::Format(format!("GeoParquet: row group {g} has columns shorter than its rows")));
+                }
+                for (n, &i) in mine.iter().enumerate() {
+                    if let Some(f) = sample.items.get_mut(i) {
+                        f.attrs = attrs
+                            .iter()
+                            .enumerate()
+                            .map(|(field, col)| col.value(n, field, &mut unread_dates, &mut rounded_dates))
+                            .collect();
+                    }
+                }
+                continue;
+            }
+            let attrs: Vec<ColumnValues> =
+                self.field_cols.iter().map(|&c| read_values(rg.as_ref(), c, take, &budget)).collect::<Result<_>>()?;
             // A column shorter than its row group (a truncated or corrupt file) would pair values
             // with the wrong rows: refuse it.
-            let wanted = take.iter().filter(|&&t| t).count();
             if geoms.len() != wanted || attrs.iter().any(|a| a.values.len() != wanted) {
                 return Err(DataError::Format(format!("GeoParquet: row group {g} has columns shorter than its rows")));
             }
-            let base = starts.get(g).copied().unwrap_or(0);
             // The columns hold the taken rows only, in order: the k-th is row `r`.
             for (k, (r, _)) in take.iter().enumerate().filter(|(_, t)| **t).enumerate() {
                 if unbounded {
@@ -717,7 +830,7 @@ impl FeatureSource for ParquetSource {
                     None => None,
                 };
                 let matches_extent = geometry.as_ref().map_or(req.extent.is_none(), |g| g.inside);
-                if !matches_extent || (late && !sample.wants()) {
+                if !matches_extent {
                     continue;
                 }
                 let geometry = geometry.map(|p| p.geometry);
@@ -757,6 +870,7 @@ impl FeatureSource for ParquetSource {
     /// before the next check. An unbounded view also checks the decoded-column budget first.
     fn visit_chunks(&self, extent: Option<Extent>, bytes: usize, visit: &mut dyn FnMut(Vec<Feature>) -> Result<()>) -> Result<Batch> {
         self.attribute();
+        let decoded = std::cell::LazyCell::new(|| self.decoded_limit());
         let mut chunks = super::chunk_memory::Chunker::new(bytes, visit)?;
         if self.remote.is_some() {
             return Err(DataError::Unsupported("a whole GeoParquet by its web address read a chunk at a time".into()));
@@ -807,9 +921,64 @@ impl FeatureSource for ParquetSource {
                 continue;
             }
             let rg = self.reader.get_row_group(g).map_err(err)?;
-            let geoms = read_bytes(rg.as_ref(), self.geom_col, &take)?;
-            let attrs: Vec<ColumnValues> = self.field_cols.iter().map(|&c| read_values(rg.as_ref(), c, &take)).collect::<Result<_>>()?;
+            let budget = Budget::new(*decoded, g);
+            let geoms = read_bytes(rg.as_ref(), self.geom_col, &take, &budget)?;
             let wanted = take.iter().filter(|&&t| t).count();
+            if extent.is_some() {
+                // The geometry test chooses the rows first; only their attributes are decoded, and
+                // so charged.
+                if geoms.len() != wanted {
+                    return Err(DataError::Format(format!("GeoParquet: row group {g} has columns shorter than its rows")));
+                }
+                let mut chosen = vec![false; take.len()];
+                let mut found = Vec::new();
+                for (k, (r, _)) in take.iter().enumerate().filter(|(_, t)| **t).enumerate() {
+                    crate::progress::step(1)?;
+                    let geometry = match geoms.get(k).and_then(|b| b.as_deref()) {
+                        Some(bytes) => {
+                            let Some(geometry) = wkb::decode(bytes).and_then(|geom| self.reproject.place(geom, &req)) else {
+                                out.skipped += 1;
+                                continue;
+                            };
+                            Some(geometry)
+                        }
+                        None => None,
+                    };
+                    if !geometry.as_ref().map_or(req.extent.is_none(), |g| g.inside) {
+                        continue;
+                    }
+                    if let Some(c) = chosen.get_mut(r) {
+                        *c = true;
+                    }
+                    found.push((k, r));
+                }
+                if found.is_empty() {
+                    continue;
+                }
+                let attrs: Vec<ColumnValues> =
+                    self.field_cols.iter().map(|&c| read_values(rg.as_ref(), c, &chosen, &budget)).collect::<Result<_>>()?;
+                if attrs.iter().any(|a| a.values.len() != found.len()) {
+                    return Err(DataError::Format(format!("GeoParquet: row group {g} has columns shorter than its rows")));
+                }
+                // Decoded again for the rows found, so no decoded geometry outlives the first pass.
+                for (n, (k, r)) in found.into_iter().enumerate() {
+                    let geometry = geoms
+                        .get(k)
+                        .and_then(|b| b.as_deref())
+                        .and_then(|bytes| wkb::decode(bytes).and_then(|geom| self.reproject.place(geom, &req)))
+                        .map(|p| p.geometry);
+                    let values = attrs
+                        .iter()
+                        .enumerate()
+                        .map(|(field, col)| col.value(n, field, &mut out.unread_dates, &mut out.rounded_dates))
+                        .collect();
+                    out.matched += 1;
+                    chunks.push(Feature { id: start.saturating_add(r as u64 + 1), geometry, attrs: values })?;
+                }
+                continue;
+            }
+            let attrs: Vec<ColumnValues> =
+                self.field_cols.iter().map(|&c| read_values(rg.as_ref(), c, &take, &budget)).collect::<Result<_>>()?;
             if geoms.len() != wanted || attrs.iter().any(|a| a.values.len() != wanted) {
                 return Err(DataError::Format(format!("GeoParquet: row group {g} has columns shorter than its rows")));
             }
@@ -969,8 +1138,23 @@ fn err(e: parquet::errors::ParquetError) -> DataError {
     DataError::Format(format!("GeoParquet: {e}"))
 }
 
-/// The reader of a row group's column, its pages checked by [`CheckedPages`].
+/// [`err`] for an error met in `place` (a row group and column), when it is known.
+fn err_in(place: Option<&str>, e: parquet::errors::ParquetError) -> DataError {
+    match place {
+        Some(place) => DataError::Format(format!("GeoParquet: {place}: {e}")),
+        None => err(e),
+    }
+}
+
+/// The reader of a row group's column, its pages checked by [`CheckedPages`] (a page no bigger
+/// than the column chunk says).
 fn column_reader(rg: &dyn RowGroupReader, col: usize) -> Result<ColumnReader> {
+    Ok(column_reader_within(rg, col, u64::MAX)?.0)
+}
+
+/// [`column_reader`] refusing any page of more than `limit` bytes too, with what it has seen of
+/// the pages ([`PageNote`]).
+fn column_reader_within(rg: &dyn RowGroupReader, col: usize, limit: u64) -> Result<(ColumnReader, Arc<PageNote>)> {
     let desc = rg.metadata().column(col).column_descr_ptr();
     let bits = match desc.physical_type() {
         Physical::BOOLEAN => 1,
@@ -979,17 +1163,142 @@ fn column_reader(rg: &dyn RowGroupReader, col: usize) -> Result<ColumnReader> {
         Physical::INT96 => 96,
         Physical::FIXED_LEN_BYTE_ARRAY => u64::try_from(desc.type_length()).unwrap_or(0).max(1) * 8,
     };
-    let pages = CheckedPages { pages: rg.get_column_page_reader(col).map_err(err)?, bits };
-    Ok(parquet::column::reader::get_column_reader(desc, Box::new(pages)))
+    let chunk = rg.metadata().column(col);
+    let note = Arc::new(PageNote::default());
+    let pages = CheckedPages {
+        pages: rg.get_column_page_reader(col).map_err(err)?,
+        bits,
+        limit,
+        // A footer that gives no size, or a negative one, bounds a page by the limit alone.
+        chunk_bytes: u64::try_from(chunk.uncompressed_size()).ok().filter(|&n| n > 0),
+        delta_listed: [Encoding::DELTA_BYTE_ARRAY, Encoding::DELTA_LENGTH_BYTE_ARRAY].map(|listed| chunk.encodings().any(|e| e == listed)),
+        max_def: desc.max_def_level(),
+        max_rep: desc.max_rep_level(),
+        chunk_values: u64::try_from(chunk.num_values()).ok().filter(|&n| n > 0).unwrap_or(u64::MAX),
+        note: note.clone(),
+    };
+    Ok((parquet::column::reader::get_column_reader(desc, Box::new(pages)), note))
+}
+
+/// What a column's [`CheckedPages`] have seen of its data pages, for [`Pace`].
+struct PageNote {
+    /// The bytes of the data page being read, decoded.
+    page: std::sync::atomic::AtomicU64,
+    /// The values of that page not yet read or skipped (`0`: the next read fetches a page).
+    in_page: std::sync::atomic::AtomicUsize,
+    /// While a `skip_records` call may pass over whole pages undecoded: the values of the run it is
+    /// asked for that are still to skip ([`NOT_SKIPPING`] outside such a call).
+    skip_left: std::sync::atomic::AtomicUsize,
+    /// The values of the whole pages that call has passed over.
+    passed: std::sync::atomic::AtomicUsize,
+    /// The values of the data page last peeked at in such a call.
+    peeked: std::sync::atomic::AtomicUsize,
+    /// Such a call was stopped at a page it would only have skipped part of.
+    stopped: std::sync::atomic::AtomicBool,
+    /// What the read's budget has left, as the column's values are charged (everything until a read
+    /// says): the decoder's own arrays for a page are held against it.
+    left: std::sync::atomic::AtomicU64,
+}
+
+/// [`PageNote::skip_left`] when no skip is passing over whole pages.
+const NOT_SKIPPING: usize = usize::MAX;
+
+impl Default for PageNote {
+    fn default() -> Self {
+        Self {
+            page: Default::default(),
+            in_page: Default::default(),
+            skip_left: std::sync::atomic::AtomicUsize::new(NOT_SKIPPING),
+            passed: Default::default(),
+            peeked: Default::default(),
+            stopped: Default::default(),
+            left: std::sync::atomic::AtomicU64::new(u64::MAX),
+        }
+    }
+}
+
+/// How many values of a column one `read_records` or `skip_records` call takes. The `parquet`
+/// crate builds the values of a DELTA_BYTE_ARRAY page one by one in the call, each up to the page's
+/// size, so a call that reads or skips into a page takes no more than the budget left holds at
+/// that size, and none that reach past the page; at a page it hasn't seen it takes one value, which
+/// fetches the page. A skip that starts at such a page is asked for its whole run instead, so the
+/// crate passes over the pages the run covers undecoded (fetching one sets its decoder up, and the
+/// decoder sizes arrays from a count the page holds), and [`CheckedPages`] stops it at a page it
+/// would only skip part of, which the one-value pace then takes. A column of another encoding
+/// skips its whole runs, and its reads take [`BATCH`] values, as before.
+struct Pace<'a> {
+    watch: Option<(&'a PageNote, &'a Budget)>,
+}
+
+impl Pace<'_> {
+    /// The values of the next call, of the `left` still to read or skip (more than `0`).
+    fn take(&self, left: usize) -> usize {
+        let most = left.min(BATCH);
+        let Some((note, budget)) = self.watch else { return most };
+        let in_page = note.in_page.load(Ordering::Relaxed);
+        if in_page == 0 {
+            return 1;
+        }
+        let page = note.page.load(Ordering::Relaxed).max(1);
+        let fit = usize::try_from(budget.left.get() / page).unwrap_or(BATCH);
+        most.min(in_page).min(fit.max(1))
+    }
+
+    /// The values of the next `skip_records` call, of the `left` still to skip (more than `0`): the
+    /// whole run unless the column is paced and the call is inside a page, or follows a stop at one.
+    fn skip(&self, left: usize) -> usize {
+        let Some((note, _)) = self.watch else { return left };
+        if note.in_page.load(Ordering::Relaxed) > 0 || note.stopped.swap(false, Ordering::Relaxed) {
+            return self.take(left);
+        }
+        note.passed.store(0, Ordering::Relaxed);
+        note.skip_left.store(left, Ordering::Relaxed);
+        left
+    }
+
+    /// Ends a skip call that [`skip`](Self::skip) asked for, which `result` is the outcome of: the
+    /// values it skipped, whether it was stopped at a page it would only have skipped part of (the
+    /// whole pages before that count).
+    fn skipped(&self, place: Option<&str>, result: parquet::errors::Result<usize>) -> Result<(usize, bool)> {
+        let Some((note, _)) = self.watch else { return result.map(|n| (n, false)).map_err(|e| err_in(place, e)) };
+        note.skip_left.store(NOT_SKIPPING, Ordering::Relaxed);
+        match result {
+            Ok(n) => Ok((n, false)),
+            Err(_) if note.stopped.load(Ordering::Relaxed) => Ok((note.passed.load(Ordering::Relaxed), true)),
+            Err(e) => Err(err_in(place, e)),
+        }
+    }
+
+    /// Notes that a call read or skipped `values` of the page.
+    fn used(&self, values: usize) {
+        if let Some((note, _)) = self.watch {
+            note.in_page.store(note.in_page.load(Ordering::Relaxed).saturating_sub(values), Ordering::Relaxed);
+        }
+    }
 }
 
 /// A column's pages, a dictionary page refused when it says it holds more values than its bytes
 /// can: the `parquet` crate makes room for the count it is told before decoding any (a few bytes
-/// of header can ask for tens of gigabytes).
+/// of header can ask for tens of gigabytes). A page bigger than the column chunk it belongs to or
+/// than `limit`, and a data page in the DELTA_BYTE_ARRAY or DELTA_LENGTH_BYTE_ARRAY encoding that the chunk doesn't list (each encoding on its own), are
+/// refused too: the pace of [`read_binary`] rests on both. The size is checked once the crate has
+/// the page; a header asking for more than the file holds is still allocated by the crate first.
 struct CheckedPages {
     pages: Box<dyn parquet::column::page::PageReader>,
     /// The fewest bits one value of the column takes in a dictionary page (plain encoded).
     bits: u64,
+    /// The most bytes of one page the read allows.
+    limit: u64,
+    /// The bytes the column chunk's footer says its pages hold decoded, when it says.
+    chunk_bytes: Option<u64>,
+    /// Whether the footer lists the DELTA_BYTE_ARRAY, and the DELTA_LENGTH_BYTE_ARRAY, encoding for the chunk.
+    delta_listed: [bool; 2],
+    /// The most levels the column's values have, for a version 1 page's level streams.
+    max_def: i16,
+    max_rep: i16,
+    /// The values the column chunk's footer says it holds, when it says (levels included).
+    chunk_values: u64,
+    note: Arc<PageNote>,
 }
 
 impl Iterator for CheckedPages {
@@ -1002,29 +1311,244 @@ impl Iterator for CheckedPages {
     }
 }
 
+impl CheckedPages {
+    /// Refuses a DELTA_BYTE_ARRAY or DELTA_LENGTH_BYTE_ARRAY data page whose streams say they hold
+    /// more values than the page or the column chunk does, or whose arrays the decoder would make
+    /// for them (4 bytes a value for each stream, `parquet` 60.2.0 `set_data`) are more than the
+    /// budget has left, or can't be read as a stream: the decoders size those arrays from the count
+    /// in the stream before decoding a value, and a few bytes can ask for gigabytes. See
+    /// [`delta_stream`] for what is checked of a stream.
+    fn check_delta(&self, page: &parquet::column::page::Page) -> parquet::errors::Result<()> {
+        use parquet::column::page::Page;
+        let (buf, num_values, encoding, levels) = match page {
+            Page::DataPage { buf, num_values, encoding, def_level_encoding, rep_level_encoding, .. } => {
+                if !matches!(encoding, Encoding::DELTA_BYTE_ARRAY | Encoding::DELTA_LENGTH_BYTE_ARRAY) {
+                    return Ok(());
+                }
+                // Each level stream in front of the values, as the crate's `parse_v1_level` sizes it.
+                let mut at = 0usize;
+                for (max, level_encoding) in [(self.max_rep, rep_level_encoding), (self.max_def, def_level_encoding)] {
+                    if max <= 0 {
+                        continue;
+                    }
+                    #[expect(deprecated, reason = "BIT_PACKED levels are deprecated but still read")]
+                    let bit_packed = Encoding::BIT_PACKED;
+                    let len = if *level_encoding == Encoding::RLE {
+                        let prefix = buf.get(at..at.saturating_add(4)).and_then(|b| <[u8; 4]>::try_from(b).ok());
+                        let len = prefix.map(u32::from_le_bytes).and_then(|n| usize::try_from(n).ok());
+                        len.and_then(|n| n.checked_add(4)).ok_or_else(|| delta_err("its levels are cut off"))?
+                    } else if *level_encoding == bit_packed {
+                        let bits = u64::from(u64::BITS - u64::try_from(max).unwrap_or(0).leading_zeros());
+                        let bytes = (u64::from(*num_values).saturating_mul(bits)).div_ceil(8);
+                        usize::try_from(bytes).map_err(|_| delta_err("its levels are cut off"))?
+                    } else {
+                        return Err(delta_err(&format!("its levels are in the {level_encoding} encoding, which a page can't have")));
+                    };
+                    at = at.saturating_add(len);
+                }
+                (buf, *num_values, *encoding, at)
+            }
+            Page::DataPageV2 { buf, num_values, encoding, def_levels_byte_len, rep_levels_byte_len, .. } => {
+                let at = (*def_levels_byte_len as usize).saturating_add(*rep_levels_byte_len as usize);
+                (buf, *num_values, *encoding, at)
+            }
+            Page::DictionaryPage { .. } => return Ok(()),
+        };
+        if !matches!(encoding, Encoding::DELTA_BYTE_ARRAY | Encoding::DELTA_LENGTH_BYTE_ARRAY) {
+            return Ok(());
+        }
+        let values = buf.get(levels..).ok_or_else(|| delta_err("its levels are longer than the page"))?;
+        let delta = encoding == Encoding::DELTA_BYTE_ARRAY;
+        let bounds = DeltaBounds {
+            page: u64::from(num_values),
+            chunk: self.chunk_values,
+            left: self.limit.min(self.note.left.load(Ordering::Relaxed)),
+            // A DELTA_BYTE_ARRAY page makes an array for its prefix lengths and one for its suffix lengths.
+            per_value: if delta { 8 } else { 4 },
+        };
+        let (count, end) = delta_stream(values, &bounds)?;
+        if delta {
+            // The prefix lengths are followed by the suffixes, a DELTA_LENGTH_BYTE_ARRAY stream of as many.
+            let rest = values.get(end..).ok_or_else(|| delta_err("its prefix lengths run past the page"))?;
+            let (suffixes, _) = delta_stream(rest, &bounds)?;
+            if suffixes != count {
+                return Err(delta_err(&format!("it has {count} prefix lengths and {suffixes} suffixes")));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn delta_err(what: &str) -> parquet::errors::ParquetError {
+    parquet::errors::ParquetError::General(format!("a delta page is refused: {what}"))
+}
+
+/// What a delta stream's count may be.
+struct DeltaBounds {
+    /// The values of the page (levels included).
+    page: u64,
+    /// The values of the column chunk.
+    chunk: u64,
+    /// What the budget has left.
+    left: u64,
+    /// The bytes the decoders make an array of for each value of a page.
+    per_value: u64,
+}
+
+/// One ULEB128 number at `at` of `data`, moving `at` past it (`None` when it is cut off or longer
+/// than the 10 bytes the crate reads: it panics at an 11th).
+fn uleb(data: &[u8], at: &mut usize) -> Option<u64> {
+    let mut value = 0u64;
+    for shift in (0..70).step_by(7) {
+        let byte = *data.get(*at)?;
+        *at += 1;
+        value |= u64::from(byte & 0x7f) << shift;
+        if byte & 0x80 == 0 {
+            return Some(value);
+        }
+    }
+    None
+}
+
+/// Reads the layout of the DELTA_BINARY_PACKED stream at the start of `data` as the crate's
+/// `DeltaBitPackDecoder` does, without decoding a value: the header (block size, miniblocks per
+/// block, count of values, first value), then each block's minimum delta and miniblock bit widths.
+/// It returns the count and the offset where the stream ends. It refuses a stream whose count is
+/// more than `bounds` allow, whose blocks don't fit in `data`, or that is cut off or not the sizes
+/// the format needs: the crate's decoders trust all of that when they size their arrays, and panic
+/// on some of it.
+fn delta_stream(data: &[u8], bounds: &DeltaBounds) -> parquet::errors::Result<(u64, usize)> {
+    let mut at = 0usize;
+    let cut = || delta_err("a stream header is cut off or malformed");
+    let block = uleb(data, &mut at).ok_or_else(cut)?;
+    let mini_blocks = uleb(data, &mut at).ok_or_else(cut)?;
+    let count = uleb(data, &mut at).ok_or_else(cut)?;
+    uleb(data, &mut at).ok_or_else(cut)?;
+    if block == 0
+        || !block.is_multiple_of(128)
+        || mini_blocks == 0
+        || !block.is_multiple_of(mini_blocks)
+        || !(block / mini_blocks).is_multiple_of(32)
+    {
+        return Err(delta_err(&format!("its block of {block} values in {mini_blocks} miniblocks is not one the format allows")));
+    }
+    if count > bounds.page {
+        return Err(delta_err(&format!("a stream says it holds {count} values, more than the page's {}", bounds.page)));
+    }
+    if count > bounds.chunk {
+        return Err(delta_err(&format!("a stream says it holds {count} values, more than the column chunk's {}", bounds.chunk)));
+    }
+    if count.saturating_mul(bounds.per_value) > bounds.left {
+        return Err(delta_err(&format!(
+            "a stream says it holds {count} values, whose arrays of {} bytes each are more than the {} bytes the decoded-column budget has left",
+            bounds.per_value, bounds.left
+        )));
+    }
+    let per_mini = block / mini_blocks;
+    let widths = usize::try_from(mini_blocks).map_err(|_| cut())?;
+    let mut left = count.saturating_sub(1);
+    while left > 0 {
+        let short = || delta_err(&format!("its {count} values need more blocks than its {} bytes can hold", data.len()));
+        uleb(data, &mut at).ok_or_else(short)?;
+        let end = at.checked_add(widths).ok_or_else(cut)?;
+        let bits = data.get(at..end).ok_or_else(short)?;
+        at = end;
+        let mut packed = 0u64;
+        for &width in bits {
+            // Miniblocks past the last value have their widths taken as 0, as the crate does.
+            let width = if left == 0 { 0 } else { u64::from(width) };
+            if width > 32 {
+                return Err(delta_err(&format!("a miniblock has a bit width of {width}, more than 32")));
+            }
+            left = left.saturating_sub(per_mini);
+            packed = packed.saturating_add(width.saturating_mul(per_mini) / 8);
+        }
+        at = usize::try_from(packed).ok().and_then(|n| at.checked_add(n)).ok_or_else(cut)?;
+        if at > data.len() {
+            return Err(delta_err(&format!("its {count} values need more bytes than the page's {} bytes can hold", data.len())));
+        }
+    }
+    Ok((count, at))
+}
+
 impl parquet::column::page::PageReader for CheckedPages {
     /// The next page, or an error for a dictionary page whose count its bytes can't hold.
     fn get_next_page(&mut self) -> parquet::errors::Result<Option<parquet::column::page::Page>> {
         let page = self.pages.get_next_page()?;
         if let Some(parquet::column::page::Page::DictionaryPage { buf, num_values, .. }) = &page
-            && u64::from(*num_values).saturating_mul(self.bits) > (buf.len() as u64).saturating_mul(8)
+            && u64::from(*num_values).saturating_mul(self.bits) > u64::try_from(buf.len()).unwrap_or(u64::MAX).saturating_mul(8)
         {
             return Err(parquet::errors::ParquetError::General(format!(
                 "a dictionary page says it holds {num_values} values, more than its {} bytes can",
                 buf.len()
             )));
         }
+        if let Some(page) = &page {
+            let len = u64::try_from(page.buffer().len()).unwrap_or(u64::MAX);
+            if let Some(chunk) = self.chunk_bytes
+                && len > chunk
+            {
+                return Err(parquet::errors::ParquetError::General(format!(
+                    "a page holds {len} bytes, more than the {chunk} its column chunk says it holds"
+                )));
+            }
+            if len > self.limit {
+                return Err(parquet::errors::ParquetError::General(format!(
+                    "a page holds {len} bytes, more than the {} byte decoded-column budget",
+                    self.limit
+                )));
+            }
+            if let parquet::column::page::Page::DataPage { encoding, .. } | parquet::column::page::Page::DataPageV2 { encoding, .. } = page
+                && let Some(at) = [Encoding::DELTA_BYTE_ARRAY, Encoding::DELTA_LENGTH_BYTE_ARRAY].iter().position(|e| e == encoding)
+                && !self.delta_listed.get(at).copied().unwrap_or(false)
+            {
+                return Err(parquet::errors::ParquetError::General(format!(
+                    "a page uses the {encoding} encoding, which its column chunk doesn't list"
+                )));
+            }
+            self.check_delta(page)?;
+            if let parquet::column::page::Page::DataPage { num_values, .. } | parquet::column::page::Page::DataPageV2 { num_values, .. } =
+                page
+            {
+                #[cfg(test)]
+                if self.delta_listed.contains(&true) {
+                    DELTA_PAGES.with(|pages| pages.set(pages.get() + 1));
+                }
+                self.note.page.store(len, Ordering::Relaxed);
+                self.note.in_page.store(usize::try_from(*num_values).unwrap_or(usize::MAX), Ordering::Relaxed);
+            }
+        }
         Ok(page)
     }
 
-    /// The next page's header, unchecked: a peek decodes no values.
+    /// The next page's header, unchecked: a peek decodes no values. While a skip is passing over
+    /// whole pages, a data page the skip would only pass over part of is refused (the skip would
+    /// set its decoder up first): [`Pace`] takes that page at its own pace.
     fn peek_next_page(&mut self) -> parquet::errors::Result<Option<parquet::column::page::PageMetadata>> {
-        self.pages.peek_next_page()
+        let meta = self.pages.peek_next_page()?;
+        let left = self.note.skip_left.load(Ordering::Relaxed);
+        if left != NOT_SKIPPING
+            && let Some(meta) = &meta
+        {
+            let rows = if meta.is_dict { Some(0) } else { meta.num_rows.or(meta.num_levels) };
+            if rows.is_none_or(|rows| rows > left) {
+                self.note.stopped.store(true, Ordering::Relaxed);
+                return Err(parquet::errors::ParquetError::General("a skip stops at a page it would only partly pass over".into()));
+            }
+            self.note.peeked.store(rows.unwrap_or(0), Ordering::Relaxed);
+        }
+        Ok(meta)
     }
 
     /// Skips the next page unchecked: a skipped page is never decoded.
     fn skip_next_page(&mut self) -> parquet::errors::Result<()> {
-        self.pages.skip_next_page()
+        self.pages.skip_next_page()?;
+        if self.note.skip_left.load(Ordering::Relaxed) != NOT_SKIPPING {
+            let rows = self.note.peeked.swap(0, Ordering::Relaxed);
+            self.note.skip_left.store(self.note.skip_left.load(Ordering::Relaxed).saturating_sub(rows), Ordering::Relaxed);
+            self.note.passed.store(self.note.passed.load(Ordering::Relaxed).saturating_add(rows), Ordering::Relaxed);
+        }
+        Ok(())
     }
 
     /// Whether the next page starts a record, as the column's own pages say.
@@ -1242,6 +1766,52 @@ fn field_type(c: &ColumnDescPtr) -> Option<FieldType> {
 /// rows not taken are skipped without being decoded into values, so a sample of a large row
 /// group doesn't hold all of it.
 fn read_column<T: PqType>(r: &mut ColumnReaderImpl<T>, take: &[bool], max_def: i16) -> Result<Vec<Option<T::T>>> {
+    read_column_with(r, take, max_def, &Pace { watch: None }, None, &mut |_| Ok(()))
+}
+
+/// Forgets the longest skip this thread has made, for tests.
+#[cfg(test)]
+pub(crate) fn reset_largest_skip() {
+    LARGEST_SKIP.with(|largest| largest.set(0));
+}
+
+/// The most values one `skip_records` call was asked to skip on this thread, for tests.
+#[cfg(test)]
+pub(crate) fn largest_skip() -> usize {
+    LARGEST_SKIP.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The most values one `skip_records` call was asked to skip on this thread, for tests.
+    static LARGEST_SKIP: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// The DELTA_BYTE_ARRAY data pages the crate fetched (and so set a decoder up for) on this
+    /// thread, for tests.
+    static DELTA_PAGES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Forgets the delta pages this thread has fetched, for tests.
+#[cfg(test)]
+pub(crate) fn reset_delta_pages() {
+    DELTA_PAGES.with(|pages| pages.set(0));
+}
+
+/// The DELTA_BYTE_ARRAY data pages the crate fetched on this thread, for tests.
+#[cfg(test)]
+pub(crate) fn delta_pages() -> usize {
+    DELTA_PAGES.with(std::cell::Cell::get)
+}
+
+/// [`read_column`] reading as `pace` says (an error naming `place`) and asking `charge` about each value
+/// it keeps, before the caller copies any: a read that passes its budget stops there.
+fn read_column_with<T: PqType>(
+    r: &mut ColumnReaderImpl<T>,
+    take: &[bool],
+    max_def: i16,
+    pace: &Pace,
+    place: Option<&str>,
+    charge: &mut dyn FnMut(&T::T) -> Result<()>,
+) -> Result<Vec<Option<T::T>>> {
     let wanted = take.iter().filter(|&&t| t).count();
     let mut out: Vec<Option<T::T>> = Vec::with_capacity(wanted.min(1 << 24));
     let mut defs = Vec::new();
@@ -1256,25 +1826,41 @@ fn read_column<T: PqType>(r: &mut ColumnReaderImpl<T>, take: &[bool], max_def: i
         let mut left = j - i;
         i = j;
         if !on {
-            if r.skip_records(left).map_err(err)? < left {
-                break;
+            while left > 0 {
+                let asked = pace.skip(left);
+                #[cfg(test)]
+                LARGEST_SKIP.with(|largest| largest.set(largest.get().max(asked)));
+                let (skipped, stopped) = pace.skipped(place, r.skip_records(asked))?;
+                pace.used(skipped);
+                left = left.saturating_sub(skipped);
+                if skipped < asked && !stopped {
+                    return Ok(out);
+                }
             }
             continue;
         }
         while left > 0 {
             defs.clear();
             values.clear();
-            let (records, _, levels) = r.read_records(left.min(BATCH), Some(&mut defs), None, &mut values).map_err(err)?;
+            let (records, _, levels) = r.read_records(pace.take(left), Some(&mut defs), None, &mut values).map_err(|e| err_in(place, e))?;
             if records == 0 {
                 return Ok(out);
             }
+            pace.used(records);
             left = left.saturating_sub(records);
             if max_def == 0 {
-                out.extend(values.drain(..).map(Some));
+                for v in values.drain(..) {
+                    charge(&v)?;
+                    out.push(Some(v));
+                }
             } else {
                 let mut it = values.drain(..);
                 for d in defs.iter().take(levels) {
-                    out.push(if *d == max_def { it.next() } else { None });
+                    let v = if *d == max_def { it.next() } else { None };
+                    if let Some(v) = &v {
+                        charge(v)?;
+                    }
+                    out.push(v);
                 }
             }
         }
@@ -1338,7 +1924,7 @@ impl ColumnValues {
 }
 
 /// Reads a field column for the selected rows, keeping date flags for the final filter.
-fn read_values(rg: &dyn RowGroupReader, col: usize, take: &[bool]) -> Result<ColumnValues> {
+fn read_values(rg: &dyn RowGroupReader, col: usize, take: &[bool], budget: &Budget) -> Result<ColumnValues> {
     let desc = rg.metadata().column(col).column_descr_ptr();
     let max_def = desc.max_def_level();
     let scale = decimal_scale(&desc).map(|s| 10f64.powi(-s));
@@ -1384,48 +1970,50 @@ fn read_values(rg: &dyn RowGroupReader, col: usize, take: &[bool]) -> Result<Col
             (Some(i), None) => Value::Int(i),
         }
     };
-    let values = match column_reader(rg, col)? {
-        ColumnReader::BoolColumnReader(mut r) => {
-            read_column(&mut r, take, max_def)?.into_iter().map(|v| v.map(Value::Bool).unwrap_or_default()).collect()
-        }
-        ColumnReader::Int32ColumnReader(mut r) => read_column(&mut r, take, max_def)?.into_iter().map(|v| int(v.map(i64::from))).collect(),
-        ColumnReader::Int64ColumnReader(mut r) => read_column(&mut r, take, max_def)?.into_iter().map(int).collect(),
-        ColumnReader::Int96ColumnReader(mut r) => read_column(&mut r, take, max_def)?
-            .into_iter()
-            .map(|v| {
-                flags.push(0u8);
-                v.map(|v| {
-                    let words = v.data();
-                    let ns = u64::from(words.first().copied().unwrap_or(0)) | (u64::from(words.get(1).copied().unwrap_or(0)) << 32);
-                    let day = i64::from(words.get(2).copied().unwrap_or(0)) - 2_440_588;
-                    let (rounded, cut, lossy) = nanos_to_micros(ns as i64);
-                    let at = |us: Option<i64>| day.checked_mul(86_400_000_000)?.checked_add(us?).and_then(crate::DateTime::local);
-                    let t = if ns < 86_400_000_000_000 { at(rounded).or_else(|| at(cut)) } else { None };
-                    if let Some(flag) = flags.last_mut() {
-                        *flag = if t.is_none() {
-                            INVALID
-                        } else if lossy {
-                            ROUNDED
-                        } else {
-                            0
-                        };
-                    }
-                    t.map(Value::DateTime).unwrap_or_default()
+    let values = if let Some(binary) = read_binary(rg, col, take, budget, text_len)? {
+        binary.into_iter().map(|v| v.map(|b| Value::Text(String::from_utf8_lossy(b.data()).into_owned())).unwrap_or_default()).collect()
+    } else {
+        match column_reader(rg, col)? {
+            ColumnReader::BoolColumnReader(mut r) => {
+                read_column(&mut r, take, max_def)?.into_iter().map(|v| v.map(Value::Bool).unwrap_or_default()).collect()
+            }
+            ColumnReader::Int32ColumnReader(mut r) => {
+                read_column(&mut r, take, max_def)?.into_iter().map(|v| int(v.map(i64::from))).collect()
+            }
+            ColumnReader::Int64ColumnReader(mut r) => read_column(&mut r, take, max_def)?.into_iter().map(int).collect(),
+            ColumnReader::Int96ColumnReader(mut r) => read_column(&mut r, take, max_def)?
+                .into_iter()
+                .map(|v| {
+                    flags.push(0u8);
+                    v.map(|v| {
+                        let words = v.data();
+                        let ns = u64::from(words.first().copied().unwrap_or(0)) | (u64::from(words.get(1).copied().unwrap_or(0)) << 32);
+                        let day = i64::from(words.get(2).copied().unwrap_or(0)) - 2_440_588;
+                        let (rounded, cut, lossy) = nanos_to_micros(ns as i64);
+                        let at = |us: Option<i64>| day.checked_mul(86_400_000_000)?.checked_add(us?).and_then(crate::DateTime::local);
+                        let t = if ns < 86_400_000_000_000 { at(rounded).or_else(|| at(cut)) } else { None };
+                        if let Some(flag) = flags.last_mut() {
+                            *flag = if t.is_none() {
+                                INVALID
+                            } else if lossy {
+                                ROUNDED
+                            } else {
+                                0
+                            };
+                        }
+                        t.map(Value::DateTime).unwrap_or_default()
+                    })
+                    .unwrap_or_default()
                 })
-                .unwrap_or_default()
-            })
-            .collect(),
-        ColumnReader::FloatColumnReader(mut r) => {
-            read_column(&mut r, take, max_def)?.into_iter().map(|v| v.map(|f| Value::Float(f64::from(f))).unwrap_or_default()).collect()
+                .collect(),
+            ColumnReader::FloatColumnReader(mut r) => {
+                read_column(&mut r, take, max_def)?.into_iter().map(|v| v.map(|f| Value::Float(f64::from(f))).unwrap_or_default()).collect()
+            }
+            ColumnReader::DoubleColumnReader(mut r) => {
+                read_column(&mut r, take, max_def)?.into_iter().map(|v| v.map(Value::Float).unwrap_or_default()).collect()
+            }
+            _ => Vec::new(),
         }
-        ColumnReader::DoubleColumnReader(mut r) => {
-            read_column(&mut r, take, max_def)?.into_iter().map(|v| v.map(Value::Float).unwrap_or_default()).collect()
-        }
-        ColumnReader::ByteArrayColumnReader(mut r) => read_column(&mut r, take, max_def)?
-            .into_iter()
-            .map(|v| v.map(|b| Value::Text(String::from_utf8_lossy(b.data()).into_owned())).unwrap_or_default())
-            .collect(),
-        _ => Vec::new(),
     };
     Ok(ColumnValues { values, flags })
 }
@@ -1452,15 +2040,54 @@ fn binary_dictionary_max(bytes: &[u8], count: u32) -> Result<u64> {
     Ok(longest)
 }
 
-/// Reads a binary column (the WKB geometry), for the rows `take` marks, in order.
-fn read_bytes(rg: &dyn RowGroupReader, col: usize, take: &[bool]) -> Result<Vec<Option<Vec<u8>>>> {
-    let max_def = rg.metadata().column(col).column_descr().max_def_level();
-    match column_reader(rg, col)? {
-        ColumnReader::ByteArrayColumnReader(mut r) => {
-            Ok(read_column(&mut r, take, max_def)?.into_iter().map(|v| v.map(|b| b.data().to_vec())).collect())
-        }
-        _ => Err(DataError::Format("GeoParquet: the geometry column is not binary".into())),
+/// Reads a binary column (the WKB geometry), for the rows `take` marks, in order, within `budget`.
+fn read_bytes(rg: &dyn RowGroupReader, col: usize, take: &[bool], budget: &Budget) -> Result<Vec<Option<Vec<u8>>>> {
+    match read_binary(rg, col, take, budget, <[u8]>::len)? {
+        Some(values) => Ok(values.into_iter().map(|v| v.map(|b| b.data().to_vec())).collect()),
+        None => Err(DataError::Format("GeoParquet: the geometry column is not binary".into())),
     }
+}
+
+/// The bytes `bytes` takes as a `String` made by [`String::from_utf8_lossy`], counted without
+/// building it: valid text keeps its length, and each invalid sequence becomes the 3 bytes of
+/// U+FFFD, which can be more than it held.
+fn text_len(bytes: &[u8]) -> usize {
+    bytes.utf8_chunks().map(|c| c.valid().len() + if c.invalid().is_empty() { 0 } else { 3 }).sum()
+}
+
+/// The rows `take` marks of a BYTE_ARRAY column, charging `budget` for each value as it is read,
+/// as `size` counts what the caller makes of its bytes, before any is copied (`None` for a column
+/// of another type). Only the rows taken count, not the
+/// column chunk's size; a page of more than the budget is refused, as the `parquet` crate makes
+/// room for a whole page. A column with DELTA_BYTE_ARRAY pages, whose values the decoder builds
+/// one by one, or DELTA_LENGTH_BYTE_ARRAY pages, whose length arrays are made as a page is
+/// fetched, is read at the [`Pace`] its page size and the budget left allow.
+fn read_binary(
+    rg: &dyn RowGroupReader,
+    col: usize,
+    take: &[bool],
+    budget: &Budget,
+    size: fn(&[u8]) -> usize,
+) -> Result<Option<Vec<Option<ByteArray>>>> {
+    let chunk = rg.metadata().column(col);
+    if chunk.column_descr().physical_type() != Physical::BYTE_ARRAY {
+        return Ok(None);
+    }
+    let name = chunk.column_path().string();
+    let (reader, note) = column_reader_within(rg, col, budget.limit)?;
+    let ColumnReader::ByteArrayColumnReader(mut r) = reader else { return Ok(None) };
+    // DELTA_LENGTH_BYTE_ARRAY pages are paced too: the decoder makes an array of a page's count
+    // when it is fetched, which must see what the values before it were charged.
+    let delta = chunk.encodings().any(|e| matches!(e, Encoding::DELTA_BYTE_ARRAY | Encoding::DELTA_LENGTH_BYTE_ARRAY));
+    let pace = Pace { watch: delta.then_some((&*note, budget)) };
+    let place = format!("row group {}, column '{name}'", budget.group);
+    note.left.store(budget.left.get(), Ordering::Relaxed);
+    read_column_with(&mut r, take, chunk.column_descr().max_def_level(), &pace, Some(&place), &mut |b: &ByteArray| {
+        budget.charge(size(b.data()), &name)?;
+        note.left.store(budget.left.get(), Ordering::Relaxed);
+        Ok(())
+    })
+    .map(Some)
 }
 
 /// Reads every one of `n` rows of a float or double column as doubles (the covering).
@@ -1517,13 +2144,14 @@ pub fn read_vectors(file: &Arc<Remote>, extent: &Extent, column: &str, max_group
         return Err(remote::need());
     }
     // The points in the extent, by row group.
+    let decoded = std::cell::LazyCell::new(max_decoded_bytes);
     let mut found: Vec<(usize, Vec<(usize, (f64, f64))>)> = Vec::new();
     let mut total = 0usize;
     let mut hit = 0usize;
     for &g in &groups {
         let rg = reader.get_row_group(g).map_err(err)?;
         let rows = usize::try_from(rg.metadata().num_rows()).unwrap_or(0).min(MAX_GROUP_ROWS);
-        let geoms = read_bytes(rg.as_ref(), geom, &vec![true; rows])?;
+        let geoms = read_bytes(rg.as_ref(), geom, &vec![true; rows], &Budget::new(*decoded, g))?;
         let inside: Vec<(usize, (f64, f64))> = geoms
             .iter()
             .enumerate()
@@ -1864,7 +2492,7 @@ pub(crate) fn write_features<W: std::io::Write + Send>(
     feed: &mut dyn FnMut(&mut dyn FnMut(&[Feature]) -> Result<()>) -> Result<()>,
 ) -> Result<(W, Vec<usize>, Vec<crate::loss::Note>)> {
     use parquet::basic::{Compression, Encoding, Repetition, ZstdLevel};
-    use parquet::data_type::{BoolType, ByteArray, ByteArrayType, DoubleType, Int32Type, Int64Type};
+    use parquet::data_type::{BoolType, ByteArrayType, DoubleType, Int32Type, Int64Type};
     use parquet::file::metadata::KeyValue;
     use parquet::file::properties::WriterProperties;
     use parquet::file::writer::SerializedFileWriter;
@@ -2054,4 +2682,679 @@ pub(crate) fn write_features<W: std::io::Write + Send>(
     }
     // Without a target: the caller says the path the export is written to.
     Ok((w.into_inner().map_err(err)?, unfit_counts, layout.notes(fields, "")))
+}
+
+/// The rows of a group (ids from `base + 1`, `rows` of them) that the sample still holds, and
+/// where in the sample each one sits. The sample is in id order (groups are read in order and
+/// the sampler keeps order), so the search starts at the group's first possible id and stops at its last.
+fn rows_held<T>(items: &[T], id: impl Fn(&T) -> u64, base: u64, rows: usize) -> (Vec<bool>, Vec<usize>) {
+    let mut chosen = vec![false; rows];
+    let mut mine = Vec::new();
+    let first = base.saturating_add(1);
+    let from = items.partition_point(|f| id(f) < first);
+    for (i, f) in items.iter().enumerate().skip(from) {
+        let Some(r) = id(f).checked_sub(first).and_then(|r| usize::try_from(r).ok()) else { continue };
+        let Some(c) = chosen.get_mut(r) else { break };
+        *c = true;
+        mine.push(i);
+    }
+    (chosen, mine)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use parquet::column::page::{Page, PageMetadata, PageReader};
+
+    /// Pages handed out one by one, as a file's would be.
+    struct Pages(std::vec::IntoIter<Page>);
+
+    impl Iterator for Pages {
+        type Item = parquet::errors::Result<Page>;
+        fn next(&mut self) -> Option<Self::Item> {
+            self.0.next().map(Ok)
+        }
+    }
+
+    impl PageReader for Pages {
+        fn get_next_page(&mut self) -> parquet::errors::Result<Option<Page>> {
+            Ok(self.0.next())
+        }
+        fn peek_next_page(&mut self) -> parquet::errors::Result<Option<PageMetadata>> {
+            Ok(None)
+        }
+        fn skip_next_page(&mut self) -> parquet::errors::Result<()> {
+            Ok(())
+        }
+        fn at_record_boundary(&mut self) -> parquet::errors::Result<bool> {
+            Ok(true)
+        }
+    }
+
+    fn data_page(bytes: usize, encoding: Encoding) -> Page {
+        Page::DataPage {
+            buf: Bytes::from(vec![0u8; bytes]),
+            num_values: 1,
+            encoding,
+            def_level_encoding: Encoding::RLE,
+            rep_level_encoding: Encoding::RLE,
+            statistics: None,
+        }
+    }
+
+    fn data_page_v2(bytes: usize, encoding: Encoding) -> Page {
+        Page::DataPageV2 {
+            buf: Bytes::from(vec![0u8; bytes]),
+            num_values: 1,
+            encoding,
+            num_nulls: 0,
+            num_rows: 1,
+            def_levels_byte_len: 0,
+            rep_levels_byte_len: 0,
+            is_compressed: false,
+            statistics: None,
+        }
+    }
+
+    /// `page` through [`CheckedPages`] of a column chunk the footer gives `chunk_bytes` for, read with `limit`.
+    fn checked(page: Page, chunk_bytes: Option<u64>, limit: u64, delta_declared: bool) -> parquet::errors::Result<Option<Page>> {
+        CheckedPages {
+            pages: Box::new(Pages(vec![page].into_iter())),
+            bits: 32,
+            limit,
+            chunk_bytes,
+            delta_listed: [delta_declared; 2],
+            max_def: 0,
+            max_rep: 0,
+            chunk_values: u64::MAX,
+            note: Arc::new(PageNote::default()),
+        }
+        .get_next_page()
+    }
+
+    /// A page can't hold more than the column chunk it belongs to says it does, nor more than the
+    /// read allows; a footer without a size leaves the read's limit.
+    #[test]
+    fn checked_pages_refuse_a_page_larger_than_its_chunk_or_the_limit() {
+        let error = checked(data_page(11, Encoding::PLAIN), Some(10), u64::MAX, false).unwrap_err().to_string();
+        assert!(error.contains("a page holds 11 bytes, more than the 10 its column chunk says it holds"), "{error}");
+        assert!(checked(data_page(10, Encoding::PLAIN), Some(10), u64::MAX, false).unwrap().is_some());
+        for chunk in [None, Some(100)] {
+            let error = checked(data_page(11, Encoding::PLAIN), chunk, 10, false).unwrap_err().to_string();
+            assert!(error.contains("a page holds 11 bytes, more than the 10 byte decoded-column budget"), "{error}");
+            assert!(checked(data_page(10, Encoding::PLAIN), chunk, 10, false).unwrap().is_some());
+        }
+    }
+
+    /// A footer that gives no usable size (zero or negative) is read as no size, not as a large one.
+    #[test]
+    fn checked_pages_take_the_limit_for_a_footer_without_a_size() {
+        let size = |n: i64| u64::try_from(n).ok().filter(|&n| n > 0);
+        for n in [0, -1, i64::MIN] {
+            assert_eq!(size(n), None, "{n}");
+            assert!(checked(data_page(11, Encoding::PLAIN), size(n), 10, false).is_err(), "{n}");
+        }
+        assert_eq!(size(7), Some(7));
+    }
+
+    /// A page in the one encoding that builds its values one by one must be in the chunk's list,
+    /// whichever version of data page it is.
+    #[test]
+    fn checked_pages_refuse_an_undeclared_delta_page() {
+        let mut sound = delta_flat(3, 0);
+        sound.extend(delta_flat(3, 4));
+        sound.extend_from_slice(b"ababab");
+        for (v2, page) in [(false, data_page as fn(usize, Encoding) -> Page), (true, data_page_v2)] {
+            let error = checked(page(4, Encoding::DELTA_BYTE_ARRAY), Some(10), u64::MAX, false).unwrap_err().to_string();
+            assert!(error.contains("the DELTA_BYTE_ARRAY encoding, which its column chunk doesn't list"), "{error}");
+            let declared = delta_page(0, sound.clone(), 3, Encoding::DELTA_BYTE_ARRAY, v2);
+            assert!(checked(declared, Some(100), u64::MAX, true).unwrap().is_some());
+            assert!(checked(page(4, Encoding::PLAIN), Some(10), u64::MAX, false).unwrap().is_some());
+        }
+    }
+
+    /// A DELTA_LENGTH_BYTE_ARRAY page, like a DELTA_BYTE_ARRAY one, must be in the chunk's list: the
+    /// pace is only on for a column that lists one, so an unlisted page would be checked against a
+    /// budget the values before it have not been charged to.
+    #[test]
+    fn checked_pages_refuse_an_undeclared_delta_length_page() {
+        let mut sound = delta_flat(3, 4);
+        sound.extend_from_slice(b"ababab");
+        for v2 in [false, true] {
+            let page = || delta_page(0, sound.clone(), 3, Encoding::DELTA_LENGTH_BYTE_ARRAY, v2);
+            let error = checked(page(), Some(100), u64::MAX, false).unwrap_err().to_string();
+            assert!(error.contains("the DELTA_LENGTH_BYTE_ARRAY encoding, which its column chunk doesn't list"), "v2 {v2}: {error}");
+            assert!(checked(page(), Some(100), u64::MAX, true).unwrap().is_some(), "v2 {v2}");
+        }
+    }
+
+    /// `page` through [`CheckedPages`] of a chunk whose footer lists exactly `listed` among the encodings.
+    fn checked_listing(page: Page, listed: &[Encoding]) -> parquet::errors::Result<Option<Page>> {
+        CheckedPages {
+            pages: Box::new(Pages(vec![page].into_iter())),
+            bits: 32,
+            limit: u64::MAX,
+            chunk_bytes: Some(100),
+            delta_listed: [Encoding::DELTA_BYTE_ARRAY, Encoding::DELTA_LENGTH_BYTE_ARRAY].map(|e| listed.contains(&e)),
+            max_def: 0,
+            max_rep: 0,
+            chunk_values: u64::MAX,
+            note: Arc::new(PageNote::default()),
+        }
+        .get_next_page()
+    }
+
+    /// A late-filtered read looks only at the sample's rows from the current group on, not at every
+    /// row kept from earlier groups: the work stays linear in the groups.
+    #[test]
+    fn rows_held_inspects_only_the_current_groups_suffix() {
+        use std::cell::Cell;
+        let groups = 2_000u64;
+        let per = 4u64;
+        let mut items: Vec<u64> = Vec::new();
+        let looked = Cell::new(0u64);
+        for g in 0..groups {
+            let base = g * per;
+            items.extend((1..=per).map(|r| base + r));
+            let (chosen, mine) = rows_held(
+                &items,
+                |&id| {
+                    looked.set(looked.get() + 1);
+                    id
+                },
+                base,
+                per as usize,
+            );
+            assert_eq!(chosen, vec![true; per as usize]);
+            assert_eq!(mine, (items.len() - per as usize..items.len()).collect::<Vec<_>>());
+        }
+        // Binary search plus the suffix: far below the quadratic groups * rows / 2 of a full scan.
+        assert!(looked.get() < groups * (per + 16), "inspected {} entries", looked.get());
+    }
+
+    /// The page's own encoding must be in the chunk's list: a chunk that lists one delta encoding
+    /// doesn't make a page in the other one declared.
+    #[test]
+    fn checked_pages_refuse_a_delta_page_of_the_other_delta_encoding() {
+        let mut flat = delta_flat(3, 4);
+        flat.extend_from_slice(b"ababab");
+        let mut both = delta_flat(3, 0);
+        both.extend(delta_flat(3, 4));
+        both.extend_from_slice(b"ababab");
+        for v2 in [false, true] {
+            let length = || delta_page(0, flat.clone(), 3, Encoding::DELTA_LENGTH_BYTE_ARRAY, v2);
+            let prefixed = || delta_page(0, both.clone(), 3, Encoding::DELTA_BYTE_ARRAY, v2);
+            let error = checked_listing(length(), &[Encoding::DELTA_BYTE_ARRAY]).unwrap_err().to_string();
+            assert!(error.contains("the DELTA_LENGTH_BYTE_ARRAY encoding, which its column chunk doesn't list"), "v2 {v2}: {error}");
+            let error = checked_listing(prefixed(), &[Encoding::DELTA_LENGTH_BYTE_ARRAY]).unwrap_err().to_string();
+            assert!(error.contains("the DELTA_BYTE_ARRAY encoding, which its column chunk doesn't list"), "v2 {v2}: {error}");
+            assert!(checked_listing(length(), &[Encoding::DELTA_LENGTH_BYTE_ARRAY]).unwrap().is_some(), "v2 {v2}");
+            assert!(checked_listing(prefixed(), &[Encoding::DELTA_BYTE_ARRAY]).unwrap().is_some(), "v2 {v2}");
+            assert!(
+                checked_listing(length(), &[Encoding::DELTA_BYTE_ARRAY, Encoding::DELTA_LENGTH_BYTE_ARRAY]).unwrap().is_some(),
+                "v2 {v2}"
+            );
+        }
+    }
+
+    /// A data page tells the pace its size and its values.
+    #[test]
+    fn checked_pages_note_the_data_page_they_hand_over() {
+        for page in [data_page(40, Encoding::PLAIN), data_page_v2(40, Encoding::PLAIN)] {
+            let note = Arc::new(PageNote::default());
+            let mut pages = CheckedPages {
+                pages: Box::new(Pages(vec![page].into_iter())),
+                bits: 32,
+                limit: u64::MAX,
+                chunk_bytes: None,
+                delta_listed: [false; 2],
+                max_def: 0,
+                max_rep: 0,
+                chunk_values: u64::MAX,
+                note: note.clone(),
+            };
+            assert!(pages.get_next_page().unwrap().is_some());
+            assert_eq!((note.page.load(Ordering::Relaxed), note.in_page.load(Ordering::Relaxed)), (40, 1));
+        }
+    }
+
+    /// The length of text as `from_utf8_lossy` makes it, for any bytes.
+    #[test]
+    fn text_len_is_the_length_of_the_lossy_string() {
+        for bytes in
+            [&b""[..], b"abc", "h\u{e9}llo \u{4e2d}".as_bytes(), b"\xff", b"a\xffb\xfe\xfec", b"\xe2\x82", b"ok\xe2\x82", b"\xf0\x9f\x98"]
+        {
+            assert_eq!(text_len(bytes), String::from_utf8_lossy(bytes).len(), "{bytes:?}");
+        }
+    }
+
+    /// A DELTA_BINARY_PACKED stream of `count` values, written as the format lays it out: blocks of
+    /// 128 values in 4 miniblocks of 32, whose bit widths cycle through `widths` (a miniblock past
+    /// the last value has width 0 and no bytes), the packed bytes all zero.
+    fn delta_bits(count: u32, first: u8, widths: [u8; 4]) -> Vec<u8> {
+        let mut out = delta_head(count, first);
+        let mut left = count.saturating_sub(1);
+        let mut at = 0;
+        while left > 0 {
+            out.push(0);
+            let mut packed = 0usize;
+            let mut bits = Vec::new();
+            for _ in 0..4 {
+                let width = if left == 0 { 0 } else { widths[at % 4] };
+                at += 1;
+                left = left.saturating_sub(32);
+                bits.push(width);
+                packed += usize::from(width) * 32 / 8;
+            }
+            out.extend(bits);
+            out.extend(std::iter::repeat_n(0u8, packed));
+        }
+        out
+    }
+
+    /// The header of such a stream: block size 128, 4 miniblocks, the count, the first value.
+    fn delta_head(count: u32, first: u8) -> Vec<u8> {
+        let mut out = vec![0x80, 0x01, 0x04];
+        out.extend(uleb_bytes(u64::from(count)));
+        out.push(first);
+        out
+    }
+
+    /// `delta_bits` of width 0 (a run of equal values).
+    fn delta_flat(count: u32, first: u8) -> Vec<u8> {
+        delta_bits(count, first, [0; 4])
+    }
+
+    fn uleb_bytes(mut n: u64) -> Vec<u8> {
+        let mut out = Vec::new();
+        loop {
+            let low = (n & 0x7f) as u8;
+            n >>= 7;
+            if n == 0 {
+                out.push(low);
+                return out;
+            }
+            out.push(low | 0x80);
+        }
+    }
+
+    fn delta_page(levels: usize, values: Vec<u8>, num_values: u32, encoding: Encoding, v2: bool) -> Page {
+        let mut buf = vec![0xAAu8; levels];
+        buf.extend(values);
+        let buf = Bytes::from(buf);
+        if v2 {
+            Page::DataPageV2 {
+                buf,
+                num_values,
+                encoding,
+                num_nulls: 0,
+                num_rows: num_values,
+                def_levels_byte_len: u32::try_from(levels).unwrap_or(0),
+                rep_levels_byte_len: 0,
+                is_compressed: false,
+                statistics: None,
+            }
+        } else {
+            Page::DataPage {
+                buf,
+                num_values,
+                encoding,
+                def_level_encoding: Encoding::RLE,
+                rep_level_encoding: Encoding::RLE,
+                statistics: None,
+            }
+        }
+    }
+
+    /// `page` through [`CheckedPages`] of a column with `max_def` levels, in a chunk of `chunk_values`
+    /// values, with `left` bytes of budget.
+    fn checked_in(page: Page, max_def: i16, chunk_values: u64, left: u64) -> parquet::errors::Result<Option<Page>> {
+        let note = Arc::new(PageNote::default());
+        note.left.store(left, Ordering::Relaxed);
+        CheckedPages {
+            pages: Box::new(Pages(vec![page].into_iter())),
+            bits: 32,
+            limit: u64::MAX,
+            chunk_bytes: None,
+            delta_listed: [true; 2],
+            max_def,
+            max_rep: 0,
+            chunk_values,
+            note,
+        }
+        .get_next_page()
+    }
+
+    /// A version 1 delta page of a column with a definition level, its levels `levels` in front.
+    fn delta_page_with_levels(levels: Vec<u8>, values: Vec<u8>, num_values: u32, def_level_encoding: Encoding) -> Page {
+        Page::DataPage {
+            buf: Bytes::from([levels, values].concat()),
+            num_values,
+            encoding: Encoding::DELTA_BYTE_ARRAY,
+            def_level_encoding,
+            rep_level_encoding: Encoding::RLE,
+            statistics: None,
+        }
+    }
+
+    /// The two streams of a DELTA_BYTE_ARRAY page of `count` values, then `tail` bytes.
+    fn delta_bytes(count: u32, widths: [u8; 4], tail: &[u8]) -> Vec<u8> {
+        [delta_bits(count, 0, widths), delta_bits(count, 4, widths), tail.to_vec()].concat()
+    }
+
+    /// A delta page whose count is more than its values, or more than its bytes can hold, or whose
+    /// header is cut off or malformed, is refused before the crate's decoder sizes an array from the
+    /// count (a few bytes can say two billion values), and a sound one is handed over. Each refusal
+    /// says which of these it is.
+    #[test]
+    fn checked_pages_refuse_a_delta_page_with_a_count_its_bytes_cannot_hold() {
+        let huge = delta_head(i32::MAX as u32, 0);
+        let delta = Encoding::DELTA_BYTE_ARRAY;
+        let lengths = Encoding::DELTA_LENGTH_BYTE_ARRAY;
+        let sound = delta_bytes(3, [0; 4], b"ababab");
+        // Widths that need bits, over several blocks.
+        let wide = delta_bytes(300, [3, 0, 5, 7], b"");
+        for v2 in [false, true] {
+            // Level bytes in front, in version 2 (a version 1 page of a column without levels has none).
+            for levels in [0, 2] {
+                if !v2 && levels > 0 {
+                    continue;
+                }
+                let at = format!("v2 {v2} levels {levels}");
+                let page = |values: Vec<u8>, n: u32, e| delta_page(levels, values, n, e, v2);
+                let refused = |values: Vec<u8>, n: u32, e| checked(page(values, n, e), None, 1 << 30, true).unwrap_err().to_string();
+                let says = |error: String, what: &str| {
+                    assert!(error.contains(&format!("a delta page is refused: {what}")), "{at}: {error} -- wanted {what}")
+                };
+                says(refused(huge.clone(), 3, delta), "a stream says it holds 2147483647 values, more than the page's 3");
+                says(refused(huge.clone(), 3, lengths), "a stream says it holds 2147483647 values, more than the page's 3");
+                // A count the page's own value count allows, but its few bytes can't hold.
+                says(
+                    refused([delta_head(1000, 0), vec![0; 5]].concat(), 1000, delta),
+                    "its 1000 values need more blocks than its 11 bytes can hold",
+                );
+                // The decoder's arrays for that count, more than the budget has.
+                let error = checked_in(page(delta_flat(1 << 20, 0), 1 << 20, lengths), 0, u64::MAX, 1 << 10).unwrap_err().to_string();
+                says(
+                    error,
+                    "a stream says it holds 1048576 values, whose arrays of 4 bytes each are more than the 1024 bytes the decoded-column budget has left",
+                );
+                // Cut off in its header, a block's minimum delta or widths, or not a header at all.
+                let flat = delta_flat(3, 0);
+                for (cut, what) in [
+                    (0, "a stream header is cut off or malformed"),
+                    (2, "a stream header is cut off or malformed"),
+                    (4, "a stream header is cut off or malformed"),
+                    (5, "its 3 values need more blocks than its 5 bytes can hold"),
+                    (7, "its 3 values need more blocks than its 7 bytes can hold"),
+                    (9, "its 3 values need more blocks than its 9 bytes can hold"),
+                ] {
+                    says(refused(flat[..cut].to_vec(), 3, delta), what);
+                }
+                says(refused(vec![0x80; 12], 3, delta), "a stream header is cut off or malformed");
+                says(
+                    refused(vec![0x81, 0x01, 0x04, 0x03, 0x00], 3, delta),
+                    "its block of 129 values in 4 miniblocks is not one the format allows",
+                );
+                says(
+                    refused(vec![0x80, 0x01, 0x00, 0x03, 0x00], 3, delta),
+                    "its block of 128 values in 0 miniblocks is not one the format allows",
+                );
+                says(
+                    refused(vec![0x80, 0x01, 0x03, 0x03, 0x00], 3, delta),
+                    "its block of 128 values in 3 miniblocks is not one the format allows",
+                );
+                // A width above 32, and packed bytes the page doesn't have.
+                let mut wide_bits = delta_flat(3, 0);
+                wide_bits[6] = 33;
+                says(refused(wide_bits, 3, delta), "a miniblock has a bit width of 33, more than 32");
+                let mut packed = delta_bits(3, 0, [3, 0, 0, 0]);
+                packed.truncate(packed.len() - 1);
+                says(refused(packed, 3, delta), "its 3 values need more bytes than the page's 21 bytes can hold");
+                // The two streams' counts must agree.
+                let odd = [delta_flat(3, 0), delta_flat(2, 4)].concat();
+                says(refused(odd, 3, delta), "it has 3 prefix lengths and 2 suffixes");
+                // Sound pages go through, and so does a column of nothing but nulls.
+                for (values, n) in
+                    [(sound.clone(), 3), (wide.clone(), 300), (delta_bytes(0, [0; 4], b""), 3), (delta_bytes(1, [0; 4], b"a"), 1)]
+                {
+                    assert!(checked(page(values, n, delta), None, 1 << 30, true).unwrap().is_some(), "{at}");
+                }
+                assert!(checked(page(delta_flat(3, 4), 3, lengths), None, 1 << 30, true).unwrap().is_some(), "{at}");
+            }
+        }
+    }
+
+    /// Levels in front of a version 1 page's values: an RLE stream with its length, in the order
+    /// the crate reads them, and a page with them cut off or in no encoding a page has is refused.
+    #[test]
+    fn checked_pages_find_the_values_after_a_version_one_pages_levels() {
+        let sound = delta_bytes(300, [3, 0, 5, 7], b"");
+        let rle = |bytes: &[u8]| [u32::try_from(bytes.len()).unwrap().to_le_bytes().to_vec(), bytes.to_vec()].concat();
+        let page = |levels: Vec<u8>, values: Vec<u8>, encoding| delta_page_with_levels(levels, values, 300, encoding);
+        // A definition level stream of 3 bytes, then the values.
+        assert!(checked_in(page(rle(&[1, 2, 3]), sound.clone(), Encoding::RLE), 1, u64::MAX, u64::MAX).unwrap().is_some());
+        assert!(checked_in(page(rle(&[]), sound.clone(), Encoding::RLE), 1, u64::MAX, u64::MAX).unwrap().is_some());
+        let error = checked_in(page(vec![9, 0], vec![], Encoding::RLE), 1, u64::MAX, u64::MAX).unwrap_err().to_string();
+        assert!(error.contains("a delta page is refused: its levels are cut off"), "{error}");
+        let error = checked_in(page(rle(&[1]), sound.clone(), Encoding::PLAIN), 1, u64::MAX, u64::MAX).unwrap_err().to_string();
+        assert!(error.contains("its levels are in the PLAIN encoding, which a page can't have"), "{error}");
+        // A level length that runs past the page.
+        let error = checked_in(page(vec![0xff, 0xff, 0xff, 0x7f], sound, Encoding::RLE), 1, u64::MAX, u64::MAX).unwrap_err().to_string();
+        assert!(error.contains("its levels are longer than the page"), "{error}");
+    }
+
+    /// A stream says it holds more values than the column chunk does: refused, though the page's own
+    /// count allows it; and one the budget left can't hold the arrays of, though the whole limit could.
+    #[test]
+    fn checked_pages_hold_a_delta_count_to_the_chunk_and_the_budget_left() {
+        let values = delta_bytes(300, [3, 0, 5, 7], b"");
+        let page = || delta_page(0, values.clone(), 300, Encoding::DELTA_BYTE_ARRAY, true);
+        assert!(checked_in(page(), 0, 300, 2400).unwrap().is_some());
+        let error = checked_in(page(), 0, 299, u64::MAX).unwrap_err().to_string();
+        assert!(error.contains("more than the column chunk's 299"), "{error}");
+        let error = checked_in(page(), 0, 300, 2399).unwrap_err().to_string();
+        assert!(error.contains("the 2399 bytes the decoded-column budget has left"), "{error}");
+    }
+
+    /// The layout `delta_stream` reads agrees with a real writer's: the count and the end of the
+    /// stream (the page holds nothing else) for many shapes of values, in pages of one stream.
+    #[test]
+    fn delta_stream_ends_where_the_writer_ended_it() {
+        use arrow_array::{ArrayRef, Int32Array, RecordBatch};
+        use arrow_schema::{DataType, Field as AField, Schema};
+        use parquet::file::reader::{FileReader as _, SerializedFileReader};
+        let wide: Vec<i32> = (0..5000).map(|i| (i * 7919) % 100_003 - 50_000).collect();
+        let shapes: Vec<Vec<i32>> = vec![
+            vec![5],
+            vec![5, 5],
+            vec![0; 127],
+            vec![3; 128],
+            vec![3; 129],
+            (0..300).collect(),
+            (0..1000).map(|i| i * i % 1009).collect(),
+            wide,
+            (0..4096).map(|i| if i % 2 == 0 { i32::MAX - i } else { i32::MIN + i }).collect(),
+        ];
+        for values in shapes {
+            let schema = Arc::new(Schema::new(vec![AField::new("v", DataType::Int32, false)]));
+            let column: ArrayRef = Arc::new(Int32Array::from(values.clone()));
+            let batch = RecordBatch::try_new(schema.clone(), vec![column]).unwrap();
+            let props = ::parquet::file::properties::WriterProperties::builder()
+                .set_dictionary_enabled(false)
+                .set_encoding(Encoding::DELTA_BINARY_PACKED)
+                .set_data_page_row_count_limit(usize::MAX)
+                .set_data_page_size_limit(usize::MAX)
+                .build();
+            let mut bytes = Vec::new();
+            let mut writer = ::parquet::arrow::ArrowWriter::try_new(&mut bytes, schema, Some(props)).unwrap();
+            writer.write(&batch).unwrap();
+            writer.close().unwrap();
+            let reader = SerializedFileReader::new(Bytes::from(bytes)).unwrap();
+            let mut pages = reader.get_row_group(0).unwrap().get_column_page_reader(0).unwrap();
+            let mut seen = 0;
+            while let Some(page) = pages.get_next_page().unwrap() {
+                if let Page::DataPage { buf, num_values, .. } | Page::DataPageV2 { buf, num_values, .. } = &page {
+                    let bounds = DeltaBounds { page: u64::MAX, chunk: u64::MAX, left: u64::MAX, per_value: 4 };
+                    let (count, end) = delta_stream(buf, &bounds).unwrap();
+                    assert_eq!((count, end), (u64::from(*num_values), buf.len()), "{} values", values.len());
+                    // With bytes after it the stream still ends in the same place.
+                    let longer = [buf.to_vec(), vec![0xAB; 9]].concat();
+                    assert_eq!(delta_stream(&longer, &bounds).unwrap(), (count, end), "{} values", values.len());
+                    seen += 1;
+                }
+            }
+            assert!(seen > 0);
+        }
+    }
+
+    /// The crate's decoders make an array of 4 bytes a value for each of a DELTA_BYTE_ARRAY page's two
+    /// streams: a count the page and the chunk allow, but whose two arrays are more than the budget,
+    /// is refused.
+    #[test]
+    fn checked_pages_refuse_a_delta_count_whose_arrays_are_more_than_the_budget() {
+        let limit = 1u64 << 20;
+        // Under a quarter of the limit: one array fits, the two don't.
+        let count = u32::try_from(limit / 4 - 1).unwrap();
+        let mut both = delta_flat(count, 0);
+        both.extend(delta_flat(count, 4));
+        let error = checked(delta_page(0, both, count, Encoding::DELTA_BYTE_ARRAY, true), None, limit, true).unwrap_err().to_string();
+        assert!(error.contains("decoded-column budget"), "{error}");
+        // The one array of DELTA_LENGTH_BYTE_ARRAY fits.
+        let page = delta_page(0, delta_flat(count, 4), count, Encoding::DELTA_LENGTH_BYTE_ARRAY, true);
+        assert!(checked(page, None, limit, true).unwrap().is_some());
+    }
+
+    /// Levels written in the deprecated BIT_PACKED encoding have no length in front: the page's
+    /// values start after as many bytes as its values have bits, as the crate reads them.
+    #[test]
+    fn checked_pages_read_past_bit_packed_levels() {
+        let mut sound = delta_flat(3, 0);
+        sound.extend(delta_flat(3, 4));
+        sound.extend_from_slice(b"ababab");
+        let mut buf = vec![0b101u8];
+        buf.extend(sound);
+        #[expect(deprecated, reason = "BIT_PACKED levels are deprecated but still read")]
+        let def_level_encoding = Encoding::BIT_PACKED;
+        let page = Page::DataPage {
+            buf: Bytes::from(buf),
+            num_values: 3,
+            encoding: Encoding::DELTA_BYTE_ARRAY,
+            def_level_encoding,
+            rep_level_encoding: Encoding::RLE,
+            statistics: None,
+        };
+        let mut pages = CheckedPages {
+            pages: Box::new(Pages(vec![page].into_iter())),
+            bits: 32,
+            limit: u64::MAX,
+            chunk_bytes: None,
+            delta_listed: [true; 2],
+            max_def: 1,
+            max_rep: 0,
+            chunk_values: u64::MAX,
+            note: Arc::new(PageNote::default()),
+        };
+        assert!(pages.get_next_page().unwrap().is_some());
+    }
+
+    /// Headers handed out one by one, as a file's pages would be peeked at and skipped.
+    struct Headers(Vec<PageMetadata>);
+
+    impl Iterator for Headers {
+        type Item = parquet::errors::Result<Page>;
+        fn next(&mut self) -> Option<Self::Item> {
+            None
+        }
+    }
+
+    impl PageReader for Headers {
+        fn get_next_page(&mut self) -> parquet::errors::Result<Option<Page>> {
+            Ok(None)
+        }
+        fn peek_next_page(&mut self) -> parquet::errors::Result<Option<PageMetadata>> {
+            Ok(self.0.first().cloned())
+        }
+        fn skip_next_page(&mut self) -> parquet::errors::Result<()> {
+            self.0.remove(0);
+            Ok(())
+        }
+        fn at_record_boundary(&mut self) -> parquet::errors::Result<bool> {
+            Ok(true)
+        }
+    }
+
+    /// A skip passes over the whole pages its run covers, and is stopped (an error, with the values
+    /// it passed over noted) at a data page it would only skip part of, whose decoder it would set up.
+    #[test]
+    fn checked_pages_stop_a_skip_at_a_page_it_would_only_partly_pass_over() {
+        let page = |rows| PageMetadata { num_rows: Some(rows), num_levels: Some(rows), is_dict: false };
+        let dictionary = PageMetadata { num_rows: None, num_levels: None, is_dict: true };
+        let note = Arc::new(PageNote::default());
+        let mut pages = CheckedPages {
+            pages: Box::new(Headers(vec![dictionary, page(4), page(4), page(4)])),
+            bits: 32,
+            limit: u64::MAX,
+            chunk_bytes: None,
+            delta_listed: [true; 2],
+            max_def: 0,
+            max_rep: 0,
+            chunk_values: u64::MAX,
+            note: note.clone(),
+        };
+        let budget = Budget::new(1 << 20, 0);
+        let pace = Pace { watch: Some((&note, &budget)) };
+        // Not skipping: a peek is a peek.
+        assert!(pages.peek_next_page().unwrap().is_some_and(|m| m.is_dict));
+        assert_eq!(pace.skip(10), 10, "a run from a page's start is asked for whole");
+        assert!(pages.peek_next_page().unwrap().is_some_and(|m| m.is_dict), "a dictionary page is left to the crate");
+        pages.skip_next_page().unwrap();
+        for _ in 0..2 {
+            assert_eq!(pages.peek_next_page().unwrap().and_then(|m| m.num_rows), Some(4));
+            pages.skip_next_page().unwrap();
+        }
+        // 2 values of the run are left, the next page holds 4: the skip stops there.
+        assert!(pages.peek_next_page().is_err());
+        let (skipped, stopped) = pace.skipped(None, Err(parquet::errors::ParquetError::General("stop".into()))).unwrap();
+        assert_eq!((skipped, stopped), (8, true));
+        assert_eq!(note.skip_left.load(Ordering::Relaxed), NOT_SKIPPING);
+        assert_eq!(pages.peek_next_page().unwrap().and_then(|m| m.num_rows), Some(4), "nothing was fetched");
+        assert_eq!(pace.skip(2), 1, "the page is then taken a value at a time");
+        // Another error is the caller's.
+        assert_eq!(pace.skip(3), 3);
+        assert!(pace.skipped(None, Err(parquet::errors::ParquetError::General("other".into()))).is_err());
+        assert_eq!(pace.skipped(None, Ok(3)).unwrap(), (3, false));
+    }
+
+    /// A DELTA_BYTE_ARRAY column takes one value at a page's start, then no more than its page
+    /// and what the budget left holds at that page's size; other columns take a batch.
+    #[test]
+    fn delta_pace_follows_the_page_and_the_budget_left() {
+        let note = PageNote::default();
+        let budget = Budget::new(8 << 10, 0);
+        let pace = Pace { watch: Some((&note, &budget)) };
+        assert_eq!(pace.take(5000), 1, "a page not yet seen");
+        note.in_page.store(5000, Ordering::Relaxed);
+        note.page.store(1024, Ordering::Relaxed);
+        assert_eq!(pace.take(5000), 8, "8 KiB left holds eight values of a page of 1 KiB");
+        pace.used(3);
+        assert_eq!(note.in_page.load(Ordering::Relaxed), 4997);
+        note.page.store(1 << 20, Ordering::Relaxed);
+        assert_eq!(pace.take(5000), 1, "a page bigger than what is left still moves on");
+        note.page.store(1, Ordering::Relaxed);
+        note.in_page.store(100, Ordering::Relaxed);
+        assert_eq!((pace.take(5000), pace.take(50)), (100, 50), "never past the page or the run");
+        note.in_page.store(1 << 20, Ordering::Relaxed);
+        assert_eq!(pace.take(1 << 20), BATCH, "small values take a full batch");
+        pace.used(usize::MAX);
+        assert_eq!(note.in_page.load(Ordering::Relaxed), 0);
+        assert_eq!(Pace { watch: None }.take(1 << 20), BATCH);
+        assert_eq!(Pace { watch: None }.take(7), 7);
+        assert_eq!(Pace { watch: None }.skip(1 << 20), 1 << 20, "a skip of another encoding is one call");
+        note.in_page.store(100, Ordering::Relaxed);
+        assert_eq!(pace.skip(1 << 20), 100, "a skip inside a page takes no more than the page's rest");
+        note.in_page.store(0, Ordering::Relaxed);
+        assert_eq!(pace.skip(1 << 20), 1 << 20, "a delta column's skip starts a page with its whole run");
+        assert_eq!(note.skip_left.load(Ordering::Relaxed), 1 << 20, "so the pages it covers pass undecoded");
+    }
 }

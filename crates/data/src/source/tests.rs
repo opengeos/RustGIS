@@ -5440,6 +5440,463 @@ fn unbounded_parquet_view_refuses_decoded_columns_over_budget() {
     assert_eq!(batch.features[0].attrs[0], Value::Text("x".repeat(1024)));
 }
 
+/// A whole read, an export and a view with bounds decode a dictionary's one long value once for
+/// each row they take, so they stop at the decoded-column budget as an unbounded view does (#2913).
+#[test]
+fn parquet_reads_refuse_decoded_columns_over_budget_without_a_view() {
+    let p = dir().join("decoded-reads.parquet");
+    let mut ds = Dataset::new("pts", GeometryType::Point, vec![Field::new("label", FieldType::Text)]);
+    for _ in 0..20 {
+        ds.push(Some(Geometry::Point(Coord::new(-81.0, 0.0))), vec![Value::Text("x".repeat(1024))]);
+    }
+    write_unbounded_view_fixture(&ds, &p);
+    let source = parquet::ParquetSource::open_path(&p, "pts").unwrap().with_decoded_bytes(8 << 10);
+    let whole = Request { extent: None, limit: 100, own: None };
+    let error = source.read(&whole).unwrap_err().to_string();
+    assert!(error.contains("decoded-column budget") && error.contains("column 'label'"), "{error}");
+    let bounded = Request { extent: Some(Extent::new(-84.0, -1.0, -78.0, 1.0)), limit: 100, own: None };
+    let error = source.read(&bounded).unwrap_err().to_string();
+    assert!(error.contains("decoded-column budget"), "{error}");
+    let error = source.visit_chunks(None, 4096, &mut |_| Ok(())).unwrap_err().to_string();
+    assert!(error.contains("decoded-column budget"), "{error}");
+    let error = source.visit_chunks(bounded.extent, 4096, &mut |_| Ok(())).unwrap_err().to_string();
+    assert!(error.contains("decoded-column budget"), "{error}");
+    // Only the rows a read takes count: one row of 1 KiB is under 8 KiB.
+    let one = Request { extent: Some(Extent::new(-84.0, -1.0, -78.0, 1.0)), limit: 1, own: None };
+    assert_eq!(source.read(&one).unwrap().features.len(), 1);
+    // Clean input, no refusal: the default budget reads every row.
+    let source = parquet::ParquetSource::open_path(&p, "pts").unwrap();
+    let batch = source.read(&whole).unwrap();
+    assert_eq!(batch.features.len(), 20);
+    assert_eq!(batch.features[0].attrs[0], Value::Text("x".repeat(1024)));
+    let mut rows = 0;
+    source
+        .visit_chunks(None, 1 << 20, &mut |chunk| {
+            rows += chunk.len();
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(rows, 20);
+}
+
+/// The geometry column's decoded bytes count with the fields', in the same row group.
+#[test]
+fn parquet_geometry_column_is_charged_with_the_fields() {
+    let p = dir().join("decoded-geometry.parquet");
+    let mut ds = Dataset::new("pts", GeometryType::Point, vec![]);
+    for _ in 0..20 {
+        ds.push(Some(Geometry::Point(Coord::new(-81.0, 0.0))), vec![]);
+    }
+    write_unbounded_view_fixture(&ds, &p);
+    let whole = Request { extent: None, limit: 100, own: None };
+    let source = parquet::ParquetSource::open_path(&p, "pts").unwrap().with_decoded_bytes(100);
+    let error = source.read(&whole).unwrap_err().to_string();
+    assert!(error.contains("column 'geometry'"), "{error}");
+    let source = parquet::ParquetSource::open_path(&p, "pts").unwrap().with_decoded_bytes(1 << 10);
+    assert_eq!(source.read(&whole).unwrap().features.len(), 20);
+}
+
+/// A read takes only some rows of a column chunk far bigger than the budget: it is the rows taken
+/// and the size of a page that count, not the chunk's, so a view or a sample still reads (#2913).
+#[test]
+fn parquet_sampled_read_of_a_chunk_over_the_budget_succeeds() {
+    let p = dir().join("decoded-sampled.parquet");
+    let mut ds = Dataset::new("pts", GeometryType::Point, vec![Field::new("label", FieldType::Text)]);
+    for i in 0..20 {
+        ds.push(Some(Geometry::Point(Coord::new(-81.0, 0.0))), vec![Value::Text(format!("{}{i:02}", "x".repeat(1024)))]);
+    }
+    // Plain text of 20 KiB in pages of about 2 KiB, read with a budget of 8 KiB.
+    write_encoded_parquet_fixture(&ds, &p, 100, false, FixturePages { page_bytes: Some(2 << 10), ..FixturePages::default() });
+    let source = parquet::ParquetSource::open_path(&p, "pts").unwrap().with_decoded_bytes(8 << 10);
+    let bounded = Extent::new(-84.0, -1.0, -78.0, 1.0);
+    let one = Request { extent: Some(bounded), limit: 1, own: None };
+    assert_eq!(source.read(&one).unwrap().features.len(), 1);
+    let none = Request { extent: None, limit: 1, own: None };
+    assert_eq!(source.read(&none).unwrap().features.len(), 1);
+    // Taking every row still stops at the budget.
+    let all = Request { extent: Some(bounded), limit: 100, own: None };
+    let error = source.read(&all).unwrap_err().to_string();
+    assert!(error.contains("decoded-column budget"), "{error}");
+}
+
+/// A DELTA_BYTE_ARRAY column builds each value in the decoder, so its reads take fewer values at a
+/// time as the budget gets smaller, and still read every row, or stop at the budget (#2913).
+#[test]
+fn parquet_delta_byte_array_reads_within_the_decoded_budget() {
+    let p = dir().join("decoded-delta.parquet");
+    let mut ds = Dataset::new("pts", GeometryType::Point, vec![Field::new("label", FieldType::Text)]);
+    for i in 0..20 {
+        ds.push(Some(Geometry::Point(Coord::new(-81.0, 0.0))), vec![Value::Text(format!("{}{i:02}", "x".repeat(1024)))]);
+    }
+    write_encoded_parquet_fixture(&ds, &p, 100, false, FixturePages { delta: true, ..FixturePages::default() });
+    let encodings = text_encodings(&p, "label");
+    assert!(encodings.contains(&::parquet::basic::Encoding::DELTA_BYTE_ARRAY), "{encodings:?}");
+    let whole = Request { extent: None, limit: 100, own: None };
+    // 20 values of 1,026 bytes: a budget of 32 KiB reads them all, a smaller one stops.
+    let source = parquet::ParquetSource::open_path(&p, "pts").unwrap().with_decoded_bytes(32 << 10);
+    let batch = source.read(&whole).unwrap();
+    assert_eq!(batch.features.len(), 20);
+    assert_eq!(batch.features[19].attrs[0], Value::Text(format!("{}19", "x".repeat(1024))));
+    let source = parquet::ParquetSource::open_path(&p, "pts").unwrap().with_decoded_bytes(16 << 10);
+    let error = source.read(&whole).unwrap_err().to_string();
+    assert!(error.contains("decoded-column budget"), "{error}");
+}
+
+/// The encodings the footer lists for the column chunks of the field `name`.
+fn text_encodings(path: &Path, name: &str) -> Vec<::parquet::basic::Encoding> {
+    let footer = ::parquet::file::reader::SerializedFileReader::new(std::fs::File::open(path).unwrap()).unwrap();
+    ::parquet::file::reader::FileReader::metadata(&footer)
+        .row_group(0)
+        .columns()
+        .iter()
+        .filter(|c| c.column_path().string() == name)
+        .flat_map(|c| c.encodings())
+        .collect()
+}
+
+/// A column that isn't delta encoded skips a run of rows it doesn't take in one call, so the
+/// `parquet` crate can pass over whole pages without decoding them (#2913).
+#[test]
+fn parquet_sampled_read_skips_a_long_run_in_one_call() {
+    let p = dir().join("sampled-skip.parquet");
+    let mut ds = Dataset::new("pts", GeometryType::Point, vec![]);
+    for i in 0..30_000 {
+        ds.push(Some(Geometry::Point(Coord::new(-82.0 + f64::from(i) / 30_000.0, 0.0))), vec![]);
+    }
+    write_projected_parquet_fixture(&ds, &p, 30_000, false);
+    let source = parquet::ParquetSource::open_path(&p, "pts").unwrap();
+    parquet::reset_largest_skip();
+    let one = Request { extent: None, limit: 1, own: None };
+    assert_eq!(source.read(&one).unwrap().features.len(), 1);
+    // Most of the 30,000 rows aren't taken: one run of well over a batch of 8,192.
+    assert!(parquet::largest_skip() > 8192, "{}", parquet::largest_skip());
+}
+
+/// A sampled read of a DELTA_BYTE_ARRAY column passes over the pages it takes no row of without
+/// fetching them, as it does a column of another encoding, so the crate sets no decoder up for a
+/// page it only skips (its decoder sizes arrays from a count in the page) (#2913).
+#[test]
+fn parquet_sampled_delta_read_does_not_fetch_the_pages_it_skips() {
+    let p = dir().join("decoded-delta-skip.parquet");
+    let mut ds = Dataset::new("pts", GeometryType::Point, vec![Field::new("label", FieldType::Text)]);
+    for i in 0..20 {
+        ds.push(
+            Some(Geometry::Point(Coord::new(-81.0 + f64::from(i) * 0.01, 0.0))),
+            vec![Value::Text(format!("{i:02}{}", "x".repeat(1024)))],
+        );
+    }
+    for v2 in [false, true] {
+        let pages = FixturePages { delta: true, v2, page_bytes: Some(2 << 10), ..FixturePages::default() };
+        write_encoded_parquet_fixture(&ds, &p, 100, false, pages);
+        let source = parquet::ParquetSource::open_path(&p, "pts").unwrap();
+        // Values that start differently share no prefix, so pages of 2 KiB hold about two each.
+        let everything = Request { extent: None, limit: 100, own: None };
+        parquet::reset_delta_pages();
+        assert_eq!(source.read(&everything).unwrap().features.len(), 20, "v2 {v2}");
+        assert!(parquet::delta_pages() >= 5, "v2 {v2}: {} pages", parquet::delta_pages());
+        // Only the last point is in the extent: the rows before it, in pages of two or so, are skipped.
+        let last = Request { extent: Some(Extent::new(-80.815, -1.0, -80.805, 1.0)), limit: 100, own: None };
+        parquet::reset_delta_pages();
+        let batch = source.read(&last).unwrap();
+        assert_eq!(batch.features.len(), 1, "v2 {v2}");
+        assert_eq!(batch.features[0].attrs[0], Value::Text(format!("19{}", "x".repeat(1024))), "v2 {v2}");
+        // The page holding the row, and for version 2 the one of the geometry column, which is delta
+        // encoded too: no page before them.
+        assert_eq!(parquet::delta_pages(), 1 + usize::from(v2), "v2 {v2}: only the pages holding the row are fetched");
+    }
+}
+
+/// Delta pages of many blocks, with nulls and lengths that need bits, pass the check of the stream
+/// layout that [`CheckedPages`] makes and read back as written (#2913).
+#[test]
+fn parquet_delta_pages_of_many_blocks_read_back() {
+    let p = dir().join("decoded-delta-blocks.parquet");
+    let mut ds = Dataset::new("pts", GeometryType::Point, vec![Field::new("label", FieldType::Text)]);
+    let text = |i: usize| (!i.is_multiple_of(11)).then(|| format!("{}{i}", "y".repeat(i % 53)));
+    for i in 0..3000usize {
+        ds.push(Some(Geometry::Point(Coord::new(-81.0, 0.0))), vec![text(i).map(Value::Text).unwrap_or(Value::Null)]);
+    }
+    let whole = Request { extent: None, limit: 5000, own: None };
+    for v2 in [false, true] {
+        for page_bytes in [None, Some(4 << 10)] {
+            write_encoded_parquet_fixture(&ds, &p, 3000, false, FixturePages { delta: true, v2, page_bytes, ..FixturePages::default() });
+            let encodings = text_encodings(&p, "label");
+            assert!(encodings.contains(&::parquet::basic::Encoding::DELTA_BYTE_ARRAY), "{encodings:?}");
+            parquet::reset_delta_pages();
+            let batch = parquet::ParquetSource::open_path(&p, "pts").unwrap().read(&whole).unwrap();
+            // The label column's pages (version 1 has a definition level stream in front of the
+            // values) went through the check: one page, or several of about 4 KiB.
+            assert!(parquet::delta_pages() >= if page_bytes.is_some() { 2 } else { 1 }, "v2 {v2} {page_bytes:?}");
+            assert_eq!(batch.features.len(), 3000, "v2 {v2} {page_bytes:?}");
+            for (i, f) in batch.features.iter().enumerate() {
+                assert_eq!(f.attrs[0], text(i).map(Value::Text).unwrap_or(Value::Null), "v2 {v2} {page_bytes:?} row {i}");
+            }
+        }
+    }
+}
+
+/// The decoder of a delta page makes arrays of the page's count (8 bytes a value), more than the
+/// values it builds from short text: the read holds them against the budget left, so a page of 3,000
+/// one-letter values is refused with 80,000 bytes (the geometry took 63,000 of them) and read with
+/// 200,000 (#2913).
+#[test]
+fn parquet_delta_page_arrays_count_against_the_budget() {
+    let p = dir().join("decoded-delta-arrays.parquet");
+    let mut ds = Dataset::new("pts", GeometryType::Point, vec![Field::new("label", FieldType::Text)]);
+    for _ in 0..3000 {
+        ds.push(Some(Geometry::Point(Coord::new(-81.0, 0.0))), vec![Value::Text("a".into())]);
+    }
+    let whole = Request { extent: None, limit: 5000, own: None };
+    for v2 in [false, true] {
+        write_encoded_parquet_fixture(&ds, &p, 3000, false, FixturePages { delta: true, v2, page_bytes: None, ..FixturePages::default() });
+        let source = parquet::ParquetSource::open_path(&p, "pts").unwrap().with_decoded_bytes(80_000);
+        let error = source.read(&whole).unwrap_err().to_string();
+        assert!(error.contains("bytes the decoded-column budget has left") && error.contains("column 'label'"), "v2 {v2}: {error}");
+        let source = parquet::ParquetSource::open_path(&p, "pts").unwrap().with_decoded_bytes(200_000);
+        assert_eq!(source.read(&whole).unwrap().features.len(), 3000, "v2 {v2}");
+    }
+}
+
+/// Data pages of version 2 read as version 1 do, with and without a budget that stops them.
+#[test]
+fn parquet_version_two_pages_read_within_the_decoded_budget() {
+    let p = dir().join("decoded-v2.parquet");
+    let mut ds = Dataset::new("pts", GeometryType::Point, vec![Field::new("label", FieldType::Text)]);
+    for i in 0..20 {
+        ds.push(Some(Geometry::Point(Coord::new(-81.0, 0.0))), vec![Value::Text(format!("{}{i:02}", "x".repeat(1024)))]);
+    }
+    let whole = Request { extent: None, limit: 100, own: None };
+    for delta in [false, true] {
+        let pages = FixturePages { delta, v2: true, page_bytes: Some(2 << 10), ..FixturePages::default() };
+        write_encoded_parquet_fixture(&ds, &p, 100, false, pages);
+        // The writer's own choice for version 2 text is DELTA_BYTE_ARRAY, so each case says its own.
+        let encodings = text_encodings(&p, "label");
+        assert_eq!(encodings.contains(&::parquet::basic::Encoding::DELTA_BYTE_ARRAY), delta, "{encodings:?}");
+        assert_eq!(encodings.contains(&::parquet::basic::Encoding::PLAIN), !delta, "{encodings:?}");
+        let source = parquet::ParquetSource::open_path(&p, "pts").unwrap();
+        let batch = source.read(&whole).unwrap();
+        assert_eq!(batch.features.len(), 20, "delta {delta}");
+        assert_eq!(batch.features[19].attrs[0], Value::Text(format!("{}19", "x".repeat(1024))), "delta {delta}");
+        let source = parquet::ParquetSource::open_path(&p, "pts").unwrap().with_decoded_bytes(8 << 10);
+        let error = source.read(&whole).unwrap_err().to_string();
+        assert!(error.contains("decoded-column budget"), "delta {delta}: {error}");
+    }
+}
+
+/// Text that is invalid UTF-8 grows when it is made a `String` (each bad sequence becomes the
+/// three bytes of U+FFFD), so the budget counts the converted length, not the stored one (#2913).
+#[test]
+fn parquet_invalid_text_is_charged_at_its_converted_length() {
+    use ::parquet::data_type::{ByteArray, ByteArrayType};
+    use ::parquet::file::writer::SerializedFileWriter;
+    let schema =
+        ::parquet::schema::parser::parse_message_type("message m { REQUIRED BINARY geometry; OPTIONAL BINARY label (STRING); }").unwrap();
+    let mut bytes = Vec::new();
+    let mut w = SerializedFileWriter::new(&mut bytes, Arc::new(schema), Arc::default()).unwrap();
+    let mut rg = w.next_row_group().unwrap();
+    let geom = ByteArray::from(wkb::encode(&Geometry::Point(Coord::new(0.0, 0.0))));
+    let mut col = rg.next_column().unwrap().unwrap();
+    col.typed::<ByteArrayType>().write_batch(&vec![geom; 20], None, None).unwrap();
+    col.close().unwrap();
+    // 20 values of 256 bytes that are not UTF-8: 5,120 stored, 15,360 once each byte is U+FFFD.
+    let bad = ByteArray::from(vec![0xffu8; 256]);
+    let mut col = rg.next_column().unwrap().unwrap();
+    col.typed::<ByteArrayType>().write_batch(&vec![bad; 20], Some(&[1; 20]), None).unwrap();
+    col.close().unwrap();
+    rg.close().unwrap();
+    w.close().unwrap();
+    let whole = Request { extent: None, limit: 100, own: None };
+    let source = parquet::ParquetSource::open_bytes(bytes.clone(), "m").unwrap().with_decoded_bytes(8 << 10);
+    let error = source.read(&whole).unwrap_err().to_string();
+    assert!(error.contains("decoded-column budget") && error.contains("label"), "{error}");
+    let source = parquet::ParquetSource::open_bytes(bytes, "m").unwrap().with_decoded_bytes(32 << 10);
+    let batch = source.read(&whole).unwrap();
+    assert_eq!(batch.features.len(), 20);
+    assert_eq!(batch.features[0].attrs[0], Value::Text("\u{fffd}".repeat(256)));
+}
+
+/// A page of more than the budget is refused, whatever the rows taken: each label fits the budget
+/// alone, and the page they share does not, so the page's own refusal is the one asserted.
+#[test]
+fn parquet_page_over_the_budget_is_refused() {
+    let p = dir().join("decoded-page.parquet");
+    let mut ds = Dataset::new("pts", GeometryType::Point, vec![Field::new("label", FieldType::Text)]);
+    for i in 0..20 {
+        ds.push(Some(Geometry::Point(Coord::new(-81.0, 0.0))), vec![Value::Text(format!("{}{i:02}", "x".repeat(98)))]);
+    }
+    write_encoded_parquet_fixture(&ds, &p, 100, false, FixturePages { page_bytes: Some(1 << 10), ..FixturePages::default() });
+    // 100 bytes a label, so more than ten of them (over 1 KiB) share a page.
+    let source = parquet::ParquetSource::open_path(&p, "pts").unwrap().with_decoded_bytes(1 << 10);
+    let one = Request { extent: None, limit: 1, own: None };
+    let error = source.read(&one).unwrap_err().to_string();
+    assert!(error.contains("a page holds") && error.contains("more than the 1024 byte decoded-column budget"), "{error}");
+    assert!(!error.contains("exceeds"), "{error}");
+    // A page's refusal names the row group and the column, as the budget's does.
+    assert!(error.contains("row group 0") && error.contains("column 'label'"), "{error}");
+    // The same label read on its own is under the budget.
+    let source = parquet::ParquetSource::open_path(&p, "pts").unwrap().with_decoded_bytes(4 << 10);
+    assert_eq!(source.read(&one).unwrap().features.len(), 1);
+}
+
+/// Late-filtered rows are charged for their attributes only once the geometry test and the sampler
+/// have chosen them: a view no bounds can be made of reads a match whose label fits, among rows whose
+/// labels together would not (#2913).
+#[test]
+fn parquet_late_view_charges_only_the_rows_it_keeps() {
+    let p = dir().join("decoded-late.parquet");
+    let mut ds = Dataset::new("pts", GeometryType::Point, vec![Field::new("label", FieldType::Text)]);
+    for i in 0..20 {
+        // Row 7 is the one point in the view (latitude 0); the others are at latitude 40.
+        let (lat, label) = if i == 7 { (0.0, "hit7".to_string()) } else { (40.0, "x".repeat(1024)) };
+        ds.push(Some(Geometry::Point(Coord::new(-81.0, lat))), vec![Value::Text(label)]);
+    }
+    write_unbounded_view_fixture(&ds, &p);
+    let view = Some(Extent::new(-120.0, -30.0, 10.0, 30.0));
+    let req = Request { extent: view, limit: 100, own: None };
+    let source = parquet::ParquetSource::open_path(&p, "pts").unwrap().with_decoded_bytes(8 << 10);
+    let batch = source.read(&req).unwrap();
+    assert_eq!((batch.matched, batch.features.len()), (1, 1));
+    assert_eq!((batch.features[0].id, &batch.features[0].attrs[0]), (8, &Value::Text("hit7".into())));
+    let mut seen = Vec::new();
+    let batch = source
+        .visit_chunks(view, 1 << 20, &mut |chunk| {
+            seen.extend(chunk.into_iter().map(|f| (f.id, f.attrs[0].clone())));
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!((batch.matched, seen), (1, vec![(8, Value::Text("hit7".into()))]));
+    // Every row is in the view, and the sample keeps one: only its label is charged, and the read
+    // is the one the default budget makes.
+    let mut all = Dataset::new("pts", GeometryType::Point, vec![Field::new("label", FieldType::Text)]);
+    for _ in 0..20 {
+        all.push(Some(Geometry::Point(Coord::new(-81.0, 0.0))), vec![Value::Text("x".repeat(1024))]);
+    }
+    write_unbounded_view_fixture(&all, &p);
+    let one = Request { extent: view, limit: 1, own: None };
+    let sampled = parquet::ParquetSource::open_path(&p, "pts").unwrap().with_decoded_bytes(8 << 10).read(&one).unwrap();
+    let plain = parquet::ParquetSource::open_path(&p, "pts").unwrap().read(&one).unwrap();
+    assert_eq!((sampled.matched, sampled.features.len()), (20, 1));
+    assert_eq!(sampled.matched, plain.matched);
+    let rows = |b: &Batch| b.features.iter().map(|f| (f.id, f.attrs[0].clone())).collect::<Vec<_>>();
+    assert_eq!(rows(&sampled), rows(&plain));
+    // Taking every row still stops at the budget.
+    let error = parquet::ParquetSource::open_path(&p, "pts").unwrap().with_decoded_bytes(8 << 10).read(&req).unwrap_err().to_string();
+    assert!(error.contains("decoded-column budget"), "{error}");
+}
+
+/// A late-filtered read and traversal pair each kept row with its own label and place, across row
+/// groups, when the sample halves as it goes and when only some rows of a group are hits (#2913).
+#[test]
+fn parquet_late_view_pairs_rows_with_their_attributes_across_row_groups() {
+    let p = dir().join("decoded-late-pairs.parquet");
+    let label = |i: usize| format!("L{i:03}");
+    let mut ds = Dataset::new("pts", GeometryType::Point, vec![Field::new("label", FieldType::Text)]);
+    for i in 0..40usize {
+        // Every third row is in the view (latitude 0), the others are at latitude 40.
+        let lat = if i % 3 == 0 { 0.0 } else { 40.0 };
+        ds.push(Some(Geometry::Point(Coord::new(-81.0 + i as f64 * 0.01, lat))), vec![Value::Text(label(i))]);
+    }
+    // Row groups of 10 rows, plain text.
+    write_encoded_parquet_fixture(&ds, &p, 10, false, FixturePages::default());
+    let source = parquet::ParquetSource::open_path(&p, "pts").unwrap().with_decoded_bytes(1 << 20);
+    let view = Some(Extent::new(-120.0, -30.0, 10.0, 30.0));
+    // Row i is at longitude -81 + 0.01 i; the file is projected, so compare in longitude/latitude.
+    let at_row = |g: Option<Geometry>, id: u64| match lonlat_of(&source, g) {
+        Some(Geometry::Point(c)) => assert!((c.x - (-81.0 + 0.01 * (id as f64 - 1.0))).abs() < 1e-4, "id {id}: x {}", c.x),
+        other => panic!("id {id}: {other:?}"),
+    };
+    let hits: Vec<usize> = (0..40).filter(|i| i % 3 == 0).collect();
+    // Every hit is kept: its id is its row's, and its label and place are its row's too.
+    let all = source.read(&Request { extent: view, limit: 100, own: None }).unwrap();
+    assert_eq!(all.matched, hits.len() as u64);
+    let ids: Vec<u64> = all.features.iter().map(|f| f.id).collect();
+    assert_eq!(ids, hits.iter().map(|&i| i as u64 + 1).collect::<Vec<_>>());
+    for f in &all.features {
+        assert_eq!(f.attrs[0], Value::Text(label(f.id as usize - 1)), "id {}", f.id);
+        at_row(f.geometry.clone(), f.id);
+    }
+    // A limit under the hits halves the sample while it crosses groups: what is kept is paired still.
+    for limit in [3, 4, 5] {
+        let sampled = source.read(&Request { extent: view, limit, own: None }).unwrap();
+        assert_eq!(sampled.matched, hits.len() as u64, "limit {limit}");
+        assert!(!sampled.features.is_empty() && sampled.features.len() <= limit, "limit {limit}");
+        for f in &sampled.features {
+            assert_eq!(f.attrs[0], Value::Text(label(f.id as usize - 1)), "limit {limit} id {}", f.id);
+            assert!(hits.contains(&(f.id as usize - 1)), "limit {limit} id {}", f.id);
+            at_row(f.geometry.clone(), f.id);
+        }
+    }
+    let mut seen = Vec::new();
+    let batch = source
+        .visit_chunks(view, 1 << 20, &mut |chunk| {
+            seen.extend(chunk.into_iter().map(|f| (f.id, f.attrs[0].clone(), f.geometry)));
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(batch.matched, hits.len() as u64);
+    for (id, _, geometry) in &seen {
+        at_row(geometry.clone(), *id);
+    }
+    let seen: Vec<_> = seen.into_iter().map(|(id, label, _)| (id, label)).collect();
+    assert_eq!(seen, hits.iter().map(|&i| (i as u64 + 1, Value::Text(label(i)))).collect::<Vec<_>>());
+}
+
+/// The geometry and every text field share one budget: each fits it alone, their sum does not, so
+/// the last field is the one refused (#2913).
+#[test]
+fn parquet_geometry_and_text_fields_share_one_budget() {
+    let p = dir().join("decoded-two-fields.parquet");
+    let mut ds = Dataset::new("pts", GeometryType::Point, vec![Field::new("a", FieldType::Text), Field::new("b", FieldType::Text)]);
+    for i in 0..4 {
+        let (a, b) = (format!("{}{i}", "a".repeat(999)), format!("{}{i}", "b".repeat(999)));
+        ds.push(Some(Geometry::Point(Coord::new(-81.0, 0.0))), vec![Value::Text(a), Value::Text(b)]);
+    }
+    write_encoded_parquet_fixture(&ds, &p, 100, false, FixturePages::default());
+    let geometry = 4 * wkb::encode(&Geometry::Point(Coord::new(0.0, 0.0))).len() as u64;
+    let combined = geometry + 2 * 4 * 1000;
+    let whole = Request { extent: None, limit: 100, own: None };
+    // Each column alone fits 6,000 bytes (84 and 4,000 and 4,000), the three together do not.
+    let source = parquet::ParquetSource::open_path(&p, "pts").unwrap().with_decoded_bytes(6000);
+    let error = source.read(&whole).unwrap_err().to_string();
+    assert!(error.contains("exceeds the 6000 byte decoded-column budget in column 'b'"), "{error}");
+    let source = parquet::ParquetSource::open_path(&p, "pts").unwrap().with_decoded_bytes(combined);
+    let batch = source.read(&whole).unwrap();
+    assert_eq!(batch.features.len(), 4);
+    assert_eq!(batch.features[3].attrs[1], Value::Text(format!("{}3", "b".repeat(999))));
+    let source = parquet::ParquetSource::open_path(&p, "pts").unwrap().with_decoded_bytes(combined - 1);
+    assert!(source.read(&whole).unwrap_err().to_string().contains("column 'b'"));
+}
+
+/// DELTA_LENGTH_BYTE_ARRAY pages make an array of their count when the crate fetches them, so a
+/// read goes page by page and the array is checked against what the page before left (#2913).
+#[test]
+fn parquet_delta_length_pages_are_checked_against_what_the_pages_before_left() {
+    let p = dir().join("decoded-delta-length.parquet");
+    let mut ds = Dataset::new("pts", GeometryType::Point, vec![Field::new("label", FieldType::Text)]);
+    // One value that fills a page by itself, then many one-letter ones in pages of about 1 KiB.
+    ds.push(Some(Geometry::Point(Coord::new(-81.0, 0.0))), vec![Value::Text("x".repeat(3000))]);
+    for _ in 0..1500 {
+        ds.push(Some(Geometry::Point(Coord::new(-81.0, 0.0))), vec![Value::Text("a".into())]);
+    }
+    let whole = Request { extent: None, limit: 5000, own: None };
+    let geometry = ds.features.len() as u64 * wkb::encode(&Geometry::Point(Coord::new(0.0, 0.0))).len() as u64;
+    for v2 in [false, true] {
+        let pages = FixturePages { lengths: true, v2, page_bytes: Some(1 << 10), ..FixturePages::default() };
+        write_encoded_parquet_fixture(&ds, &p, 5000, false, pages);
+        let encodings = text_encodings(&p, "label");
+        assert!(encodings.contains(&::parquet::basic::Encoding::DELTA_LENGTH_BYTE_ARRAY), "{encodings:?}");
+        // After the first value 3,000 bytes are left, fewer than the 4,000 the next page's array
+        // takes (4 bytes a value), though all the values together (4,500 bytes) fit what was left
+        // before it.
+        let source = parquet::ParquetSource::open_path(&p, "pts").unwrap().with_decoded_bytes(geometry + 6000);
+        let error = source.read(&whole).unwrap_err().to_string();
+        assert!(error.contains("bytes the decoded-column budget has left") && error.contains("column 'label'"), "v2 {v2}: {error}");
+        let source = parquet::ParquetSource::open_path(&p, "pts").unwrap().with_decoded_bytes(geometry + 9000);
+        let batch = source.read(&whole).unwrap();
+        assert_eq!(batch.features.len(), 1501, "v2 {v2}");
+    }
+}
+
 /// The same small file must remain readable with plain or dictionary-encoded binary columns.
 #[test]
 fn unbounded_parquet_scan_accepts_two_thousand_distinct_points() {
@@ -5530,6 +5987,24 @@ fn write_unbounded_view_fixture(ds: &Dataset, path: &Path) {
 
 /// A UTM fixture with selectable row-group size and binary encoding, using the same covering.
 fn write_projected_parquet_fixture(ds: &Dataset, path: &Path, rows: usize, dictionary: bool) {
+    write_encoded_parquet_fixture(ds, path, rows, dictionary, FixturePages::default());
+}
+
+/// How [`write_encoded_parquet_fixture`] writes the text fields' pages.
+#[derive(Clone, Copy, Default)]
+struct FixturePages {
+    /// The DELTA_BYTE_ARRAY encoding.
+    delta: bool,
+    /// The DELTA_LENGTH_BYTE_ARRAY encoding (when `delta` is not set).
+    lengths: bool,
+    /// Data pages of version 2.
+    v2: bool,
+    /// About this many bytes to a data page.
+    page_bytes: Option<usize>,
+}
+
+/// [`write_projected_parquet_fixture`] with the text fields' pages as `pages` says.
+fn write_encoded_parquet_fixture(ds: &Dataset, path: &Path, rows: usize, dictionary: bool, pages: FixturePages) {
     let crs = Crs::from_epsg(32617).unwrap();
     use arrow_array::{BinaryArray, Float64Array, RecordBatch, StringArray, StructArray};
     use arrow_schema::{DataType, Field as AField, Schema};
@@ -5568,11 +6043,27 @@ fn write_projected_parquet_fixture(ds: &Dataset, path: &Path, rows: usize, dicti
         "encoding": "WKB", "geometry_types": ["Point"], "crs": {"type": "ProjectedCRS", "id": {"authority": "EPSG", "code": 32617}},
         "covering": {"bbox": {"xmin": ["bbox", "xmin"], "ymin": ["bbox", "ymin"], "xmax": ["bbox", "xmax"], "ymax": ["bbox", "ymax"]}}
     }}});
-    let props = ::parquet::file::properties::WriterProperties::builder()
+    let mut props = ::parquet::file::properties::WriterProperties::builder()
         .set_max_row_group_row_count(Some(rows))
         .set_dictionary_enabled(dictionary)
-        .set_key_value_metadata(Some(vec![::parquet::file::metadata::KeyValue::new("geo".into(), geo.to_string())]))
-        .build();
+        .set_key_value_metadata(Some(vec![::parquet::file::metadata::KeyValue::new("geo".into(), geo.to_string())]));
+    // Left alone, version 2 writes text as DELTA_BYTE_ARRAY, so the plain case says so.
+    let encoding = match (pages.delta, pages.lengths) {
+        (true, _) => ::parquet::basic::Encoding::DELTA_BYTE_ARRAY,
+        (false, true) => ::parquet::basic::Encoding::DELTA_LENGTH_BYTE_ARRAY,
+        (false, false) => ::parquet::basic::Encoding::PLAIN,
+    };
+    for field in ds.fields.iter().filter(|f| f.ty == FieldType::Text) {
+        props = props.set_column_encoding(field.name.as_str().into(), encoding);
+    }
+    if pages.v2 {
+        props = props.set_writer_version(::parquet::file::properties::WriterVersion::PARQUET_2_0);
+    }
+    if let Some(bytes) = pages.page_bytes {
+        // Pages close after each value, so one holds about `bytes`.
+        props = props.set_write_batch_size(1).set_data_page_size_limit(bytes);
+    }
+    let props = props.build();
     let mut writer = ::parquet::arrow::ArrowWriter::try_new(std::fs::File::create(path).unwrap(), schema, Some(props)).unwrap();
     writer.write(&batch).unwrap();
     writer.close().unwrap();
