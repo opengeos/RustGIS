@@ -689,8 +689,7 @@ impl RoomMade {
 /// What a bug RustGIS caught while doing `what` says ([`rustgis_data::incident::message`]), with its
 /// incident's reference: the panic `payload` is told apart from a refusal, and its details kept.
 pub(crate) fn bug(what: &str, payload: &(dyn std::any::Any + Send)) -> String {
-    let incident = rustgis_data::incident::caught(payload);
-    rustgis_data::incident::message(what, false, &incident.id)
+    rustgis_data::incident::bug(what, payload)
 }
 
 /// What a command run worked on, as its parameters name it, for the messages it says: a layer, a
@@ -1463,6 +1462,9 @@ impl Session {
     /// Starts an independent session with fresh runtime selection intent and request order.
     /// Prepared script copies explicitly share request order with their originating session.
     pub fn new(mut project: Project) -> Self {
+        // Every panic an incident with a reference, whatever embeds the session (the apps, Python,
+        // MCP): installed once, before the hook that was there (a crash log) runs.
+        rustgis_data::incident::install();
         // The engine's tests never add Shapefile indexes to the user's cache (#1230).
         #[cfg(all(test, not(target_arch = "wasm32")))]
         rustgis_data::source::shp::use_temporary_index_dir();

@@ -2011,7 +2011,7 @@ fn trend(app: &mut RustGisApp, ui: &mut Ui, rasters: &[String]) {
                 let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     job.run(&cancel, &done).map(|rasters| (rasters, job.dates()))
                 }))
-                .unwrap_or_else(|_| Err(tl!("The trend failed unexpectedly").to_string()));
+                .unwrap_or_else(|payload| Err(rustgis_engine::data::incident::bug(tl!("The trend"), payload.as_ref())));
                 if let Ok(mut g) = result.lock() {
                     *g = Some(out);
                 }

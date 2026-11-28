@@ -43,9 +43,18 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// A reference no other incident of this session has: the time and a count, mixed, as six
-/// hexadecimal digits.
+/// A reference no incident kept has: the time and a count, mixed, as six hexadecimal digits.
 fn new_id() -> String {
+    loop {
+        let id = mixed_id();
+        if find(&id).is_none() {
+            return id;
+        }
+    }
+}
+
+/// A reference from the time and a count, mixed, as six hexadecimal digits.
+fn mixed_id() -> String {
     let n = {
         let mut count = lock(&COUNT);
         *count = count.wrapping_add(1);
@@ -64,12 +73,26 @@ fn keep(incident: Incident) {
     recent.push_back(incident);
 }
 
+/// The most of a panic's message kept: a report needs its start, and a long one stays in memory
+/// until [`KEPT`] newer incidents push it out.
+const MESSAGE_BYTES: usize = 4096;
+
+/// A panic's message, cut to [`MESSAGE_BYTES`] at a character boundary.
 fn payload_text(payload: &(dyn std::any::Any + Send)) -> String {
-    payload
+    let mut text = payload
         .downcast_ref::<&str>()
         .map(|s| (*s).to_string())
         .or_else(|| payload.downcast_ref::<String>().cloned())
-        .unwrap_or_else(|| "a panic without a message".to_string())
+        .unwrap_or_else(|| "a panic without a message".to_string());
+    if text.len() > MESSAGE_BYTES {
+        let mut cut = MESSAGE_BYTES;
+        while !text.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        text.truncate(cut);
+        text.push('…');
+    }
+    text
 }
 
 /// Records every panic as an incident before the hook that was there runs (the app's crash log,
@@ -79,12 +102,7 @@ pub fn install() {
         let previous = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
             let id = new_id();
-            let message = info
-                .payload()
-                .downcast_ref::<&str>()
-                .map(|s| (*s).to_string())
-                .or_else(|| info.payload().downcast_ref::<String>().cloned())
-                .unwrap_or_else(|| "a panic without a message".to_string());
+            let message = payload_text(info.payload());
             let location = info.location().map(|l| format!("{}:{}", l.file(), l.line()));
             LAST.with(|last| *last.borrow_mut() = Some(id.clone()));
             keep(Incident { id, message, location });
@@ -131,6 +149,13 @@ pub fn message(what: &str, restored: bool, id: &str) -> String {
     format!(
         "{what} failed unexpectedly, a bug in RustGIS (incident {id}){kept}. The details are in Messages; please include them in a bug report"
     )
+}
+
+/// What a bug caught while doing `what` says ([`message`]), its incident taken from the panic
+/// `payload` ([`caught`]): for a catch site that rolls nothing back.
+pub fn bug(what: &str, payload: &(dyn std::any::Any + Send)) -> String {
+    let incident = caught(payload);
+    message(what, false, &incident.id)
 }
 
 /// The reference a message from [`message`] names, if it names one.

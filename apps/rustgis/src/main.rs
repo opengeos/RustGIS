@@ -283,6 +283,9 @@ mod running {
         file: File,
         /// This run has it to itself: no other copy can take it while this one runs.
         locked: bool,
+        /// The command noted has ended, but is kept until the work it started in the background
+        /// has too ([`Marker::settle`]).
+        ended: bool,
     }
 
     /// Why a run has no marker: shown as it starts without autosave.
@@ -333,8 +336,14 @@ mod running {
     pub fn start(dir: Option<&Path>) -> (Result<Marker, NoMarker>, bool, Option<Breadcrumb>) {
         let none = |why: String| Err(NoMarker { why, other_copy: false });
         let Some(dir) = dir else { return (none("this computer has no settings folder for RustGIS".into()), false, None) };
-        let file = std::fs::create_dir_all(dir)
-            .and_then(|_| OpenOptions::new().read(true).write(true).create(true).truncate(false).open(dir.join("running")));
+        // Readable by this user only: it names the command running and what it worked on.
+        let file = std::fs::create_dir_all(dir).and_then(|_| {
+            let mut options = OpenOptions::new();
+            options.read(true).write(true).create(true).truncate(false);
+            #[cfg(unix)]
+            std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+            options.open(dir.join("running"))
+        });
         let mut file = match file {
             Ok(f) => f,
             Err(e) => {
@@ -380,7 +389,7 @@ mod running {
         if let Err(e) = marked {
             log::warn!("could not mark this run: {e}");
         }
-        (Ok(Marker { file, locked }), unclean, crumb)
+        (Ok(Marker { file, locked, ended: false }), unclean, crumb)
     }
 
     impl Marker {
@@ -394,7 +403,24 @@ mod running {
         /// without closing leaves it for the next launch to say. A few bytes over the old ones; a
         /// write that fails leaves the marker set, as a run without a note.
         pub fn note(&mut self, run: Option<&rustgis_engine::data::diagnostics::Run>, at: u64) {
-            let text = running_text(run, at);
+            // A command's end is kept for [`Marker::settle`]: what it started may still run.
+            self.ended = run.is_none();
+            if self.ended {
+                return;
+            }
+            self.write(&running_text(run, at));
+        }
+
+        /// Between frames: once no work runs in the background (`busy`), a command that has ended
+        /// is no longer noted, and the marker says only that this run is open.
+        pub fn settle(&mut self, busy: bool) {
+            if self.ended && !busy {
+                self.ended = false;
+                self.write(&running_text(None, 0));
+            }
+        }
+
+        fn write(&mut self, text: &str) {
             let written =
                 self.file.rewind().and_then(|_| self.file.write_all(text.as_bytes())).and_then(|_| self.file.set_len(text.len() as u64));
             if let Err(e) = written {
@@ -421,6 +447,14 @@ mod running {
         let mut held = marker.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(m) = held.as_mut() {
             m.note(run, at);
+        }
+    }
+
+    /// [`Marker::settle`] on a shared marker.
+    pub fn settle(marker: &Shared, busy: bool) {
+        let mut held = marker.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(m) = held.as_mut() {
+            m.settle(busy);
         }
     }
 
@@ -495,6 +529,8 @@ impl eframe::App for App {
             self.0.session.notify(text, true);
         }
         self.0.logic(ctx);
+        // A command that has ended stays noted while what it started runs in the background.
+        running::settle(&self.1, self.0.work_under_way());
         #[cfg(target_os = "macos")]
         self.menus(ctx);
         if self.0.quit_requested {
@@ -972,9 +1008,19 @@ mod tests {
         let (second, unclean, crumb) = running::start(Some(&dir));
         assert!(unclean);
         assert_eq!(crumb, Some(running::Breadcrumb { command: "gp.run".into(), target: Some("Parcels county".into()), at: 1_700_000_000 }));
-        // Between commands there is nothing to say, and a clean close says nothing at all.
+        // A command that ended stays noted while what it started runs on; once that is done,
+        // there is nothing to say, and a clean close says nothing at all.
         let mut second = second.unwrap();
+        second.note(Some(&run), 1_700_000_000);
         second.note(None, 0);
+        second.settle(true);
+        drop(second);
+        let (second, unclean, crumb) = running::start(Some(&dir));
+        assert!(unclean && crumb.is_some_and(|c| c.command == "gp.run"), "kept while work runs on");
+        let mut second = second.unwrap();
+        second.note(Some(&run), 1_700_000_000);
+        second.note(None, 0);
+        second.settle(false);
         drop(second);
         let (third, unclean, crumb) = running::start(Some(&dir));
         assert!(unclean && crumb.is_none());
