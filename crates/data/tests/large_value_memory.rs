@@ -5,7 +5,7 @@
 
 use rustgis_data::capped::Limit;
 use rustgis_data::raster::Crs;
-use rustgis_data::{Coord, Dataset, Field, FieldType, Geometry, Value};
+use rustgis_data::{Coord, Dataset, Field, FieldType, Geometry, GeometryType, Value};
 
 /// The bytes of each large value or shape.
 const ITEM: usize = 32 << 20;
@@ -13,6 +13,14 @@ const ITEM: usize = 32 << 20;
 const ROOM: usize = 1 << 20;
 /// The most the peak may grow while an item is written: a quarter of the item.
 const MOST: u64 = 8 << 20;
+
+/// The rows before the large shape that fills a `.dbf`, and the columns of 254 bytes in each.
+const ROWS: usize = 10_000;
+const COLUMNS: usize = 10;
+/// The bytes those rows take in the `.dbf`: each its columns and a deletion flag.
+const TABLE: usize = ROWS * (COLUMNS * 254 + 1);
+/// Room that holds the table or the large shape after them, not both.
+const SHARED_ROOM: usize = ITEM + TABLE / 2;
 
 /// The most memory this process has held since the peak was last reset, in bytes.
 fn peak_bytes() -> u64 {
@@ -28,6 +36,20 @@ fn growth(run: impl FnOnce()) -> u64 {
     let before = peak_bytes();
     run();
     peak_bytes().saturating_sub(before)
+}
+
+/// [`ROWS`] short lines with a wide table, then one line of `ITEM` bytes of points.
+fn large_shape_after_a_large_table(last: Vec<Coord>) -> Dataset {
+    let fields = (0..COLUMNS).map(|k| Field::new(format!("c{k}"), FieldType::Text)).collect();
+    let mut ds = Dataset::new("after", GeometryType::Polyline, fields);
+    let short = || Geometry::Line(vec![vec![Coord::new(1.0, 2.0), Coord::new(3.0, 4.0)]]);
+    // The first row's values give each column its width; the rest are padded to it.
+    for row in 0..ROWS {
+        let value = if row == 0 { "x".repeat(254) } else { String::new() };
+        ds.push(Some(short()), vec![Value::Text(value); COLUMNS]);
+    }
+    ds.push(Some(Geometry::Line(vec![last])), vec![Value::Null; COLUMNS]);
+    ds
 }
 
 /// A one-feature layer of `geometry` with the text `value` in a field.
@@ -108,6 +130,18 @@ fn a_large_value_or_shape_is_not_copied_for_a_download() {
         });
         assert!(limit.passed(), "{name}");
         check(name, grew);
+    }
+
+    // So is a shape that would fit only if what the `.dbf` holds weren't counted: the peak grows
+    // by little more than the table.
+    let ds = large_shape_after_a_large_table(vertices());
+    let limit = Limit::new(SHARED_ROOM);
+    let grew = growth(|| {
+        assert!(rustgis_data::io::write_bytes_noted_within(&ds, "shp", Crs::LonLat, "t", &limit).is_err());
+    });
+    assert!(limit.passed());
+    if grew >= TABLE as u64 + MOST {
+        over.push(format!("Shapefile line after a table: the peak grew {} MiB", grew >> 20));
     }
 
     assert!(over.is_empty(), "{over:#?}");

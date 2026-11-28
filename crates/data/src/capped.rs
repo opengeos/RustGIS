@@ -54,9 +54,22 @@ impl Limit {
         self.whole(Ok(()))
     }
 
+    /// Refuses as [`Limit::fits`] does when `more` bytes can't be held beside what is counted now.
+    pub(crate) fn fits_more(&self, more: usize) -> Result<()> {
+        self.fits(self.held.load(Ordering::Relaxed).saturating_add(more))
+    }
+
     /// An empty buffer counted against this limit.
     pub(crate) fn buffer(&self) -> Buffer<'_> {
-        Buffer { file: Vec::new(), at: 0, limit: self, charged: 0 }
+        Buffer { file: Vec::new(), at: 0, limit: self, charged: 0, room: None }
+    }
+
+    /// [`Limit::buffer`], which also keeps `room` at the bytes counted for it as it grows: for a
+    /// caller to ask while a writer has the buffer.
+    pub(crate) fn watched_buffer<'a>(&'a self, room: &'a AtomicUsize) -> Buffer<'a> {
+        let mut buffer = self.buffer();
+        buffer.room = Some(room);
+        buffer
     }
 
     /// Counts `bytes` held apart from the buffers (files made in them and taken out, while an
@@ -112,6 +125,8 @@ pub(crate) struct Buffer<'a> {
     limit: &'a Limit,
     /// The allocation counted against the limit: what the system holds, not the file's length.
     charged: usize,
+    /// Told `charged` as it grows ([`Limit::watched_buffer`]).
+    room: Option<&'a AtomicUsize>,
 }
 
 impl Buffer<'_> {
@@ -145,6 +160,9 @@ impl Buffer<'_> {
         let room = old.saturating_mul(2).max(end).min(old.saturating_add(left)).max(end);
         self.limit.take(room - old)?;
         self.charged += room - old;
+        if let Some(told) = self.room {
+            told.store(self.charged, Ordering::Relaxed);
+        }
         // For bytes, `try_reserve_exact` allocates what is asked.
         self.file.try_reserve_exact(room - self.file.len()).map_err(|_| Error::from(ErrorKind::OutOfMemory))?;
         Ok(())

@@ -3,6 +3,7 @@
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::atomic::AtomicUsize;
 
 use serde::ser::{Serialize, SerializeMap, Serializer};
 use serde_json::{Map, Value as Json, json};
@@ -6523,7 +6524,9 @@ fn shapefile_parts_within(
 
     let pt = |c: &Coord| shapefile::Point::new(c.x, c.y);
     let finite = |c: &&Coord| c.x.is_finite() && c.y.is_finite();
-    let (mut shp, mut shx, mut dbf) = (limit.buffer(), limit.buffer(), limit.buffer());
+    // The room the `.shp` and `.shx` hold of the limit, asked while the writer has them.
+    let (shp_room, shx_room) = (AtomicUsize::new(0), AtomicUsize::new(0));
+    let (mut shp, mut shx, mut dbf) = (limit.watched_buffer(&shp_room), limit.watched_buffer(&shx_room), limit.buffer());
     let mut left_out = 0;
     let mut written = 0;
     {
@@ -6531,16 +6534,20 @@ fn shapefile_parts_within(
         let mut w = shapefile::Writer::new(shapes, table.build_with_dest(&mut dbf));
         let multi_points = ds.features.iter().any(|f| matches!(f.geometry, Some(Geometry::MultiPoint(_))));
         // What the `.shp` and `.shx` come to with each shape: their headers, then the records.
-        let mut shape_bytes = 2 * SHAPEFILE_HEADER;
+        let (mut shp_bytes, mut shx_bytes) = (SHAPEFILE_HEADER, SHAPEFILE_HEADER);
         for f in &ds.features {
             crate::progress::step(1)?;
-            // A shape is copied to be written: one whose record can't fit is refused first.
+            // A shape is copied to be written: one whose record can't fit beside what the three
+            // files hold is refused first.
             if limit.bounded()
                 && let Some(g) = &f.geometry
                 && let Some(bytes) = shapefile_record_bytes(g, ds.geometry_type, multi_points)
             {
-                shape_bytes = shape_bytes.saturating_add(bytes);
-                limit.fits(shape_bytes)?;
+                shp_bytes = shp_bytes.saturating_add(bytes);
+                shx_bytes = shx_bytes.saturating_add(SHX_RECORD);
+                // Only what passes the room the `.shp` and `.shx` already hold is more to hold.
+                let more = |bytes: usize, room: &AtomicUsize| bytes.saturating_sub(room.load(std::sync::atomic::Ordering::Relaxed));
+                limit.fits_more(more(shp_bytes, &shp_room).saturating_add(more(shx_bytes, &shx_room)))?;
             }
             let ok = match (&f.geometry, ds.geometry_type) {
                 (Some(Geometry::Point(c)), GeometryType::Point) if !multi_points && finite(&c) => {
@@ -6624,7 +6631,11 @@ fn shapefile_parts_within(
 /// The bytes of a `.shp` file's header, and of a `.shx` file's.
 const SHAPEFILE_HEADER: usize = 100;
 
-/// The bytes `g`'s record adds to a `.shp` and its `.shx` in a layer of type `gt`, counted from
+/// The bytes of a record's entry in a `.shx`.
+const SHX_RECORD: usize = 8;
+
+/// The bytes `g`'s record adds to a `.shp` in a layer of type `gt` (its `.shx` entry is
+/// [`SHX_RECORD`] more), counted from
 /// the vertices [`shapefile_parts_within`] keeps, without copying them; `None` for one it leaves
 /// out. `multi_points` says the layer's points are written as multipoints.
 fn shapefile_record_bytes(g: &Geometry, gt: GeometryType, multi_points: bool) -> Option<usize> {
@@ -6662,8 +6673,8 @@ fn shapefile_record_bytes(g: &Geometry, gt: GeometryType, multi_points: bool) ->
             parts(rings, points)
         }
     };
-    // The record's header and shape type in the `.shp`, and its entry in the `.shx`.
-    Some(8 + 4 + content + 8)
+    // The record's header and shape type, then its content.
+    Some(8 + 4 + content)
 }
 
 fn is_outer<P>(r: &shapefile::PolygonRing<P>) -> bool {
@@ -6758,13 +6769,41 @@ mod tests {
         for (kind, shapes) in layers {
             let mut ds = Dataset::new("t", kind, vec![]);
             let multi_points = shapes.iter().any(|g| matches!(g, Geometry::MultiPoint(_)));
-            let counted: usize = shapes.iter().filter_map(|g| shapefile_record_bytes(g, kind, multi_points)).sum();
+            let counted: Vec<usize> = shapes.iter().filter_map(|g| shapefile_record_bytes(g, kind, multi_points)).collect();
             for g in shapes {
                 ds.push(Some(g), vec![]);
             }
             let (parts, _) = shapefile_parts_in(&ds, Crs::LonLat).unwrap();
-            let written: usize = parts.iter().filter(|(e, _)| matches!(*e, "shp" | "shx")).map(|(_, b)| b.len()).sum();
-            assert_eq!(2 * SHAPEFILE_HEADER + counted, written, "{kind:?}");
+            let written = |ext: &str| parts.iter().find(|(e, _)| *e == ext).unwrap().1.len();
+            assert_eq!(SHAPEFILE_HEADER + counted.iter().sum::<usize>(), written("shp"), "{kind:?}");
+            assert_eq!(SHAPEFILE_HEADER + SHX_RECORD * counted.len(), written("shx"), "{kind:?}");
+        }
+    }
+
+    /// A shape is counted with what the three files already hold: it is written where they fit
+    /// together, with a `.dbf` holding most of the room, and where it fits in room the `.shp`
+    /// and `.shx` hold already, though nothing is left of the limit.
+    #[test]
+    fn a_shape_that_fits_beside_what_the_three_files_hold_is_written() {
+        let line = |points: u32| Geometry::Line(vec![(0..points).map(|i| Coord::new(f64::from(i), 1.0)).collect()]);
+        let layer = |shapes: Vec<Geometry>, rows: usize, width: usize| {
+            let mut ds = Dataset::new("t", GeometryType::Polyline, vec![Field::new("n", FieldType::Text)]);
+            for _ in 0..rows {
+                ds.push(Some(line(2)), vec![Value::Text("x".repeat(width))]);
+            }
+            for g in shapes {
+                ds.push(Some(g), vec![Value::Text("x".to_string())]);
+            }
+            ds
+        };
+        for (ds, max) in [
+            (layer(vec![line(1_000)], 200, 254), 100_000),
+            // A short line's growth of the `.shp` takes all that is left, and the rest fit in it.
+            (layer(std::iter::once(line(900)).chain(std::iter::repeat_n(line(2), 30)).collect(), 0, 1), 17_500),
+        ] {
+            let unlimited = shapefile_parts_in(&ds, Crs::LonLat).unwrap().0;
+            let (parts, ..) = shapefile_parts_within(&ds, Crs::LonLat, None, &Limit::new(max)).unwrap();
+            assert_eq!(parts, unlimited, "{max}");
         }
     }
 
