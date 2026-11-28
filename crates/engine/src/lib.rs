@@ -1061,6 +1061,9 @@ pub struct Session {
     /// The top-level command running, as the messages it says remember it, and how many have run.
     run: Option<rustgis_data::diagnostics::Run>,
     runs: u64,
+    /// Told of each top-level command run as it starts, and with `None` as it ends: the desktop app
+    /// notes it in its run marker, so a run that ends without closing can say what it was doing.
+    pub on_run: Option<Box<dyn FnMut(Option<&rustgis_data::diagnostics::Run>) + Send>>,
     /// How many of the commands running now restore the project if they fail: a replacement is
     /// put aside only under one of them, as only then can it be rolled back.
     restorable: u32,
@@ -1575,6 +1578,7 @@ impl Session {
             diagnostic_source: None,
             run: None,
             runs: 0,
+            on_run: None,
             restorable: 0,
             published_syncs: Vec::new(),
             actor: None,
@@ -1976,7 +1980,11 @@ impl Session {
                 after: None,
                 target: run_target(params),
             };
-            self.run.replace(run)
+            let previous = self.run.replace(run);
+            if let Some(on_run) = self.on_run.as_mut() {
+                on_run(self.run.as_ref());
+            }
+            previous
         });
         let history_deferred = std::mem::replace(&mut self.undo_memory.deferred, true);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -2071,6 +2079,9 @@ impl Session {
                 self.diagnostics.finish_run(ended.id, self.state);
             }
             self.run = run;
+            if let Some(on_run) = self.on_run.as_mut() {
+                on_run(None);
+            }
         }
         self.undo_memory.deferred = history_deferred;
         // Every top-level invocation consumes its key, even a refusal or panic before guarded.
@@ -2487,8 +2498,11 @@ impl Session {
         let retry_state = (self.plugin_retries.clone(), self.url_waits.clone());
         let file_outputs: Vec<_> = self.file_outputs.iter().map(|file| file.id).collect();
         let said = self.notices_given;
-        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self)))
-            .unwrap_or_else(|_| Err(format!("{label} failed unexpectedly; the project was restored")));
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self))).unwrap_or_else(|payload| {
+            // A bug in RustGIS: said as one, with a reference to its details in Messages.
+            let incident = rustgis_data::incident::caught(payload.as_ref());
+            Err(rustgis_data::incident::message(label, mutates, &incident.id))
+        });
         self.shared_steps = outer_steps;
         self.depth = self.depth.saturating_sub(1);
         self.restorable = self.restorable.saturating_sub(u32::from(mutates));
@@ -3668,6 +3682,12 @@ impl Session {
             return;
         }
         self.diagnostics.push_redacted(severity, source.unwrap_or("Application"), &text, loss, self.run.clone());
+        // A bug's failure keeps its details (the panic's message and place) under it, for a report.
+        if severity == rustgis_data::diagnostics::Severity::Error
+            && let Some(incident) = rustgis_data::incident::named_in(text.as_str()).and_then(rustgis_data::incident::find)
+        {
+            self.diagnostics.detail_newest(&incident.details());
+        }
         self.notices.push(Notice {
             text: text.into_string(),
             error: severity == rustgis_data::diagnostics::Severity::Error,

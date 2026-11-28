@@ -152,6 +152,11 @@ pub fn set_clock(clock: fn() -> u64) {
     *lock(&CLOCK) = Some(clock);
 }
 
+/// Milliseconds since 1970 by the application's clock ([`set_clock`]).
+pub(crate) fn now_ms() -> u64 {
+    timestamp_ms()
+}
+
 fn timestamp_ms() -> u64 {
     let clock = *lock(&CLOCK);
     if let Some(clock) = clock {
@@ -278,6 +283,16 @@ impl History {
                 None => {}
             }
         }
+    }
+
+    /// Adds `details` (redacted and bounded) to the newest record: what a bug's failure keeps for a
+    /// report ([`crate::incident::Incident::details`]).
+    pub fn detail_newest(&self, details: &str) {
+        let mut state = lock(&self.0);
+        if let Some(record) = state.records.back_mut() {
+            record.details = bounded(&redact(details), MAX_DETAILS_BYTES);
+        }
+        state.generation = state.generation.wrapping_add(1);
     }
 
     /// Oldest first; both the count and every string in this independent snapshot are bounded.

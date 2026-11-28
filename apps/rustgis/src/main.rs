@@ -154,6 +154,36 @@ mod prefs {
     }
 }
 
+/// What the start of a run says of the last one: an internal error it met (`crash_log`, which a
+/// caught one writes too), and, when it didn't close (`unclean`), the command it was running then.
+/// Without a crash log, a run that didn't close was stopped from outside, most often by running out
+/// of memory.
+fn last_run_notice(app: &RustGisApp, crash_log: Option<&std::path::Path>, unclean: bool, last: Option<&running::Breadcrumb>) -> String {
+    use rustgis_ui_egui::i18n::{fmt, t};
+    let what = last.map(|b| {
+        let name = app.session.registry.get(b.command.as_str()).map_or(b.command.as_str(), |spec| t(spec.label));
+        let at = crash::utc(b.at);
+        match &b.target {
+            Some(target) => fmt("{command} on {target}, started {at} UTC", &[("command", name), ("target", target), ("at", &at)]),
+            None => fmt("{command}, started {at} UTC", &[("command", name), ("at", &at)]),
+        }
+    });
+    match (crash_log, unclean, what) {
+        (Some(log), true, Some(what)) => fmt(
+            "RustGIS closed after an internal error last time, while running {what}. The details are in {path}; please attach them to a bug report.",
+            &[("what", &what), ("path", &log.display().to_string())],
+        ),
+        (Some(log), _, _) => fmt(
+            "RustGIS ran into an internal error last time. The details are in {path}; please attach them to a bug report.",
+            &[("path", &log.display().to_string())],
+        ),
+        (None, _, what) => fmt(
+            "RustGIS closed without a crash report last time, while running {what}: it was most likely stopped from outside, by the computer running out of memory, a forced quit or a power cut. If it happens again with the same data, try a smaller part of it, such as by filtering or clipping it first.",
+            &[("what", &what.unwrap_or_default())],
+        ),
+    }
+}
+
 /// Crash reports. A panic, caught or not, is written to `crash.log` in the settings folder (a
 /// release build on Windows has no console to print it to), and the next launch says where it is.
 mod crash {
@@ -173,17 +203,20 @@ mod crash {
         }));
     }
 
+    /// Appends a panic to `<dir>/crash.log`: the version, system, time, thread and the incident's
+    /// reference, the panic and its backtrace. The log starts over past its cap.
     fn write(dir: &Path, info: &std::panic::PanicHookInfo<'_>) {
         let path = dir.join("crash.log");
         let used = std::fs::metadata(&path).map_or(0, |m| m.len());
         let thread = std::thread::current();
         let entry = format!(
-            "--- RustGIS {} on {} {}, {} UTC, thread {}\n{info}\n{}\n\n",
+            "--- RustGIS {} on {} {}, {} UTC, thread {}{}\n{info}\n{}\n\n",
             env!("CARGO_PKG_VERSION"),
             std::env::consts::OS,
             std::env::consts::ARCH,
             utc_now(),
             thread.name().unwrap_or("unnamed"),
+            rustgis_engine::data::incident::last_id().map(|id| format!(", incident {id}")).unwrap_or_default(),
             std::backtrace::Backtrace::force_capture(),
         );
         // The log starts over when this entry doesn't fit, and one huge entry is cut to the cap.
@@ -253,18 +286,53 @@ mod running {
         pub other_copy: bool,
     }
 
+    /// The command the last run was running when it ended without closing, as its marker held it.
+    #[derive(Debug, PartialEq, Eq)]
+    pub struct Breadcrumb {
+        /// The registered command's id.
+        pub command: String,
+        /// What it worked on, redacted as a message is ([`rustgis_engine::data::diagnostics::Run`]).
+        pub target: Option<String>,
+        /// When it started, in seconds since 1970 (UTC).
+        pub at: u64,
+    }
+
+    /// The marker's text while `run` runs: `running`, then the command, its target and its start,
+    /// tab-separated on a second line.
+    fn running_text(run: Option<&rustgis_engine::data::diagnostics::Run>, at: u64) -> String {
+        match run {
+            None => "running".to_string(),
+            Some(run) => {
+                // One line of fields: tabs and line breaks in a layer's name read as spaces.
+                let clean = |s: &str| s.chars().map(|c| if c.is_control() { ' ' } else { c }).collect::<String>();
+                format!("running\n{}\t{}\t{at}", clean(&run.command), clean(run.target.as_deref().unwrap_or("")))
+            }
+        }
+    }
+
+    /// The command a marker's text says was running ([`running_text`]), if any.
+    fn breadcrumb(text: &str) -> Option<Breadcrumb> {
+        let line = text.strip_prefix("running\n")?;
+        let mut fields = line.trim_end().split('\t');
+        let command = fields.next().filter(|c| !c.is_empty())?.to_string();
+        let target = fields.next().filter(|t| !t.is_empty()).map(str::to_string);
+        let at = fields.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+        Some(Breadcrumb { command, target, at })
+    }
+
     /// Takes `<dir>/running` for this run: the marker, or why there is none (another copy holds
-    /// it, or the folder can't be written), and whether the previous run didn't close cleanly.
-    pub fn start(dir: Option<&Path>) -> (Result<Marker, NoMarker>, bool) {
+    /// it, or the folder can't be written), whether the previous run didn't close cleanly, and the
+    /// command it was running then, when its marker says.
+    pub fn start(dir: Option<&Path>) -> (Result<Marker, NoMarker>, bool, Option<Breadcrumb>) {
         let none = |why: String| Err(NoMarker { why, other_copy: false });
-        let Some(dir) = dir else { return (none("this computer has no settings folder for RustGIS".into()), false) };
+        let Some(dir) = dir else { return (none("this computer has no settings folder for RustGIS".into()), false, None) };
         let file = std::fs::create_dir_all(dir)
             .and_then(|_| OpenOptions::new().read(true).write(true).create(true).truncate(false).open(dir.join("running")));
         let mut file = match file {
             Ok(f) => f,
             Err(e) => {
                 log::warn!("no run marker in {} ({e}): an unclean exit won't be noticed", dir.display());
-                return (none(format!("the settings folder {} can't be written ({e})", dir.display())), false);
+                return (none(format!("the settings folder {} can't be written ({e})", dir.display())), false, None);
             }
         };
         let locked = match file.try_lock() {
@@ -272,7 +340,7 @@ mod running {
             Err(std::fs::TryLockError::WouldBlock) => {
                 log::info!("the run marker is held: another copy of RustGIS is running");
                 let why = "another copy of RustGIS is running, and only the first keeps a recovery copy".into();
-                return (Err(NoMarker { why, other_copy: true }), false);
+                return (Err(NoMarker { why, other_copy: true }), false, None);
             }
             // The folder can't lock files (some network or FUSE folders): keep the marker unlocked,
             // so unclean exits are still noticed. Without a lock, copies running side by side share
@@ -295,6 +363,8 @@ mod running {
                 true
             }
         };
+        // What it was running when it ended, when it says.
+        let crumb = if unclean { breadcrumb(&String::from_utf8_lossy(&bytes)) } else { None };
         // Written over what is there, then cut to its length: a write that fails leaves the old
         // content, so a marker that was set never reads as a clean exit.
         const RUNNING: &[u8] = b"running";
@@ -303,7 +373,7 @@ mod running {
         if let Err(e) = marked {
             log::warn!("could not mark this run: {e}");
         }
-        (Ok(Marker { file, locked }), unclean)
+        (Ok(Marker { file, locked }), unclean, crumb)
     }
 
     impl Marker {
@@ -311,6 +381,18 @@ mod running {
         /// recovery folder this run's alone.
         pub fn locked(&self) -> bool {
             self.locked
+        }
+
+        /// Writes what is running now (`run`, or nothing between commands), so a run that ends
+        /// without closing leaves it for the next launch to say. A few bytes over the old ones; a
+        /// write that fails leaves the marker set, as a run without a note.
+        pub fn note(&mut self, run: Option<&rustgis_engine::data::diagnostics::Run>, at: u64) {
+            let text = running_text(run, at);
+            let written =
+                self.file.rewind().and_then(|_| self.file.write_all(text.as_bytes())).and_then(|_| self.file.set_len(text.len() as u64));
+            if let Err(e) = written {
+                log::warn!("could not note the running command in the run marker: {e}");
+            }
         }
 
         /// A clean exit: the next launch starts as usual. Dropping the file releases the lock.
@@ -325,6 +407,15 @@ mod running {
     /// clears it (the app's `on_exit`, or `main` when `run_native` returns, which also covers
     /// eframe failing to start before the app exists).
     pub type Shared = std::sync::Arc<std::sync::Mutex<Option<Marker>>>;
+
+    /// Notes what a shared marker's run is running now ([`Marker::note`]).
+    pub fn note(marker: &Shared, run: Option<&rustgis_engine::data::diagnostics::Run>) {
+        let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+        let mut held = marker.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(m) = held.as_mut() {
+            m.note(run, at);
+        }
+    }
 
     /// Clears a shared marker once.
     pub fn close(marker: &Shared) {
@@ -603,8 +694,11 @@ fn main() -> eframe::Result {
     let crashed = crash::take_previous(prefs::dir());
     // Whether it closed cleanly: if not, the Start With project isn't opened (it may be what
     // crashed, and reopening it on every launch would leave no way into Settings).
-    let (marker, unclean) = running::start(prefs::dir().as_deref());
+    let (marker, unclean, last_command) = running::start(prefs::dir().as_deref());
     crash::install(prefs::dir());
+    // Every panic an incident with a reference, which the crash log above names and a caught bug's
+    // message gives (installed after it, so it runs first).
+    rustgis_engine::data::incident::install();
     // Finder can supply documents before eframe creates the app. Keep the native target alive
     // through run_native and attach its wakeup when the app's egui context becomes available.
     #[cfg(target_os = "macos")]
@@ -663,14 +757,10 @@ fn main() -> eframe::Result {
     if let Err(e) = app.start(&rustgis_ui_egui::Start { blank, after_crash: unclean, ..Default::default() }) {
         log::warn!("start-up: {e}");
     }
-    if let Some(log) = crashed {
+    if crashed.is_some() || unclean && last_command.is_some() {
         // Notices are shown as written: translate this one now that the language is known.
         rustgis_ui_egui::i18n::set_current(app.chosen_lang());
-        let text = rustgis_ui_egui::i18n::fmt(
-            "RustGIS ran into an internal error last time. The details are in {path}; please attach them to a bug report.",
-            &[("path", &log.display().to_string())],
-        );
-        app.session.notify(text, true);
+        app.session.notify(last_run_notice(&app, crashed.as_deref(), unclean, last_command.as_ref()), true);
     }
     if let Some(e) = no_autosave {
         log::warn!("no autosave: {e}");
@@ -738,6 +828,9 @@ fn main() -> eframe::Result {
     }
     let marker: running::Shared = std::sync::Arc::new(std::sync::Mutex::new(marker.ok()));
     let held = marker.clone();
+    // What runs, noted in the marker, so a run that ends without closing says what it was doing.
+    let crumbs = marker.clone();
+    app.session.on_run = Some(Box::new(move |run| running::note(&crumbs, run)));
     let menus = Menus::default();
     let result = eframe::run_native(
         "RustGIS",
@@ -851,27 +944,58 @@ mod tests {
     }
 
     #[test]
+    fn a_run_that_did_not_close_says_the_command_it_was_running() {
+        let dir = std::env::temp_dir().join(format!("rustgis-running-crumb-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _cleanup = TempDir(dir.clone());
+        let (first, _, _) = running::start(Some(&dir));
+        let mut first = first.unwrap();
+        let run = rustgis_engine::data::diagnostics::Run {
+            id: 1,
+            command: "gp.run".into(),
+            before: 0,
+            after: None,
+            target: Some("Parcels\tcounty".into()),
+        };
+        first.note(Some(&run), 1_700_000_000);
+        // It ends without closing, in the middle of the command.
+        drop(first);
+        let (second, unclean, crumb) = running::start(Some(&dir));
+        assert!(unclean);
+        assert_eq!(crumb, Some(running::Breadcrumb { command: "gp.run".into(), target: Some("Parcels county".into()), at: 1_700_000_000 }));
+        // Between commands there is nothing to say, and a clean close says nothing at all.
+        let mut second = second.unwrap();
+        second.note(None, 0);
+        drop(second);
+        let (third, unclean, crumb) = running::start(Some(&dir));
+        assert!(unclean && crumb.is_none());
+        third.unwrap().close();
+        let (_, unclean, crumb) = running::start(Some(&dir));
+        assert!(!unclean && crumb.is_none());
+    }
+
+    #[test]
     fn a_run_that_did_not_close_is_noticed_once() {
         let dir = std::env::temp_dir().join(format!("rustgis-running-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         // Removed however the test ends (declared first, so dropped after the markers).
         let _cleanup = TempDir(dir.clone());
-        let (first, unclean) = running::start(Some(&dir));
+        let (first, unclean, _) = running::start(Some(&dir));
         assert!(first.is_ok() && !unclean, "a first run");
         // Held alone: autosave may use the recovery folder.
         assert!(first.as_ref().is_ok_and(running::Marker::locked));
         // Another copy running alongside can't take it, and doesn't count as a crash.
-        let (second, unclean) = running::start(Some(&dir));
+        let (second, unclean, _) = running::start(Some(&dir));
         // It says why, which the app shows as it starts without autosave.
         assert!(second.as_ref().err().is_some_and(|no| no.other_copy && no.why.contains("another copy")) && !unclean);
         // A folder that can't be written isn't another copy.
         assert!(running::start(None).0.err().is_some_and(|no| !no.other_copy));
         // This run ends without closing (a crash): the next one notices, once it closes cleanly.
         drop(first);
-        let (after_crash, unclean) = running::start(Some(&dir));
+        let (after_crash, unclean, _) = running::start(Some(&dir));
         assert!(unclean);
         after_crash.unwrap().close();
-        let (next, unclean) = running::start(Some(&dir));
+        let (next, unclean, _) = running::start(Some(&dir));
         assert!(!unclean);
         drop(next);
     }

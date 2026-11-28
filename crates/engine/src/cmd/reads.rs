@@ -191,7 +191,10 @@ impl ReadAhead {
                 })
             })
         }))
-        .unwrap_or_else(|_| Err(format!("{name} failed unexpectedly")));
+        .unwrap_or_else(|payload| {
+            let incident = rustgis_data::incident::caught(payload.as_ref());
+            Err(rustgis_data::incident::message(name, false, &incident.id))
+        });
         res?;
         Ok(Read {
             op,
