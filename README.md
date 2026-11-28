@@ -192,16 +192,18 @@ Layered crates, each depending only on the ones below it:
 | L1 | `rustgis-data` | features and typed attributes; GeoJSON, CSV, Shapefile, KML, GPX and more; GeoPackage, GeoParquet, FlatGeobuf, LiDAR, PostGIS and MySQL providers; GDAL formats and DuckDB queries through their programs; SQL where clauses; rasters (GeoTIFF, ASCII grid, Zarr) and their coordinate systems |
 | L2 | `rustgis-map`, `rustgis-analysis` | layers, symbology, labeling, camera, basemaps; geoprocessing (on `geo`) |
 | L2 | `rustgis-tiles` | web map tiles: XYZ/TMS/WMS, Mapbox Vector Tiles, PMTiles and MBTiles archives, MapLibre styles, the tile cache |
+| L2 | `rustgis-keychain` | the system's secret store (macOS Keychain, Windows Credential Manager, Secret Service) |
 | L3 | `rustgis-render` | tiny-skia renderer, label placement, PNG export, fonts |
 | L3 | `rustgis-plugins` | sandboxed WebAssembly plugins and the plugin registry |
 | L3 | `rustgis-geolibre` | the GeoLibre tool suite as geoprocessing tools |
 | L4 | `rustgis-engine` | session, undo, command registry, sample project |
 | L5 | `rustgis-assistant` | the AI Assistant: a chat agent that acts through commands |
 | L6 | `rustgis-ui-egui` | the ribbon front end (swappable) |
-| apps | `rustgis`, `rustgis-cli`, `rustgis-web`, `rustgis-python` | desktop, command line, browser (WebAssembly), the `rustgis` Python package |
+| L7 | `rustgis-ui-touch` | the phone and tablet interface around `rustgis-ui-egui`'s map view |
+| apps | `rustgis`, `rustgis-cli`, `rustgis-web`, `rustgis-python`, `rustgis-mobile` | desktop, command line, browser (WebAssembly), the `rustgis` Python package, Android and iOS |
 
-`cargo xtask ci` runs formatting, clippy, the tests and the layering check. Contributor and
-agent notes: [AGENTS.md](AGENTS.md).
+`cargo xtask ci` runs test hygiene, formatting, clippy, the tests, layering, attribution, row-use
+and schema checks. Contributor and agent notes: [AGENTS.md](AGENTS.md).
 
 ## Sponsor
 

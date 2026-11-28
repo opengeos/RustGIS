@@ -3,7 +3,9 @@ name: Auto-merge
 # A maintainer labels a pull request `automerge`: it's approved and joins the merge queue as soon
 # as the checks the `main` ruleset requires pass; the queue squash-merges it once its checks pass
 # on top of main. A later push drops the label and turns auto-merge off,
-# so new commits need another look; removing the label turns it off too.
+# so new commits need another look; removing the label turns it off and dismisses the approval
+# automerge posted (manual approvals and approvals created before this workflow marks them are
+# left untouched).
 #
 # `pull_request_target` so fork pull requests get the token; the pull request's code is never
 # checked out or run. The token is a maintainer's (`AUTOMERGE_TOKEN`), not GITHUB_TOKEN: Actions
@@ -16,10 +18,12 @@ on:
 
 permissions: {}
 
-# One group per action: a pending run is replaced by the next one in its group, so a push's revoke
-# run mustn't share a group with runs for other labels.
+# Serialize `automerge` label/unlabel events in one FIFO queue so adding, removing, and re-adding
+# the label cannot race or replace a pending revoke run; keep `synchronize` and unrelated labels in
+# separate groups.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}-${{ github.event.action }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}-${{ github.event.action == 'synchronize' && 'synchronize' || (github.event.label.name == 'automerge' && 'label' || 'other') }}
+  queue: max
 
 jobs:
   enable:
@@ -35,6 +39,7 @@ jobs:
           SENDER: ${{ github.event.sender.login }}
           AUTHOR: ${{ github.event.pull_request.user.login }}
         run: |
+          set -euo pipefail
           # Triage can label too: only someone who could merge it themselves may use the label.
           perm=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$SENDER/permission" --jq .permission)
           case "$perm" in
@@ -46,13 +51,19 @@ jobs:
           if [ "$SENDER" = "$AUTHOR" ] && [ "$AUTHOR" != "$owner" ]; then
             echo "::error::$SENDER can't use automerge on their own pull request."; exit 1
           fi
+          # Re-verify the label is still present in case it was removed before this run started.
+          has_label=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$NUMBER" --jq 'any(.labels[]; .name == "automerge")')
+          if [ "$has_label" != true ]; then
+            echo "automerge label was removed before enabling; skipping."
+            exit 0
+          fi
           # Both pinned to the commit that was labelled: if the head has moved, enabling auto-merge
           # fails before anything is approved.
           gh pr merge "$PR" --auto --squash --match-head-commit "$SHA"
           # The token owner can't approve their own pull requests, and needn't: they bypass the review.
           if [ "$AUTHOR" != "$owner" ]; then
             gh api "repos/$GITHUB_REPOSITORY/pulls/$NUMBER/reviews" -f commit_id="$SHA" -f event=APPROVE \
-              --silent || { gh pr merge "$PR" --disable-auto; exit 1; }
+              -f body="Approved via automerge." --silent || { gh pr merge "$PR" --disable-auto; exit 1; }
           fi
 
   revoke:
@@ -65,7 +76,20 @@ jobs:
       - env:
           GH_TOKEN: ${{ secrets.AUTOMERGE_TOKEN }}
           PR: ${{ github.event.pull_request.html_url }}
+          NUMBER: ${{ github.event.pull_request.number }}
           ACTION: ${{ github.event.action }}
         run: |
+          set -euo pipefail
           gh pr merge "$PR" --disable-auto || echo "Auto-merge was off."
-          if [ "$ACTION" = synchronize ]; then gh pr edit "$PR" --remove-label automerge; fi
+          if [ "$ACTION" = synchronize ]; then
+            gh pr edit "$PR" --remove-label automerge
+          elif [ "$ACTION" = unlabeled ]; then
+            owner=$(gh api user --jq .login)
+            gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$NUMBER/reviews?per_page=100" \
+              | jq -r --arg owner "$owner" '.[] | select((.user.login // "") == $owner and .state == "APPROVED" and (.body // "") == "Approved via automerge.") | .id' \
+              | while read -r review_id; do
+                  [ -n "$review_id" ] || continue
+                  gh api -X PUT "repos/$GITHUB_REPOSITORY/pulls/$NUMBER/reviews/$review_id/dismissals" \
+                    -f message="Automerge label removed" --silent
+                done
+          fi

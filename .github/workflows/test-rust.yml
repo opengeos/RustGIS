@@ -157,9 +157,19 @@ jobs:
           path: ${{ runner.temp }}/overlay-findings
           if-no-files-found: ignore
       # The command line's peak memory per workflow, as a multiple of loading alone, against
-      # xtask/memory-limits.txt (xtask/src/memory.rs). It runs the rustgis-cli the tests above
-      # built, so it costs only its own run; on Linux (GNU time), when the tests cover rustgis-cli,
-      # as they do whenever a package it uses changes.
+      # xtask/memory-limits.txt (xtask/src/memory.rs). On Linux (GNU time), when the tests cover
+      # rustgis-cli (as they do whenever a package it uses changes) or xtask itself (such as
+      # changes to memory-limits.txt or memory.rs). Reuses the rustgis-cli binary nextest built
+      # when the tests cover it. Otherwise (such as an xtask-only run) it builds rustgis-cli again,
+      # since a cached binary may be stale.
       - name: Peak memory
-        if: matrix.os == 'ubuntu-latest' && (inputs.packages == '--workspace' || contains(format('{0} ', inputs.packages), '-p rustgis-cli '))
-        run: cargo xtask memory --cli target/debug/rustgis-cli
+        if: matrix.os == 'ubuntu-latest' && (inputs.packages == '--workspace' || contains(format('{0} ', inputs.packages), '-p rustgis-cli ') || contains(format('{0} ', inputs.packages), '-p xtask '))
+        shell: bash
+        env:
+          PACKAGES: ${{ inputs.packages }}
+        run: |
+          set -euo pipefail
+          if [ ! -x target/debug/rustgis-cli ] || { [ "$PACKAGES" != --workspace ] && [[ " $PACKAGES " != *" -p rustgis-cli "* ]]; }; then
+            cargo build --locked -p rustgis-cli
+          fi
+          cargo xtask memory --cli target/debug/rustgis-cli
