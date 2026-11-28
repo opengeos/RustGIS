@@ -585,7 +585,10 @@ impl Layer {
     /// any new rows can be paired with it. External source changes still use strict validation.
     pub fn refresh_replaced_source(&mut self) -> Result<(), String> {
         let Some(source) = &mut self.source else { return Ok(()) };
-        source.reopen()?;
+        if let Err(error) = source.reopen() {
+            self.install(Vec::new());
+            return Err(error);
+        }
         if let Some(info) = source.info() {
             let removed: Vec<_> = self
                 .dataset
@@ -988,7 +991,7 @@ impl Layer {
         }
         if format == "GeoParquet"
             && source.iter().any(|f| f.ty.is_temporal())
-            && (fields.len() != source.len() || fields.iter().zip(source).any(|(saved, fresh)| saved.name != fresh.name))
+            && (fields.len() > source.len() || fields.iter().zip(source).any(|(saved, fresh)| saved.name != fresh.name))
         {
             return Err(
                 "The source's columns don't match this saved layer's fields. Add the data source again to use its current schema.".into()
@@ -4286,10 +4289,40 @@ mod tests {
         assert_eq!(layer.dataset.fields[0].alias.as_deref(), Some("Rank"));
         let notes = layer.source.as_mut().unwrap().take_read_notes();
         assert!(notes.iter().any(|n| n.contains("1 saved column") && n.contains("'gone'")), "{notes:?}");
+        layer.sync_source(&view, true);
+        assert_eq!(layer.dataset.features.len(), 1);
+        std::fs::remove_file(&path).unwrap();
+        assert!(layer.refresh_replaced_source().is_err());
+        assert!(layer.dataset.features.is_empty(), "a failed replacement cannot leave rows from the previous file drawn");
+        assert_eq!(layer.dataset.fields[0].alias.as_deref(), Some("Rank"));
         drop(layer);
         for extension in ["shp", "shx", "dbf", "prj", "cpg"] {
             let _ = std::fs::remove_file(path.with_extension(extension));
         }
+    }
+
+    /// A saved native-date prefix can gain a trailing field before any view sync. Whole reads,
+    /// chunk exports and views all adopt that same source header without epoch reinterpretation.
+    #[test]
+    fn linked_source_schema_native_parquet_dates_allow_trailing_fields() {
+        let fields = vec![Field::new("issued", FieldType::Date), Field::new("download", FieldType::Integer)];
+        let mut ds = Dataset::new("Permits", GeometryType::Point, fields.clone());
+        let date = Value::parse("2026-11-27", FieldType::Date);
+        ds.push(Some(Geometry::Point(Coord::new(1.0, 1.0))), vec![date.clone(), Value::Int(11)]);
+        let bytes = std::sync::Arc::new(rustgis_data::io::write_bytes(&ds, "parquet").unwrap().0);
+        let handle = rustgis_data::source::open_shared("permits.parquet", bytes, None).unwrap();
+        let mut layer = Layer::new_streamed(1, source::SourceLayer::from_path("permits.parquet", None, handle));
+        layer.dataset.fields.truncate(1);
+        let (all, report) = layer.load_all_reported().unwrap();
+        assert_eq!(all.fields, fields);
+        assert_eq!(all.features.value(0, 0), &date);
+        assert_eq!(all.features.value(0, 1), &Value::Int(11));
+        assert_eq!(report.messages.iter().filter(|n| n.contains("1 field") && n.contains("download")).count(), 1);
+        assert_eq!(layer.chunk_export().unwrap().unwrap().1.fields, fields);
+        layer.sync_source(&Extent::new(-180.0, -80.0, 180.0, 80.0), true);
+        assert_eq!(layer.dataset.fields, fields);
+        assert_eq!(layer.dataset.features.value(0, 0), &date);
+        assert_eq!(layer.dataset.features.value(0, 1), &Value::Int(11));
     }
 
     #[test]
@@ -4368,15 +4401,14 @@ mod tests {
         assert!(rustgis_data::query::parse_fields("starts_on <= ends_on", &Dataset::new("", GeometryType::Point, current)).is_ok());
     }
 
-    /// Previously omitted INT96 fields can now be present between saved columns, or after them.
-    /// Refusal keeps the saved schema intact and prevents shifted or silently omitted values.
+    /// Previously omitted INT96 fields inserted between saved columns would shift their values.
+    /// Refusal keeps that saved schema intact; a matching prefix can safely gain trailing fields.
     #[test]
     fn newly_read_date_columns_refuse_stale_saved_field_positions() {
         let fields = vec![Field::new("name", FieldType::Text), Field::new("population", FieldType::Integer)];
         let layer = Layer::new(1, Dataset::new("old", GeometryType::Point, fields.clone()));
         for source in [
             vec![fields[0].clone(), Field::new("legacy_time", FieldType::DateTime), fields[1].clone()],
-            vec![fields[0].clone(), fields[1].clone(), Field::new("legacy_time", FieldType::DateTime)],
             vec![Field::new("name", FieldType::DateTime), fields[0].clone(), fields[1].clone()],
         ] {
             let mut saved = fields.clone();
@@ -4387,6 +4419,8 @@ mod tests {
             layer.date_fields_from_source(&mut fresh, &source, "GeoParquet").unwrap();
             assert_eq!(fresh, source);
         }
+        let appended = vec![fields[0].clone(), fields[1].clone(), Field::new("legacy_time", FieldType::DateTime)];
+        assert_eq!(layer.fields_from_source(&appended, "GeoParquet").unwrap(), appended);
     }
 
     #[test]
