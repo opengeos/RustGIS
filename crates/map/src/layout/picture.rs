@@ -218,7 +218,7 @@ mod tests {
             "data:image/png;base64,AAAA",
             "logos/me@host:/a.png",
             "/data/user@host:/a.png",
-            r"C:\Users\me@corp\a.png",
+            r"C:\maps\me@corp\a.png",
             "C:/me@corp:x/a.png",
             r"\\server\share\me@corp:x\a.png",
             "./user@host:/a.png",
