@@ -653,6 +653,7 @@ pub fn report_file(s: &Session, i: usize, template: bool) -> Result<Vec<u8>, Str
 
 fn open(s: &mut Session, p: &Value) -> CmdResult {
     let text = super::items::read_text(p)?;
+    crate::project::check_format(&text, "report")?;
     let mut r: Report = serde_json::from_str(&text).map_err(|e| format!("not a RustGIS report: {e}"))?;
     let repairs = r.clamp();
     import_layer(s, p, &mut r)?;

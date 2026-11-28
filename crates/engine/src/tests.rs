@@ -64953,6 +64953,57 @@ fn a_transparency_reads_back_without_float_noise() {
     assert_eq!(crate::cmd::project::percent(0.0), json!(0.0));
 }
 
+/// Every saved-item reader refuses files saved by a newer format version or requiring an unknown
+/// capability before deserializing, and Jupyter notebook import refuses any `nbformat` other than
+/// integer 4.
+#[test]
+fn saved_item_readers_refuse_future_format_requires_and_non_v4_nbformat() {
+    use base64::Engine;
+    let mut s = world();
+    let cases: &[(&str, Value)] = &[
+        ("presentation.import", json!({"name": "Deck", "pages": []})),
+        ("report.open", json!({"name": "Rep", "layer": "Cities"})),
+        ("notebook.open", json!({"name": "Notes", "cells": []})),
+        ("bookmark.import", json!({"type": "rustgisBookmarks", "bookmarks": []})),
+    ];
+    for (cmd, base) in cases {
+        let mut future = base.clone();
+        future["format"] = json!(999);
+        let err = s.run(cmd, &json!({"text": future.to_string()})).unwrap_err();
+        assert!(err.contains("newer RustGIS"), "{cmd} future format: {err}");
+
+        let mut req = base.clone();
+        req["requires"] = json!(["future-feature-x"]);
+        let err = s.run(cmd, &json!({"text": req.to_string()})).unwrap_err();
+        assert!(err.contains("future-feature-x"), "{cmd} unknown requires: {err}");
+    }
+
+    // Deep learning package (`dl.import`) checks `model.json` inside the ZIP archive.
+    let make_dlpk = |model_json: &Value| -> String {
+        let buf = rustgis_data::zip::write(&[("model.json".into(), model_json.to_string().into_bytes())]).unwrap();
+        base64::engine::general_purpose::STANDARD.encode(buf)
+    };
+    let future_dl = make_dlpk(&json!({"format": 999, "name": "M"}));
+    let err = s.run("dl.import", &json!({"data": future_dl})).unwrap_err();
+    assert!(err.contains("newer RustGIS"), "dl.import future format: {err}");
+    let req_dl = make_dlpk(&json!({"requires": ["future-dl-op"], "name": "M"}));
+    let err = s.run("dl.import", &json!({"data": req_dl})).unwrap_err();
+    assert!(err.contains("future-dl-op"), "dl.import unknown requires: {err}");
+
+    // Jupyter notebooks must declare integer `nbformat: 4`.
+    for (bad, needle) in [
+        (json!({"nbformat": 5, "cells": []}), "nbformat 5"),
+        (json!({"nbformat": 3, "cells": []}), "nbformat 3"),
+        (json!({"nbformat": "4", "cells": []}), "nbformat"),
+        (json!({"nbformat": null, "cells": []}), "nbformat"),
+    ] {
+        let err = s.run("notebook.open", &json!({"text": bad.to_string()})).unwrap_err();
+        assert!(err.contains(needle), "expected {needle} for {bad}, got: {err}");
+    }
+    let ok_v4 = json!({"nbformat": 4, "cells": [{"cell_type": "markdown", "source": "ok"}]});
+    s.run("notebook.open", &json!({"text": ok_v4.to_string()})).unwrap();
+}
+
 /// Headless sessions emit the CJK font-folder scan notice once through `Session::run` when a
 /// fallback scan was lossy, stay silent when clean, and leave the summary untouched across every
 /// `Session::new` copy once a UI shell claims process-wide ownership for translation.

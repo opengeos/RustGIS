@@ -538,12 +538,15 @@ fn export(app: &mut RustGisApp) {
     }
 }
 
+/// Extensions accepted when importing a model file on desktop and in the browser.
+pub(crate) const MODEL_EXTS: &[&str] = &["json", "rgistool"];
+
 /// Imports a model file (`*.model.json`, or a web tool) and opens it.
 pub(crate) fn import(app: &mut RustGisApp) {
     if let Some(open) = &app.services.open_async {
         app.ui.pending_open = Some("model.import");
         open("item");
-    } else if let Some(path) = crate::dialogs::pick_open(&["json", "rgistool"], tl!("RustGIS model")) {
+    } else if let Some(path) = crate::dialogs::pick_open(MODEL_EXTS, tl!("RustGIS model")) {
         match app.run("model.import", json!({"path": path})) {
             Ok(v) => imported(app, &v),
             Err(e) => app.mb.log(e, LogKind::Error),

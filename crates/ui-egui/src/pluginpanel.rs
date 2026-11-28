@@ -532,6 +532,17 @@ pub(crate) fn cancel_pick(app: &mut RustGisApp) {
     }
 }
 
+#[cfg(test)]
+impl State {
+    pub(crate) fn set_picking_for_tests(&mut self, plugin: &str, widget: &str) {
+        self.picking = Some((plugin.to_string(), widget.to_string()));
+    }
+
+    pub(crate) fn is_picking_for_tests(&self) -> bool {
+        self.picking.is_some()
+    }
+}
+
 /// What a pick waiting for the map asks for, for the map's hint and the status bar.
 pub(crate) fn pick_hint(app: &mut RustGisApp) -> Option<String> {
     let (pid, item) = waiting_pick(app)?;

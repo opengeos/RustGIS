@@ -225,3 +225,14 @@ def test_widget_repeated_table_id_cannot_gain_a_retained_key():
     from_app(m, json.dumps(incoming))
     assert s._engine._peer_text()[1] == 0
     assert any("lost their keys" in notice for notice, _ in m.notices())
+
+
+def test_app_src_preserves_fragments_and_existing_query():
+    from rustgis._embed import _app_src
+
+    assert _app_src("https://web.rustgis.app/", None) == "https://web.rustgis.app/?embed"
+    assert _app_src("https://web.rustgis.app/#map=5/10/20", None) == "https://web.rustgis.app/?embed#map=5/10/20"
+    assert _app_src("https://web.rustgis.app/#map=5/10/20", "fr") == "https://web.rustgis.app/?embed&lang=fr#map=5/10/20"
+    assert _app_src("https://web.rustgis.app/?webgl#view", "de") == "https://web.rustgis.app/?webgl&embed&lang=de#view"
+    assert _app_src("https://web.rustgis.app/?webgl&theme=dark", None) == "https://web.rustgis.app/?webgl&theme=dark&embed"
+    assert _app_src("https://web.rustgis.app/?#frag", None) == "https://web.rustgis.app/?embed#frag"

@@ -504,7 +504,7 @@ fn geopackage_edit_dialogs_target_numeric_ids_with_duplicate_names() {
         h.run_steps(2);
         h.get_by_label(&format!("Duplicate (#{to})")).click();
         h.run_steps(2);
-        assert_eq!(h.state().dialogs.gpkg_layer, Some(to));
+        assert_eq!(h.state().dialogs.source_layer, Some(to));
     };
     let shown_count = |h: &egui_kittest::Harness<'_, RustGisApp>, count: &str| {
         let label = h.get_by_label("Changed rows").rect();
@@ -521,7 +521,7 @@ fn geopackage_edit_dialogs_target_numeric_ids_with_duplicate_names() {
     h.state_mut().run("layer.select", json!({"layer": lower})).unwrap();
     h.state_mut().run("ui.dialog", json!({"name": "gpkgSave"})).unwrap();
     h.run_steps(3);
-    assert_eq!(h.state().dialogs.gpkg_layer, Some(lower), "the lower duplicate is active");
+    assert_eq!(h.state().dialogs.source_layer, Some(lower), "the lower duplicate is active");
     h.get_by_label(&lower_table);
     assert_eq!(h.state().dialogs.list[2], "2");
     shown_count(&h, "2");
@@ -544,7 +544,7 @@ fn geopackage_edit_dialogs_target_numeric_ids_with_duplicate_names() {
     h.state_mut().run("edit.setValue", json!({"layer": lower, "row": 0, "field": "name", "value": "lower discarded"})).unwrap();
     h.state_mut().run("ui.dialog", json!({"name": "gpkgDiscard"})).unwrap();
     h.run_steps(3);
-    assert_eq!(h.state().dialogs.gpkg_layer, Some(lower));
+    assert_eq!(h.state().dialogs.source_layer, Some(lower));
     h.get_by_label(&lower_table);
     choose(&mut h, lower, upper);
     h.get_by_label(&upper_table);
@@ -563,7 +563,7 @@ fn geopackage_edit_dialogs_target_numeric_ids_with_duplicate_names() {
     for (dialog, button) in [("gpkgSave", "Save"), ("gpkgDiscard", "Discard")] {
         for target in [None, Some(u32::MAX)] {
             h.state_mut().run("ui.dialog", json!({"name": dialog})).unwrap();
-            h.state_mut().dialogs.gpkg_layer = target;
+            h.state_mut().dialogs.source_layer = target;
             h.run_steps(3);
             assert!(h.state().dialogs.list.is_empty());
             h.get_by_role_and_label(egui::accesskit::Role::Button, button).click();
@@ -577,7 +577,7 @@ fn geopackage_edit_dialogs_target_numeric_ids_with_duplicate_names() {
     }
     h.state_mut().run("layer.select", json!({"layer": "Countries"})).unwrap();
     h.state_mut().run("ui.dialog", json!({"name": "gpkgSave"})).unwrap();
-    assert_eq!(h.state().dialogs.gpkg_layer, Some(upper), "a non-editable active layer falls back to the first editable ID");
+    assert_eq!(h.state().dialogs.source_layer, Some(upper), "a non-editable active layer falls back to the first editable ID");
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -615,7 +615,7 @@ fn geopackage_edit_dialogs_refuse_reused_layer_ids() {
                 h.state_mut().run("ui.dialog", json!({"name": dialog})).unwrap();
                 h.run_steps(3);
                 assert_eq!(h.state().dialogs.list[4], a.to_string_lossy());
-                assert_eq!(h.state().dialogs.gpkg_instance, Some(instance));
+                assert_eq!(h.state().dialogs.source_instance, Some(instance));
 
                 h.state_mut().run("edit.undo", json!({})).unwrap();
                 assert!(h.state().session.map().layer(id).is_none());
@@ -637,7 +637,7 @@ fn geopackage_edit_dialogs_refuse_reused_layer_ids() {
                 h.run_steps(3);
                 assert_eq!(h.state().dialogs.open, Some(dialog));
                 assert!(h.state().dialogs.error.is_some());
-                assert_eq!(h.state().dialogs.gpkg_instance, Some(instance), "rendering must never adopt the replacement");
+                assert_eq!(h.state().dialogs.source_instance, Some(instance), "rendering must never adopt the replacement");
                 assert!(h.state().dialogs.list.is_empty());
                 assert_eq!(
                     h.state().session.map().layer(id).unwrap().dataset.features[0].attrs[0],
@@ -655,7 +655,7 @@ fn geopackage_edit_dialogs_refuse_reused_layer_ids() {
                 }
                 h.state_mut().run("ui.dialog", json!({"name": dialog})).unwrap();
                 h.run_steps(3);
-                assert_eq!(h.state().dialogs.gpkg_instance, Some(other_instance));
+                assert_eq!(h.state().dialogs.source_instance, Some(other_instance));
                 assert_eq!(h.state().dialogs.list[4], replacement.to_string_lossy());
                 assert_eq!(h.state().dialogs.list[2], "1");
                 assert!(h.state().dialogs.error.is_none());

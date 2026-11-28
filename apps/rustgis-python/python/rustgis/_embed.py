@@ -16,7 +16,7 @@ import os
 import pathlib
 import threading
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit, urlunsplit
 
 from . import PathLike, RustGISError, Session, _Api, _warn_losses
 
@@ -291,8 +291,10 @@ def _app_src(url: Optional[str], lang: Optional[str]) -> str:
         lang: The interface language code, or None.
     """
     base = url or os.environ.get("RUSTGIS_WEB_URL") or DEFAULT_URL
-    query = "embed" + (f"&lang={quote(lang)}" if lang else "")
-    return base + ("&" if "?" in base else "?") + query
+    parts = urlsplit(base)
+    extra = "embed" + (f"&lang={quote(lang)}" if lang else "")
+    query = f"{parts.query}&{extra}" if parts.query else extra
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, query, parts.fragment))
 
 
 def _data_args(path: PathLike) -> Tuple[str, Dict[str, Any]]:

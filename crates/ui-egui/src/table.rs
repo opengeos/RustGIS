@@ -223,6 +223,18 @@ pub(crate) fn prune_views(app: &mut RustGisApp) {
     }
 }
 
+#[cfg(test)]
+impl TableState {
+    pub(crate) fn seed_view_for_tests(&mut self, opened: u64, layer_instance: u64) {
+        self.opened = opened;
+        self.views.insert(ViewKey::Layer(layer_instance), ColumnView::default());
+    }
+
+    pub(crate) fn has_views_for_tests(&self) -> bool {
+        !self.views.is_empty()
+    }
+}
+
 /// Why a column can't be changed, translated: the edit commands find a field by name, ignoring
 /// case, and an earlier field has this one's name but for case.
 fn shadowed() -> &'static str {

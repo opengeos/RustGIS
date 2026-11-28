@@ -51,6 +51,7 @@ pub fn commands() -> Vec<C> {
         .params(r#"{"name"?, "title"?: the title page's text}"#),
         C::new("presentation.import", "Import Presentation", "Publish › Presentation", |s, p| {
             let text = super::items::read_text(p)?;
+            crate::project::check_format(&text, "presentation")?;
             let mut pres: Presentation = serde_json::from_str(&text).map_err(|e| format!("not a RustGIS presentation: {e}"))?;
             let repairs = pres.clamp();
             let (name, cut) = unique_name(s, "Import Presentation", "the name from the file", &pres.name);
