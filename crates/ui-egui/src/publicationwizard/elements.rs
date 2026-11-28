@@ -1200,7 +1200,7 @@ mod tests {
         app.dialogs.publication.as_mut().unwrap().step = Step::Elements;
         app.dialogs.publication.as_mut().unwrap().style = "panel".into();
         let h = harness_sized(app, egui::vec2(320.0, 900.0));
-        for label in ["Default: Globe", "Inset and globe", "Comma (1,5)"] {
+        for label in ["Default: Globe", "Inset", "Inset and globe", "Comma (1,5)"] {
             let rect = h.get_by_role_and_label(Role::RadioButton, label).rect();
             assert!(rect.left() >= 0.0 && rect.right() <= 320.0, "{label} at {rect:?}");
         }
