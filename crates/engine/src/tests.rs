@@ -31447,7 +31447,7 @@ fn exporting_features_adds_or_replaces_a_table_in_an_existing_geopackage() {
     });
     assert_eq!(kind(&s), Some(rustgis_data::GeometryType::Polygon));
     let in_place = s.map_mut().layers.iter_mut().find(|layer| layer.name == "InPlace").unwrap();
-    let moved = rustgis_map::symbology::MovedLabel { id: in_place.dataset.features.get(0).unwrap().id, at: [4.0, 5.0] };
+    let moved = rustgis_map::symbology::MovedLabel { id: in_place.dataset.features.row(0).unwrap().id(), at: [4.0, 5.0] };
     in_place.labels.default.moved.push(moved);
     let mut class = in_place.labels.default.clone();
     class.name = "Subset".into();

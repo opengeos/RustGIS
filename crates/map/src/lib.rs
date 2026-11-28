@@ -812,7 +812,7 @@ impl Layer {
                         source.schema_refused = true;
                         source.error = Some(error);
                     }
-                    selected.extend(self.selection.iter().filter_map(|row| self.dataset.features.get(*row)).map(|feature| feature.id));
+                    selected.extend(self.selection.iter().filter_map(|row| self.dataset.features.row(*row)).map(|feature| feature.id()));
                     self.selection.clear();
                     self.install(Vec::new());
                     if let Some(source) = &mut self.source {
@@ -4302,7 +4302,7 @@ mod tests {
         // names saved columns that disappeared; old window rows cannot survive the change.
         layer.dataset.fields[0].alias = Some("Rank".into());
         layer.dataset.fields.push(Field::new("gone", FieldType::Integer));
-        let moved = symbology::MovedLabel { id: layer.dataset.features.get(0).unwrap().id, at: [4.0, 5.0] };
+        let moved = symbology::MovedLabel { id: layer.dataset.features.row(0).unwrap().id(), at: [4.0, 5.0] };
         layer.labels.default.moved.push(moved);
         let mut class = layer.labels.default.clone();
         class.name = "Subset".into();
