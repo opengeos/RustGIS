@@ -1874,9 +1874,11 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
                 pub_card(Rgba::rgb(0xFF, 0xFF, 0xFF), Rgba::new(0x2B, 0x26, 0x20, 60), 0.4, card_r),
             );
         }
-        // The inset at the left; over the map's right half, at the right, against the frame's edge.
+        // Inset first from the left. A pair over the map's right half is mirrored, so the inset
+        // is the one against the frame's edge there too.
         let from_right = column.is_none() && r.0 + r.2 / 2.0 > fx + fw / 2.0;
-        let mut outlined = frame;
+        // What the next locator outlines: the map frame, then the locator before it.
+        let mut target = frame;
         for (i, (kind, (map, locator_scale, shape, locator_center))) in locator_maps.iter().enumerate() {
             let slot = if from_right { locator_maps.len() - 1 - i } else { i };
             let name = match kind {
@@ -1884,7 +1886,7 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
                 Locator::Inset => "Locator Inset",
                 Locator::Globe => "Locator Globe",
             };
-            outlined = l.add(
+            target = l.add(
                 name,
                 (r.0 + slot as f64 * (side + locator_gap), r.1, side, r.3),
                 ElementKind::MapFrame {
@@ -1894,7 +1896,7 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
                     shape: shape.clone(),
                     grid: None,
                     sections: Vec::new(),
-                    extent_of: Some(outlined),
+                    extent_of: Some(target),
                     extent_color: rustgis_map::layout::INDICATOR_COLOR,
                     extent_width: rustgis_map::layout::INDICATOR_WIDTH,
                     border_color: rustgis_map::layout::FRAME_BORDER_COLOR,
