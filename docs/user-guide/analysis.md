@@ -5,10 +5,11 @@
 **Home › Select** picks features by clicking or dragging a box. Open **Select options** to choose
 **Select by Polygon** (click vertices; click the first vertex or double-click to finish), **Select by
 Lasso** (drag a freehand outline), or **Select by Radius**. For a radius, enter a distance and click
-its centre, or leave the Radius box empty and drag from the centre to an edge. A drag fills the box
-so its distance can be reused or corrected. Bare numbers use metres or feet, following the
-measurement setting; `m`, `km`, `ft` and `mi` suffixes select units explicitly. Shift adds to the
-selection; Ctrl/Cmd removes; Esc cancels an unfinished outline. Area tools use even-odd fill, so a
+its centre, or drag from the centre to an edge. A drag replaces the box's value, so its distance can
+be reused or corrected. Bare numbers use metres or feet, following the measurement setting;
+`m`, `km`, `ft` and `mi` suffixes select units explicitly. Use a decimal point and no thousands
+separators. Shift adds to the selection; Ctrl/Cmd removes; Esc cancels an unfinished outline.
+Area tools use even-odd fill, so a
 self-crossing outline selects its alternating filled regions. Radius uses the Neighborhood Explorer's
 local Mercator distance and retained geographic prefilter; its outline and readout are approximate
 and some features near the outline may be excluded. A feature reaching beyond 85.05°, where Web

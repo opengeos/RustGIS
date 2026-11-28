@@ -1045,7 +1045,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     let time = now(ui);
     app.map.record_frame(time);
 
-    if app.session.tool == Tool::SelectRadius {
+    if app.session.tool == Tool::SelectRadius && !app.map.hide_overlays {
         radius_panel(app, ui, rect);
     }
     interact(app, ui, &resp, rect);
@@ -6626,6 +6626,31 @@ mod tests {
             assert!(h.state().map.drag.is_none());
             assert_eq!(h.state().session.tool, Tool::SelectLasso);
         }
+    }
+
+    /// Map-only relay captures hide the editor; ordinary and later frames retain it.
+    /// Set the capture flag after logic, as the relay does, without opening a listener.
+    #[test]
+    fn radius_entry_respects_map_only_capture() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = RustGisApp::new(rustgis_engine::Session::new(rustgis_engine::Project::default()));
+        app.run("tool.set", json!({"tool":"selectRadius"})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 860.0)).build_ui_state(
+            |ui, (app, hide): &mut (RustGisApp, bool)| {
+                app.logic(ui.ctx());
+                app.map.hide_overlays = *hide;
+                app.ui(ui);
+            },
+            (app, false),
+        );
+        h.run();
+        assert!(h.query_by_label("Radius").is_some());
+        h.state_mut().1 = true;
+        h.run();
+        assert!(h.query_by_label("Radius").is_none(), "map-only snapshots hide the radius editor");
+        h.state_mut().1 = false;
+        h.run();
+        assert!(h.query_by_label("Radius").is_some(), "normal selection keeps its editor");
     }
 
     /// Typed distances reach the real map handler in metres, preserve fractional values,
