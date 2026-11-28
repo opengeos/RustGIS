@@ -370,14 +370,7 @@ pub(crate) fn raw_table(dbf: &[u8]) -> Option<RawTable<'_>> {
     let le16 = |at: usize| Some(usize::from(u16::from_le_bytes([*dbf.get(at)?, *dbf.get(at + 1)?])));
     let count = usize::try_from(u32::from_le_bytes(dbf.get(4..8)?.try_into().ok()?)).ok()?;
     let (header_len, record_len) = (le16(8)?, le16(10)?);
-    let mut columns = Vec::new();
-    for start in (32..header_len.min(dbf.len())).step_by(32) {
-        let d = dbf.get(start..start + 32).filter(|d| d.first() != Some(&0x0D));
-        let Some(d) = d else { break };
-        let name = d.get(..11)?;
-        let name = name.get(..name.iter().position(|b| *b == 0).unwrap_or(11))?.to_vec();
-        columns.push(Column { name, ty: *d.get(11)?, len: *d.get(16)?, decimals: *d.get(17)? });
-    }
+    let columns = columns(dbf, header_len)?;
     let width: usize = 1 + columns.iter().map(|c| usize::from(c.len)).sum::<usize>();
     if width != record_len || record_len == 0 {
         return None;
@@ -405,6 +398,46 @@ pub(crate) fn raw_table(dbf: &[u8]) -> Option<RawTable<'_>> {
         records.push(values);
     }
     Some(RawTable { columns, records, deleted })
+}
+
+/// Reads the column descriptors for publish and overwrite without decoding field values.
+fn columns(dbf: &[u8], header_len: usize) -> Option<Vec<Column>> {
+    let mut columns = Vec::new();
+    for start in (32..header_len.min(dbf.len())).step_by(32) {
+        let d = dbf.get(start..start + 32).filter(|d| d.first() != Some(&0x0D));
+        let Some(d) = d else { break };
+        let name = d.get(..11)?;
+        let name = name.get(..name.iter().position(|b| *b == 0).unwrap_or(11))?.to_vec();
+        columns.push(Column { name, ty: *d.get(11)?, len: *d.get(16)?, decimals: *d.get(17)? });
+    }
+    Some(columns)
+}
+
+/// The declarations in a complete DBF header. A partial or inconsistent header supplies
+/// no declarations for comparison.
+pub(crate) fn declarations(dbf: &[u8]) -> Option<Vec<Column>> {
+    let header_len = usize::from(u16::from_le_bytes(dbf.get(8..10)?.try_into().ok()?));
+    let record_len = usize::from(u16::from_le_bytes(dbf.get(10..12)?.try_into().ok()?));
+    let header = dbf.get(..header_len)?;
+    let columns = columns(header, header_len)?;
+    let width = 1 + columns.iter().map(|c| usize::from(c.len)).sum::<usize>();
+    (header.get(32 + 32 * columns.len()) == Some(&0x0D) && width == record_len).then_some(columns)
+}
+
+/// Reads the declarations and language driver byte from the header (at most 65535 bytes).
+pub(crate) fn read_declarations(path: &std::path::Path) -> Option<(Vec<Column>, u8)> {
+    use std::io::Read;
+    if !path.is_file() {
+        return None;
+    }
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut first = [0; 32];
+    file.read_exact(&mut first).ok()?;
+    let header_len = usize::from(u16::from_le_bytes([first[8], first[9]]));
+    let mut header = first.to_vec();
+    header.resize(header_len.max(first.len()), 0);
+    file.read_exact(header.get_mut(first.len()..)?).ok()?;
+    Some((declarations(&header)?, first[29]))
 }
 
 /// A date (`D`) field's value, `YYYYMMDD`: `Ok(None)` when it's blank or zeros, as writers leave

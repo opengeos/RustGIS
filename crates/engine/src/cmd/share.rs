@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 
 use super::exports::{Room, Work, Wrote};
 use super::{f, need_layer, ps};
-use crate::{CommandSpec as C, Session};
+use crate::{CommandSpec as C, Session, notice_text::NoticeText};
 
 /// The map export binds exactly the map and tile routes the worker will copy.
 fn map_inputs(s: &super::InputContext<'_>, _: &Value) -> Result<super::Inputs, String> {
@@ -64,8 +64,30 @@ pub fn gpkg_table(p: &Value, ext: &str) -> Result<GpkgTable, String> {
     Ok(GpkgTable { mode, name })
 }
 
+/// A committed overwrite's declaration changes. File and column names stay literal when
+/// the front end formats the notice.
+fn declaration_change_note(path: &str, table: Option<&str>, columns: &[String]) -> Option<NoticeText> {
+    if columns.is_empty() {
+        return None;
+    }
+    let clean = |name: &str| -> NoticeText { name.chars().map(rustgis_data::io::dbf_notice_char).collect::<String>().into() };
+    let target = match table {
+        Some(table) => NoticeText::format("{path} ({table})", [("path", clean(path)), ("table", clean(table))]),
+        None => clean(path),
+    };
+    let key = if columns.len() == 1 {
+        "{target}: changed {count} column declaration ({columns})"
+    } else {
+        "{target}: changed {count} column declarations ({columns})"
+    };
+    Some(NoticeText::format(
+        key,
+        [("target", target), ("count", columns.len().to_string().into()), ("columns", clean(&columns.join(", ")))],
+    ))
+}
+
 /// File-only GeoPackage diagnostics, available even if delivery cannot refresh live layers.
-fn table_write_notes(path: &str, gpkg: &GpkgTable, default: &str, table: &GpkgWritten) -> Vec<String> {
+fn table_write_notes(path: &str, gpkg: &GpkgTable, default: &str, table: &GpkgWritten) -> Vec<NoticeText> {
     let mut notes = Vec::new();
     // A new file's table is said only when it isn't the name asked for, or by default the
     // layer's (a reserved name is prefixed, control characters and edge spaces dropped); one
@@ -83,7 +105,7 @@ fn table_write_notes(path: &str, gpkg: &GpkgTable, default: &str, table: &GpkgWr
                 table.table
             )
         };
-        notes.push(note);
+        notes.push(note.into());
     }
     if gpkg.mode != GpkgMode::NewFile {
         let note = if table.replaced {
@@ -94,26 +116,33 @@ fn table_write_notes(path: &str, gpkg: &GpkgTable, default: &str, table: &GpkgWr
         } else {
             format!("{path}: added the table {}", table.table)
         };
-        notes.push(note);
+        notes.push(note.into());
         if !table.dependents.is_empty() {
             let n = table.dependents.len();
-            notes.push(format!(
-                "{path}: {n} view{} or trigger{} naming {} may no longer work if a column it uses is gone: {}",
-                if n == 1 { "" } else { "s" },
-                if n == 1 { "" } else { "s" },
-                table.table,
-                table.dependents.join(", ")
-            ));
+            notes.push(
+                format!(
+                    "{path}: {n} view{} or trigger{} naming {} may no longer work if a column it uses is gone: {}",
+                    if n == 1 { "" } else { "s" },
+                    if n == 1 { "" } else { "s" },
+                    table.table,
+                    table.dependents.join(", ")
+                )
+                .into(),
+            );
         }
     }
+    notes.extend(declaration_change_note(path, Some(&table.table), &table.changed_columns));
     notes
 }
 
+/// Reports the committed table and refreshes live sources that read a table it replaced.
 fn report_table(s: &mut Session, path: &str, gpkg: &GpkgTable, default: &str, table: Option<GpkgWritten>, out: &mut Value) {
     let Some(table) = table else { return };
+    let mark = s.notice_mark();
     for note in table_write_notes(path, gpkg, default, &table) {
-        s.notify_written(note);
+        s.notify_text(note, false);
     }
+    s.retain_written_notices(mark);
     if gpkg.mode != GpkgMode::NewFile {
         let (reread, failed) =
             if table.replaced { super::gpkg::reset_sources(s, Path::new(path), &table.table, true) } else { (0, Vec::new()) };
@@ -760,6 +789,7 @@ fn write_layer(
     // first geometry's, which the chunks written say.
     let mut csv_points = ds.geometry_type == rustgis_data::GeometryType::Point;
     let mut lonlat_extent = None;
+    let mut changed_columns = Vec::new();
     let (written, left_out, skipped, table, unfit, null_numbers, moved, format_notes, dates) = match &chunks {
         Some((src, layer)) => {
             let (e, table) = rustgis_data::export::write_source_filtered(src.as_ref(), layer, Path::new(&path), crs, &gpkg, query)
@@ -813,7 +843,7 @@ fn write_layer(
                 held = Some(std::sync::Arc::new(bytes));
                 (left_out, None, notes, lonlat)
             } else {
-                rustgis_data::io::write_path_placed(ds, Path::new(&path), crs, &gpkg).map_err(|e| e.to_string())?
+                rustgis_data::io::write_path_placed(ds, Path::new(&path), crs, &gpkg, &mut changed_columns).map_err(|e| e.to_string())?
             };
             lonlat_extent = Some(lonlat);
             // Old parts of a Shapefile written over that couldn't be removed.
@@ -873,7 +903,10 @@ fn write_layer(
     let written_path = Some(path.to_string());
     let path = path.to_string();
     let default = ds.name.clone();
-    let mut refused_notes = table.as_ref().map(|t| table_write_notes(&path, &gpkg, &default, t)).unwrap_or_default();
+    let mut refused_notes =
+        table.iter().flat_map(|t| table_write_notes(&path, &gpkg, &default, t)).map(|note| note.english()).collect::<Vec<_>>();
+    let declaration_note = declaration_change_note(&path, None, &changed_columns);
+    refused_notes.extend(declaration_note.iter().map(NoticeText::english));
     if let Some(note) = null_numbers_note(&path, null_numbers) {
         refused_notes.push(note.english());
     }
@@ -881,9 +914,14 @@ fn write_layer(
     if let Some(note) = &query_note {
         refused_notes.push(note.english());
     }
-    let then: Option<super::exports::Then> = if table.is_some() || null_numbers > 0 || query_note.is_some() {
+    let then: Option<super::exports::Then> = if table.is_some() || null_numbers > 0 || query_note.is_some() || declaration_note.is_some() {
         Some(Box::new(move |s: &mut Session, out: &mut Value| {
             notify_written_query(s, query_note);
+            if let Some(note) = declaration_note {
+                let mark = s.notice_mark();
+                s.notify_text(note, false);
+                s.retain_written_notices(mark);
+            }
             notify_null_numbers(s, &path, null_numbers);
             if let Some(t) = table {
                 report_table(s, &path, &gpkg, &default, Some(t), out);
@@ -928,7 +966,6 @@ pub(crate) fn query_export_note(
     layer: &str,
     report: &rustgis_data::export::QueryReport,
 ) -> Option<crate::notice_text::NoticeText> {
-    use crate::notice_text::NoticeText;
     if let Some(error) = &report.parse_error {
         return Some(NoticeText::format(
             "{path}: the definition query on {layer} could not be read ({error}) and was skipped during export",

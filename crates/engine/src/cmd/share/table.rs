@@ -195,7 +195,8 @@ pub(in crate::cmd) fn table_work(s: &Session, p: &Value) -> Result<Work, String>
                 [("path", path.clone().into()), ("count", omitted.to_string().into())],
             )
         });
-        let mut refused_notes = table.as_ref().map(|t| super::table_write_notes(&path, &gpkg, &default, t)).unwrap_or_default();
+        let mut refused_notes =
+            table.iter().flat_map(|t| super::table_write_notes(&path, &gpkg, &default, t)).map(|note| note.english()).collect::<Vec<_>>();
         if let Some(note) = super::null_numbers_note(&path, null_numbers) {
             refused_notes.push(note.english());
         }

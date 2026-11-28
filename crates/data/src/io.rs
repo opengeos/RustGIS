@@ -1196,13 +1196,15 @@ pub struct GpkgWritten {
     pub table: String,
     pub replaced: bool,
     pub dependents: Vec<String>,
+    /// Columns of the replaced table whose declared types changed, in output column order.
+    pub changed_columns: Vec<String>,
 }
 
 /// As [`write_path`], in the coordinate system `crs` (a GeoPackage, Shapefile or FlatGeobuf; see
 /// [`write_bytes_in`]). Refused on a place `crs` can't hold, naming its feature, as it gives no
 /// notes to say it; [`write_path_to`] writes the feature without its geometry instead, and says so.
 pub fn write_path_in(ds: &Dataset, path: &Path, crs: Crs) -> Result<usize> {
-    write_path_as(ds, path, crs, &GpkgTable::default(), false).map(|(left_out, _, _, _)| left_out)
+    write_path_as(ds, path, crs, &GpkgTable::default(), false, None).map(|(left_out, _, _, _)| left_out)
 }
 
 /// As [`write_path_in`], a GeoPackage's table placed as `gpkg` says (other formats ignore it):
@@ -1216,19 +1218,21 @@ pub fn write_path_to(
     crs: Crs,
     gpkg: &GpkgTable,
 ) -> Result<(usize, Option<GpkgWritten>, Vec<crate::loss::Note>)> {
-    write_path_as(ds, path, crs, gpkg, true).map(|(left_out, table, notes, _)| (left_out, table, notes))
+    write_path_as(ds, path, crs, gpkg, true, None).map(|(left_out, table, notes, _)| (left_out, table, notes))
 }
 
 /// [`write_path_to`], also giving the dataset's [`Dataset::lonlat_extent`]: taken from the
 /// places converted for the file when it is written in longitude/latitude from another system,
 /// so each is converted once, and otherwise from the dataset after the write.
+/// On a Shapefile overwrite, `changed_columns` receives the columns whose declarations changed.
 pub fn write_path_placed(
     ds: &Dataset,
     path: &Path,
     crs: Crs,
     gpkg: &GpkgTable,
+    changed_columns: &mut Vec<String>,
 ) -> Result<(usize, Option<GpkgWritten>, Vec<crate::loss::Note>, rustgis_geom::Extent)> {
-    let (left_out, table, notes, placed) = write_path_as(ds, path, crs, gpkg, true)?;
+    let (left_out, table, notes, placed) = write_path_as(ds, path, crs, gpkg, true, Some(changed_columns))?;
     Ok((left_out, table, notes, lonlat_extent_placed(ds, crs, placed)))
 }
 
@@ -1241,6 +1245,7 @@ fn write_path_as(
     crs: Crs,
     gpkg: &GpkgTable,
     leaving_out: bool,
+    changed_columns: Option<&mut Vec<String>>,
 ) -> Result<(usize, Option<GpkgWritten>, Vec<crate::loss::Note>, Option<rustgis_geom::Extent>)> {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
     if crs != Crs::LonLat && PROJECTED_FORMATS.contains(&ext.as_str()) {
@@ -1279,7 +1284,12 @@ fn write_path_as(
             crate::progress::begin(ds.features.len());
             let (parts, left_out) = shapefile_parts_in(ds, crs)?;
             let parts: Vec<(std::path::PathBuf, Vec<u8>)> = parts.into_iter().map(|(e, bytes)| (shapefile_part(path, e), bytes)).collect();
-            let kept = place_shapefile(path, &stage_shapefile(&parts)?)?;
+            let staged = stage_shapefile(&parts)?;
+            let changes = changed_columns.as_ref().and_then(|_| shapefile_declaration_changes(path, &parts));
+            let kept = place_shapefile(path, &staged)?;
+            if let (Some(columns), Some(changes)) = (changed_columns, changes) {
+                *columns = changes;
+            }
             Ok((left_out, None, unplaced.into_iter().chain(kept_backups_note(path, &kept).map(crate::loss::Note::plain)).collect(), placed))
         }
         _ if crs != Crs::LonLat && !holds_a_system(&ext) => {
@@ -1291,6 +1301,37 @@ fn write_path_as(
             Ok((left_out, None, unplaced.into_iter().collect(), placed))
         }
     }
+}
+
+/// Compares the header the writer made to the old file's header, by on-disk column name.
+fn shapefile_declaration_changes(path: &Path, parts: &[(std::path::PathBuf, Vec<u8>)]) -> Option<Vec<String>> {
+    use shapefile::dbase::Encoding;
+
+    if !path.is_file() {
+        return None;
+    }
+    let (before, ldid) = crate::dbf::read_declarations(&dbf_sidecar(path))?;
+    let mut read_notes = crate::loss::Notes::new();
+    let cpg = crate::dbf::read_cpg(path, &mut read_notes);
+    let encoding = crate::dbf::encoding(cpg.as_deref(), ldid, &mut read_notes);
+    let decoder = encoding.decoder();
+    let before: std::collections::HashMap<_, _> = before
+        .iter()
+        .filter(|c| !encoding.malformed(&c.name))
+        .filter_map(|c| decoder.decode(&c.name).ok().map(|name| (name.trim().to_ascii_lowercase(), c)))
+        .collect();
+    let dbf = parts.iter().find_map(|(part, bytes)| (part.extension().is_some_and(|e| e == "dbf")).then_some(bytes))?;
+    let after = crate::dbf::declarations(dbf)?;
+    Some(
+        after
+            .iter()
+            .filter_map(|c| {
+                let name = std::str::from_utf8(&c.name).ok()?;
+                let old = before.get(&name.to_ascii_lowercase())?;
+                (!c.ty.eq_ignore_ascii_case(&old.ty) || c.len != old.len || c.decimals != old.decimals).then(|| name.to_owned())
+            })
+            .collect(),
+    )
 }
 
 /// The path of the part with extension `ext` of the Shapefile at `path`: the `.shp` keeps the

@@ -821,7 +821,7 @@ pub fn write_table_in(ds: &crate::Dataset, path: &Path, crs: Crs, target: &GpkgT
     let conn = Connection::open(&tmp).map_err(err)?;
     let table = build(&conn, ds, name, crs, pinned)?;
     install(conn, tmp, path)?;
-    Ok(GpkgWritten { table, replaced: false, dependents: Vec::new() })
+    Ok(GpkgWritten { table, replaced: false, dependents: Vec::new(), changed_columns: Vec::new() })
 }
 
 /// The kind of geometry a GeoPackage table of `ds` is made for: its type or, for a layer that
@@ -889,7 +889,7 @@ pub(crate) fn write_features_in(
             Ok((layout, extent)) => {
                 finish(&conn, &layout, extent, pinned)?;
                 install(conn, tmp, path)?;
-                return Ok(GpkgWritten { table: layout.table, replaced: false, dependents: Vec::new() });
+                return Ok(GpkgWritten { table: layout.table, replaced: false, dependents: Vec::new(), changed_columns: Vec::new() });
             }
         }
     }
