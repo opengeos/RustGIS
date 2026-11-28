@@ -22,6 +22,7 @@ tools and their parameters. See [Installation](installation.md) for the CLI pack
 
 `render <data|project> <out.png>` opens a data file or saved project and exports its map.
 It defaults to 1600 × 900 pixels at 96 DPI; `--width`, `--height` and `--dpi` change those.
+A `--width` or `--height` outside 16 to 8000 points (pixels at 96 DPI; a higher `--dpi` draws more pixels) is moved to the nearest limit, and it says so.
 A data file is zoomed to its full extent; a project keeps its saved view.
 `--tiles` accepts an XYZ template, vector tiles or a MapLibre-style address.
 
@@ -42,6 +43,11 @@ then), nor by `mcp --attach`.
 cores), as [`gp.threads`](user-guide/analysis.md#analysis-workflows) sets it. With `mcp --attach` the
 open app's own setting holds, so `--threads` is refused there. Without it, a run takes
 the computer's cores, up to 16.
+
+An option that takes a value (`--save`, `--data`, `--cmd`, `--width` and the rest) and gets none, or
+gets another option in its place, is refused with status 2 before anything runs, and so is a
+`--width`, `--height` or `--dpi` of `render` that isn't a number above 0. A value that starts with
+`--` is read as an option: put `./` in front of a file with such a name.
 
 ## Chaining commands
 
@@ -154,28 +160,15 @@ An `--allow` that names no kind or code is refused with status 2, as is `--allow
 
 ### Loss codes
 
-| Code | What to do |
-|---|---|
-| `dropped.legend` | Use a service with short HTTP or HTTPS addresses for its legend pictures. |
-| `dropped.ring` | Correct the unreadable polygon ring in the source. |
-| `dropped.extra-attributes` | Add fields for the extra attribute values or remove those values from the input. |
-| `dropped.time` | Write to a date-time field to keep the time of day. |
-| `dropped.value` | Correct the value or use a destination field that can hold it. |
-| `dropped.calculation-result` | Correct the expression or check the input rows named in the notice. |
-| `dropped.zm` | Keep the source file where heights or measures matter: RustGIS keeps x and y only. |
-| `dropped.crs-name` | Keep the source file's coordinate system definition with the export. |
-| `dropped.feature` | Correct those features in the source, or read the source in the way the notice suggests. |
-| `dropped.geometry` | Correct the geometry in the source, or give the coordinate system its coordinates are in. |
-| `dropped.over-limit` | Read less at once, such as by filtering or clipping the source first. |
-| `changed.truncated` | Use a decimal field to keep the fractional part. |
-| `changed.body` | Export in the layer's own coordinate system, which keeps its body. |
-| `changed.encoding` | Put a .cpg file naming the file's own encoding beside it. |
-| `changed.rounded` | Keep the source file where times finer than a microsecond matter. |
-| `changed.position` | Export in a coordinate system that holds the positions, such as WGS 84. |
-| `approximated.datum` | Export in the layer's own coordinate system, or give that system with a known transformation to WGS 84. |
-| `approximated.curve` | Keep the source file where exact curves matter: RustGIS draws curves as straight segments. |
-| `assumed.null-marker` | Write the value another way if the text Null is meant as text, not as an empty value. |
-| `assumed.crs` | Give the coordinate system the coordinates are in ("crs" when adding the data, or Define Projection). |
+Each code has an entry in [Data loss codes](user-guide/loss-codes.md): what it means, where it is
+said and what to do about it. A strict run's message gives the address of each code's entry.
+
+`rustgis-cli explain CODE` says what a code means and what to do, from the text built into
+RustGIS, so it works offline; `rustgis-cli explain` lists every code:
+
+```sh
+rustgis-cli explain changed.rounded
+```
 
 Not every loss has a code yet: losses still reported without one don't stop a strict run.
 
@@ -195,7 +188,7 @@ rustgis-cli ask --login                             # sign in with ChatGPT to us
 rustgis-cli ask --sample --provider chatgpt "Zoom to Tokyo"
 ```
 
-The provider is `--provider` (`anthropic`, `openai`, `chatgpt`, `gemini`, `openrouter`, `ollama`, `custom`, `requesty`, `trustedrouter`, `opper`),
+The provider is `--provider` (`anthropic`, `openai`, `chatgpt`, `gemini`, `openrouter`, `ollama`, `custom`, `requesty`, `trustedrouter`, `opper`, `mistral`),
 else `RUSTGIS_ASSISTANT_PROVIDER`, else the first with a key in the environment, else the app's
 saved provider when `--use-saved-secrets` is set, else Ollama. ChatGPT sign-in is used only when
 that provider is selected. Account management and `--models` do not read saved API keys:

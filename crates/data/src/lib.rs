@@ -5,6 +5,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod address;
+pub mod capped;
 pub mod citygml;
 pub mod cityjson;
 mod citymodel;
@@ -25,6 +26,7 @@ pub mod gml;
 pub mod gpx;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod http;
+pub mod incident;
 pub mod interop;
 pub mod io;
 pub mod kml;
@@ -90,7 +92,9 @@ pub fn no_programs_here() -> &'static str {
 
 #[derive(Debug, thiserror::Error)]
 pub enum DataError {
-    #[error("i/o: {0}")]
+    /// A failure of the computer rather than the data (a full disk, a read-only folder, no
+    /// permission, no memory) says so, and what to do, before the system's own words.
+    #[error("{}", io_text(.0))]
     Io(#[source] std::io::Error),
     #[error("{0}")]
     Format(String),
@@ -116,6 +120,24 @@ impl DataError {
     pub fn of_conversion(e: String) -> Self {
         if e == DataError::Cancelled.to_string() { DataError::Cancelled } else { DataError::Format(e) }
     }
+}
+
+/// An I/O error in words: what the computer ran into and what to do, for a failure of the computer
+/// rather than the data, then the system's own words; `i/o: …` for any other.
+pub fn io_text(e: &std::io::Error) -> String {
+    use std::io::ErrorKind as K;
+    let plain = match e.kind() {
+        K::StorageFull => "the disk is full: free some space, or save somewhere else",
+        K::QuotaExceeded => "the storage quota on this disk is used up: free some space, or save somewhere else",
+        K::FileTooLarge => "the file is larger than this disk or system allows: save it in pieces, or to a disk that holds larger files",
+        K::ReadOnlyFilesystem => "the disk or folder is read-only: save somewhere else",
+        K::PermissionDenied => "RustGIS isn't allowed to use this file or folder: check its permissions, or choose another",
+        K::OutOfMemory => {
+            "the computer ran out of memory: close other programs, or work on a smaller part of the data, such as by filtering or clipping it first"
+        }
+        _ => return format!("i/o: {e}"),
+    };
+    format!("{plain} ({e})")
 }
 
 /// An I/O error, or [`DataError::Cancelled`] when it carries one: a write that only returns I/O
@@ -167,6 +189,25 @@ impl DataError {
 
 #[cfg(test)]
 mod unplaced_out_tests;
+
+#[cfg(test)]
+mod io_text_tests {
+    use super::*;
+
+    #[test]
+    fn a_failure_of_the_computer_says_what_to_do_and_keeps_the_systems_words() {
+        use std::io::{Error, ErrorKind as K};
+        let full = DataError::Io(Error::from(K::StorageFull)).to_string();
+        assert!(full.starts_with("the disk is full: free some space, or save somewhere else ("), "{full}");
+        assert!(full.ends_with(&format!("{})", Error::from(K::StorageFull))), "{full}");
+        for kind in [K::QuotaExceeded, K::FileTooLarge, K::ReadOnlyFilesystem, K::PermissionDenied, K::OutOfMemory] {
+            let said = DataError::Io(Error::from(kind)).to_string();
+            assert!(!said.starts_with("i/o:") && said.contains(':'), "{kind:?}: {said}");
+        }
+        // Any other failure is said as before.
+        assert_eq!(DataError::Io(Error::other("unchanged")).to_string(), "i/o: unchanged");
+    }
+}
 
 #[cfg(test)]
 mod secret_redaction_tests {
@@ -472,6 +513,26 @@ fn held_in_lonlat() -> raster::Crs {
 }
 
 impl Dataset {
+    /// Whether saving this dataset serializes a [`raster::Crs`] requiring `crs-wkt`
+    /// (`raster::Crs::needs_wkt`); windowed datasets omit `held_in` when serialized.
+    /// Exhaustively destructured so any new `Crs`-bearing field forces an explicit decision.
+    pub fn needs_wkt(&self) -> bool {
+        let Self {
+            name: _,
+            geometry_type: _,
+            fields: _,
+            features: _,
+            source: _,
+            crs,
+            crs_incomplete: _,
+            zm_dropped: _,
+            windowed,
+            held_in,
+            shown_in: _,
+        } = self;
+        crs.is_some_and(raster::Crs::needs_wkt) || (!*windowed && held_in.needs_wkt())
+    }
+
     /// The coordinate system its geometry is in ([`Dataset::held_in`]): the system a file was read
     /// in, else longitude/latitude (WGS 84). Drawing converts geometry from it
     /// ([`raster::Crs::to`]). Longitude/latitude never fails to convert, and [`Dataset::hold_in`]
@@ -771,6 +832,10 @@ pub struct ReadReport {
     /// The extrusion the reader suggests for the layer (a city model's volumes): applied when the
     /// layer is added, and only then; a reload keeps the layer's own.
     pub extrusion: Option<SuggestedExtrusion>,
+    /// A zip's table read with `CsvOptions::columns_optional` that lacked a column named (`x`, `y` or
+    /// `WKT`, and its name): read without the columns given. Not in `messages`: the zip reader takes it
+    /// and says it once for all its tables.
+    pub columns_lacking: Option<Box<(&'static str, String)>>,
 }
 
 /// An extrusion a reader suggests for a layer of polygons: heights from one field, on a base from
@@ -815,9 +880,12 @@ fn layer_list(names: &[&str]) -> String {
 /// What `what` (an export to a file, a copy, a package: "{target}") says of the `n` features of
 /// `layer` it took without their geometry, as a place of each can't be given in
 /// longitude/latitude ([`Dataset::in_lonlat_leaving_out`]). `None` for none.
-pub fn unplaced_note(target: &str, layer: &str, n: usize) -> Option<String> {
+pub fn unplaced_note(target: &str, layer: &str, n: usize) -> Option<loss::Note> {
     (n > 0).then(|| {
-        format!("{target}: {n} feature(s) of {layer} have a place that can't be given in longitude/latitude, so their geometry is left out (and the feature, where only features with geometry are kept)")
+        loss::Note::loss(
+            loss::LossCode::DroppedGeometry,
+            format!("{target}: {n} feature(s) of {layer} have a place that can't be given in longitude/latitude, so their geometry is left out (and the feature, where only features with geometry are kept)"),
+        )
     })
 }
 
@@ -1379,6 +1447,20 @@ impl Dataset {
         self.fields.push(Field::new(name, ty));
         self.features.add_column(Value::Null);
         self.fields.len() - 1
+    }
+
+    /// [`Dataset::ensure_field`] for several fields, returning their indices in order. The missing
+    /// ones are added together, so each row changes once however many there are.
+    pub fn ensure_fields<const N: usize>(&mut self, fields: [(&str, FieldType); N]) -> [usize; N] {
+        let before = self.fields.len();
+        let at = fields.map(|(name, ty)| {
+            self.field_index(name).unwrap_or_else(|| {
+                self.fields.push(Field::new(name, ty));
+                self.fields.len() - 1
+            })
+        });
+        self.features.add_columns(self.fields.len() - before, Value::Null);
+        at
     }
 
     /// The features `rows` keeps, by position; a row past its end counts, so `&[]` keeps them all.

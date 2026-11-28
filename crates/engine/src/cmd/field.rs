@@ -652,8 +652,11 @@ pub(crate) fn export_work(s: &Session, p: &Value) -> Result<super::exports::Work
                 })?;
             }
             let mark = s.notice_mark();
-            super::exports::say(s, other.into_iter().map(|n| (n.severity, n.text)).collect());
-            for note in notes.into_iter().chain(construction_notes.into_iter().map(rustgis_data::loss::Note::plain)) {
+            super::exports::say_coded(
+                s,
+                other.into_iter().map(|n| (n.severity, rustgis_data::loss::Note { loss: n.loss(), text: n.text, tally: None })).collect(),
+            );
+            for note in notes.into_iter().chain(construction_notes) {
                 s.say(note);
             }
             spend(s, spent);
@@ -666,6 +669,7 @@ pub(crate) fn export_work(s: &Session, p: &Value) -> Result<super::exports::Work
             notes: Default::default(),
             then: Some(then),
             written_path: None,
+            download: None,
             diagnostics,
             refused_notes: Vec::new(),
             owner: None,
@@ -847,6 +851,7 @@ fn copy_stream(
         source::unread_dates_note(&info.fields, &batch.unread_dates),
         source::rounded_dates_note(&info.fields, &batch.rounded_dates),
         source::null_text_note(&info.fields, &batch.null_text),
+        source::not_utf8_note(&info.fields, &batch.not_utf8, src.text_encoding()),
     ];
     losses.extend(info.notes.iter().chain(&batch.notes).cloned().map(|note| note.prefixed(&layer.name)));
     losses.extend(counted.into_iter().flatten().map(|note| note.prefixed(&layer.name)));

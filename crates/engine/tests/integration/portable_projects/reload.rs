@@ -493,7 +493,7 @@ fn raster_reload_and_repair_disclose_fresh_losses_once_without_repeating_them_on
         s.notice_landed_rasters();
         s.notice_landed_rasters();
         for loss in losses {
-            assert_eq!(s.notices_since(mark).iter().filter(|n| n.text.ends_with(&loss)).count(), 1, "{command}: {loss}");
+            assert_eq!(s.notices_since(mark).iter().filter(|n| n.text.ends_with(loss.as_str())).count(), 1, "{command}: {}", loss.text);
         }
     }
     raster_file(&moved, 1);
@@ -1439,7 +1439,8 @@ fn project_open_reports_fresh_conversion_losses_once_per_kind_but_not_clean_conv
                     assert!(losses[0].text.starts_with("2 layers: "), "{}", losses[0].text);
                     assert!(losses[0].text.ends_with(&format!("first: {first}")), "{}", losses[0].text);
                 }
-                assert!(losses[0].text.contains("1 source feature(s)"), "{}", losses[0].text);
+                // One feature each: several layers' notice gives their total.
+                assert!(losses[0].text.contains(&format!("{layer_count} source feature(s)")), "{}", losses[0].text);
                 assert!(!losses[0].error);
             } else {
                 assert!(losses.is_empty(), "{notices:?}");

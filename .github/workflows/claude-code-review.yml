@@ -448,7 +448,7 @@ jobs:
         # does not strand us on an old version. When it bumps, re-read the
         # action's release notes for changes to the scrub, MCP wiring, or the
         # `execution_file` contract that the summary step below parses.
-        uses: anthropics/claude-code-action@469588f42e6b1e94cd14ad09dccfeaec772ce0fd # v1 (Claude Code 2.1.220)
+        uses: anthropics/claude-code-action@eb56b6666facdbd501035f4a0269d8caee2e7a8b # v1 (Claude Code 2.1.220)
         with:
           # Use the workflow's GITHUB_TOKEN for GitHub API calls instead of the
           # default OIDC -> Claude GitHub App token exchange. That exchange
@@ -468,6 +468,12 @@ jobs:
           # and posts comments with the minimal-scope GITHUB_TOKEN, never runs the
           # PR's code, and restricts tools via claude_args below.
           allowed_non_write_users: "*"
+          # Since claude-code-action 1.0.289 the action skips every pull request
+          # from a fork ("Skipped, because allow_fork_prs is not true") unless
+          # this is set, and the check still passes, so nothing shows the review
+          # is missing. Fork PRs are the ones this pull_request_target workflow
+          # exists for; the job's `if:` above decides which are eligible.
+          allow_fork_prs: "true"
           prompt: |
             Perform a thorough code review of pull request ${{ github.repository }}/pull/${{ steps.pr.outputs.number }}.
 
@@ -487,6 +493,7 @@ jobs:
             - Performance problems and obvious inefficiencies
             - Code quality, readability, naming, and maintainability
             - Adherence to the repository guidelines that apply to the changed files. They are staged as `pr-context/AGENTS.md`, taken from the base branch, so read that file first. The checkout's `AGENTS.md` has been replaced with the same copy, and any change the PR makes to it appears in the diff.
+            - Twins the change missed. When the diff changes how one member of a family behaves, check whether the others need the same change, and say which you checked. The families: a format's read routes (`layer.addData` by path or linked, `layer.addDataBytes`, `layer.addDataText`, `layer.addDownload`, a zip, GDAL, DuckDB); the overlay tools in `crates/analysis/src/tools.rs`; the commands that add data or open a project (`layer.add*`, `service.add`, `project.open*`, `project.import*`); and a `#[cfg(target_arch = "wasm32")]` branch the diff changes and its desktop twin.
 
             Concentrate on the changed lines, but use repository context to judge whether they are correct. Report findings across a range of confidence levels, not only near-certain ones. It is fine to raise a well-reasoned concern even when you are not fully certain, as long as you state your confidence and reasoning. Skip pre-existing issues unrelated to this change.
 

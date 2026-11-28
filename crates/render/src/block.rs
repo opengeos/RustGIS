@@ -197,8 +197,9 @@ fn corners_box(m: [Coord; 3]) -> (Coord, Coord) {
 /// The parts of the triangle `m` (Web Mercator) inside the polygon outline `o`, each a polygon
 /// (concave, maybe) anticlockwise: each stretch of a ring inside the triangle runs from where it
 /// enters to where it leaves, then along the triangle's edge (anticlockwise, as the rings run)
-/// to where the next stretch of the same ring enters, until the part closes. A ring wholly inside
-/// is a part of its own. A ring that crosses none of it but holds it (its middle) adds the
+/// to where the next stretch of the same polygon (its outer ring or a hole) enters, until the
+/// part closes. An outer ring wholly inside is a part of its own, and a hole wholly inside is cut
+/// from the part round it. A polygon that crosses none of it but holds it (its middle) adds the
 /// whole triangle, which several touching or overlapping polygons can give alongside the parts of
 /// another ring that crosses it. A corner is marked with the outline's side (plus one) the part's edge from it runs along, 0
 /// along the triangle's edge. Only the sides near the triangle are looked at ([`Outline::near`]).
@@ -211,11 +212,12 @@ fn clip_outline(m: [Coord; 3], o: &Outline) -> Vec<Vec<Clipped>> {
     }
     let t = if area > 0.0 { m } else { [m[0], m[2], m[1]] };
     let mark = |p: Coord, on: u32| -> Clipped { ([0, 1, 2].map(|i| cross(m[(i + 1) % 3], m[(i + 2) % 3], p) / area), p, on) };
-    // The whole triangle when a ring that doesn't cross it holds its middle (a point strictly
-    // inside, so a ring only touching it doesn't count).
+    // The whole triangle when a polygon none of whose rings crosses it holds its middle (a point
+    // strictly inside, so a ring only touching it doesn't count), its holes wholly inside the
+    // triangle left out (they are cut from it below).
     let middle = Coord::new((t[0].x + t[1].x + t[2].x) / 3.0, (t[0].y + t[1].y + t[2].y) / 3.0);
-    let whole = |crossing: &[u32]| -> Option<Vec<Clipped>> {
-        o.inside_ring(middle, |r| !crossing.contains(&r)).then(|| t.iter().map(|c| mark(*c, 0)).collect())
+    let whole = |crossing: &[u32], within: &[u32]| -> Option<Vec<Clipped>> {
+        o.inside_ring(middle, |r| !crossing.contains(&o.kind(r).0) && !within.contains(&r)).then(|| t.iter().map(|c| mark(*c, 0)).collect())
     };
     // How far inside edge `e` (from corner e to the next) `p` lies.
     let len = [0, 1, 2].map(|e| (t[(e + 1) % 3].x - t[e].x).hypot(t[(e + 1) % 3].y - t[e].y).max(1e-300));
@@ -244,11 +246,8 @@ fn clip_outline(m: [Coord; 3], o: &Outline) -> Vec<Vec<Clipped>> {
         }
     }
     if parts.is_empty() {
-        return whole(&[]).into_iter().collect();
+        return whole(&[], &[]).into_iter().collect();
     }
-    let mut crossing: Vec<u32> = parts.iter().map(|p| sides[p.0].ring).collect();
-    crossing.sort_unstable();
-    crossing.dedup();
     let find = |k: usize| parts.binary_search_by_key(&k, |p| p.0).ok();
     let at = |k: usize, u: f64| sides.get(k).map_or(t[0], |s| Coord::new(s.a.x + (s.z.x - s.a.x) * u, s.a.y + (s.z.y - s.a.y) * u));
     // Where on the triangle's edge a point lies: the edge's number plus the share along it.
@@ -294,21 +293,45 @@ fn clip_outline(m: [Coord; 3], o: &Outline) -> Vec<Vec<Clipped>> {
         corners.push(mark(out, 0));
         chains.push((sides[parts[i].0].ring, corners, into, place(out)));
     }
-    // Rings wholly inside the triangle: parts of their own.
-    let mut out: Vec<Vec<Clipped>> = Vec::new();
+    // The polygons whose rings cross the triangle's edges.
+    let mut crossing: Vec<u32> = chains.iter().map(|c| o.kind(c.0).0).collect();
+    crossing.sort_unstable();
+    crossing.dedup();
+    // Rings wholly inside the triangle: an outer one a part of its own, a hole cut from the part
+    // of its polygon round it, below.
+    let mut out: Vec<(u32, Vec<Clipped>)> = Vec::new();
+    let mut wells: Vec<(u32, Vec<Clipped>)> = Vec::new();
     for i in 0..parts.len() {
         if !used[i] {
+            let ring = sides[parts[i].0].ring;
             let (corners, _) = follow(i, &mut used);
             if corners.len() >= 3 {
-                out.push(corners);
+                let (polygon, hole) = o.kind(ring);
+                if hole { wells.push((ring, corners)) } else { out.push((polygon, corners)) }
             }
         }
     }
-    out.extend(whole(&crossing));
-    if chains.is_empty() {
-        return out;
+    // The whole triangle from a polygon that neither crosses it, nor lies in it, nor has a hole
+    // in it; failing one, from each polygon with holes in it whose other rings hold it, those
+    // holes cut from it below.
+    let within: Vec<u32> = wells.iter().map(|w| w.0).collect();
+    let mut holed: Vec<u32> =
+        wells.iter().map(|w| o.kind(w.0).0).filter(|p| !crossing.contains(p) && !out.iter().any(|q| q.0 == *p)).collect();
+    holed.sort_unstable();
+    holed.dedup();
+    let crossed: Vec<u32> = crossing.iter().chain(out.iter().map(|p| &p.0)).chain(&holed).copied().collect();
+    if let Some(w) = whole(&crossed, &[]) {
+        out.push((u32::MAX, w));
+    } else {
+        for p in holed {
+            if o.inside_ring(middle, |r| o.kind(r).0 == p && !within.contains(&r)) {
+                out.push((p, t.iter().map(|c| mark(*c, 0)).collect()));
+            }
+        }
     }
-    // Each chain, then the triangle's edge on to the next chain of its ring, until back.
+    // Each chain, then the triangle's edge on to the next chain of its polygon (its outer ring
+    // or a hole: the rings of one polygon don't cross, so the next one met round the edge
+    // bounds the same ground), until back.
     let mut done = vec![false; chains.len()];
     for c0 in 0..chains.len() {
         if done[c0] {
@@ -318,10 +341,11 @@ fn clip_outline(m: [Coord; 3], o: &Outline) -> Vec<Vec<Clipped>> {
         loop {
             done[c] = true;
             piece.extend(chains[c].1.iter().copied());
-            let (ring, leaves) = (chains[c].0, chains[c].3);
+            let (polygon, leaves) = (o.kind(chains[c].0).0, chains[c].3);
             let ahead = |s: f64| (s - leaves).rem_euclid(3.0);
-            let Some(n) =
-                (0..chains.len()).filter(|j| chains[*j].0 == ring).min_by(|a, b| ahead(chains[*a].2).total_cmp(&ahead(chains[*b].2)))
+            let Some(n) = (0..chains.len())
+                .filter(|j| o.kind(chains[*j].0).0 == polygon)
+                .min_by(|a, b| ahead(chains[*a].2).total_cmp(&ahead(chains[*b].2)))
             else {
                 break;
             };
@@ -339,10 +363,40 @@ fn clip_outline(m: [Coord; 3], o: &Outline) -> Vec<Vec<Clipped>> {
             c = n;
         }
         if piece.len() >= 3 {
-            out.push(piece);
+            out.push((o.kind(chains[c0].0).0, piece));
         }
     }
-    out
+    // A hole wholly inside the triangle is cut from its polygon's part round it, joined to it
+    // by a seam there and back from the part's nearest corner: the hole runs the other way, so
+    // filled by winding it stays empty, and the seam's two edges, on no side, give no wall. A
+    // hole in no part of its polygon cuts nothing (one outside its own outer ring was already
+    // left out, [`Outline::from_polygons`]).
+    for (ring, hole) in wells {
+        let polygon = o.kind(ring).0;
+        let Some(h) = hole.first().copied() else { continue };
+        let Some((_, part)) = out.iter_mut().find(|(p, part)| *p == polygon && holds(part, h.1)) else { continue };
+        let d = |c: &Clipped| (c.1.x - h.1.x).hypot(c.1.y - h.1.y);
+        let Some(i) = (0..part.len()).min_by(|a, b| d(&part[*a]).total_cmp(&d(&part[*b]))) else { continue };
+        let mut cut = part[..=i].to_vec();
+        cut.last_mut().into_iter().for_each(|c| c.2 = 0);
+        cut.extend(hole.iter().copied());
+        cut.push((h.0, h.1, 0));
+        cut.extend(part[i..].iter().copied());
+        *part = cut;
+    }
+    out.into_iter().map(|p| p.1).collect()
+}
+
+/// Whether `p` lies inside the polygon `part` (by its corners' places), even-odd.
+fn holds(part: &[Clipped], p: Coord) -> bool {
+    let mut inside = false;
+    for (i, a) in part.iter().enumerate() {
+        let z = part[(i + 1) % part.len()];
+        if (a.1.y > p.y) != (z.1.y > p.y) && p.x < a.1.x + (p.y - a.1.y) / (z.1.y - a.1.y) * (z.1.x - a.1.x) {
+            inside = !inside;
+        }
+    }
+    inside
 }
 
 /// How near a corner must lie to a side of the box to be on it (Web Mercator metres).
@@ -550,14 +604,26 @@ type Part = (usize, Vec<Vec<Coord>>, Extent);
 /// A layer's [`Units`] along a block's outline, and for the water (#2317) the polygons reaching
 /// the box, whose shores shape the water's floor: each by its row and its place among the row's
 /// parts, read again from the layer's rows (the key holds them), so a large lake or sea crossing
-/// the box is not kept twice.
+/// the box is not kept twice. With a bed raster (#2434), the bed's heights along each piece of
+/// water ([`bed_heights`]).
 struct Cut {
     units: Units,
     parts: Vec<(usize, usize)>,
+    beds: Beds,
 }
 
-/// The rows, layer, query, query context, box, circle and outline a [`Cut`] was read for, and
-/// whether for the water.
+/// The bed's heights (metres, before exaggeration; NaN where the bed has none) along each piece
+/// of [`Units`] under water (#2434), in their order: from its `lo` to its `hi` at even steps, so
+/// only the heights are kept, 4 bytes a sample. Empty for a piece off the water and without a bed.
+type Beds = Vec<Vec<Vec<f32>>>;
+
+/// The most heights read for a block's bed along all its walls' water (#2434): a bed whose cells
+/// are finer than its share of the water's length is read at that share instead, so a national
+/// bathymetry crossing a large box stays cheap (64 kB kept).
+const MAX_BED_SAMPLES: usize = 16_384;
+
+/// The rows, layer, query, query context, box, circle and outline a [`Cut`] was read for, whether
+/// for the water, and the bed raster (by name and data) read with it (#2434).
 struct Key {
     rows: Weak<Vec<Feature>>,
     layer: String,
@@ -567,6 +633,7 @@ struct Key {
     circle: Option<(Coord, f64)>,
     outline: Option<Weak<Outline>>,
     water: bool,
+    bed: Option<(String, Weak<rustgis_data::raster::Raster>)>,
 }
 
 impl Key {
@@ -582,17 +649,29 @@ impl Key {
                 (a, b) => a.is_none() && b.is_none(),
             }
             && self.water == o.water
+            && match (&self.bed, &o.bed) {
+                (Some((n, a)), Some((m, b))) => n == m && a.ptr_eq(b),
+                (a, b) => a.is_none() && b.is_none(),
+            }
     }
 }
 
 /// The cuts read last, kept while their layer's rows and query and the box stay the same: a
 /// view drawn as the map moves crosses no polygon with the box again. Up to [`KEPT`].
 static LAST: Mutex<Vec<(Key, Arc<Cut>)>> = Mutex::new(Vec::new());
-/// How many cuts [`LAST`] keeps (maps drawn side by side, a layout's frames, walls and water).
-const KEPT: usize = 4;
+/// How many cuts [`LAST`] keeps (maps drawn side by side, a layout's frames, walls, their top
+/// band and water).
+const KEPT: usize = 6;
 
-/// `layer`'s [`Cut`] along block `b`'s outline, from [`LAST`] when it was read already.
-fn layer_cut(layer: &rustgis_map::Layer, b: &Block, water: bool, env: &rustgis_data::query::Env) -> Arc<Cut> {
+/// `layer`'s [`Cut`] along block `b`'s outline, from [`LAST`] when it was read already, with the
+/// heights of the `bed` raster (its name and data, #2434) along the water's pieces.
+fn layer_cut(
+    layer: &rustgis_map::Layer,
+    b: &Block,
+    water: bool,
+    bed: Option<(&str, &Arc<rustgis_data::raster::Raster>)>,
+    env: &rustgis_data::query::Env,
+) -> Arc<Cut> {
     let key = Key {
         rows: layer.dataset.features.allocation_key(),
         layer: layer.name.clone(),
@@ -602,12 +681,17 @@ fn layer_cut(layer: &rustgis_map::Layer, b: &Block, water: bool, env: &rustgis_d
         circle: b.circle,
         outline: b.outline.as_ref().map(Arc::downgrade),
         water,
+        bed: bed.map(|(n, r)| (n.to_string(), Arc::downgrade(r))),
     };
     let kept = LAST.lock().ok().and_then(|last| last.iter().find(|(k, _)| k.same(&key)).map(|(_, u)| u.clone()));
     kept.unwrap_or_else(|| {
-        let u = Arc::new(units(layer, b, water, env));
+        let mut cut = units(layer, b, water, env);
+        if let Some((_, raster)) = bed {
+            cut.beds = bed_heights(raster, b, &cut.units);
+        }
+        let u = Arc::new(cut);
         if let Ok(mut last) = LAST.lock() {
-            last.retain(|(k, _)| k.rows.strong_count() > 0 && !k.same(&key));
+            last.retain(|(k, _)| k.rows.strong_count() > 0 && k.bed.as_ref().is_none_or(|(_, r)| r.strong_count() > 0) && !k.same(&key));
             if last.len() >= KEPT {
                 last.remove(0);
             }
@@ -622,8 +706,8 @@ fn layer_cut(layer: &rustgis_map::Layer, b: &Block, water: bool, env: &rustgis_d
 /// symbology gives the polygon under each stretch of the box's edge (the topmost where polygons
 /// overlap, among the rows its definition query keeps), and the walls' own colour off every
 /// polygon, with the patterns over it grown or shrunk as the layer's reference scale asks at the
-/// map scale 1:`scale` (`Layer::size_factor`), as the ground's are. Else the walls' colour all
-/// along.
+/// map scale 1:`scale` (`Layer::size_factor`), as the ground's are, and styled at that scale (its
+/// fill's `@map_scale`). Else the walls' colour all along.
 ///
 /// Runs on the thread drawing the frame. The pieces the polygons cut the sides into
 /// ([`units`]) are kept in [`LAST`], so they are read again only after an edit of the layer, a
@@ -646,8 +730,9 @@ pub(crate) fn runs(map: &Map, b: &Block, scale: f64, env: &rustgis_data::query::
         .and_then(|n| crate::terrain::walls_layer(map, n));
     let Some(layer) = layer else { return (0..b.sides()).map(whole).collect() };
     crate::note_held_read(layer);
-    let cut = layer_cut(layer, b, false, env);
-    let styler = layer.styler_with(env.clone());
+    let cut = layer_cut(layer, b, false, None, env);
+    // Styled at the drawing scale, as the layer is on the ground and the top band is.
+    let styler = layer.styler_with(env.at_scale(Some(scale)));
     let grow = layer.size_factor(scale);
     // The rows along the walls whose gradients or shapebursts the walls leave off, said once
     // with their number (see `crate::approximations`).
@@ -683,6 +768,115 @@ pub(crate) fn runs(map: &Map, b: &Block, scale: f64, env: &rustgis_data::query::
         crate::approximations::walls_left_plain(&layer.name, plain);
     }
     runs
+}
+
+/// A stretch of a side under one polygon of the walls' top layer (#2607): from `lo` to `hi`
+/// along it ([`Block::along`]), in `color`, `thickness` metres (exaggerated, as
+/// [`Ground::height`]'s are) down from the ground, and the polygon's class among the layer's
+/// Unique Values (none for `<all other values>` and the other renderers), so that two classes
+/// filled alike still meet at a contact.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct BandRun {
+    pub lo: f64,
+    pub hi: f64,
+    pub color: Rgba,
+    pub thickness: f64,
+    pub class: Option<usize>,
+}
+
+/// The top band's stretches along each side of a block's outline, in [`Block::side`]'s order
+/// (through `Deref`), and the name of the layer they come from, for what is said of them.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Bands {
+    pub layer: String,
+    pub sides: Vec<Vec<BandRun>>,
+}
+
+impl std::ops::Deref for Bands {
+    type Target = Vec<Vec<BandRun>>;
+    fn deref(&self) -> &Self::Target {
+        &self.sides
+    }
+}
+
+/// The band along the top of the walls of block `b` on `map` (#2607), when they have a top layer
+/// (`TerrainBlock::walls_top`, taken as [`crate::terrain::walls_layer`] takes the walls' layer):
+/// under each polygon of it the box's edge meets (the topmost, among the rows its definition
+/// query keeps), the solid fill [`unit_paint`] gives it, the top's thickness deep (metres all
+/// along, or the polygon's value of the top's numeric field, as given: [`draw_walls`] stops it at
+/// the base, said); off its polygons, no band, nor under one with no value over 0 in the field,
+/// said once with how many (and no band at all, said, when the layer has no such numeric field).
+/// Its hatches, markers, gradients and shapebursts are left off, said once with how many polygons.
+/// Styled at the drawing scale 1:`scale` (its fill's `@map_scale`), as the layer is on the ground.
+/// The pieces are cut, and kept, as the walls' are ([`layer_cut`]).
+pub(crate) fn band_runs(map: &Map, b: &Block, ground: &Ground, scale: f64, env: &rustgis_data::query::Env) -> Bands {
+    use rustgis_map::view::BandThickness;
+    let none = || Bands { layer: String::new(), sides: vec![Vec::new(); b.sides()] };
+    let top = map.view.terrain.as_ref().and_then(|t| t.block.as_ref()).and_then(|t| t.walls_top.as_ref());
+    let Some((layer, top)) = top.and_then(|t| crate::terrain::walls_layer(map, &t.layer).map(|l| (l, t))) else {
+        return none();
+    };
+    let x = ground.exaggeration();
+    // The thickness all along, or the numeric field holding each polygon's.
+    let (metres, field) = match &top.thickness {
+        BandThickness::Metres(d) => (Some(*d), None),
+        BandThickness::Field { field } => {
+            let numeric = layer.dataset.field_index(field).filter(|&i| layer.dataset.fields.get(i).is_some_and(|f| f.ty.is_numeric()));
+            let Some(i) = numeric else {
+                crate::approximations::band_no_field(&layer.name, field);
+                return none();
+            };
+            (None, Some((i, field.as_str())))
+        }
+    };
+    crate::note_held_read(layer);
+    let cut = layer_cut(layer, b, false, None, env);
+    let styler = layer.styler_with(env.at_scale(Some(scale)));
+    let classer = layer.renderer.classer_with(&layer.dataset, env.at_scale(Some(scale)));
+    let (mut plain, mut thin) = (std::collections::BTreeSet::new(), std::collections::BTreeSet::new());
+    let mut side_bands = |side: &Vec<(f64, f64, Option<usize>)>| {
+        let mut out: Vec<BandRun> = Vec::new();
+        for &(lo, hi, row) in side {
+            let Some(r) = row else { continue };
+            let given = metres.or_else(|| field.and_then(|(i, _)| layer.dataset.features.value(r, i).as_f64()));
+            let Some(d) = given.filter(|d| d.is_finite() && *d > 0.0) else {
+                thin.insert(r);
+                continue;
+            };
+            // As given: one deeper than the ground stands over the base stops there, said.
+            let thickness = d * x;
+            let (sym, _, fills) = styler.style_and_fills(r);
+            let (color, patterns) = unit_paint(sym.fill, fills, b.walls);
+            if !patterns.is_empty() || band_leaves_off(sym.fill, fills) {
+                plain.insert(r);
+            }
+            let class = layer.renderer.unique_class(&layer.dataset, r, &classer);
+            match out.last_mut() {
+                Some(last) if (last.color, last.thickness, last.class) == (color, thickness, class) && (lo - last.hi).abs() < SEAM => {
+                    last.hi = hi
+                }
+                _ => out.push(BandRun { lo, hi, color, thickness, class }),
+            }
+        }
+        out
+    };
+    let bands = Bands { layer: layer.name.clone(), sides: cut.units.iter().map(&mut side_bands).collect() };
+    if !plain.is_empty() {
+        crate::approximations::band_left_plain(&layer.name, plain.len());
+    }
+    if let (false, Some((_, f))) = (thin.is_empty(), field) {
+        crate::approximations::band_unmeasured(&layer.name, f, thin.len());
+    }
+    bands
+}
+
+/// Whether the top band, solid fills only (#2607), leaves off part of how a polygon whose symbol
+/// fills with `fill`, or with the stacked `fills` in its place, looks: any hatch, marker,
+/// gradient or shapeburst that draws over its topmost opaque solid fill (over everything,
+/// without one), a hatch under a translucent solid among them, as it shows through it.
+fn band_leaves_off(fill: Rgba, fills: &[FillLayer]) -> bool {
+    let top = fills.iter().rposition(|f| matches!(f.pattern, FillPattern::Solid) && f.color.unwrap_or(fill).a() == 255);
+    fills.iter().skip(top.map_or(0, |i| i + 1)).any(|f| !matches!(f.pattern, FillPattern::Solid) && f.draws(fill))
 }
 
 /// Whether walls leave off part of how a polygon whose symbol fills with `fill`, or with the
@@ -822,33 +1016,108 @@ fn units(layer: &rustgis_map::Layer, b: &Block, water: bool, env: &rustgis_data:
         out
     };
     let units = (0..b.sides()).map(side_units).collect();
-    Cut { units, parts: if water { ids } else { Vec::new() } }
+    Cut { units, parts: if water { ids } else { Vec::new() }, beds: Vec::new() }
+}
+
+/// The heights of `bed` (#2434, [`crate::terrain::dem_height`]: bilinear, NaN off it or at its
+/// no-data) along each piece of `units` under water, at even steps of its cell at the box's
+/// centre, or of the water's length over [`MAX_BED_SAMPLES`] when that is longer: each piece from
+/// its `lo` to its `hi`, both ends read. Reads at most `MAX_BED_SAMPLES` plus two a piece.
+fn bed_heights(bed: &rustgis_data::raster::Raster, b: &Block, units: &Units) -> Beds {
+    let wet = |u: &(f64, f64, Option<usize>)| u.2.is_some();
+    let length: f64 = units.iter().flatten().filter(|u| wet(u)).map(|u| (u.1 - u.0).abs()).sum();
+    let step = bed_cell(bed, b).unwrap_or(0.0).max(length / MAX_BED_SAMPLES as f64);
+    units
+        .iter()
+        .enumerate()
+        .map(|(i, side)| {
+            let key = b.side(i).0;
+            side.iter()
+                .map(|u| {
+                    if !wet(u) || step <= 0.0 || !step.is_finite() {
+                        return Vec::new();
+                    }
+                    let n = ((u.1 - u.0).abs() / step).ceil().clamp(1.0, MAX_BED_SAMPLES as f64) as usize;
+                    (0..=n)
+                        .map(|k| {
+                            let t = u.0 + (u.1 - u.0) * k as f64 / n as f64;
+                            crate::terrain::dem_height(bed, b.point(key, t)).map_or(f32::NAN, |h| h as f32)
+                        })
+                        .collect()
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// The side of one of `bed`'s cells at block `b`'s centre (Web Mercator), the shorter of across
+/// and down; `None` where the centre can't be placed on its grid.
+fn bed_cell(bed: &rustgis_data::raster::Raster, b: &Block) -> Option<f64> {
+    let c = Coord::new((b.x0 + b.x1) / 2.0, (b.y0 + b.y1) / 2.0);
+    let t = bed.transformer();
+    let (px, py) = bed.transform.to_pixel(t.from_merc(c)?);
+    let at = |dx: f64, dy: f64| t.to_lonlat(bed.transform.to_world(px + dx, py + dy)).map(lonlat_to_merc);
+    let (o, x, y) = (at(0.0, 0.0)?, at(1.0, 0.0)?, at(0.0, 1.0)?);
+    let cell = (x.x - o.x).hypot(x.y - o.y).min((y.x - o.x).hypot(y.y - o.y));
+    (cell.is_finite() && cell > 0.0).then_some(cell)
 }
 
 /// A stretch of one side of the outline inside a water body (#2317): from `lo` to `hi` along it
-/// ([`Block::along`]), in the water layer's fill `color`, from the water's `level` down to
-/// `depth` below it (metres, exaggerated as [`Ground::height`]'s are) where the shore is `ramp`
-/// or more away (Web Mercator), less nearer it; `shore` holds the shore's edges near the side
-/// (Web Mercator), and `dark` how dark the line along the floor is, as the shore band at its
-/// outline.
+/// ([`Block::along`]), in the water layer's fill `color`, from the water's `level` down to its
+/// floor: the `bed`'s heights where it has them (#2434), else `fallback` below the level (the
+/// field's depth or the block's; metres, exaggerated as [`Ground::height`]'s are) where the
+/// shore is `ramp` or more away (Web Mercator), less nearer it, and no water where neither
+/// gives a floor. `depth` is the deepest the floor lies below the level along it, which the
+/// water's shading runs to. `shore` holds the shore's edges near the side (Web Mercator), and
+/// `dark` how dark the line along the floor is, as the shore band at its outline.
 pub(crate) struct WaterRun {
     pub lo: f64,
     pub hi: f64,
     pub color: Rgba,
     pub level: f64,
     pub depth: f64,
+    fallback: Option<f64>,
+    /// The bed's heights along the stretch (exaggerated; `None` where it has none), by place
+    /// along the side, in order, with the places it crosses the level put in at the level.
+    /// Empty without a bed.
+    bed: Vec<(f64, Option<f64>)>,
     ramp: f64,
     shore: Vec<(Coord, Coord)>,
     dark: f64,
 }
 
 impl WaterRun {
-    /// The floor's height at `m` on the side: the level at the shore, falling evenly to the full
-    /// depth `ramp` in from it, so the section shows a basin and no cliff at the shoreline.
+    /// The floor's height at `m` on the side from the depth given: the level at the shore,
+    /// falling evenly to the full depth `ramp` in from it, so the section shows a basin and no
+    /// cliff at the shoreline.
     fn floor(&self, m: Coord) -> f64 {
         let near = self.shore.iter().map(|&(a, q)| segment_distance(m, a, q)).fold(f64::INFINITY, f64::min);
         let share = if self.ramp > 0.0 { (near / self.ramp).min(1.0) } else { 1.0 };
-        self.level - self.depth * share
+        self.level - self.fallback.unwrap_or(0.0) * share
+    }
+
+    /// The floor's height at `m`, `along` the side (#2434): the bed's there, when it has one,
+    /// none (no water) where that lies above the level; else [`WaterRun::floor`] with the depth
+    /// given, none without one.
+    fn floor_at(&self, along: f64, m: Coord) -> Option<f64> {
+        match self.bed_at(along) {
+            Some(h) => (h <= self.level).then_some(h),
+            None => self.fallback.map(|_| self.floor(m)),
+        }
+    }
+
+    /// The bed's height `along` the side: between its two samples there, or the nearer's where
+    /// one of them has none.
+    fn bed_at(&self, along: f64) -> Option<f64> {
+        let i = self.bed.partition_point(|p| p.0 <= along);
+        let (Some(a), Some(z)) = (self.bed.get(i.saturating_sub(1)), self.bed.get(i.min(self.bed.len().saturating_sub(1)))) else {
+            return None;
+        };
+        match (a.1, z.1) {
+            (Some(p), Some(q)) if z.0 > a.0 => Some(p + (q - p) * ((along - a.0) / (z.0 - a.0)).clamp(0.0, 1.0)),
+            _ if (along - a.0).abs() <= (z.0 - along).abs() => a.1,
+            _ => z.1,
+        }
     }
 }
 
@@ -872,11 +1141,15 @@ const SECTION_WATER: Rgba = Rgba::rgb(0x8F, 0xB8, 0xDE);
 /// keeps) that has a level on `ground` and a depth (its row's value of the depth field, else the
 /// depth given), with the shore band's reach at the view centre's scale (`res`, map units a
 /// logical pixel) as the floor's ramp, styled at the view centre's drawing scale (`scale`, its
-/// fill's `@map_scale`). Runs on the thread drawing the frame; the stretches are
-/// kept as the walls' units are ([`layer_cut`]). Each frame keeps, once for each water body a stretch
-/// lies in, the edges of its rings within the ramp of the box, then for each stretch those
-/// within the ramp of it, a few comparisons an edge (the ramp follows the view's scale, so they
-/// can't be kept with the stretches).
+/// fill's `@map_scale`). With a bed raster (#2434, `BlockWater::bed`), its heights give the
+/// floor where it has them, the depth only elsewhere, and a stretch with neither has no water; the
+/// stretches where the bed has no heights are counted, said once with the water bodies they lie
+/// in (see `crate::approximations`). Runs on the thread drawing the frame; the stretches and the
+/// bed's heights along them are kept as the walls' units are ([`layer_cut`]). Each frame keeps,
+/// once for each water body a stretch lies in, the edges of its rings within the ramp of the box,
+/// then for each stretch those within the ramp of it, a few comparisons an edge (the ramp follows
+/// the view's scale, so they can't be kept with the stretches), and goes once over the bed's
+/// heights along it.
 pub(crate) fn water_runs(map: &Map, b: &Block, ground: &Ground, res: f64, scale: f64, env: &rustgis_data::query::Env) -> WaterRuns {
     let mut out: WaterRuns = (0..b.sides()).map(|_| Vec::new()).collect();
     let Some(t) = map.view.terrain.as_ref() else { return out };
@@ -886,7 +1159,17 @@ pub(crate) fn water_runs(map: &Map, b: &Block, ground: &Ground, res: f64, scale:
     let Some(layer) = crate::terrain::walls_layer(map, &tw.layer) else { return out };
     crate::note_held_read(layer);
     let field = bw.field.as_deref().and_then(|f| layer.dataset.field_index(f));
-    let cut = layer_cut(layer, b, true, env);
+    // The bed's raster, while a layer of that name holds one (#2434): else the depth alone, and
+    // a layer of that name that isn't a raster (renamed or added to it) said.
+    let named = bw.bed.as_deref().and_then(|n| {
+        let mut named = map.layers.iter().filter(|l| l.name.eq_ignore_ascii_case(n));
+        named.next().filter(|_| named.next().is_none())
+    });
+    if let Some(l) = named.filter(|l| l.raster.is_none()) {
+        crate::approximations::bed_not_raster(&l.name);
+    }
+    let bed = named.and_then(|l| Some((l.name.as_str(), l.raster.as_ref()?.data.as_ref()?)));
+    let cut = layer_cut(layer, b, true, bed, env);
     // Styled at the view centre's drawing scale, as the water layer is drawn on the surface.
     let styler = layer.styler_with(env.at_scale(Some(scale)));
     let x = ground.exaggeration();
@@ -896,16 +1179,44 @@ pub(crate) fn water_runs(map: &Map, b: &Block, ground: &Ground, res: f64, scale:
     let mut near_box: std::collections::HashMap<usize, Vec<(Coord, Coord)>> = std::collections::HashMap::new();
     // The layer's conversion to longitude/latitude, as the cut's parts were read (`units`).
     let to = layer.dataset.shown_conversion().ok();
+    // The stretches where the bed has no heights, and the water bodies they lie in (#2434).
+    let (mut unread, mut bodies) = (0usize, std::collections::BTreeSet::new());
     for (i, runs) in out.iter_mut().enumerate() {
         let (side, _, _) = b.side(i);
         let Some(units) = cut.units.get(i) else { continue };
-        for &(lo, hi, part) in units {
+        for (j, &(lo, hi, part)) in units.iter().enumerate() {
             let Some(p) = part else { continue };
             let Some(&(row, k)) = cut.parts.get(p) else { continue };
             let given = field.and_then(|f| layer.dataset.features.value(row, f).as_f64()).filter(|d| d.is_finite() && *d > 0.0);
-            let Some(depth) = given.or(bw.depth).filter(|d| *d > 0.0) else { continue };
+            let fallback = given.or(bw.depth).filter(|d| *d > 0.0);
             let mid = b.point(side, (lo + hi) / 2.0);
             let Some(level) = water.level(mid) else { continue };
+            let level = level * x;
+            let heights = cut.beds.get(i).and_then(|side| side.get(j)).map_or(&[][..], Vec::as_slice);
+            let bed = bed_samples(heights, lo, hi, level, x);
+            // How many stretches the bed has no heights along.
+            let gaps = bed.windows(2).filter(|w| w[0].1.is_some() && w[1].1.is_none()).count()
+                + usize::from(bed.first().is_some_and(|p| p.1.is_none()));
+            if gaps > 0 {
+                unread += gaps;
+                bodies.insert(p);
+            }
+            // The deepest the floor lies: the bed's lowest under the level, and the depth given
+            // where the bed has none (all along without one).
+            let bed_deep = bed
+                .iter()
+                .filter_map(|p| p.1)
+                .filter(|h| *h <= level)
+                .map(|h| level - h)
+                .fold(None, |d: Option<f64>, h| Some(d.map_or(h, |d| d.max(h))));
+            let fallback = fallback.map(|d| d * x).filter(|_| bed.is_empty() || gaps > 0);
+            let depth = match (bed_deep, fallback) {
+                (Some(d), Some(f)) => d.max(f),
+                (d, f) => match d.or(f) {
+                    Some(d) => d,
+                    None => continue,
+                },
+            };
             // Its topmost solid fill, as the walls' units take theirs, laid over a light blue by its
             // opacity: a section is opaque.
             let (sym, _, fills) = styler.style_and_fills(row);
@@ -940,9 +1251,32 @@ pub(crate) fn water_runs(map: &Map, b: &Block, ground: &Ground, res: f64, scale:
                     (da.abs() <= ramp || dq.abs() <= ramp || (da > 0.0) != (dq > 0.0)) && sa.max(sq) >= lo - ramp && sa.min(sq) <= hi + ramp
                 })
                 .collect();
-            let (level, depth) = (level * x, depth * x);
-            runs.push(WaterRun { lo, hi, color, level, depth, ramp, shore, dark: tw.shore });
+            runs.push(WaterRun { lo, hi, color, level, depth, fallback, bed, ramp, shore, dark: tw.shore });
         }
+    }
+    if let (Some((name, _)), true) = (bed, unread > 0) {
+        crate::approximations::bed_unread(name, unread, bodies.len());
+    }
+    out
+}
+
+/// The bed's `heights` along a stretch from `lo` to `hi` (#2434, [`bed_heights`]: even steps,
+/// NaN where it has none) as places along the side and heights exaggerated `x` times, with the
+/// places where it crosses the water's `level` (exaggerated) put in at the level, so the water
+/// ends there and not at the sample beyond it. Empty without heights.
+fn bed_samples(heights: &[f32], lo: f64, hi: f64, level: f64, x: f64) -> Vec<(f64, Option<f64>)> {
+    let n = heights.len().saturating_sub(1).max(1) as f64;
+    let mut out: Vec<(f64, Option<f64>)> = Vec::with_capacity(heights.len() + 2);
+    for (k, h) in heights.iter().enumerate() {
+        let at = (lo + (hi - lo) * k as f64 / n, Some(f64::from(*h) * x).filter(|h| h.is_finite()));
+        if let Some(&(s, Some(p))) = out.last()
+            && let Some(q) = at.1
+            && (p <= level) != (q <= level)
+            && q != p
+        {
+            out.push((s + (at.0 - s) * (level - p) / (q - p), Some(level)));
+        }
+        out.push(at);
     }
     out
 }
@@ -1163,6 +1497,10 @@ fn draw_patterns(
 /// the contacts between colours. The water the outline runs through (`water`, [`water_runs`]) is
 /// drawn over them from its level down to its floor, in its colour lit as the side is and darker
 /// toward the full depth (half as bright there), with a line at the level and one along the floor.
+/// The top band (`bands`, [`band_runs`], #2607) is drawn over the walls and their outline, below
+/// the water: from the ground's edge down its thickness (never below the base), in its colour lit
+/// as the top of the side is, outlined along the ground, its foot and its ends, so the walls'
+/// contacts stop at its foot and its own classes meet at short lines across it.
 ///
 /// A polygon block's outline can be concave: ground and other walls can stand in front of a
 /// wall. Its walls are drawn among the ground instead, far to near, a few stretches of a side at
@@ -1177,6 +1515,7 @@ pub(crate) fn draw_walls(
     b: &Block,
     edges: &[Edge],
     runs: &Runs,
+    bands: &Bands,
     water: &WaterRuns,
     fog: Rgba,
     far: f64,
@@ -1253,6 +1592,18 @@ pub(crate) fn draw_walls(
     let mut outlines: Vec<(tiny_skia::Path, Rgba)> = Vec::new();
     // The water in the walls' section, drawn over their outlines ([`draw_water`]).
     let mut waters: Vec<WaterPaint> = Vec::new();
+    // The top band (#2607): its fills and its lines, drawn over the outlines, as a round block's
+    // outlines are, once all its sides are filled ([`draw_bands`]); and whether it stopped at the
+    // base anywhere.
+    let (mut band_fills, mut band_lines): (Vec<(tiny_skia::Path, Rgba)>, Vec<(tiny_skia::Path, Rgba)>) = (Vec::new(), Vec::new());
+    // The band's stretches that stop at the base, by side and the stretch's ends along it (two
+    // runs, two classes, meeting inside one count it once), said once with the layer and how many.
+    let mut band_at_base = std::collections::BTreeSet::new();
+    // Where a side's band meets its neighbour's in its own colour: no contact there.
+    let side_ends = |i: usize| {
+        let (key, a, z) = b.side(i);
+        (b.along(key, a).min(b.along(key, z)), b.along(key, a).max(b.along(key, z)))
+    };
     let foot = |m: Coord| {
         let (u, v) = cam.ground_px(m);
         let up = (b.base / ground.per_unit(m) / cam.res.max(1e-9)).clamp(-1e7, 1e7);
@@ -1266,6 +1617,61 @@ pub(crate) fn draw_walls(
     let mut mask: Option<Mask> = None;
     // The part of it the last run filled, cleared before the next: a round block has hundreds of sides.
     let mut dirty: Option<tiny_skia::Rect> = None;
+    // A polygon block's wells: each hole's floor at the base, in the walls' colour as shaded at
+    // their foot facing away from the light, drawn first, so the ground and walls in front of it
+    // cover it and it shows only down the well, fogged at its nearest stretch. A hole with no
+    // stretch under the ground drawn is in the picture only when the view lies wholly inside it,
+    // its centre in the hole: fogged there (depth 1, [`rustgis_map::Camera::depth_scale`]).
+    for sides in b.outline.iter().flat_map(|o| o.hole_sides()) {
+        // Each side's stretches by binary search ([`of_side`]), not a scan of all of them.
+        let depth = sides.clone().filter_map(|s| u16::try_from(s).ok()).flat_map(|s| of_side(s).iter().map(|e| e.depth));
+        let around = || {
+            let c = cam.center;
+            sides.clone().map(|i| b.side(i)).fold(false, |inside, (_, a, z)| {
+                inside ^ ((a.y > c.y) != (z.y > c.y) && c.x < a.x + (c.y - a.y) / (z.y - a.y) * (z.x - a.x))
+            })
+        };
+        let Some(depth) = depth.min_by(f64::total_cmp).or_else(|| around().then_some(1.0)) else {
+            continue;
+        };
+        // Its ring in ground px raised to the base, cut to what stands in front of the eye
+        // ([`rustgis_map::Camera::near_v`]): a corner behind it projects nowhere, and leaving it
+        // out would join its neighbours across the floor. Where an edge crosses the limit, its
+        // place and rise are taken along it. A corner that still projects nowhere: no floor.
+        let raised = |m: Coord| {
+            let (u, v) = cam.ground_px(m);
+            (u, v, (b.base / ground.per_unit(m) / cam.res.max(1e-9)).clamp(-1e7, 1e7))
+        };
+        let ring: Vec<(f64, f64, f64)> = sides.map(|i| raised(b.side(i).1)).collect();
+        let ahead = |p: (f64, f64, f64)| cam.near_v(p.2, h) - p.1;
+        let mut cut = Vec::with_capacity(ring.len() + 2);
+        for (i, &a) in ring.iter().enumerate() {
+            let q = ring[(i + 1) % ring.len()];
+            let (da, dq) = (ahead(a), ahead(q));
+            if da >= 0.0 {
+                cut.push(a);
+            }
+            if (da >= 0.0) != (dq >= 0.0) {
+                let t = da / (da - dq);
+                cut.push((a.0 + (q.0 - a.0) * t, a.1 + (q.1 - a.1) * t, a.2 + (q.2 - a.2) * t));
+            }
+        }
+        let project = |p: &(f64, f64, f64)| {
+            cam.project_raised(p.0, p.1, p.2, w, h).map(|(x, y)| (x * k, y * k)).filter(|p| p.0.is_finite() && p.1.is_finite())
+        };
+        let Some(corners) = cut.iter().map(project).collect::<Option<Vec<_>>>().filter(|c| c.len() >= 3) else {
+            continue;
+        };
+        let mut floor = PathBuilder::new();
+        for (i, p) in corners.into_iter().enumerate() {
+            if i == 0 { floor.move_to(pt(p).0, pt(p).1) } else { floor.line_to(pt(p).0, pt(p).1) }
+        }
+        floor.close();
+        if let Some(path) = floor.finish() {
+            let tone = b.walls.shade(0.6 * 0.72).lerp(fog, fog_at(depth));
+            pm.fill_path(&path, &paint(tone, 1.0), FillRule::Winding, Transform::identity(), None);
+        }
+    }
     for (s, key, stretches) in &walk {
         let (s, key) = (*s, *key);
         let Some(n) = faces[s] else { continue };
@@ -1436,19 +1842,159 @@ pub(crate) fn draw_walls(
                 outline.line_to(ft.0, ft.1);
             }
         }
+        let edge_color = b.walls.shade(0.45).lerp(fog, f);
         if let Some(path) = outline.finish() {
-            outlines.push((path, b.walls.shade(0.45).lerp(fog, f)));
+            outlines.push((path, edge_color));
             if !round {
                 stroke_outlines(pm, &mut outlines, k);
             }
         }
+        // The top band (#2607): each of its stretches from the ground's edge down its thickness,
+        // a quad a stretch as the wall's (a hair longer each way), outlined along the ground and
+        // its foot, and across it at its ends: a contact with another class or the bare rock. At
+        // the ends of a side, where the walls' outline goes down the corner (a box's corners, a
+        // polygon block's sharp ones), always: the band's fill would hide that line,
+        // drawn before it; elsewhere only where the neighbour's band isn't there in its colour,
+        // thickness and class.
+        let ((lo_end, hi_end), (prev, next)) = (side_ends(s), b.neighbours(s));
+        let (before_band, after_band) = (bands.get(prev).and_then(|r| r.last()), bands.get(next).and_then(|r| r.first()));
+        let goes_on = |o: Option<&BandRun>, run: &BandRun, at_end: bool| {
+            o.is_some_and(|p| {
+                let (lo, hi) = side_ends(if at_end { next } else { prev });
+                (p.color, p.thickness, p.class) == (run.color, run.thickness, run.class)
+                    && if at_end { (p.lo - lo).abs() < SEAM } else { (p.hi - hi).abs() < SEAM }
+            })
+        };
+        // Where the walls' outline goes down a corner (`down`), at the side's low and high end.
+        let (down_lo, down_hi) = if b.along(side, a) <= b.along(side, z) { (down_a, down_z) } else { (down_z, down_a) };
+        let mut lines = PathBuilder::new();
+        for run in bands.get(s).into_iter().flatten() {
+            let ends_across = [
+                (run.lo, (run.lo - lo_end).abs() >= SEAM || down_lo || !goes_on(before_band, run, false)),
+                (run.hi, (run.hi - hi_end).abs() >= SEAM || down_hi || !goes_on(after_band, run, true)),
+            ];
+            let mut fill = PathBuilder::new();
+            for (ends, _, [ta, tz]) in &quads {
+                let (ca, cz) = (b.along(side, ends[0]), b.along(side, ends[1]));
+                let span = cz - ca;
+                if span.abs() < 1e-12 {
+                    continue;
+                }
+                let (u, v) = ((run.lo - ca) / span, (run.hi - ca) / span);
+                let (t0, t1) = (u.min(v).max(0.0), u.max(v).min(1.0));
+                if t1 <= t0 {
+                    continue;
+                }
+                // The stretch's ends raised to the ground: its top is the straight line between them.
+                let raised = |m: Coord| {
+                    let (u, v) = cam.ground_px(m);
+                    (u, v, ground.up_px(m, &cam))
+                };
+                let (ra, rz) = (raised(ends[0]), raised(ends[1]));
+                // The ground's edge over `t`, on the screen line from `ta` to `tz` the wall is drawn
+                // to: in a turned view the stretch's ends lie at different depths, so the ground's
+                // point `t` along the stretch is not `t` along that line, and the band's contacts
+                // would lean away from their feet.
+                let seen = |t: f64| {
+                    let (u, v) = lerp((ra.0, ra.1), (rz.0, rz.1), t);
+                    cam.project_raised(u, v, ra.2 + (rz.2 - ra.2) * t, w, h)
+                };
+                let (sa, sz) = (seen(0.0), seen(1.0));
+                let top_at = |t: f64| {
+                    let along = match (sa, sz, seen(t)) {
+                        (Some(a), Some(z), Some(q)) => {
+                            let (dx, dy) = (z.0 - a.0, z.1 - a.1);
+                            let len = dx * dx + dy * dy;
+                            if len > 1e-18 { ((q.0 - a.0) * dx + (q.1 - a.1) * dy) / len } else { t }
+                        }
+                        _ => t,
+                    };
+                    lerp(*ta, *tz, along.clamp(0.0, 1.0))
+                };
+                // The band's foot `t` along the stretch: its thickness under the ground's edge
+                // drawn there, never below the base. That edge is the mesh's (`ta` to `tz`), which
+                // can stand off the ground read at the stretch's ends, and the ground inside the
+                // stretch off both: its height is read through its screen point
+                // ([`up_through`]), from the line's between the ends there.
+                // Whether this stretch of the band stops at the base anywhere.
+                let mut at_base = false;
+                let mut under = |t: f64| {
+                    let m = Coord::new(ends[0].x + (ends[1].x - ends[0].x) * t, ends[0].y + (ends[1].y - ends[0].y) * t);
+                    let (gu, gv) = cam.ground_px(m);
+                    let per = ground.per_unit(m) * res;
+                    let seen_up = |up: f64| {
+                        cam.project_raised(gu, gv, up.clamp(-1e7, 1e7), w, h)
+                            .map(|(x, y)| (x * k, y * k))
+                            .filter(|p| p.0.is_finite() && p.1.is_finite())
+                    };
+                    let (line, top) = (ra.2 + (rz.2 - ra.2) * t, top_at(t));
+                    let edge = up_through(&cam, (gu, gv), line, top, (w, h, k));
+                    let (foot, base) = (edge - run.thickness / per, b.base / per);
+                    at_base |= foot < base;
+                    // Never over the top on screen, whatever the heights: where it would
+                    // stand up the vertical from the top, it is the top.
+                    let (Some(p), Some(q), Some(at)) = (seen_up(line), seen_up(line - 1.0), seen_up(foot.max(base))) else {
+                        return None;
+                    };
+                    let over_top = (at.0 - top.0) * (p.0 - q.0) + (at.1 - top.1) * (p.1 - q.1) > 0.0;
+                    // With how far over the base the foot would stand (under 0: it stops there).
+                    Some((if over_top { top } else { at }, foot - base))
+                };
+                let (Some((ba, over_a)), Some((bz, over_z))) = (under(t0), under(t1)) else { continue };
+                // Where the foot meets the base inside the stretch, it bends there: along the base
+                // on one side, rising from it on the other, not straight across over the rock.
+                let bend = ((over_a < 0.0) != (over_z < 0.0))
+                    .then(|| t0 + (t1 - t0) * over_a / (over_a - over_z))
+                    .and_then(&mut under)
+                    .map(|(p, _)| p);
+                if at_base {
+                    // Keyed by where the stretch lies along its side, which holds across the runs
+                    // a long side is drawn in (`WALL_RUN`), not by its place among them.
+                    band_at_base.insert((s, ca.to_bits(), cz.to_bits()));
+                }
+                let (ta2, tz2) = (top_at(t0), top_at(t1));
+                let foot = match bend {
+                    Some(c) => vec![grow(bz, c), pt(c), grow(ba, c)],
+                    None => vec![grow(bz, ba), grow(ba, bz)],
+                };
+                for (i, p) in [grow(ta2, tz2), grow(tz2, ta2)].into_iter().chain(foot).enumerate() {
+                    if i == 0 { fill.move_to(p.0, p.1) } else { fill.line_to(p.0, p.1) }
+                }
+                fill.close();
+                lines.move_to(pt(ta2).0, pt(ta2).1);
+                lines.line_to(pt(tz2).0, pt(tz2).1);
+                lines.move_to(pt(ba).0, pt(ba).1);
+                if let Some(c) = bend {
+                    lines.line_to(pt(c).0, pt(c).1);
+                }
+                lines.line_to(pt(bz).0, pt(bz).1);
+                for (t, top, foot) in [(t0, ta2, ba), (t1, tz2, bz)] {
+                    let c = ca + span * t;
+                    if ends_across.iter().any(|(e, across)| *across && (c - e).abs() < SEAM) {
+                        lines.move_to(pt(top).0, pt(top).1);
+                        lines.line_to(pt(foot).0, pt(foot).1);
+                    }
+                }
+            }
+            if let Some(path) = fill.finish() {
+                band_fills.push((path, run.color.shade(top_shade).lerp(fog, f)));
+            }
+        }
+        if let Some(path) = lines.finish() {
+            band_lines.push((path, edge_color));
+        }
+        if !round {
+            draw_bands(pm, &mut band_fills, &mut band_lines, k);
+        }
         // The water the side cuts through (#2317), over the wall and its contacts: from its level
-        // down to the floor, sampled along each stretch so the floor follows the shore.
+        // down to the floor, sampled along each stretch so the floor follows the shore, and at
+        // each of the bed's samples too where it is read (#2434), so the floor follows the bed.
         for wr in water.get(s).into_iter().flatten() {
             // Along the run: each point's place along the side, its level and floor on screen,
-            // and the floor at the full depth there, for the shading.
+            // and the floor at the full depth there, for the shading; and the places with no
+            // water (the bed above the level, or no floor known), where the band breaks.
             type Sample = (f64, (f64, f64), (f64, f64), (f64, f64));
-            let mut samples: Vec<Sample> = Vec::new();
+            let (mut samples, mut dry): (Vec<Sample>, Vec<f64>) = (Vec::new(), Vec::new());
             for (ends, _, [ta, tz]) in &quads {
                 let (ca, cz) = (b.along(side, ends[0]), b.along(side, ends[1]));
                 let span = cz - ca;
@@ -1457,26 +2003,43 @@ pub(crate) fn draw_walls(
                 }
                 let (u, v) = ((wr.lo - ca) / span, (wr.hi - ca) / span);
                 let (t0, t1) = (u.min(v).max(0.0), u.max(v).min(1.0));
-                for i in (t1 > t0).then_some(0..=WATER_STEPS).into_iter().flatten() {
-                    let t = t0 + (t1 - t0) * f64::from(i) / f64::from(WATER_STEPS);
+                let steps = (t1 > t0).then_some(0..=WATER_STEPS).into_iter().flatten();
+                let steps = steps.map(|i| t0 + (t1 - t0) * f64::from(i) / f64::from(WATER_STEPS));
+                // The bed's samples within the stretch's part of the run, by binary search: those
+                // with a height; without a depth to fall back on those without one too, where the
+                // water stops; and with one those without one next to one with, where the floor
+                // steps to the depth's (elsewhere it is sampled as without a bed).
+                let (blo, bhi) = (ca + span * t0, ca + span * t1);
+                let (blo, bhi) = (blo.min(bhi), blo.max(bhi));
+                let has = |i: Option<usize>| i.and_then(|i| wr.bed.get(i)).is_some_and(|p| p.1.is_some());
+                let keep = |i: usize| has(Some(i)) || wr.fallback.is_none() || has(i.checked_sub(1)) || has(Some(i + 1));
+                let range = wr.bed.partition_point(|p| p.0 < blo)..wr.bed.partition_point(|p| p.0 <= bhi);
+                let beds = range.filter(|&i| t1 > t0 && keep(i)).filter_map(|i| wr.bed.get(i)).map(|p| (p.0 - ca) / span);
+                for t in steps.chain(beds) {
                     let m = Coord::new(ends[0].x + (ends[1].x - ends[0].x) * t, ends[0].y + (ends[1].y - ends[0].y) * t);
+                    let along = b.along(side, m);
+                    let Some(floor) = wr.floor_at(along, m) else {
+                        dry.push(along);
+                        continue;
+                    };
                     let (gu, gv) = cam.ground_px(m);
                     let raised = |height: f64| {
                         let up = (height.max(b.base) / ground.per_unit(m) / res).clamp(-1e7, 1e7);
                         cam.project_raised(gu, gv, up, w, h).map(|(x, y)| (x * k, y * k)).filter(|p| p.0.is_finite() && p.1.is_finite())
                     };
-                    if let (Some(floor), Some(deep)) = (raised(wr.floor(m)), raised(wr.level - wr.depth)) {
+                    if let (Some(floor), Some(deep)) = (raised(floor), raised(wr.level - wr.depth)) {
                         // The water's level, or the ground's edge where that runs lower: the mesh
                         // draws a stretch reaching past the shore partly at the land's heights
                         // (up is up the screen in a tilted view).
                         let edge = lerp(*ta, *tz, t);
                         let top = raised(wr.level).filter(|l| l.1 > edge.1).unwrap_or(edge);
-                        samples.push((b.along(side, m), top, floor, deep));
+                        samples.push((along, top, floor, deep));
                     }
                 }
             }
             samples.sort_by(|p, q| p.0.total_cmp(&q.0));
             samples.dedup_by(|p, q| (p.0 - q.0).abs() < 1e-9);
+            dry.sort_by(f64::total_cmp);
             // The wall's stretches within the run, joined where they meet or overlap: a band of
             // ground that failed to draw (`render_tilted` goes on without it) leaves the wall in
             // pieces, and the water keeps to each, crossing no gap where no wall stands.
@@ -1498,8 +2061,20 @@ pub(crate) fn draw_walls(
                     _ => pieces.push((lo, hi)),
                 }
             }
-            for (lo, hi) in pieces {
-                let mut samples: Vec<Sample> = samples.iter().filter(|p| p.0 >= lo - tol && p.0 <= hi + tol).copied().collect();
+            // Each piece's samples, broken where a place with no water lies between two of them
+            // (#2434): one band each.
+            let dry_between = |a: f64, z: f64| dry.partition_point(|d| *d <= a) < dry.partition_point(|d| *d < z);
+            let bands = pieces.into_iter().flat_map(|(lo, hi)| {
+                let mut bands: Vec<Vec<Sample>> = Vec::new();
+                for p in samples.iter().filter(|p| p.0 >= lo - tol && p.0 <= hi + tol) {
+                    match bands.last_mut() {
+                        Some(band) if band.last().is_some_and(|q| !dry_between(q.0, p.0)) => band.push(*p),
+                        _ => bands.push(vec![*p]),
+                    }
+                }
+                bands
+            });
+            for mut samples in bands {
                 if samples.len() < 2 {
                     continue;
                 }
@@ -1564,7 +2139,44 @@ pub(crate) fn draw_walls(
         }
     }
     stroke_outlines(pm, &mut outlines, k);
+    draw_bands(pm, &mut band_fills, &mut band_lines, k);
+    if !band_at_base.is_empty() {
+        crate::approximations::band_at_base(&bands.layer, band_at_base.len());
+    }
     draw_water(pm, &mut waters, k);
+}
+
+/// The height (up px, as [`rustgis_map::Camera::project_raised`] takes it) at which the vertical
+/// over ground offsets `(u, v)` passes screen point `at` (physical px, `k` of them a logical px),
+/// read along the vertical's line on screen (the part of `at` across it left out) from its
+/// points at `near` and a pixel of height either side. A vertical's heights and its points' places
+/// along that line match by a projective map, which keeps cross-ratios, so the height is exact
+/// (a straight-line estimate is off where `near` stands far from it). `near` where it can't be told.
+fn up_through(cam: &rustgis_map::Camera, (u, v): (f64, f64), near: f64, at: (f64, f64), (w, h, k): (f64, f64, f64)) -> f64 {
+    let seen = |up: f64| cam.project_raised(u, v, up, w, h).map(|(x, y)| (x * k, y * k));
+    let (Some(p0), Some(p1), Some(p2)) = (seen(near), seen(near - 1.0), seen(near + 1.0)) else { return near };
+    let (dx, dy) = (p2.0 - p1.0, p2.1 - p1.1);
+    let len = dx.hypot(dy);
+    // Places along the line from `p0`, up the vertical.
+    let place = |p: (f64, f64)| ((p.0 - p0.0) * dx + (p.1 - p0.1) * dy) / len;
+    let (s1, s2, s) = (place(p1), place(p2), place(at));
+    if len < 1e-12 || s.abs() < 1e-12 || (s2 - s1).abs() < 1e-12 {
+        return near;
+    }
+    // The cross-ratio of (p0, p1; p2, at) along the line equals that of their heights (near,
+    // near − 1; near + 1, x): (x − near + 1) / (2 (x − near)).
+    let c = s2 * (s - s1) / ((s2 - s1) * s);
+    let x = (near - 1.0 - 2.0 * c * near) / (1.0 - 2.0 * c);
+    if x.is_finite() { x } else { near }
+}
+
+/// Draws the top band's `fills` (#2607), then strokes its `lines` as the walls' outlines are, at
+/// the scale `k` (physical px a logical one), and empties both.
+fn draw_bands(pm: &mut Pixmap, fills: &mut Vec<(tiny_skia::Path, Rgba)>, lines: &mut Vec<(tiny_skia::Path, Rgba)>, k: f64) {
+    for (path, c) in fills.drain(..) {
+        pm.fill_path(&path, &paint(c, 1.0), FillRule::Winding, Transform::identity(), None);
+    }
+    stroke_outlines(pm, lines, k);
 }
 
 /// The points each stretch of wall is cut into for the water's floor (#2317): enough for the
@@ -1654,8 +2266,13 @@ pub fn flat_walls(map: &Map, ground: &Ground, b: &Block, res: f64, per_unit: f64
     // What `runs` approximates is this drawing's, said with it; what frames before it said stays.
     let before = crate::approximations::keep();
     let runs = runs(map, b, scale, &env);
-    let gaps = crate::approximations::take();
+    let mut gaps = crate::approximations::take();
     crate::approximations::restore(before);
+    // The walls' top band (#2607) is the map view's only.
+    let top = map.view.terrain.as_ref().and_then(|t| t.block.as_ref()).and_then(|t| t.walls_top.as_ref());
+    if let Some(top) = top.filter(|t| crate::terrain::walls_layer(map, &t.layer).is_some()) {
+        gaps.push(format!("the walls' top band from '{}' is drawn on the map view only, not on the model's walls", top.layer));
+    }
     let water = water_runs(map, b, ground, res, scale, &env).iter().map(Vec::len).sum();
     let mut out = FlatWalls { pictures: None, squeeze: 1.0, water, gaps };
     let boxed = b.circle.is_none() && b.outline.is_none() && runs.len() == 4;
@@ -1761,6 +2378,139 @@ mod tests {
     fn area(parts: &[Vec<Clipped>]) -> f64 {
         let ring = |p: &Vec<Clipped>| p.iter().zip(p.iter().cycle().skip(1)).map(|(a, b)| a.1.x * b.1.y - b.1.x * a.1.y).sum::<f64>() / 2.0;
         parts.iter().map(ring).sum()
+    }
+
+    #[test]
+    fn a_polygon_blocks_hole_is_cut_from_the_triangles_round_it_as_a_well() {
+        // #2318: a square 10 a side with a hole 2 a side in its middle (both given anticlockwise:
+        // the hole is turned round). Inside the hole nothing is ground; a triangle across its
+        // edge keeps the part outside it, its edge along the hole's side; one round the whole
+        // hole keeps all but the hole, in one part joined to it by a seam that gives no wall.
+        let ring = |c: &[(f64, f64)]| c.iter().map(|&(x, y)| Coord::new(x, y)).collect::<Vec<_>>();
+        let square = ring(&[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]);
+        let hole = ring(&[(4.0, 4.0), (6.0, 4.0), (6.0, 6.0), (4.0, 6.0)]);
+        // A hole of a polygon whose outer ring has no area goes with it.
+        let flat = ring(&[(20.0, 0.0), (30.0, 0.0), (25.0, 0.0)]);
+        let alone = Outline::from_polygons(vec![vec![square.clone()], vec![flat, hole.clone()]]).expect("an outline");
+        assert_eq!((alone.side_count(), alone.holes(), alone.dropped()), (4, 0, 0));
+        // One lying outside its own outer ring cuts nothing and makes no ground: left out, counted.
+        let stray = ring(&[(20.0, 20.0), (22.0, 20.0), (22.0, 22.0), (20.0, 22.0)]);
+        let o = Outline::from_polygons(vec![vec![square.clone(), stray]]).expect("an outline");
+        assert_eq!((o.side_count(), o.holes(), o.stray()), (4, 0, 1));
+        let [x0, y0, x1, y1] = o.extent();
+        let b = Block { x0, y0, x1, y1, outline: Some(Arc::new(o)), ..unit_block() };
+        assert!(pieces([Coord::new(19.0, 20.5), Coord::new(21.0, 20.5), Coord::new(19.0, 21.5)], &b).is_empty());
+        let o = Outline::from_polygons(vec![vec![square, hole]]).expect("an outline");
+        assert_eq!((o.side_count(), o.holes()), (8, 1));
+        assert!(o.contains(Coord::new(2.0, 2.0)) && !o.contains(Coord::new(5.0, 5.0)));
+        let b = Block { x0: 0.0, y0: 0.0, x1: 10.0, y1: 10.0, outline: Some(Arc::new(o)), ..unit_block() };
+        assert!(pieces([Coord::new(4.5, 4.5), Coord::new(5.5, 4.5), Coord::new(4.5, 5.5)], &b).is_empty());
+        // Across the hole's west side: x 3 to 5, so the half from x 4 is in the hole.
+        let across = pieces([Coord::new(3.0, 4.5), Coord::new(5.0, 4.5), Coord::new(3.0, 5.5)], &b);
+        assert!((area(&across) - (1.0 - 0.25)).abs() < 1e-9, "{}", area(&across));
+        let mut out = Vec::new();
+        let screen = |p: &Vec<Clipped>| p.iter().map(|c| (c.1.x, c.1.y)).collect::<Vec<_>>();
+        across.iter().for_each(|p| edges(&b, p, &screen(p), 1.0, &mut out));
+        assert!(
+            out.len() == 1 && out[0].ends.iter().all(|e| (e.x - 4.0).abs() < 1e-9),
+            "{:?}",
+            out.iter().map(|e| e.ends).collect::<Vec<_>>()
+        );
+        // Round the whole hole: the triangle's 32 less the hole's 4, its four sides the walls.
+        let round = pieces([Coord::new(1.0, 1.0), Coord::new(9.0, 1.0), Coord::new(5.0, 9.0)], &b);
+        assert!(round.len() == 1 && (area(&round) - 28.0).abs() < 1e-9, "{}", area(&round));
+        out.clear();
+        edges(&b, &round[0], &screen(&round[0]), 1.0, &mut out);
+        let mut sides: Vec<u16> = out.iter().map(|e| e.side).collect();
+        sides.sort_unstable();
+        assert_eq!(sides, vec![4, 5, 6, 7]);
+        // A hole's walls face into it: its north side (its first, run east) faces south.
+        assert_eq!(b.side(4).1, Coord::new(4.0, 6.0));
+        assert!(b.beyond(4, Coord::new(5.0, 5.0)) > 0.0 && b.beyond(4, Coord::new(5.0, 7.0)) < 0.0);
+    }
+
+    #[test]
+    fn a_polygon_blocks_hole_seam_across_a_notch_fills_no_ground_outside_the_polygon() {
+        // #2318: a U, its bay x 1 to 2 from y = 1 up, the east arm's inner side with a spike into
+        // the bay to (1.2, 5), and a hole in the west arm. Every corner of the hole is nearer the
+        // spike's tip than any corner of the west arm, so the seam from the part's nearest corner
+        // crosses the bay. Filled as the frame fills it (by winding), the seam's two edges cancel:
+        // the bay stays bare, the hole too, and the walls are the outline's sides only.
+        let ring = |c: &[(f64, f64)]| c.iter().map(|&(x, y)| Coord::new(x, y)).collect::<Vec<_>>();
+        let u = ring(&[
+            (0.0, 0.0),
+            (3.0, 0.0),
+            (3.0, 10.0),
+            (2.0, 10.0),
+            (2.0, 5.2),
+            (1.2, 5.0),
+            (2.0, 4.8),
+            (2.0, 1.0),
+            (1.0, 1.0),
+            (1.0, 10.0),
+            (0.0, 10.0),
+        ]);
+        let hole = ring(&[(0.3, 4.8), (0.9, 4.8), (0.9, 5.2), (0.3, 5.2)]);
+        let o = Outline::from_polygons(vec![vec![u, hole.clone()]]).expect("an outline");
+        assert_eq!((o.side_count(), o.holes()), (15, 1));
+        let [x0, y0, x1, y1] = o.extent();
+        let b = Block { x0, y0, x1, y1, outline: Some(Arc::new(o)), ..unit_block() };
+        let o = b.outline.as_deref().expect("an outline");
+        let parts = pieces([Coord::new(-5.0, -5.0), Coord::new(30.0, -5.0), Coord::new(-5.0, 30.0)], &b);
+        assert_eq!(parts.len(), 1);
+        // The U's 30 less the bay's 9, plus the spike's 0.16, less the hole's 0.24.
+        assert!((area(&parts) - 20.92).abs() < 1e-9, "{}", area(&parts));
+        // The seam does run from the spike's tip, across the bay, to a corner of the hole.
+        let p = &parts[0];
+        let tip = Coord::new(1.2, 5.0);
+        assert!(p.iter().zip(p.iter().cycle().skip(1)).any(|(a, z)| a.1 == tip && hole.contains(&z.1)), "{p:?}");
+        // Drawn as the frame draws a part, 40 px a unit: every pixel more than 1.5 px from the
+        // outline is filled where the outline holds it and bare elsewhere (the bay, the hole).
+        let (k, m) = (40.0, 8.0);
+        let mut pm = Pixmap::new((3.0 * k + 2.0 * m) as u32, (10.0 * k + 2.0 * m) as u32).expect("a pixmap");
+        let mut pb = PathBuilder::new();
+        for (i, c) in p.iter().enumerate() {
+            let (x, y) = ((c.1.x * k + m) as f32, (c.1.y * k + m) as f32);
+            if i == 0 { pb.move_to(x, y) } else { pb.line_to(x, y) }
+        }
+        pb.close();
+        let path = pb.finish().expect("a path");
+        let mut paint = Paint { anti_alias: true, ..Paint::default() };
+        paint.set_color_rgba8(0, 0, 0, 255);
+        pm.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
+        let off = |q: Coord| {
+            o.sides()
+                .iter()
+                .map(|s| {
+                    let (dx, dy) = (s.z.x - s.a.x, s.z.y - s.a.y);
+                    let u = (((q.x - s.a.x) * dx + (q.y - s.a.y) * dy) / (dx * dx + dy * dy)).clamp(0.0, 1.0);
+                    (q.x - s.a.x - u * dx).hypot(q.y - s.a.y - u * dy)
+                })
+                .fold(f64::INFINITY, f64::min)
+        };
+        let (mut bay, mut wrong) = (0, Vec::new());
+        for j in 0..pm.height() {
+            for i in 0..pm.width() {
+                let q = Coord::new((f64::from(i) + 0.5 - m) / k, (f64::from(j) + 0.5 - m) / k);
+                if off(q) * k <= 1.5 {
+                    continue;
+                }
+                let alpha = pm.pixel(i, j).map_or(0, |c| c.alpha());
+                let ground = o.contains(q);
+                bay += usize::from(!ground && q.x > 1.0 && q.x < 2.0 && q.y > 1.0 && q.y < 10.0);
+                if alpha != if ground { 255 } else { 0 } {
+                    wrong.push((q.x, q.y, alpha));
+                }
+            }
+        }
+        assert!(bay > 1000 && wrong.is_empty(), "{bay} {:?}", &wrong[..wrong.len().min(8)]);
+        // Its walls are the outline's 15 sides, none along the seam (it runs along none).
+        let mut out = Vec::new();
+        edges(&b, p, &p.iter().map(|c| (c.1.x, c.1.y)).collect::<Vec<_>>(), 1.0, &mut out);
+        let mut sides: Vec<u16> = out.iter().map(|e| e.side).collect();
+        sides.sort_unstable();
+        sides.dedup();
+        assert_eq!(sides, (0..15).collect::<Vec<u16>>());
     }
 
     #[test]
@@ -2009,6 +2759,7 @@ mod tests {
                 depth: None,
                 walls: rustgis_map::view::BLOCK_WALLS,
                 walls_layer: Some("geo".into()),
+                walls_top: None,
                 shape: rustgis_map::view::BlockShape::Box,
                 water: None,
             }),
@@ -2346,6 +3097,7 @@ mod tests {
                 depth: None,
                 walls: rustgis_map::view::BLOCK_WALLS,
                 walls_layer: None,
+                walls_top: None,
                 shape,
                 water,
             }),
@@ -2367,7 +3119,7 @@ mod tests {
         use rustgis_map::view::BlockWater;
         // #2317: the east side crosses a lake from y −300 to 300; another lake lies inside the box.
         let lakes: [(&[[f64; 4]], _); 2] = [(&[[500.0, -300.0, 1500.0, 300.0]], None), (&[[-500.0, -500.0, -200.0, -200.0]], None)];
-        let (m, b, g, res) = block_over_lakes(&lakes, Some(BlockWater { depth: Some(10.0), field: None }));
+        let (m, b, g, res) = block_over_lakes(&lakes, Some(BlockWater { depth: Some(10.0), field: None, bed: None }));
         let w = water_runs(&m, &b, &g, res, 1.0, &Default::default());
         assert!(w[0].is_empty() && w[2].is_empty() && w[3].is_empty(), "only the east side crosses water");
         let [r] = &w[1][..] else { panic!("one stretch of water on the east side") };
@@ -2381,7 +3133,7 @@ mod tests {
         // Each lake its own depth from the field; one without a value has none, unless a depth is
         // given for those.
         let lakes: [(&[[f64; 4]], _); 2] = [(&[[500.0, -300.0, 1500.0, 300.0]], Some(4.0)), (&[[-300.0, 600.0, 300.0, 1500.0]], None)];
-        let field = |depth| Some(BlockWater { depth, field: Some("prof".into()) });
+        let field = |depth| Some(BlockWater { depth, field: Some("prof".into()), bed: None });
         let (m, b, g, res) = block_over_lakes(&lakes, field(None));
         let w = water_runs(&m, &b, &g, res, 1.0, &Default::default());
         assert_eq!((w[1].len(), w[2].len()), (1, 0));
@@ -2400,7 +3152,7 @@ mod tests {
         // One row of two parts meeting on y 0 across the east side: a stretch each, each floor
         // shaped by its own part's shore.
         let halves: [[f64; 4]; 2] = [[500.0, -300.0, 1500.0, 0.0], [500.0, 0.0, 1500.0, 300.0]];
-        let (mut m, b, g, res) = block_over_lakes(&[(&halves, None)], Some(BlockWater { depth: Some(10.0), field: None }));
+        let (mut m, b, g, res) = block_over_lakes(&[(&halves, None)], Some(BlockWater { depth: Some(10.0), field: None, bed: None }));
         let w = water_runs(&m, &b, &g, res, 1.0, &Default::default());
         let [south, north] = &w[1][..] else { panic!("a stretch a part: {}", w[1].len()) };
         assert!((south.hi - 0.0).abs() < 1e-6 && (north.lo - 0.0).abs() < 1e-6);
@@ -2434,7 +3186,7 @@ mod tests {
         // The circle of radius 1000 crosses the lake (y −300 to 300 east of x 500) on the sides
         // round its east point, and nowhere else.
         let lakes: [(&[[f64; 4]], _); 1] = [(&[[500.0, -300.0, 1500.0, 300.0]], None)];
-        let water = Some(BlockWater { depth: Some(10.0), field: None });
+        let water = Some(BlockWater { depth: Some(10.0), field: None, bed: None });
         let (m, b, g, res) = block_over_lakes_shaped(&lakes, water, BlockShape::Circle { radius: None });
         let w = water_runs(&m, &b, &g, res, 1.0, &Default::default());
         assert_eq!(w.len(), ROUND_SIDES);
@@ -2487,10 +3239,22 @@ mod tests {
         let water: WaterRuns = (0..b.sides()).map(|_| Vec::new()).collect();
         let draw = |go_on: bool| {
             let (mut pm, mut asked) = (Pixmap::new(600, 500).unwrap(), 0);
-            draw_walls(&mut pm, &view, &g, &b, &edges, &runs, &water, Rgba::rgb(255, 255, 255), rustgis_map::camera::FAR, |_, _| {
-                asked += 1;
-                go_on
-            });
+            draw_walls(
+                &mut pm,
+                &view,
+                &g,
+                &b,
+                &edges,
+                &runs,
+                &band_runs(&m, &b, &g, 1.0, &Default::default()),
+                &water,
+                Rgba::rgb(255, 255, 255),
+                rustgis_map::camera::FAR,
+                |_, _| {
+                    asked += 1;
+                    go_on
+                },
+            );
             (pm.pixels().iter().filter(|p| p.alpha() > 0).count(), asked)
         };
         let (drawn, asked) = draw(true);
@@ -2505,7 +3269,7 @@ mod tests {
         // failed to draw left its wall only at x −1000 to −300 and 300 to 1000: water on each
         // piece, none in the gap between them.
         let lakes: [(&[[f64; 4]], _); 1] = [(&[[-800.0, -1500.0, 800.0, -500.0]], None)];
-        let (m, b, g, res) = block_over_lakes(&lakes, Some(BlockWater { depth: Some(50.0), field: None }));
+        let (m, b, g, res) = block_over_lakes(&lakes, Some(BlockWater { depth: Some(50.0), field: None, bed: None }));
         let water = water_runs(&m, &b, &g, res, 1.0, &Default::default());
         let camera = rustgis_map::Camera { center: Coord::new(0.0, 0.0), res, bearing: 0.0, pitch: 60.0 };
         let view = View { width: 600.0, height: 500.0, pixels_per_point: 1.0, camera, sky: false };
@@ -2532,7 +3296,19 @@ mod tests {
         let runs = runs(&m, &b, 1.0, &Default::default());
         let draw = |water: &WaterRuns| {
             let mut pm = Pixmap::new(600, 500).unwrap();
-            draw_walls(&mut pm, &view, &g, &b, &edges, &runs, water, Rgba::rgb(255, 255, 255), rustgis_map::camera::FAR, |_, _| true);
+            draw_walls(
+                &mut pm,
+                &view,
+                &g,
+                &b,
+                &edges,
+                &runs,
+                &band_runs(&m, &b, &g, 1.0, &Default::default()),
+                water,
+                Rgba::rgb(255, 255, 255),
+                rustgis_map::camera::FAR,
+                |_, _| true,
+            );
             pm
         };
         let (wet, dry) = (draw(&water), draw(&(0..b.sides()).map(|_| Vec::new()).collect()));
@@ -2560,5 +3336,935 @@ mod tests {
         for x in [-150.0, 0.0, 150.0] {
             assert_eq!(pixel(&wet, x, 950.0).alpha(), 0, "{x}: {:?}", pixel(&wet, x, 950.0));
         }
+    }
+
+    /// The lake across the south side of [`block_over_lakes`] from x −300 to 300, `water` in its
+    /// walls with its bed read from "batimetria": a Web Mercator raster of 20 m cells over the
+    /// DEM's ±5000 m, `bed(x, y)` metres at each cell's centre (NaN: no height).
+    fn lake_over_bed(depth: Option<f64>, bed: impl Fn(f64, f64) -> f32) -> (Map, Block, Ground, f64) {
+        use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster};
+        use rustgis_map::view::BlockWater;
+        let lakes: [(&[[f64; 4]], _); 1] = [(&[[-300.0, -1500.0, 300.0, -500.0]], None)];
+        let water = BlockWater { depth, field: None, bed: Some("batimetria".into()) };
+        let (mut m, b, g, res) = block_over_lakes(&lakes, Some(water));
+        let gt = GeoTransform { origin_x: -5000.0, origin_y: 5000.0, pixel_width: 20.0, pixel_height: -20.0 };
+        let cells: Vec<f32> =
+            (0..500 * 500).map(|i| bed(-4990.0 + 20.0 * f64::from(i % 500), 4990.0 - 20.0 * f64::from(i / 500))).collect();
+        let raster = Raster::new("batimetria", 500, 500, vec![cells], gt, Crs::WebMercator, None, ColorHint::Gray, "Float32").unwrap();
+        m.add_raster("batimetria", rustgis_map::RasterLayer::from_path(raster, "batimetria.tif"));
+        (m, b, g, res)
+    }
+
+    /// The lake's bed of [`lake_over_bed`]: 40 m below the DEM's 500 m in the middle of the lake,
+    /// rising evenly to it at its shores (x ±300).
+    fn dipping(x: f64, _: f64) -> f32 {
+        (500.0 - 40.0 * (1.0 - x.abs() / 300.0).max(0.0)) as f32
+    }
+
+    /// The south wall of `b` as stretches 100 m long, seen as [`a_wall_in_pieces_keeps_its_water_to_each_piece`]
+    /// sees it, drawn with `water`, and where on screen `metres` (exaggerated) at `x` lands.
+    fn south_wall(m: &Map, b: &Block, g: &Ground, res: f64, water: &WaterRuns) -> (Pixmap, impl Fn(f64, f64) -> (u32, u32)) {
+        south_wall_seen(m, b, g, res, water, 0.0, 20, None)
+    }
+
+    /// [`south_wall`] seen from `bearing`, its wall in `count` stretches of equal length, the
+    /// ground's edge over them at the heights `mesh` gives (metres, exaggerated) as a mesh's
+    /// vertices would put it, else at the ground's own. A polygon block's south side is the side
+    /// along y −1000.
+    fn south_wall_seen(
+        m: &Map,
+        b: &Block,
+        g: &Ground,
+        res: f64,
+        water: &WaterRuns,
+        bearing: f64,
+        count: u16,
+        mesh: Option<f64>,
+    ) -> (Pixmap, impl Fn(f64, f64) -> (u32, u32)) {
+        let camera = rustgis_map::Camera { center: Coord::new(0.0, 0.0), res, bearing, pitch: 60.0 };
+        let view = View { width: 600.0, height: 500.0, pixels_per_point: 1.0, camera, sky: false };
+        let (w, h) = (view.width, view.height);
+        let raised = move |x: f64, up: f64| {
+            let (u, v) = camera.ground_px(Coord::new(x, -1000.0));
+            camera.project_raised(u, v, up, w, h).expect("in view")
+        };
+        let top = |x: f64| {
+            let m = Coord::new(x, -1000.0);
+            raised(x, mesh.map_or_else(|| g.up_px(m, &camera), |metres| metres / g.per_unit(m) / res))
+        };
+        let south = match &b.outline {
+            Some(_) => (0..b.sides())
+                .find(|&k| {
+                    let (_, a, z) = b.side(k);
+                    (a.y + 1000.0).abs() < 1.0 && (z.y + 1000.0).abs() < 1.0
+                })
+                .expect("a south side") as u16,
+            None => u16::from(SOUTH),
+        };
+        let step = 2000.0 / f64::from(count);
+        let edges: Vec<Edge> = (0..count)
+            .map(|i| {
+                let (x0, x1) = (-1000.0 + step * f64::from(i), -1000.0 + step * f64::from(i + 1));
+                Edge { side: south, ends: [Coord::new(x0, -1000.0), Coord::new(x1, -1000.0)], top: [top(x0), top(x1)], depth: 1.0 }
+            })
+            .collect();
+        let mut pm = Pixmap::new(600, 500).unwrap();
+        let runs = runs(m, b, 1.0, &Default::default());
+        draw_walls(
+            &mut pm,
+            &view,
+            g,
+            b,
+            &edges,
+            &runs,
+            &band_runs(m, b, g, 1.0, &Default::default()),
+            water,
+            Rgba::rgb(255, 255, 255),
+            rustgis_map::camera::FAR,
+            |_, _| true,
+        );
+        let per = g.per_unit(Coord::new(0.0, -1000.0));
+        (pm, move |x: f64, metres: f64| {
+            let (px, py) = raised(x, metres / per / res);
+            (px as u32, py as u32)
+        })
+    }
+
+    /// Whether `c` is the water's colour `water` shaded, by its shares of red, green and blue.
+    fn is_water(c: tiny_skia::ColorU8, water: Rgba) -> bool {
+        let shares = |p: [u8; 3]| {
+            let sum = p.iter().map(|v| f64::from(*v)).sum::<f64>().max(1.0);
+            p.map(|v| f64::from(v) / sum)
+        };
+        let (p, q) = (shares([c.red(), c.green(), c.blue()]), shares([water.r(), water.g(), water.b()]));
+        c.alpha() == 255 && p.iter().zip(q).map(|(a, b)| (a - b).abs()).sum::<f64>() < 0.05
+    }
+
+    #[test]
+    fn a_wall_across_a_lake_shows_its_floor_on_the_bed_raster() {
+        // #2434: a flat DEM at 500 m, its lake's bed 40 m deeper in its middle: along the south
+        // wall the floor lies at the bed's heights (doubled, as the level is), not the depth's
+        // basin, and the water reaches down to it.
+        let (m, b, g, res) = lake_over_bed(Some(5.0), dipping);
+        let water = water_runs(&m, &b, &g, res, 1.0, &Default::default());
+        let [r] = &water[0][..] else { panic!("one stretch of water on the south side") };
+        // The shading runs to its deepest sample, about 40 m (doubled) down.
+        assert!((r.level - 1000.0).abs() < 1e-6 && (r.depth - 80.0).abs() < 3.0, "{} {}", r.level, r.depth);
+        let key = b.side(0).0;
+        for x in [-150.0, 100.0, 200.0] {
+            let at = Coord::new(x, -1000.0);
+            let floor = r.floor_at(b.along(key, at), at).expect("water there");
+            assert!((floor - 2.0 * f64::from(dipping(x, 0.0))).abs() < 1e-3, "{x}: {floor}");
+        }
+        // Drawn: water 20 m (doubled) under the level in the middle and 12 m at x −100, where the
+        // depth's 5 m basin would show the wall; the wall just under the bed near the shore.
+        let (pm, at) = south_wall(&m, &b, &g, res, &water);
+        let (plain, _) = south_wall(&m, &b, &g, res, &(0..b.sides()).map(|_| Vec::new()).collect());
+        let pixel = |pm: &Pixmap, x: f64, metres: f64| {
+            let (px, py) = at(x, metres);
+            pm.pixel(px, py).expect("in the picture").demultiply()
+        };
+        assert!(is_water(pixel(&pm, 0.0, 960.0), r.color), "{:?}", pixel(&pm, 0.0, 960.0));
+        assert!(is_water(pixel(&pm, -100.0, 975.0), r.color), "{:?}", pixel(&pm, -100.0, 975.0));
+        // (3.5 px under the floor's line, at 10 m a pixel.)
+        let under = 2.0 * f64::from(dipping(250.0, 0.0)) - 35.0;
+        let below = pixel(&pm, 250.0, under);
+        assert!(!is_water(below, r.color) && below == pixel(&plain, 250.0, under), "{below:?}");
+    }
+
+    #[test]
+    fn a_bed_covering_half_a_lake_falls_back_to_the_depth_on_the_other_half() {
+        // #2434: the bed has heights east of x 0 only: the east half's floor follows it, the west
+        // half's is the depth's basin with its shore ramp (4 px of 10 m), and one stretch without
+        // the bed is said.
+        let half = |x: f64, y: f64| if x > 0.0 { dipping(x, y) } else { f32::NAN };
+        let (m, b, g, res) = lake_over_bed(Some(10.0), half);
+        let before = crate::approximations::keep();
+        let water = water_runs(&m, &b, &g, res, 1.0, &Default::default());
+        let said = crate::approximations::take();
+        crate::approximations::restore(before);
+        let [r] = &water[0][..] else { panic!("one stretch of water on the south side") };
+        let key = b.side(0).0;
+        let floor = |x: f64| {
+            let at = Coord::new(x, -1000.0);
+            r.floor_at(b.along(key, at), at)
+        };
+        for x in [100.0, 200.0, 280.0] {
+            assert!((floor(x).unwrap() - 2.0 * f64::from(dipping(x, 0.0))).abs() < 1e-3, "{x}: {:?}", floor(x));
+        }
+        for (x, f) in [(-290.0, 995.0), (-280.0, 990.0), (-150.0, 980.0)] {
+            assert!((floor(x).unwrap() - f).abs() < 1e-6, "{x}: {:?}", floor(x));
+        }
+        // The shading runs to the deepest of them: the bed's deepest sample, a cell or so east of
+        // x 0 (its first with a height), over 30 m (doubled) down, deeper than the depth's 10 m.
+        assert!(r.depth > 60.0 && r.depth < 80.0, "{}", r.depth);
+        assert!(said.iter().any(|t| t.contains("batimetria") && t.contains("1 stretch") && t.contains("1 water body")), "{said:?}");
+        // Without a depth, no water where the bed has none.
+        let (m, b, g, res) = lake_over_bed(None, half);
+        let water = water_runs(&m, &b, &g, res, 1.0, &Default::default());
+        let [r] = &water[0][..] else { panic!("one stretch of water on the south side") };
+        let at = Coord::new(-150.0, -1000.0);
+        assert_eq!(r.floor_at(b.along(key, at), at), None);
+        let at = Coord::new(150.0, -1000.0);
+        assert!(r.floor_at(b.along(key, at), at).is_some());
+    }
+
+    #[test]
+    fn the_floor_steps_to_the_depth_at_the_beds_last_sample_with_no_height() {
+        // #2434: a bed 300 m deep east of x 160 only, the depth 2.5 m elsewhere: the bed's samples
+        // (every 20 m from the shore at −300) have no height up to x 160 and one from x 180, the
+        // wall's samples (every 25 m) none between x 150 and 175. The floor up to x 160 is the
+        // depth's, so the wall shows just under the level at x 155, not water reaching down
+        // towards the bed's floor at x 175.
+        let deep = |x: f64, _: f64| if x > 160.0 { 300.0 } else { f32::NAN };
+        let (m, b, g, res) = lake_over_bed(Some(2.5), deep);
+        let water = water_runs(&m, &b, &g, res, 1.0, &Default::default());
+        let [r] = &water[0][..] else { panic!("one stretch of water on the south side") };
+        let key = b.side(0).0;
+        let floor = |x: f64| {
+            let at = Coord::new(x, -1000.0);
+            r.floor_at(b.along(key, at), at)
+        };
+        assert!((floor(160.0).unwrap() - 995.0).abs() < 1e-6 && (floor(180.0).unwrap() - 600.0).abs() < 1e-3);
+        let (pm, at) = south_wall(&m, &b, &g, res, &water);
+        let (plain, _) = south_wall(&m, &b, &g, res, &(0..b.sides()).map(|_| Vec::new()).collect());
+        let pixel = |pm: &Pixmap, x: f64, metres: f64| {
+            let (px, py) = at(x, metres);
+            pm.pixel(px, py).expect("in the picture").demultiply()
+        };
+        assert!(is_water(pixel(&pm, 200.0, 950.0), r.color), "{:?}", pixel(&pm, 200.0, 950.0));
+        let gap = pixel(&pm, 155.0, 950.0);
+        assert!(!is_water(gap, r.color) && gap == pixel(&plain, 160.0, 950.0), "{gap:?}");
+    }
+
+    #[test]
+    fn a_bed_above_the_level_holds_no_water() {
+        // #2434: a shoal rising to 520 m round x 100 in a lake at 500 m: no water over it, the
+        // water either side of it.
+        let shoal = |x: f64, _: f64| if (x - 100.0).abs() < 50.0 { 520.0 } else { 470.0 };
+        let (m, b, g, res) = lake_over_bed(Some(10.0), shoal);
+        let water = water_runs(&m, &b, &g, res, 1.0, &Default::default());
+        let [r] = &water[0][..] else { panic!("one stretch of water on the south side") };
+        let key = b.side(0).0;
+        let floor = |x: f64| {
+            let at = Coord::new(x, -1000.0);
+            r.floor_at(b.along(key, at), at)
+        };
+        assert_eq!(floor(100.0), None);
+        assert!((floor(-100.0).unwrap() - 940.0).abs() < 1e-3 && (floor(250.0).unwrap() - 940.0).abs() < 1e-3);
+        let (pm, at) = south_wall(&m, &b, &g, res, &water);
+        let (plain, _) = south_wall(&m, &b, &g, res, &(0..b.sides()).map(|_| Vec::new()).collect());
+        let pixel = |pm: &Pixmap, x: f64, metres: f64| {
+            let (px, py) = at(x, metres);
+            pm.pixel(px, py).expect("in the picture").demultiply()
+        };
+        assert_eq!(pixel(&pm, 100.0, 990.0), pixel(&plain, 100.0, 990.0), "the wall over the shoal");
+        assert!(!is_water(pixel(&pm, 100.0, 990.0), r.color));
+        for x in [-100.0, 250.0] {
+            assert!(is_water(pixel(&pm, x, 970.0), r.color), "{x}: {:?}", pixel(&pm, x, 970.0));
+        }
+    }
+
+    #[test]
+    fn a_bed_with_no_heights_draws_the_walls_as_without_one() {
+        // #2434: no bed, a bed layer that isn't there, and a bed with no heights over the lake
+        // draw the wall's water alike, pixel for pixel: the depth's basin of #2317.
+        let frame = |bed: Option<&str>, heights: fn(f64, f64) -> f32| {
+            let (mut m, b, g, res) = lake_over_bed(Some(50.0), heights);
+            if let Some(w) = m.view.terrain.as_mut().and_then(|t| t.block.as_mut()).and_then(|b| b.water.as_mut()) {
+                w.bed = bed.map(str::to_string);
+            }
+            let water = water_runs(&m, &b, &g, res, 1.0, &Default::default());
+            south_wall(&m, &b, &g, res, &water).0
+        };
+        let plain = frame(None, dipping);
+        assert!(plain.pixels().iter().any(|p| p.alpha() > 0));
+        assert!(frame(Some("nenhuma"), dipping).data() == plain.data(), "a bed layer that isn't there");
+        assert!(frame(Some("batimetria"), |_, _| f32::NAN).data() == plain.data(), "a bed with no heights");
+        assert!(frame(Some("batimetria"), dipping).data() != plain.data(), "a bed with heights");
+    }
+
+    #[test]
+    fn a_bed_named_by_a_layer_that_isnt_a_raster_is_said() {
+        // #2434: the bed's raster gone and a polygon layer given its name (a rename, or one added):
+        // the walls show the depth's basin as without a bed, and the frame says why.
+        let (mut m, b, g, res) = lake_over_bed(Some(50.0), dipping);
+        m.layers.retain(|l| l.name != "batimetria");
+        m.add_dataset(rustgis_data::Dataset::new("batimetria", rustgis_data::GeometryType::Polygon, Vec::new()));
+        let before = crate::approximations::keep();
+        let water = water_runs(&m, &b, &g, res, 1.0, &Default::default());
+        let said = crate::approximations::take();
+        crate::approximations::restore(before);
+        assert!(!water[0].is_empty(), "the depth's water");
+        assert!(said.iter().any(|t| t.contains("batimetria") && t.contains("isn't a raster layer")), "{said:?}");
+    }
+
+    #[test]
+    fn a_bed_still_being_read_draws_the_walls_as_without_one() {
+        // #2434: a bed layer whose data hasn't come yet gives the depth's basin, as no bed does,
+        // and says nothing (its frame is drawn again when the data lands).
+        let (mut m, b, g, res) = lake_over_bed(Some(50.0), dipping);
+        let plain = {
+            let mut m = m.clone();
+            if let Some(w) = m.view.terrain.as_mut().and_then(|t| t.block.as_mut()).and_then(|b| b.water.as_mut()) {
+                w.bed = None;
+            }
+            south_wall(&m, &b, &g, res, &water_runs(&m, &b, &g, res, 1.0, &Default::default())).0
+        };
+        if let Some(r) = m.layers.iter_mut().find(|l| l.name == "batimetria").and_then(|l| l.raster.as_mut()) {
+            r.data = None;
+        }
+        let before = crate::approximations::keep();
+        let water = water_runs(&m, &b, &g, res, 1.0, &Default::default());
+        let said = crate::approximations::take();
+        crate::approximations::restore(before);
+        assert!(said.is_empty(), "{said:?}");
+        assert!(south_wall(&m, &b, &g, res, &water).0.data() == plain.data());
+    }
+
+    #[test]
+    fn a_bed_without_heights_between_two_mesh_steps_breaks_the_water() {
+        // #2434: with no depth to fall back on, the bed's one sample without a height lies between
+        // two of the mesh's steps (every 25 m along the 100 m stretches), whose nearer samples have
+        // heights: the water still stops there.
+        let (m, b, g, res) = lake_over_bed(None, dipping);
+        let mut water = water_runs(&m, &b, &g, res, 1.0, &Default::default());
+        let key = b.side(0).0;
+        let along = |x: f64| b.along(key, Coord::new(x, -1000.0));
+        let [r] = &mut water[0][..] else { panic!("one stretch of water on the south side") };
+        r.bed = (-15..=15).map(|k| f64::from(k) * 20.0 - 10.0).map(|x| (along(x), (x != 10.0).then_some(940.0))).collect();
+        r.bed.sort_by(|p, q| p.0.total_cmp(&q.0));
+        let floor = |x: f64| r.floor_at(along(x), Coord::new(x, -1000.0));
+        assert_eq!((floor(0.0), floor(10.0), floor(25.0)), (Some(940.0), None, Some(940.0)));
+        let color = r.color;
+        let (pm, at) = south_wall(&m, &b, &g, res, &water);
+        let (px, py) = at(10.0, 970.0);
+        let c = pm.pixel(px, py).expect("in the picture").demultiply();
+        assert!(!is_water(c, color), "{c:?}");
+        let (px, py) = at(-100.0, 970.0);
+        assert!(is_water(pm.pixel(px, py).expect("in the picture").demultiply(), color));
+    }
+
+    /// [`block_over_lakes`] with no lakes, its walls' top band (#2607) from "solos": one polygon a
+    /// class (field "classe"), each a Web Mercator box in its colour, `thickness` metres deep.
+    fn block_under_soils(soils: &[([f64; 4], &str, Rgba)], thickness: f64) -> (Map, Block, Ground, f64) {
+        let soils: Vec<_> = soils.iter().map(|&(r, c, fill)| (r, c, fill, None)).collect();
+        block_under_soils_by(&soils, rustgis_map::view::BandThickness::Metres(thickness))
+    }
+
+    /// [`block_under_soils`] with each polygon's value of the numeric field "espessura" (none:
+    /// null) and the band's thickness given as `thickness`.
+    fn block_under_soils_by(
+        soils: &[([f64; 4], &str, Rgba, Option<f64>)],
+        thickness: rustgis_map::view::BandThickness,
+    ) -> (Map, Block, Ground, f64) {
+        with_soils(block_over_lakes(&[], None), soils, thickness)
+    }
+
+    /// The block `base` with [`block_under_soils_by`]'s soils as its walls' top band.
+    fn with_soils(
+        base: (Map, Block, Ground, f64),
+        soils: &[([f64; 4], &str, Rgba, Option<f64>)],
+        thickness: rustgis_map::view::BandThickness,
+    ) -> (Map, Block, Ground, f64) {
+        use rustgis_data::{Dataset, Field, FieldType, GeometryType, Value};
+        let (mut m, b, g, res) = base;
+        let deg = |x: f64, y: f64| merc_to_lonlat(Coord::new(x, y));
+        let fields = vec![Field::new("classe", FieldType::Text), Field::new("espessura", FieldType::Double)];
+        let mut d = Dataset::new("solos", GeometryType::Polygon, fields);
+        for ([x0, y0, x1, y1], class, _, depth) in soils {
+            let ring = vec![deg(*x0, *y0), deg(*x1, *y0), deg(*x1, *y1), deg(*x0, *y1), deg(*x0, *y0)];
+            d.push(Some(Geometry::Polygon(vec![vec![ring]])), vec![Value::Text((*class).into()), depth.map_or(Value::Null, Value::Float)]);
+        }
+        m.add_dataset(d);
+        let base = rustgis_map::Symbol::default_for(GeometryType::Polygon, 0);
+        let classes = soils.iter().map(|(_, c, fill, _)| ((*c).to_string(), rustgis_map::Symbol { fill: *fill, ..base })).collect();
+        if let Some(l) = m.layers.iter_mut().find(|l| l.name == "solos") {
+            l.renderer = rustgis_map::Renderer::Unique {
+                field: "classe".into(),
+                classes,
+                other: base,
+                ramp: rustgis_map::Ramp::Ember,
+                class_labels: Default::default(),
+                other_label: None,
+                class_strokes: Default::default(),
+                other_strokes: Vec::new(),
+                class_fills: Default::default(),
+                other_fills: Vec::new(),
+                expression: None,
+            };
+        }
+        if let Some(block) = m.view.terrain.as_mut().and_then(|t| t.block.as_mut()) {
+            block.walls_top = Some(rustgis_map::view::WallsTop { layer: "solos".into(), thickness });
+        }
+        (m, b, g, res)
+    }
+
+    #[test]
+    fn a_wall_shows_its_soil_band_over_the_rock() {
+        // #2607: along the south wall (ground at 500 m, the base 100 m under it, both doubled), red soil
+        // west of x 0 and green from 0 to 500, 30 m (60 m doubled, 6 px) deep; no soil east of 500.
+        let (red, green) = (Rgba::rgb(220, 30, 30), Rgba::rgb(30, 170, 60));
+        let soils = [([-3000.0, -1500.0, 0.0, 0.0], "argissolo", red), ([0.0, -1500.0, 500.0, 0.0], "latossolo", green)];
+        let (m, b, g, res) = block_under_soils(&soils, 30.0);
+        let bands = band_runs(&m, &b, &g, 1.0, &Default::default());
+        let [w, e] = &bands[0][..] else { panic!("two classes along the south side: {:?}", bands[0]) };
+        assert!((w.lo + 1000.0).abs() < 1e-6 && w.hi.abs() < 1e-6 && (e.hi - 500.0).abs() < 1e-6, "{w:?} {e:?}");
+        assert!((w.thickness - 60.0).abs() < 1e-9 && (w.color, e.color) == (red, green));
+        // The other sides: west under the red soil, north and east under none.
+        assert!(bands[1].is_empty() && bands[2].is_empty() && bands[3].len() == 1, "{bands:?}");
+        let dry: WaterRuns = (0..b.sides()).map(|_| Vec::new()).collect();
+        let before = crate::approximations::keep();
+        let (pm, at) = south_wall(&m, &b, &g, res, &dry);
+        let said = crate::approximations::take();
+        crate::approximations::restore(before);
+        assert!(said.is_empty(), "solid fills reaching no base say nothing: {said:?}");
+        let bare = block_over_lakes(&[], None).0;
+        let (plain, _) = south_wall(&bare, &b, &g, res, &dry);
+        let pixel = |pm: &Pixmap, x: f64, metres: f64| {
+            let (px, py) = at(x, metres);
+            pm.pixel(px, py).expect("in the picture").demultiply()
+        };
+        let hue = |c: tiny_skia::ColorU8| (c.red(), c.green(), c.blue());
+        // Halfway down the band, each class's colour; under its foot and east of the soil, the rock.
+        let (r, gr) = (pixel(&pm, -500.0, 970.0), pixel(&pm, 250.0, 970.0));
+        assert!(r.red() > 2 * r.green() && r.red() > 2 * r.blue(), "{r:?}");
+        assert!(gr.green() > 2 * gr.red() && gr.green() > gr.blue() + 40, "{gr:?}");
+        for (x, metres) in [(-500.0, 900.0), (250.0, 900.0), (750.0, 970.0)] {
+            assert_eq!(hue(pixel(&pm, x, metres)), hue(pixel(&plain, x, metres)), "{x} {metres}");
+        }
+        // The contacts across the band, at x 0 between the classes and at 500 with the bare rock: a
+        // dark line there, none in the middle of a class.
+        // How near the outline's colour the pixels round `x` come (the sum of their differences).
+        let line = b.walls.shade(0.45);
+        let near_line = |x: f64| {
+            let (px, py) = at(x, 970.0);
+            let apart = |c: tiny_skia::ColorU8| {
+                c.red().abs_diff(line.r()) as u16 + c.green().abs_diff(line.g()) as u16 + c.blue().abs_diff(line.b()) as u16
+            };
+            (px - 1..=px + 1).filter_map(|x| pm.pixel(x, py)).map(|c| apart(c.demultiply())).min()
+        };
+        for x in [0.0, 500.0] {
+            assert!(near_line(x).is_some_and(|d| d < 40), "{x}: {:?}", near_line(x));
+        }
+        assert!(near_line(-500.0).is_some_and(|d| d > 100), "{:?}", near_line(-500.0));
+    }
+
+    #[test]
+    fn a_band_takes_each_polygons_thickness_from_a_field() {
+        // #2607: "thickness": {"field": "espessura"}: red soil 30 m (60 doubled) deep west of x 0,
+        // green 15 m (30 doubled) from 0 to 500, blue from 500 to 1000 with none: no band there,
+        // said with how many polygons.
+        use rustgis_map::view::BandThickness;
+        let (red, green, blue) = (Rgba::rgb(220, 30, 30), Rgba::rgb(30, 170, 60), Rgba::rgb(30, 60, 220));
+        let soils = [
+            ([-3000.0, -1500.0, 0.0, 0.0], "argissolo", red, Some(30.0)),
+            ([0.0, -1500.0, 500.0, 0.0], "latossolo", green, Some(15.0)),
+            ([500.0, -1500.0, 1000.0, 0.0], "neossolo", blue, None),
+        ];
+        let by_field = BandThickness::Field { field: "espessura".into() };
+        let (m, b, g, res) = block_under_soils_by(&soils, by_field);
+        let before = crate::approximations::keep();
+        let bands = band_runs(&m, &b, &g, 1.0, &Default::default());
+        let said = crate::approximations::take();
+        crate::approximations::restore(before);
+        let [w, e] = &bands[0][..] else { panic!("two measured classes along the south side: {:?}", bands[0]) };
+        assert_eq!((w.color, e.color), (red, green));
+        assert!((w.thickness - 60.0).abs() < 1e-9 && (e.thickness - 30.0).abs() < 1e-9, "{w:?} {e:?}");
+        assert!((e.hi - 500.0).abs() < 1e-6, "{e:?}");
+        let unmeasured: Vec<_> = said.iter().filter(|t| t.contains("no thickness over 0 in field 'espessura'")).collect();
+        assert!(unmeasured.len() == 1 && unmeasured[0].starts_with("solos: 1 of its polygons"), "{said:?}");
+        // Drawn: each class down its own thickness, the rock under it and where the blue soil has none.
+        let dry: WaterRuns = (0..b.sides()).map(|_| Vec::new()).collect();
+        let (pm, at) = south_wall(&m, &b, &g, res, &dry);
+        let (plain, _) = south_wall(&block_over_lakes(&[], None).0, &b, &g, res, &dry);
+        let pixel = |pm: &Pixmap, x: f64, metres: f64| {
+            let (px, py) = at(x, metres);
+            let c = pm.pixel(px, py).expect("in the picture").demultiply();
+            (c.red(), c.green(), c.blue())
+        };
+        let (r, gr) = (pixel(&pm, -500.0, 955.0), pixel(&pm, 250.0, 985.0));
+        assert!(r.0 > 2 * r.1 && r.0 > 2 * r.2, "{r:?}");
+        assert!(gr.1 > 2 * gr.0 && gr.1 > gr.2 + 40, "{gr:?}");
+        for (x, metres) in [(250.0, 955.0), (750.0, 985.0), (-500.0, 920.0)] {
+            assert_eq!(pixel(&pm, x, metres), pixel(&plain, x, metres), "{x} {metres}");
+        }
+        // A field the layer doesn't have, or one that isn't numeric: no band at all, said.
+        for field in ["nada", "classe"] {
+            let (m, b, g, _) = block_under_soils_by(&soils, BandThickness::Field { field: field.into() });
+            let before = crate::approximations::keep();
+            let bands = band_runs(&m, &b, &g, 1.0, &Default::default());
+            let said = crate::approximations::take();
+            crate::approximations::restore(before);
+            assert!(bands.iter().all(Vec::is_empty), "{field}: {bands:?}");
+            assert!(said.iter().any(|t| t.contains(&format!("field '{field}', which isn't a numeric field"))), "{field}: {said:?}");
+        }
+    }
+
+    #[test]
+    fn a_band_reaching_a_box_corner_keeps_the_corners_outline() {
+        // #2607: the band runs to the south wall's west end, the box's corner: the
+        // outline down that corner shows across the band as it does below it, not under its fill.
+        let red = Rgba::rgb(220, 30, 30);
+        let (m, b, g, res) = block_under_soils(&[([-3000.0, -1500.0, 3000.0, 0.0], "argissolo", red)], 30.0);
+        let dry: WaterRuns = (0..b.sides()).map(|_| Vec::new()).collect();
+        let (pm, at) = south_wall(&m, &b, &g, res, &dry);
+        let line = b.walls.shade(0.45);
+        // How near the outline's colour the pixels round the corner come, at `metres` up.
+        let near_line = |metres: f64| {
+            let (px, py) = at(-1000.0, metres);
+            let apart = |c: tiny_skia::ColorU8| {
+                c.red().abs_diff(line.r()) as u16 + c.green().abs_diff(line.g()) as u16 + c.blue().abs_diff(line.b()) as u16
+            };
+            (px.saturating_sub(1)..=px + 1).filter_map(|x| pm.pixel(x, py)).filter(|c| c.alpha() > 0).map(|c| apart(c.demultiply())).min()
+        };
+        // Halfway down the band, the corner's line (anti-aliased at the wall's edge): far nearer
+        // the line's colour than the band's fill 100 m in from the corner is.
+        let fill = {
+            let (px, py) = at(-900.0, 970.0);
+            let c = pm.pixel(px, py).expect("in the picture").demultiply();
+            c.red().abs_diff(line.r()) as u16 + c.green().abs_diff(line.g()) as u16 + c.blue().abs_diff(line.b()) as u16
+        };
+        assert!(fill > 120, "{fill}");
+        assert!(near_line(970.0).is_some_and(|d| d < 60), "{:?}", near_line(970.0));
+    }
+
+    #[test]
+    fn a_field_thickness_past_the_blocks_depth_is_kept_and_stops_at_the_base() {
+        // #2607: a polygon's 25 000 m (more than any block is deep) is its thickness as
+        // given, not cut to 20 000 unsaid; the band stops at the base, said once. A thickness
+        // within the wall says nothing of the base.
+        use rustgis_map::view::BandThickness;
+        let red = Rgba::rgb(220, 30, 30);
+        let by_field = || BandThickness::Field { field: "espessura".into() };
+        let deep = [([-3000.0, -1500.0, 3000.0, 0.0], "argissolo", red, Some(25_000.0))];
+        let (m, b, g, res) = block_under_soils_by(&deep, by_field());
+        let bands = band_runs(&m, &b, &g, 1.0, &Default::default());
+        assert!((bands[0][0].thickness - 50_000.0).abs() < 1e-6, "{:?}", bands[0]);
+        let dry: WaterRuns = (0..b.sides()).map(|_| Vec::new()).collect();
+        let said = |m: &Map| {
+            let before = crate::approximations::keep();
+            let _ = south_wall(m, &b, &g, res, &dry);
+            let said = crate::approximations::take();
+            crate::approximations::restore(before);
+            said
+        };
+        assert_eq!(said(&m).iter().filter(|t| t.contains("stops at the base")).count(), 1, "{:?}", said(&m));
+        let thin = [([-3000.0, -1500.0, 3000.0, 0.0], "argissolo", red, Some(10.0))];
+        let (m, ..) = block_under_soils_by(&thin, by_field());
+        assert!(said(&m).is_empty(), "{:?}", said(&m));
+    }
+
+    #[test]
+    fn a_band_contact_stands_upright_in_a_turned_view() {
+        // #2607: seen from bearing 40°, the south wall recedes, so its ends lie at
+        // different depths. In one stretch, the contact at x 0 (red soil west, green east, 30 m,
+        // 60 doubled) runs straight down from the ground's edge there to the band's foot there:
+        // red just west of x 0 and green just east, near the ground as near the foot.
+        let (red, green) = (Rgba::rgb(220, 30, 30), Rgba::rgb(30, 170, 60));
+        let soils = [([-3000.0, -1500.0, 0.0, 0.0], "argissolo", red), ([0.0, -1500.0, 3000.0, 0.0], "latossolo", green)];
+        let (m, b, g, res) = block_under_soils(&soils, 30.0);
+        let dry: WaterRuns = (0..b.sides()).map(|_| Vec::new()).collect();
+        let (pm, at) = south_wall_seen(&m, &b, &g, res, &dry, 40.0, 1, None);
+        let hue = |x: f64, metres: f64| {
+            let (px, py) = at(x, metres);
+            let c = pm.pixel(px, py).expect("in the picture").demultiply();
+            (c.red(), c.green(), c.blue())
+        };
+        let is_red = |c: (u8, u8, u8)| c.0 > 2 * c.1 && c.0 > 2 * c.2;
+        let is_green = |c: (u8, u8, u8)| c.1 > 2 * c.0 && c.1 > c.2 + 40;
+        for metres in [992.0, 948.0] {
+            let (west, east) = (hue(-60.0, metres), hue(60.0, metres));
+            assert!(is_red(west) && is_green(east), "{metres}: {west:?} {east:?}");
+        }
+    }
+
+    #[test]
+    fn a_band_over_a_rise_inside_a_stretch_stays_under_its_top() {
+        // #2607: the ground rises from 500 m at the south wall's ends to 700 m at x 0, but
+        // the wall is one stretch, whose top is the straight line between its ends (1000 m
+        // doubled). The band's foot is taken from that line too: at x 0, where the classes meet,
+        // it doesn't stand 1340 m up, over the top, and no band shows above the top line.
+        use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster};
+        let (red, green) = (Rgba::rgb(220, 30, 30), Rgba::rgb(30, 170, 60));
+        let soils = [([-3000.0, -1500.0, 0.0, 0.0], "argissolo", red), ([0.0, -1500.0, 3000.0, 0.0], "latossolo", green)];
+        let (mut m, _, _, res) = block_under_soils(&soils, 30.0);
+        let gt = GeoTransform { origin_x: -5000.0, origin_y: 5000.0, pixel_width: 20.0, pixel_height: -20.0 };
+        let rise = (0..500 * 500)
+            .map(|i| {
+                let x = -5000.0 + 20.0 * (f64::from(i % 500) + 0.5);
+                (500.0 + 200.0 * (1.0 - x.abs() / 500.0).max(0.0)) as f32
+            })
+            .collect();
+        let dem = Raster::new("dem", 500, 500, vec![rise], gt, Crs::WebMercator, None, ColorHint::Gray, "Float32").unwrap();
+        if let Some(l) = m.layers.iter_mut().find(|l| l.name == "dem") {
+            l.raster = Some(rustgis_map::RasterLayer::from_path(dem, "dem.tif"));
+        }
+        let camera = rustgis_map::Camera { center: Coord::new(0.0, 0.0), res, bearing: 0.0, pitch: 60.0 };
+        let g = Ground::of(&m, &camera).unwrap();
+        let b = g.block(&m).unwrap();
+        assert!((g.up_px(Coord::new(0.0, -1000.0), &camera) * res * g.per_unit(Coord::new(0.0, -1000.0)) - 1400.0).abs() < 25.0);
+        let dry: WaterRuns = (0..b.sides()).map(|_| Vec::new()).collect();
+        let (pm, at) = south_wall_seen(&m, &b, &g, res, &dry, 0.0, 1, None);
+        let band = |c: tiny_skia::ColorU8| {
+            let (r, g) = (u16::from(c.red()), u16::from(c.green()));
+            c.alpha() > 0 && (r > 2 * g || g > r + 60)
+        };
+        let above: Vec<_> = (-18..=18)
+            .flat_map(|i| (0..20).map(move |j| (50.0 * f64::from(i), 1030.0 + 20.0 * f64::from(j))))
+            .filter(|&(x, metres)| {
+                let (px, py) = at(x, metres);
+                pm.pixel(px, py).is_some_and(|c| band(c.demultiply()))
+            })
+            .collect();
+        assert!(above.is_empty(), "band over the top line at {above:?}");
+        // Under the top line, the band still shows each class.
+        let hue = |x: f64| {
+            let (px, py) = at(x, 970.0);
+            pm.pixel(px, py).expect("in the picture").demultiply()
+        };
+        let (w, e) = (hue(-500.0), hue(500.0));
+        assert!(u16::from(w.red()) > 2 * u16::from(w.green()) && u16::from(e.green()) > u16::from(e.red()) + 60, "{w:?} {e:?}");
+    }
+
+    #[test]
+    fn a_band_reaching_a_polygon_blocks_corner_keeps_the_corners_outline() {
+        // #2607: a square polygon block under one soil all round. The band goes on
+        // round the south-west corner in the same colour and thickness, but the outline turns
+        // 90° there, so the walls' outline goes down the corner: that line shows across the band
+        // too, not under its fill.
+        use rustgis_map::view::{BandThickness, BlockShape};
+        let red = Rgba::rgb(220, 30, 30);
+        let square: [(&[[f64; 4]], _); 1] = [(&[[-1000.0, -1000.0, 1000.0, 1000.0]], None)];
+        let base = block_over_lakes_shaped(&square, None, BlockShape::Polygon { layer: "lagos".into(), filter: None });
+        let soil = [([-3000.0, -1500.0, 3000.0, 3000.0], "argissolo", red, None)];
+        let (m, b, g, res) = with_soils(base, &soil, BandThickness::Metres(30.0));
+        assert!(b.outline.is_some());
+        let bands = band_runs(&m, &b, &g, 1.0, &Default::default());
+        assert!(bands.iter().all(|r| r.len() == 1), "one run a side, all round: {bands:?}");
+        let dry: WaterRuns = (0..b.sides()).map(|_| Vec::new()).collect();
+        let (pm, at) = south_wall_seen(&m, &b, &g, res, &dry, 0.0, 8, None);
+        let line = b.walls.shade(0.45);
+        let apart = |c: tiny_skia::ColorU8| {
+            c.red().abs_diff(line.r()) as u16 + c.green().abs_diff(line.g()) as u16 + c.blue().abs_diff(line.b()) as u16
+        };
+        let near_line = |metres: f64| {
+            let (px, py) = at(-1000.0, metres);
+            (px.saturating_sub(1)..=px + 1).filter_map(|x| pm.pixel(x, py)).filter(|c| c.alpha() > 0).map(|c| apart(c.demultiply())).min()
+        };
+        let fill = {
+            let (px, py) = at(-900.0, 970.0);
+            apart(pm.pixel(px, py).expect("in the picture").demultiply())
+        };
+        // Halfway down the band, the corner's line: well nearer the line's colour than the band's
+        // fill 100 m in from the corner is (without it, about as far: the fill hid it). The
+        // band's fill reaches a hair past the corner, so the line's anti-aliased half lies on it.
+        assert!(fill > 120, "{fill}");
+        assert!(near_line(970.0).is_some_and(|d| d + 40 < fill), "{:?} vs {fill}", near_line(970.0));
+    }
+
+    #[test]
+    fn a_band_hangs_from_the_meshs_edge_where_the_ground_reads_higher() {
+        // #2607: the mesh puts the ground's edge along the south wall at 500 m (1000
+        // doubled), but the DEM reads 700 m (1400) there. The band hangs its 30 m (60) from the
+        // edge drawn, so its foot is at 940, not at 1340 over the top: no band above the top
+        // line, and the band under it.
+        use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster};
+        let red = Rgba::rgb(220, 30, 30);
+        let (mut m, _, _, res) = block_under_soils(&[([-3000.0, -1500.0, 3000.0, 0.0], "argissolo", red)], 30.0);
+        let gt = GeoTransform { origin_x: -5000.0, origin_y: 5000.0, pixel_width: 20.0, pixel_height: -20.0 };
+        let dem =
+            Raster::new("dem", 500, 500, vec![vec![700.0; 500 * 500]], gt, Crs::WebMercator, None, ColorHint::Gray, "Float32").unwrap();
+        if let Some(l) = m.layers.iter_mut().find(|l| l.name == "dem") {
+            l.raster = Some(rustgis_map::RasterLayer::from_path(dem, "dem.tif"));
+        }
+        if let Some(block) = m.view.terrain.as_mut().and_then(|t| t.block.as_mut()) {
+            block.depth = Some(1000.0);
+        }
+        let camera = rustgis_map::Camera { center: Coord::new(0.0, 0.0), res, bearing: 0.0, pitch: 60.0 };
+        let g = Ground::of(&m, &camera).unwrap();
+        let b = g.block(&m).unwrap();
+        let dry: WaterRuns = (0..b.sides()).map(|_| Vec::new()).collect();
+        let (pm, at) = south_wall_seen(&m, &b, &g, res, &dry, 0.0, 4, Some(1000.0));
+        let band = |c: tiny_skia::ColorU8| c.alpha() > 0 && u16::from(c.red()) > 2 * u16::from(c.green());
+        let above: Vec<_> = (-18..=18)
+            .flat_map(|i| (0..20).map(move |j| (50.0 * f64::from(i), 1030.0 + 20.0 * f64::from(j))))
+            .filter(|&(x, metres)| {
+                let (px, py) = at(x, metres);
+                pm.pixel(px, py).is_some_and(|c| band(c.demultiply()))
+            })
+            .collect();
+        assert!(above.is_empty(), "band over the top line at {above:?}");
+        let pixel = |metres: f64| {
+            let (px, py) = at(-500.0, metres);
+            pm.pixel(px, py).expect("in the picture").demultiply()
+        };
+        assert!(band(pixel(970.0)), "the band under the top: {:?}", pixel(970.0));
+        assert!(!band(pixel(900.0)), "the rock under its foot: {:?}", pixel(900.0));
+    }
+
+    #[test]
+    fn a_band_meeting_the_base_inside_a_stretch_stays_on_it() {
+        // #2607: one stretch along the south wall, its ground rising from 100 at x −1000
+        // to 300 at x 1000 (exaggerated), the base at 0, the band 200 deep. Its foot is on the
+        // base all along the west half, where the ground stands under 200 over it, and rises from
+        // x 0: no rock shows between the band and the base, as it would under a straight foot
+        // from the base at the west end to 100 at the east.
+        use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster};
+        let red = Rgba::rgb(220, 30, 30);
+        let (mut m, _, _, res) = block_under_soils(&[([-3000.0, -1500.0, 3000.0, 0.0], "argissolo", red)], 100.0);
+        let gt = GeoTransform { origin_x: -5000.0, origin_y: 5000.0, pixel_width: 20.0, pixel_height: -20.0 };
+        let rise = (0..500 * 500)
+            .map(|i| {
+                let x = -5000.0 + 20.0 * (f64::from(i % 500) + 0.5);
+                (100.0 + 0.05 * x).clamp(0.0, 1000.0) as f32
+            })
+            .collect();
+        let dem = Raster::new("dem", 500, 500, vec![rise], gt, Crs::WebMercator, None, ColorHint::Gray, "Float32").unwrap();
+        if let Some(l) = m.layers.iter_mut().find(|l| l.name == "dem") {
+            l.raster = Some(rustgis_map::RasterLayer::from_path(dem, "dem.tif"));
+        }
+        let camera = rustgis_map::Camera { center: Coord::new(0.0, 0.0), res, bearing: 0.0, pitch: 60.0 };
+        let g = Ground::of(&m, &camera).unwrap();
+        let mut b = g.block(&m).unwrap();
+        b.base = 0.0;
+        let dry: WaterRuns = (0..b.sides()).map(|_| Vec::new()).collect();
+        let (pm, at) = south_wall_seen(&m, &b, &g, res, &dry, 0.0, 1, None);
+        let red_at = |x: f64, metres: f64| {
+            let (px, py) = at(x, metres);
+            let c = pm.pixel(px, py).expect("in the picture").demultiply();
+            u16::from(c.red()) > 2 * u16::from(c.green())
+        };
+        // Each column of the west half, from 2 px under the ground to 2 px over the base: band.
+        let mut rock = Vec::new();
+        for i in 1..20 {
+            let x = -1000.0 + 50.0 * f64::from(i);
+            let ground = 200.0 + 0.1 * x;
+            let (_, top) = at(x, ground);
+            let (_, base) = at(x, 0.0);
+            let n = (top + 2..base.saturating_sub(1))
+                .filter(|&py| {
+                    let (px, _) = at(x, 0.0);
+                    pm.pixel(px, py).is_some_and(|c| {
+                        let c = c.demultiply();
+                        u16::from(c.red()) <= 2 * u16::from(c.green())
+                    })
+                })
+                .count();
+            if n > 0 {
+                rock.push((x, n));
+            }
+        }
+        assert!(rock.is_empty(), "rock under the band (x, px): {rock:?}");
+        assert!(red_at(-500.0, 100.0) && red_at(500.0, 150.0) && !red_at(500.0, 50.0));
+    }
+
+    #[test]
+    fn a_thin_band_hangs_from_a_mesh_edge_far_under_the_ground_read() {
+        // #2607: a 600 × 500 view at 60°, 5 m a pixel, heights
+        // doubled, the DEM at 280 m (560) and the mesh's edge at 200 m (400) along the south
+        // wall, the band 1 m deep (0.4 px). Its foot hangs from the edge drawn: no band shows over
+        // the top line, where a foot taken from a straight-line estimate of the edge's height
+        // stands about 9 px up.
+        use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster};
+        let red = Rgba::rgb(220, 30, 30);
+        let (mut m, _, _, _) = block_under_soils(&[([-3000.0, -1500.0, 3000.0, 0.0], "argissolo", red)], 1.0);
+        let gt = GeoTransform { origin_x: -5000.0, origin_y: 5000.0, pixel_width: 20.0, pixel_height: -20.0 };
+        let dem =
+            Raster::new("dem", 500, 500, vec![vec![280.0; 500 * 500]], gt, Crs::WebMercator, None, ColorHint::Gray, "Float32").unwrap();
+        if let Some(l) = m.layers.iter_mut().find(|l| l.name == "dem") {
+            l.raster = Some(rustgis_map::RasterLayer::from_path(dem, "dem.tif"));
+        }
+        if let Some(block) = m.view.terrain.as_mut().and_then(|t| t.block.as_mut()) {
+            block.depth = Some(1000.0);
+        }
+        let res = 5.0;
+        let camera = rustgis_map::Camera { center: Coord::new(0.0, 0.0), res, bearing: 0.0, pitch: 60.0 };
+        let g = Ground::of(&m, &camera).unwrap();
+        let b = g.block(&m).unwrap();
+        let dry: WaterRuns = (0..b.sides()).map(|_| Vec::new()).collect();
+        let (pm, at) = south_wall_seen(&m, &b, &g, res, &dry, 0.0, 4, Some(400.0));
+        let band = |c: tiny_skia::ColorU8| c.alpha() > 0 && u16::from(c.red()) > 2 * u16::from(c.green());
+        let above: Vec<_> = (-18..=18)
+            .flat_map(|i| (0..40).map(move |j| (50.0 * f64::from(i), 410.0 + 5.0 * f64::from(j))))
+            .filter(|&(x, metres)| {
+                let (px, py) = at(x, metres);
+                pm.pixel(px, py).is_some_and(|c| band(c.demultiply()))
+            })
+            .collect();
+        assert!(above.is_empty(), "band over the top line at {} points, e.g. {:?}", above.len(), above.first());
+    }
+
+    #[test]
+    fn the_height_through_a_screen_point_is_read_exactly() {
+        // #2607: a 600 × 500 view at 60°, 5 m a pixel, heights
+        // doubled: the mesh's edge at 200 m (80 up px), the DEM at 280 m (112). Read from the DEM's
+        // height, the height through the edge's screen point is the edge's, not a straight-line
+        // estimate's (80.9 there, which stood a 0.4 px band's foot over its top).
+        let camera = rustgis_map::Camera { center: Coord::new(0.0, 0.0), res: 5.0, bearing: 0.0, pitch: 60.0 };
+        let (w, h) = (600.0, 500.0);
+        for (k, bearing) in [(1.0, 0.0), (2.0, 0.0), (1.0, 40.0)] {
+            let camera = rustgis_map::Camera { bearing, ..camera };
+            for y in [-1000.0, -400.0, 0.0, 600.0] {
+                let gp = camera.ground_px(Coord::new(300.0, y));
+                let top = camera.project_raised(gp.0, gp.1, 80.0, w, h).map(|(x, y)| (x * k, y * k)).unwrap();
+                let up = up_through(&camera, gp, 112.0, top, (w, h, k));
+                assert!((up - 80.0).abs() < 1e-6, "k {k}, bearing {bearing}, y {y}: {up}");
+                // From under it too, and from itself.
+                assert!((up_through(&camera, gp, 40.0, top, (w, h, k)) - 80.0).abs() < 1e-6);
+                assert!((up_through(&camera, gp, 80.0, top, (w, h, k)) - 80.0).abs() < 1e-6);
+            }
+        }
+    }
+
+    #[test]
+    fn a_band_says_a_hatch_seen_through_a_translucent_solid_is_left_off() {
+        // #2607: a blue hatch under a red solid at half opacity shows through it on the map, so
+        // the band, solid only, says it leaves it off; under an opaque solid it can't be seen, and
+        // nothing is said.
+        let red = Rgba::rgb(220, 30, 30);
+        let hatch = FillPattern::Hatch { angle: 0.0, spacing: 6.0, width: 2.0, offset: 0.0 };
+        let said_with = |solid: Rgba| {
+            let (mut m, b, g, _) = block_under_soils(&[([-3000.0, -1500.0, 3000.0, 0.0], "argissolo", red)], 30.0);
+            if let Some(l) = m.layers.iter_mut().find(|l| l.name == "solos") {
+                l.fill_layers = vec![
+                    FillLayer { color: Some(Rgba::rgb(0, 0, 255)), pattern: hatch },
+                    FillLayer { color: Some(solid), pattern: FillPattern::Solid },
+                ];
+            }
+            let before = crate::approximations::keep();
+            band_runs(&m, &b, &g, 1.0, &Default::default());
+            let said = crate::approximations::take();
+            crate::approximations::restore(before);
+            said.iter().filter(|t| t.contains("shows solid fills only")).count()
+        };
+        assert_eq!(said_with(Rgba::new(220, 30, 30, 128)), 1, "seen through half a solid");
+        assert_eq!(said_with(red), 0, "hidden under an opaque one");
+    }
+
+    #[test]
+    fn a_band_keeps_the_contact_between_two_classes_filled_alike() {
+        // #2607: "argissolo" west of x 0 and "latossolo" from 0 to 500, two classes of the soils'
+        // Unique Values in the same red, 30 m deep: two runs, and the contact between them shows
+        // across the band at x 0, as at 500 where the rock comes up; none in the middle of one.
+        let red = Rgba::rgb(220, 30, 30);
+        let soils = [([-3000.0, -1500.0, 0.0, 0.0], "argissolo", red), ([0.0, -1500.0, 500.0, 0.0], "latossolo", red)];
+        let (m, b, g, res) = block_under_soils(&soils, 30.0);
+        let bands = band_runs(&m, &b, &g, 1.0, &Default::default());
+        assert_eq!(bands[0].len(), 2, "a run a class: {:?}", bands[0]);
+        let dry: WaterRuns = (0..b.sides()).map(|_| Vec::new()).collect();
+        let (pm, at) = south_wall(&m, &b, &g, res, &dry);
+        let line = b.walls.shade(0.45);
+        let near_line = |x: f64| {
+            let (px, py) = at(x, 970.0);
+            let apart = |c: tiny_skia::ColorU8| {
+                c.red().abs_diff(line.r()) as u16 + c.green().abs_diff(line.g()) as u16 + c.blue().abs_diff(line.b()) as u16
+            };
+            (px - 1..=px + 1).filter_map(|x| pm.pixel(x, py)).map(|c| apart(c.demultiply())).min()
+        };
+        // Between the two reds, well nearer the line's colour than the red fill is (without the
+        // contact, about as far); where the rock comes up, the line beside the rock's own colour.
+        let fill = near_line(-500.0).expect("in the picture");
+        assert!(fill > 100, "{fill}");
+        assert!(near_line(0.0).is_some_and(|d| d + 40 < fill), "{:?} vs {fill}", near_line(0.0));
+        assert!(near_line(500.0).is_some_and(|d| d < 40), "{:?}", near_line(500.0));
+    }
+
+    #[test]
+    fn a_stretch_two_classes_share_at_the_base_counts_once() {
+        // #2607: 150 m (300 doubled) of red soil west of x 50 and green east of it, over a wall
+        // 200 m (doubled) high: the band stops at the base in each of the south wall's 20
+        // stretches, and the one from 0 to 100, which both classes share, is one of them, not two.
+        let (red, green) = (Rgba::rgb(220, 30, 30), Rgba::rgb(30, 170, 60));
+        let soils = [([-3000.0, -1500.0, 50.0, 0.0], "argissolo", red), ([50.0, -1500.0, 3000.0, 0.0], "latossolo", green)];
+        let (m, b, g, res) = block_under_soils(&soils, 150.0);
+        let dry: WaterRuns = (0..b.sides()).map(|_| Vec::new()).collect();
+        let before = crate::approximations::keep();
+        let _ = south_wall(&m, &b, &g, res, &dry);
+        let said = crate::approximations::take();
+        crate::approximations::restore(before);
+        let at_base: Vec<_> = said.iter().filter(|t| t.contains("stops at the base")).collect();
+        assert!(at_base.len() == 1 && at_base[0].contains(" 20 stretches "), "{said:?}");
+    }
+
+    #[test]
+    fn a_polygon_blocks_long_side_counts_every_stretch_at_the_base() {
+        // #2607: a square polygon block's south side in 20 stretches, drawn in runs of
+        // `WALL_RUN` (8, 8 and 4), 150 m (300 doubled) of soil over a wall 200 m (doubled) high:
+        // the band stops at the base in all 20, and the notice counts 20, not the 8 of a run.
+        use rustgis_map::view::{BandThickness, BlockShape};
+        let red = Rgba::rgb(220, 30, 30);
+        let square: [(&[[f64; 4]], _); 1] = [(&[[-1000.0, -1000.0, 1000.0, 1000.0]], None)];
+        let base = block_over_lakes_shaped(&square, None, BlockShape::Polygon { layer: "lagos".into(), filter: None });
+        let soil = [([-3000.0, -1500.0, 3000.0, 3000.0], "argissolo", red, None)];
+        let (m, b, g, res) = with_soils(base, &soil, BandThickness::Metres(150.0));
+        assert!(b.outline.is_some() && WALL_RUN < 20);
+        let dry: WaterRuns = (0..b.sides()).map(|_| Vec::new()).collect();
+        let before = crate::approximations::keep();
+        let _ = south_wall_seen(&m, &b, &g, res, &dry, 0.0, 20, None);
+        let said = crate::approximations::take();
+        crate::approximations::restore(before);
+        let at_base: Vec<_> = said.iter().filter(|t| t.contains("stops at the base")).collect();
+        assert!(at_base.len() == 1 && at_base[0].contains(" 20 stretches "), "{said:?}");
+    }
+
+    /// The band's thickness reads and saves as a number, or as `{"field": name}` (#2607).
+    #[test]
+    fn a_band_thickness_saves_as_a_number_or_a_field() {
+        use rustgis_map::view::{BandThickness, WallsTop};
+        for (top, saved) in [
+            (
+                WallsTop { layer: "solos".into(), thickness: BandThickness::Metres(150.0) },
+                serde_json::json!({"layer": "solos", "thickness": 150.0}),
+            ),
+            (
+                WallsTop { layer: "solos".into(), thickness: BandThickness::Field { field: "espessura".into() } },
+                serde_json::json!({"layer": "solos", "thickness": {"field": "espessura"}}),
+            ),
+        ] {
+            assert_eq!(serde_json::to_value(&top).unwrap(), saved);
+            assert_eq!(serde_json::from_value::<WallsTop>(saved).unwrap(), top);
+        }
+    }
+
+    #[test]
+    fn a_band_thicker_than_the_wall_stops_at_the_base_and_says_so() {
+        // #2607: 150 m (300 m doubled) of soil over a wall 200 m (doubled) high: red down to the
+        // base, said once with the layer and the stretches; a hatch over the soil's fill is left
+        // off the band, said with how many.
+        let red = Rgba::rgb(220, 30, 30);
+        let (mut m, b, g, res) = block_under_soils(&[([-3000.0, -1500.0, 3000.0, 0.0], "argissolo", red)], 150.0);
+        let hatch = FillPattern::Hatch { angle: 0.0, spacing: 6.0, width: 2.0, offset: 0.0 };
+        if let Some(l) = m.layers.iter_mut().find(|l| l.name == "solos") {
+            l.fill_layers = vec![
+                FillLayer { color: None, pattern: FillPattern::Solid },
+                FillLayer { color: Some(Rgba::rgb(0, 0, 255)), pattern: hatch },
+            ];
+        }
+        let dry: WaterRuns = (0..b.sides()).map(|_| Vec::new()).collect();
+        let before = crate::approximations::keep();
+        let c = {
+            let (pm, at) = south_wall(&m, &b, &g, res, &dry);
+            let (px, py) = at(-500.0, b.base + 10.0);
+            pm.pixel(px, py).expect("in the picture").demultiply()
+        };
+        let said = crate::approximations::take();
+        crate::approximations::restore(before);
+        assert!(c.red() > 2 * c.green() && c.red() > 2 * c.blue(), "{c:?}");
+        // Said once, with the layer and how many of the wall's 20 stretches it stops in: all.
+        let at_base: Vec<_> = said.iter().filter(|t| t.contains("stops at the base")).collect();
+        assert!(at_base.len() == 1 && at_base[0].starts_with("solos: ") && at_base[0].contains(" 20 stretches "), "{said:?}");
+        assert_eq!(
+            said.iter().filter(|t| t.starts_with("solos: the block diagram's top band shows solid fills only, so 1 of")).count(),
+            1,
+            "{said:?}"
+        );
+        // No such layer, or no top: no band.
+        m.view.terrain.as_mut().and_then(|t| t.block.as_mut()).unwrap().walls_top.as_mut().unwrap().layer = "none".into();
+        assert!(band_runs(&m, &b, &g, 1.0, &Default::default()).iter().all(Vec::is_empty));
+        // And a 3D model's walls say they leave a band out.
+        m.view.terrain.as_mut().and_then(|t| t.block.as_mut()).unwrap().walls_top.as_mut().unwrap().layer = "solos".into();
+        let flat = flat_walls(&m, &g, &b, res, g.per_unit(Coord::new(0.0, 0.0)), [1000.0; 4]);
+        assert!(flat.gaps.iter().any(|t| t.contains("top band from 'solos'")), "{:?}", flat.gaps);
     }
 }

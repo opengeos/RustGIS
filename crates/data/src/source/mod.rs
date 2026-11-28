@@ -189,21 +189,12 @@ impl SourceInfo {
         }
     }
 
-    /// Notes what happened to some columns in one note, counting them and naming the first 12
-    /// with their kind ("price (decimal)"): `what` says it for one column, then for several.
-    /// Nothing when there are none.
+    /// Notes what happened to some columns in one note ([`columns_note`]). Nothing when there are
+    /// none.
     pub(crate) fn note_columns(&mut self, cols: &[(String, String)], what: [&str; 2]) {
-        const NAMED: usize = 12;
-        let [one, several] = what;
-        let n = cols.len();
-        let what = match n {
-            0 => return,
-            1 => one,
-            _ => several,
-        };
-        let named: Vec<String> = cols.iter().take(NAMED).map(|(name, kind)| format!("{name} ({kind})")).collect();
-        let more = if n > NAMED { format!(" and {} more", n - NAMED) } else { String::new() };
-        self.notes.push(format!("{n} column{} {what}: {}{more}", if n == 1 { "" } else { "s" }, named.join(", ")));
+        if let Some(note) = columns_note(cols, what) {
+            self.notes.push(note);
+        }
     }
 
     /// The source's coordinate system, when it isn't longitude/latitude: one known by its EPSG
@@ -211,6 +202,23 @@ impl SourceInfo {
     pub fn coordinate_system(&self) -> Option<Crs> {
         Crs::parse(&self.crs).ok().filter(|c| *c != Crs::LonLat)
     }
+}
+
+/// The note of some columns a reader left out, counting them and naming the first 12 with their
+/// kind ("photo (binary)"): `what` says it for one column, then for several. `None` when there
+/// are none.
+pub(crate) fn columns_note(cols: &[(String, String)], what: [&str; 2]) -> Option<String> {
+    const NAMED: usize = 12;
+    let [one, several] = what;
+    let n = cols.len();
+    let what = match n {
+        0 => return None,
+        1 => one,
+        _ => several,
+    };
+    let named: Vec<String> = cols.iter().take(NAMED).map(|(name, kind)| format!("{name} ({kind})")).collect();
+    let more = if n > NAMED { format!(" and {} more", n - NAMED) } else { String::new() };
+    Some(format!("{n} column{} {what}: {}{more}", if n == 1 { "" } else { "s" }, named.join(", ")))
 }
 
 /// A read: the features intersecting `extent` (longitude/latitude; `None` = all), at most `limit`.
@@ -257,8 +265,9 @@ pub struct Batch {
     pub complete: bool,
     /// Rows that couldn't be read.
     pub skipped: usize,
-    /// Values in date fields that weren't dates and are read as null, counted for each field by
-    /// its position; empty when there were none. Said by [`unread_dates_note`].
+    /// Values in date fields that weren't dates, and text in yes/no fields that was neither yes nor
+    /// no ([`yes_no_text`]), read as null, counted for each field by its position; empty when there
+    /// were none. Said by [`unread_dates_note`].
     pub unread_dates: Vec<usize>,
     /// Date-times of date fields that had digits past the microsecond, rounded to it, counted for
     /// each field by its position. Said by [`rounded_dates_note`].
@@ -281,13 +290,87 @@ pub(crate) fn unread_date(counts: &mut Vec<usize>, k: usize) {
     unread_dates_by(counts, k, 1);
 }
 
+/// The value of the yes/no field at `k` from a file's text ([`crate::Value::yes_no`]): text that
+/// is neither yes nor no is null, counted in `counts` ([`Batch::unread_dates`]), which says it as a
+/// value that isn't yes or no ([`unread_dates_note`]). Empty text and `<Null>` are null, uncounted.
+pub(crate) fn yes_no_text(text: &str, counts: &mut Vec<usize>, k: usize) -> crate::Value {
+    let v = crate::Value::parse(text, crate::FieldType::Boolean);
+    if v.is_null() && !text.trim().is_empty() && !crate::Value::is_null_marker(text) {
+        unread_date(counts, k);
+    }
+    v
+}
+
+/// The value of the number field at `k` (`ty` Integer or Double) from a file's text
+/// ([`crate::Value::parse_source`]): text that isn't a number is null, counted in `counts`
+/// ([`Batch::unread_dates`]), which says it as a value that isn't a number ([`unread_dates_note`]).
+/// Empty text and `<Null>` are null, uncounted.
+pub(crate) fn number_text(
+    text: &str,
+    ty: crate::FieldType,
+    counts: &mut Vec<usize>,
+    rounded: Option<&mut Vec<usize>>,
+    k: usize,
+) -> crate::Value {
+    // `NaN` and `inf` written as words are kept as they are (a field holds them, and a save writes
+    // them back); a number in digits past a decimal's range (`1e400`) would be infinity, which it
+    // isn't: empty, and said as text that isn't a number.
+    let words = |t: &str| matches!(t.trim().trim_start_matches(['-', '+']).to_ascii_lowercase().as_str(), "nan" | "inf" | "infinity");
+    let v = match crate::Value::parse_source(text, ty) {
+        crate::Value::Float(f) if !f.is_finite() && !words(text) => crate::Value::Null,
+        v => v,
+    };
+    if v.is_null() && !text.trim().is_empty() && !crate::Value::is_null_marker(text) {
+        unread_date(counts, k);
+    }
+    // A number whose whole-number digits a decimal can't hold (`9007199254740993`) is rounded:
+    // counted in `rounded` ([`Batch::rounded_dates`]), as a whole number stored past 2^53 is. A
+    // fraction past what a decimal holds reads as the nearest decimal, as a stored one does.
+    let trimmed = text.trim().trim_start_matches(['-', '+']);
+    // Text past a decimal's range reads as infinity: an overflow, not a rounding.
+    if let (crate::Value::Float(f), Some(rounded)) = (&v, rounded)
+        && f.is_finite()
+        && crate::query::whole_digits_round(trimmed)
+    {
+        unread_date(rounded, k);
+    }
+    v
+}
+
+/// The text encoding a GeoPackage reader gives ([`FeatureSource::text_encoding`]): UTF-8, which the
+/// standard requires, so [`not_utf8_note`] says why without a `.cpg` to point to.
+pub const GEOPACKAGE_TEXT: &str = "UTF-8 (GeoPackage)";
+
+/// A text field's value from bytes SQLite holds as text or as a blob: the text, or, when they
+/// aren't valid UTF-8, the text with U+FFFD in place of what isn't, counted in `not_utf8`
+/// ([`Batch::not_utf8`], said by [`not_utf8_note`]).
+pub(crate) fn utf8_text(bytes: &[u8], not_utf8: &mut Vec<usize>, k: usize) -> crate::Value {
+    match std::str::from_utf8(bytes) {
+        Ok(text) => crate::Value::Text(text.to_string()),
+        Err(_) => {
+            not_utf8_at(not_utf8, k);
+            crate::Value::Text(String::from_utf8_lossy(bytes).into_owned())
+        }
+    }
+}
+
+/// The decimal value of a whole number stored in a Double field at `k`: counted in `rounded`
+/// ([`Batch::rounded_dates`]) when a decimal can't hold it exactly (past 2^53).
+pub(crate) fn int_as_double(i: i64, rounded: Option<&mut Vec<usize>>, k: usize) -> crate::Value {
+    if let Some(rounded) = rounded
+        && crate::Value::Int(i).rounds_as_double()
+    {
+        unread_date(rounded, k);
+    }
+    crate::Value::Float(i as f64)
+}
+
 /// Counts one more text value `<Null>` read as null in the field at `k` ([`Batch::null_text`]).
 pub(crate) fn null_text_at(counts: &mut Vec<usize>, k: usize) {
     unread_dates_by(counts, k, 1);
 }
 
 /// Counts one more text value that isn't valid in its encoding in the field at `k` ([`Batch::not_utf8`]).
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn not_utf8_at(counts: &mut Vec<usize>, k: usize) {
     unread_dates_by(counts, k, 1);
 }
@@ -332,7 +415,35 @@ pub fn unread_dates_note(fields: &[crate::Field], counts: &[usize]) -> Option<cr
     if total == 0 {
         return None;
     }
-    let what = if total == 1 { "1 value isn't a date and was".to_string() } else { format!("{total} values aren't dates and were") };
+    // Fields of other types count values too: text that isn't yes or no ([`yes_no_text`]), text or a
+    // blob that isn't a number ([`number_text`]), a blob.
+    let mut kinds: Vec<&str> = Vec::new();
+    for (f, _) in fields.iter().zip(counts).filter(|(_, n)| **n > 0) {
+        let kind = match f.ty {
+            crate::FieldType::Boolean => "yes/no values",
+            crate::FieldType::Integer | crate::FieldType::Double => "numbers",
+            // A text field counts dates a mixed column held ([`crate::sheets`]).
+            crate::FieldType::Text | crate::FieldType::Date | crate::FieldType::DateTime => "dates",
+        };
+        if !kinds.contains(&kind) {
+            kinds.push(kind);
+        }
+    }
+    // Dates first, as a read of dates alone always said, then the rest in a fixed order.
+    kinds.sort_by_key(|k| ["dates", "yes/no values", "numbers"].iter().position(|n| n == k));
+    let what = match (kinds.as_slice(), total == 1) {
+        ([], true) | (["dates"], true) => "1 value isn't a date and was".to_string(),
+        ([], false) | (["dates"], false) => format!("{total} values aren't dates and were"),
+        (["yes/no values"], true) => "1 value isn't yes or no and was".to_string(),
+        (["yes/no values"], false) => format!("{total} values aren't yes or no and were"),
+        (["numbers"], true) => "1 value isn't a number and was".to_string(),
+        (["numbers"], false) => format!("{total} values aren't numbers and were"),
+        (kinds, _) => {
+            let (last, first) = kinds.split_last().map_or(("", &[][..]), |(l, f)| (*l, f));
+            let list = if first.is_empty() { last.to_string() } else { format!("{} or {last}", first.join(", ")) };
+            format!("{total} values aren't {list} and were")
+        }
+    };
     let text = format!("{what} read as empty, in {}", crate::io::named_fields(fields, counts));
     Some(crate::loss::Note::loss(crate::loss::LossCode::DroppedValue, text))
 }
@@ -358,6 +469,12 @@ pub fn not_utf8_note(fields: &[crate::Field], counts: &[usize], encoding: &str) 
     if total == 0 {
         return None;
     }
+    // A GeoPackage's text is UTF-8 by its standard: no file chooses another.
+    let (encoding, cause) = if encoding == GEOPACKAGE_TEXT {
+        ("UTF-8", "a GeoPackage holds its text in UTF-8".to_string())
+    } else {
+        (encoding, crate::dbf::cause(encoding))
+    };
     let what = if total == 1 {
         format!("1 text value isn't valid {encoding} and was")
     } else {
@@ -366,21 +483,42 @@ pub fn not_utf8_note(fields: &[crate::Field], counts: &[usize], encoding: &str) 
     let text = format!(
         "{what} read with U+FFFD in place of the bytes that can't be read, in {}; {}",
         crate::io::named_fields(fields, counts),
-        crate::dbf::cause(encoding)
+        cause
     );
     Some(crate::loss::Note::loss(crate::loss::LossCode::ChangedEncoding, text))
 }
 
-/// What a read says of date-times it rounded to the microsecond ([`Batch::rounded_dates`]), naming
-/// the first five fields. `None` when there were none.
+/// What a read says of values it rounded ([`Batch::rounded_dates`]): date-times to the microsecond,
+/// whole numbers past 2^53 to the nearest decimal number a Double field holds. Names the first five
+/// fields. `None` when there were none.
 pub fn rounded_dates_note(fields: &[crate::Field], counts: &[usize]) -> Option<crate::loss::Note> {
     let total: usize = counts.iter().sum();
     if total == 0 {
         return None;
     }
-    let what = if total == 1 { "1 date-time was".to_string() } else { format!("{total} date-times were") };
-    let text =
-        format!("{what} rounded to the microsecond, as more digits than that aren't kept, in {}", crate::io::named_fields(fields, counts));
+    let number = |f: &crate::Field| matches!(f.ty, crate::FieldType::Integer | crate::FieldType::Double);
+    let counted = |numbers: bool| fields.iter().zip(counts).any(|(f, n)| *n > 0 && number(f) == numbers);
+    let (numbers, dates) = (counted(true), counted(false));
+    let text = match (numbers, dates) {
+        (true, true) => format!(
+            "{total} values were rounded, date-times to the microsecond and numbers to the nearest decimal number, as more digits than that aren't kept, in {}",
+            crate::io::named_fields(fields, counts)
+        ),
+        (true, false) => {
+            let what = if total == 1 { "1 number was".to_string() } else { format!("{total} numbers were") };
+            format!(
+                "{what} rounded to the nearest decimal number, changing digits before the point, as a decimal field doesn't keep more than 15 or 16 digits, in {}",
+                crate::io::named_fields(fields, counts)
+            )
+        }
+        _ => {
+            let what = if total == 1 { "1 date-time was".to_string() } else { format!("{total} date-times were") };
+            format!(
+                "{what} rounded to the microsecond, as more digits than that aren't kept, in {}",
+                crate::io::named_fields(fields, counts)
+            )
+        }
+    };
     Some(crate::loss::Note::loss(crate::loss::LossCode::ChangedRounded, text))
 }
 
@@ -786,13 +924,48 @@ pub fn layers(path: &Path) -> Result<Vec<String>> {
 /// source can, otherwise in one read up to [`MAX_LIMIT`]. A larger source, or an incomplete read,
 /// is refused.
 pub fn materialize(src: &dyn FeatureSource) -> Result<(Dataset, ReadReport)> {
-    materialize_within(src, MAX_READ_BYTES)
+    materialize_within(src, MAX_READ_BYTES, None)
 }
 
-/// [`materialize`], with `budget` bytes for a source read a chunk at a time.
-fn materialize_within(src: &dyn FeatureSource, budget: u64) -> Result<(Dataset, ReadReport)> {
+/// [`materialize`] for a caller that can hold only `budget` bytes of features: a larger source is
+/// refused with the error `refusal`. It is refused before it is read when the count it gives says
+/// its rows and their values alone are larger. A source that can be walked whole a chunk at a time
+/// ([`FeatureSource::visits_extent_chunks`], a GeoJSON read in place too) is refused as soon as
+/// what is read passes the budget, having held no more than a chunk, or one larger feature, past
+/// it. A file by its web address that can't be walked is refused before it is read, as neither its
+/// count nor its size says what its geometry and text decode to. Any other source read at once
+/// can't be stopped partway: it is measured once read.
+pub fn materialize_up_to(src: &dyn FeatureSource, budget: u64, refusal: &str) -> Result<(Dataset, ReadReport)> {
     let info = src.info();
-    let batch = if src.visits_chunks() { read_chunks(src, budget)? } else { read_at_once(src)? };
+    let row = std::mem::size_of::<Feature>().saturating_add(info.fields.len().saturating_mul(std::mem::size_of::<crate::Value>()));
+    if info.count.is_some_and(|n| n.saturating_mul(row as u64) > budget) {
+        return Err(DataError::Format(refusal.to_string()));
+    }
+    if src.remote().is_some() && !src.visits_extent_chunks() {
+        return Err(DataError::Format(format!(
+            "{}: a file read by its web address can't be read whole within a memory limit: download it and add the file, or use the desktop app",
+            info.name
+        )));
+    }
+    materialize_within(src, budget, Some(refusal))
+}
+
+/// [`materialize`], with `budget` bytes for a source read a chunk at a time. `refusal`, given by a
+/// caller held to the budget, is the error for a source over it: then a source that can only be
+/// walked by extent is walked too, and one read at once is measured against the budget.
+fn materialize_within(src: &dyn FeatureSource, budget: u64, refusal: Option<&str>) -> Result<(Dataset, ReadReport)> {
+    let info = src.info();
+    let batch = if src.visits_chunks() || (refusal.is_some() && src.visits_extent_chunks()) {
+        read_chunks(src, budget, refusal)?
+    } else {
+        let batch = read_at_once(src)?;
+        if let Some(refusal) = refusal
+            && chunk_memory::features_bytes(&batch.features) as u64 > budget
+        {
+            return Err(DataError::Format(refusal.to_string()));
+        }
+        batch
+    };
     let Batch { features, skipped, unread_dates, rounded_dates, null_text, notes, not_utf8, .. } = batch;
     let mut ds = Dataset::new(info.name.clone(), info.geometry_type, info.fields.clone());
     ds.crs = info.coordinate_system();
@@ -813,6 +986,7 @@ fn materialize_within(src: &dyn FeatureSource, budget: u64) -> Result<(Dataset, 
         unread_dates: unread_dates.clone(),
         rounded_dates: rounded.clone(),
         extrusion: None,
+        columns_lacking: None,
     };
     let null_text = null_text_note(&info.fields, &null_text);
     let not_utf8 = not_utf8_note(&info.fields, &not_utf8, src.text_encoding());
@@ -862,16 +1036,18 @@ fn read_at_once(src: &dyn FeatureSource) -> Result<Batch> {
 }
 
 /// Every feature of a source that can be read a chunk at a time, with the rows it skipped and the
-/// values it counted, refusing the source once its features would hold more than `budget` bytes.
-fn read_chunks(src: &dyn FeatureSource, budget: u64) -> Result<Batch> {
+/// values it counted, refusing the source once its features would hold more than `budget` bytes,
+/// with the error `refusal` when given.
+fn read_chunks(src: &dyn FeatureSource, budget: u64, refusal: Option<&str>) -> Result<Batch> {
     let info = src.info();
     let row_bytes = std::mem::size_of::<Feature>() as u64;
     let too_large = || {
-        DataError::Format(format!(
-            "{}: the layer needs more than the {} MiB a whole read may hold: clip or filter it first",
-            info.name,
-            budget >> 20
-        ))
+        DataError::Format(match refusal {
+            Some(refusal) => refusal.to_string(),
+            None => {
+                format!("{}: the layer needs more than the {} MiB a whole read may hold: clip or filter it first", info.name, budget >> 20)
+            }
+        })
     };
     let no_memory = || DataError::Format(format!("{}: not enough memory to read the whole layer", info.name));
     // A count that alone is too many rows is refused before reading. It isn't trusted to size the

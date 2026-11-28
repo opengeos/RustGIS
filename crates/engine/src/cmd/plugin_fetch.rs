@@ -22,7 +22,9 @@
 //!
 //! A plugin command's `service.add` on the desktop waits the same way (#1319): the documents it
 //! reads are fetched off the frame ([`Session::left_document`]), and its features or coverage are
-//! left to the app as `layer.addUrl`'s download is.
+//! left to the app as `layer.addUrl`'s download is. So does its `cube.reduce` or `cube.trend` on a
+//! STAC collection (#3183): the slices are read on a thread of the session's (see
+//! [`super::summary`]).
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -435,7 +437,7 @@ pub(crate) struct UrlWaits {
     pub(crate) views: std::collections::BTreeMap<u64, [f64; 4]>,
     owners: std::collections::BTreeMap<u64, crate::policy::Continuation>,
     in_flight: Vec<(u64, Value, Instant)>,
-    landed: Vec<(u64, Value, CmdResult, Added)>,
+    pub(super) landed: Vec<(u64, Value, CmdResult, Added)>,
     /// Requests given up (past [`REQUEST_WAIT`], or their command replaced or dropped), with their
     /// addresses (about [`MAX_EXPIRED`] at most, see `remember_given_up`): one that lands after is
     /// refused, not added with no command left to go on with it.
@@ -446,6 +448,8 @@ pub(crate) struct UrlWaits {
     added: VecDeque<(u64, Value)>,
     /// A service's documents being read off the frame, by request number.
     reading: Vec<(u64, String, Arc<Mutex<Option<Result<Vec<u8>, String>>>>)>,
+    /// Data cubes' summaries being read off the frame ([`super::summary`]).
+    pub(super) summaries: Vec<super::summary::Reading>,
 }
 
 /// What adding a landed download added, to tell when its command runs again whether it is still
@@ -463,6 +467,8 @@ pub(crate) struct Added {
     pub(crate) map: u64,
     /// A service's document read off the frame ([`Session::left_document`]), which adds nothing.
     pub(crate) document: Option<Arc<[u8]>>,
+    /// A data cube's summary read off the frame ([`super::summary`]), which its command adds.
+    pub(crate) summary: Option<super::summary::Summary>,
 }
 
 impl Added {
@@ -482,7 +488,12 @@ impl Added {
             (None, Some(i)) => usize::try_from(i).ok().and_then(|i| map.tiles.get(i)).cloned().into_iter().collect(),
             _ => Vec::new(),
         };
-        Added { layers, tiles, map: at, document: None }
+        Added { layers, tiles, map: at, document: None, summary: None }
+    }
+
+    /// What a data cube's summary read off the frame made: no layer yet, its command adds them.
+    pub(super) fn of_summary(summary: super::summary::Summary) -> Added {
+        Added { summary: Some(summary), ..Added::default() }
     }
 
     /// `answer` as it stands in `map` now: a tile layer's place in the list, which moves as others
@@ -547,9 +558,19 @@ const MAX_EXPIRED: usize = 1024;
 /// asked for: the same address (spaces around it set aside), and every other key it gave that
 /// the front end passes on, with the same value. What the front end leaves out or sets itself,
 /// and what the app adds of its own (`id`), don't count. Another import of the same address
-/// (other columns, another name) isn't it.
+/// (other columns, another name) isn't it. A byte range of a GRIB file (`"bytes"`) comes back as
+/// the address the front end downloads, with the range marked in it
+/// ([`crate::cmd::layer::ranged_address`]), and its rows of a box (`"bbox"`) with the box too.
 fn asked_by(asked: &Value, params: &Value) -> bool {
+    // A summary read off the frame has no address: no front end's download is it.
+    if super::summary::is_summary(asked) {
+        return false;
+    }
     let Some(o) = asked.as_object() else { return false };
+    let range = match asked.get("bytes").and_then(Value::as_array).map(Vec::as_slice) {
+        Some([a, b]) => a.as_u64().zip(b.as_u64()),
+        _ => None,
+    };
     // What the front end passes on to a download's own `layer.addUrl` (the desktop app's
     // `ui.addUrl`): only these come back, and must come back the same. Any other key (`whole`,
     // `cog`, `dates`, a `name` that isn't text…) it leaves out. `zoom` it passes on, but may change
@@ -562,12 +583,30 @@ fn asked_by(asked: &Value, params: &Value) -> bool {
         _ => false,
     };
     let given = o.iter().all(|(k, v)| match k.as_str() {
-        "url" => v.as_str().map(str::trim) == params["url"].as_str().map(str::trim),
+        "url" => {
+            let (u, given) = (v.as_str(), params["url"].as_str().map(str::trim));
+            // The desktop app marks a range on the address as asked, spaces and all; it may come
+            // marked on it trimmed too.
+            u.map(str::trim) == given
+                || u.zip(range)
+                    .is_some_and(|(u, r)| [u, u.trim()].iter().any(|u| given == Some(crate::cmd::layer::ranged_address(u, r).trim())))
+        }
         _ if passed_on(k, v) => params.get(k) == Some(v),
         _ => true,
     });
+    // The rows of a box of a range (`"bbox"` with `"bytes"`, #3055) come back with their box marked
+    // (`"window"`, as the app reads them off the frame), or as asked: the range with another box,
+    // or with none (the whole record), isn't it, nor is a box for a range asked without one.
+    let boxed = |q: &Value| {
+        q.get("window")
+            .and_then(|w| w.get("bbox"))
+            .or_else(|| q.get("bbox"))
+            .filter(|b| !b.is_null() && b.as_bool() != Some(false))
+            .cloned()
+    };
+    let boxes = range.is_none() || boxed(asked) == boxed(params);
     // ... and nothing it passes on that wasn't asked for (another import of the address).
-    given && params.as_object().is_none_or(|p| p.iter().all(|(k, v)| k == "url" || !passed_on(k, v) || o.get(k) == Some(v)))
+    given && boxes && params.as_object().is_none_or(|p| p.iter().all(|(k, v)| k == "url" || !passed_on(k, v) || o.get(k) == Some(v)))
 }
 
 impl UrlWaits {
@@ -609,8 +648,8 @@ impl UrlWaits {
     pub(crate) fn land(&mut self, n: u64, answer: CmdResult, added: Added) {
         if let Some(i) = self.in_flight.iter().position(|(m, ..)| *m == n) {
             let (_, asked, _) = self.in_flight.remove(i);
-            // (A document adds nothing, and no front end lands it again by its number.)
-            if answer.is_ok() && added.document.is_none() {
+            // (A document or a summary adds nothing, and no front end lands it again by its number.)
+            if answer.is_ok() && added.document.is_none() && added.summary.is_none() {
                 if self.added.len() >= MAX_EXPIRED {
                     self.added.pop_front();
                 }
@@ -626,7 +665,7 @@ impl UrlWaits {
     }
 
     /// Waits for request `n`, which asked for `asked`.
-    fn wait(&mut self, n: u64, asked: Value) {
+    pub(super) fn wait(&mut self, n: u64, asked: Value) {
         if !self.has(n) {
             self.in_flight.push((n, asked, Instant::now()));
         }
@@ -639,7 +678,8 @@ impl UrlWaits {
         let late: Vec<(u64, Value)> = self
             .in_flight
             .iter()
-            .filter(|(.., at)| now.saturating_duration_since(*at) >= REQUEST_WAIT)
+            // A summary still being read has its own end, and its Cancel.
+            .filter(|(n, _, at)| now.saturating_duration_since(*at) >= REQUEST_WAIT && !self.summarising(*n))
             .map(|(n, q, _)| (*n, q.clone()))
             .collect();
         let mut addresses = Vec::new();
@@ -655,6 +695,9 @@ impl UrlWaits {
     /// so a late landing is refused.
     /// `taken`: whether the front end took it (it may still land); one it didn't is just forgotten.
     fn give_up(&mut self, n: u64, taken: bool) {
+        // A summary being read is stopped, and never lands: there is nothing to refuse later.
+        let taken = taken && !self.summarising(n);
+        self.stop_summaries(|m| m != n);
         if let Some(i) = self.in_flight.iter().position(|(m, ..)| *m == n) {
             let (_, asked, _) = self.in_flight.remove(i);
             if taken {
@@ -736,6 +779,7 @@ impl UrlWaits {
         self.in_flight.retain(|(n, ..)| wanted(n));
         self.landed.retain(|(n, ..)| wanted(n));
         self.views.retain(|n, _| wanted(n));
+        self.stop_summaries(|n| wanted(&n));
         let retained: Vec<u64> = self
             .in_flight
             .iter()
@@ -946,8 +990,14 @@ impl Session {
         if !fetching.is_empty() {
             answer["fetching"] = json!(fetching);
         }
-        if !requests.is_empty() {
-            answer["downloading"] = json!(requests.iter().map(|(_, q)| q["url"].as_str().map(crate::sources::redact)).collect::<Vec<_>>());
+        let (summaries, downloads): (Vec<&(u64, Value)>, Vec<&(u64, Value)>) =
+            requests.iter().partition(|(_, q)| super::summary::is_summary(q));
+        if !downloads.is_empty() {
+            answer["downloading"] = json!(downloads.iter().map(|(_, q)| q["url"].as_str().map(crate::sources::redact)).collect::<Vec<_>>());
+        }
+        // A summary read off the frame, by its command's name.
+        if !summaries.is_empty() {
+            answer["reading"] = json!(summaries.iter().map(|(_, q)| q["summary"].clone()).collect::<Vec<_>>());
         }
         let numbers = requests.iter().map(|(n, _)| *n).collect();
         for (n, asked) in requests {
@@ -1029,6 +1079,7 @@ impl Session {
     /// by then are given up (a test passes a later time instead of backdating the waits).
     fn poll_plugin_retries_at(&mut self, now: Instant) -> Vec<(String, CmdResult)> {
         self.url_waits.documents_in();
+        self.url_waits.summaries_in();
         if self.plugin_retries.is_empty() {
             self.url_waits.prune_views();
             return Vec::new();
@@ -1329,6 +1380,53 @@ mod tests {
         assert!(asked_by(&json!({"url": u, "connection": "c1"}), &json!({"url": u, "connection": "c1"})));
         assert!(!asked_by(&json!({"url": u, "connection": "c1"}), &json!({"url": u, "connection": "c2"})));
         assert!(!asked_by(&json!({"url": u}), &json!({"url": u, "connection": "c1"})));
+    }
+
+    /// A byte range of a GRIB file lands under the address the front end downloads, the range
+    /// marked in it: that is what was asked, and another range of the same file isn't (#2428).
+    #[test]
+    fn a_byte_range_lands_under_its_marked_address() {
+        let u = "https://x.org/model.grb";
+        let asked = json!({"url": u, "bytes": [100, 199], "format": "grib", "name": "rain", "anonymous": true});
+        let ranged = crate::cmd::layer::ranged_address(u, (100, 199));
+        assert!(asked_by(&asked, &json!({"url": ranged, "name": "rain", "anonymous": true, "id": 3})));
+        let other = crate::cmd::layer::ranged_address(u, (200, 299));
+        assert!(!asked_by(&asked, &json!({"url": other, "name": "rain", "anonymous": true, "id": 3})));
+        // An address asked with spaces around it: the app marks the range on it as given.
+        let spaced = json!({"url": format!("{u} "), "bytes": [100, 199], "name": "rain", "anonymous": true});
+        let marked = crate::cmd::layer::ranged_address(&format!("{u} "), (100, 199));
+        assert!(asked_by(&spaced, &json!({"url": marked, "name": "rain", "anonymous": true, "id": 3})));
+        assert!(asked_by(&spaced, &json!({"url": ranged, "name": "rain", "anonymous": true, "id": 3})));
+        // Without a range asked, the marked address is another download.
+        assert!(!asked_by(
+            &json!({"url": u, "name": "rain", "anonymous": true}),
+            &json!({"url": ranged, "name": "rain", "anonymous": true})
+        ));
+    }
+
+    /// The rows of a box of a range (#3055) land with their box marked (`"window"`, as the app
+    /// reads them off the frame), or as asked: the range with another box, or with none, isn't
+    /// what was asked, nor are the rows of a box what a range asked without one is.
+    #[test]
+    fn the_rows_of_a_box_land_only_with_their_box() {
+        let u = "https://x.org/model.grb";
+        let bbox = json!([-51.45, -23.32, -39.46, -13.83]);
+        let asked = json!({"url": u, "bytes": [100, 199], "bbox": bbox, "name": "rain", "anonymous": true});
+        let ranged = crate::cmd::layer::ranged_address(u, (100, 199));
+        let landed = |window: Value| json!({"url": ranged, "name": "rain", "anonymous": true, "id": 3, "window": window});
+        assert!(asked_by(&asked, &landed(json!({"bbox": bbox}))));
+        assert!(!asked_by(&asked, &landed(json!({"bbox": [-50, -23, -40, -14]}))));
+        assert!(!asked_by(&asked, &json!({"url": ranged, "name": "rain", "anonymous": true, "id": 3})), "the whole record");
+        // A failure the app says with the parameters asked.
+        assert!(asked_by(&asked, &asked));
+        // "view" stays "view": the box it was is the request's own.
+        let view = json!({"url": u, "bytes": [100, 199], "bbox": "view", "anonymous": true});
+        assert!(asked_by(&view, &json!({"url": ranged, "anonymous": true, "window": {"bbox": "view"}})));
+        // A range asked without a box: its whole record lands it, the rows of a box don't.
+        let whole = json!({"url": u, "bytes": [100, 199], "name": "rain", "anonymous": true});
+        assert!(asked_by(&whole, &json!({"url": ranged, "name": "rain", "anonymous": true, "id": 3})));
+        assert!(!asked_by(&whole, &landed(json!({"bbox": bbox}))));
+        assert!(asked_by(&json!({"url": u, "bytes": [100, 199], "bbox": false}), &json!({"url": ranged})), "a false box is none");
     }
 
     fn load_test_plugin(id: &str) -> String {

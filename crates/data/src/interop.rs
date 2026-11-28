@@ -1,6 +1,7 @@
-//! Writers for exchange formats: KML, GPX and CSV with WKT geometry.
+//! Writers for exchange formats: KML, GPX and CSV with WKT geometry. Geometry text goes to the
+//! output a coordinate at a time, so a large feature's is never held whole.
 
-use std::fmt::Write as _;
+use std::io::Write;
 
 use rustgis_geom::Coord;
 
@@ -36,51 +37,106 @@ fn feature_place(layer: &str, feature: u64, what: &str) -> String {
     format!("{layer}, feature id {feature}, {what}")
 }
 
-fn coords(pts: &[Coord]) -> String {
-    pts.iter().map(|c| format!("{},{}", c.x, c.y)).collect::<Vec<_>>().join(" ")
+/// KML coordinate tuples, space-separated.
+fn write_kml_coords(out: &mut impl Write, pts: &[Coord]) -> std::io::Result<()> {
+    for (i, c) in pts.iter().enumerate() {
+        if i > 0 {
+            out.write_all(b" ")?;
+        }
+        write!(out, "{},{}", c.x, c.y)?;
+    }
+    Ok(())
 }
 
-fn kml_geometry(g: &Geometry) -> String {
+/// A KML point.
+fn write_kml_point(out: &mut impl Write, c: &Coord) -> std::io::Result<()> {
+    write!(out, "<Point><coordinates>{},{}</coordinates></Point>", c.x, c.y)
+}
+
+/// A geometry as KML; one of other than a single part is a `MultiGeometry`.
+fn write_kml_geometry(out: &mut impl Write, g: &Geometry) -> std::io::Result<()> {
+    let multi = match g {
+        Geometry::Point(_) => false,
+        Geometry::MultiPoint(_) => true,
+        Geometry::Line(parts) => parts.len() != 1,
+        Geometry::Polygon(polys) => polys.len() != 1,
+    };
+    if multi {
+        out.write_all(b"<MultiGeometry>")?;
+    }
     match g {
-        Geometry::Point(c) => format!("<Point><coordinates>{},{}</coordinates></Point>", c.x, c.y),
+        Geometry::Point(c) => write_kml_point(out, c)?,
         Geometry::MultiPoint(v) => {
-            format!("<MultiGeometry>{}</MultiGeometry>", v.iter().map(|c| kml_geometry(&Geometry::Point(*c))).collect::<String>())
+            for c in v {
+                write_kml_point(out, c)?;
+            }
         }
         Geometry::Line(parts) => {
-            let ls: String = parts.iter().map(|p| format!("<LineString><coordinates>{}</coordinates></LineString>", coords(p))).collect();
-            if parts.len() == 1 { ls } else { format!("<MultiGeometry>{ls}</MultiGeometry>") }
+            for p in parts {
+                out.write_all(b"<LineString><coordinates>")?;
+                write_kml_coords(out, p)?;
+                out.write_all(b"</coordinates></LineString>")?;
+            }
         }
         Geometry::Polygon(polys) => {
-            let ps: String = polys
-                .iter()
-                .map(|rings| {
-                    let mut it = rings.iter();
-                    let outer = it
-                        .next()
-                        .map(|r| {
-                            format!("<outerBoundaryIs><LinearRing><coordinates>{}</coordinates></LinearRing></outerBoundaryIs>", coords(r))
-                        })
-                        .unwrap_or_default();
-                    let inner: String = it
-                        .map(|r| {
-                            format!("<innerBoundaryIs><LinearRing><coordinates>{}</coordinates></LinearRing></innerBoundaryIs>", coords(r))
-                        })
-                        .collect();
-                    format!("<Polygon>{outer}{inner}</Polygon>")
-                })
-                .collect();
-            if polys.len() == 1 { ps } else { format!("<MultiGeometry>{ps}</MultiGeometry>") }
+            for rings in polys {
+                out.write_all(b"<Polygon>")?;
+                for (i, ring) in rings.iter().enumerate() {
+                    let side = if i == 0 { "outerBoundaryIs" } else { "innerBoundaryIs" };
+                    write!(out, "<{side}><LinearRing><coordinates>")?;
+                    write_kml_coords(out, ring)?;
+                    write!(out, "</coordinates></LinearRing></{side}>")?;
+                }
+                out.write_all(b"</Polygon>")?;
+            }
         }
     }
+    if multi {
+        out.write_all(b"</MultiGeometry>")?;
+    }
+    Ok(())
 }
 
 /// A KML document, one placemark per feature, named by `name_field` and with every attribute.
 /// A cancelled run ([`crate::progress`]) stops it with [`crate::DataError::Cancelled`].
 pub fn to_kml(ds: &Dataset, name_field: Option<usize>) -> crate::Result<String> {
-    let mut out = format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<kml xmlns=\"http://www.opengis.net/kml/2.2\"><Document><name>{}</name>\n",
+    let mut out = Vec::new();
+    write_kml(ds, name_field, &mut out)?;
+    text(out)
+}
+
+/// What a writer of text made, as a string.
+fn text(out: Vec<u8>) -> crate::Result<String> {
+    String::from_utf8(out).map_err(|e| crate::DataError::Format(e.to_string()))
+}
+
+/// The opaque text identifier written with explicit XML Schema string typing. Loss prediction
+/// uses the same rule, because these values are neither trimmed nor inferred on re-import.
+pub(crate) fn kml_typed_string(field: &crate::Field) -> bool {
+    field.name == "id" && field.ty == crate::FieldType::Text
+}
+
+/// [`to_kml`]'s document, written to `out` as it is made.
+pub(crate) fn write_kml(ds: &Dataset, name_field: Option<usize>, out: &mut impl Write) -> crate::Result<()> {
+    out.write_all(b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<kml xmlns=\"http://www.opengis.net/kml/2.2\"")?;
+    writeln!(
+        out,
+        " xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xmlns:xs=\"http://www.w3.org/2001/XMLSchema\"><Document><name>{}</name>",
         xml(&ds.name, "KML", || "layer name".to_string())?
-    );
+    )?;
+    // Declare columns independently of populated values, so all-null columns survive a read.
+    out.write_all(b"<Schema id=\"fields\">")?;
+    for field in &ds.fields {
+        crate::progress::check()?;
+        let name = xml(&field.name, "KML", || format!("{}, field name '{}'", ds.name, field.name.escape_debug()))?
+            .replace('\t', "&#9;")
+            .replace('\n', "&#10;");
+        // ExtendedData's Data/value entries are text. Keep their inferred-reader behavior;
+        // a 64-bit integer must not be mislabeled as KML's 32-bit int type.
+        let ty = "string";
+        write!(out, "<SimpleField name=\"{name}\" type=\"{ty}\"/>")?;
+    }
+    out.write_all(b"</Schema>\n")?;
     // KML's description is text. Other types and differently-cased columns stay in
     // ExtendedData, where the reader preserves their values and reports name collisions.
     let description = ds.fields.iter().position(|f| f.name == "description" && f.ty == crate::FieldType::Text);
@@ -111,140 +167,193 @@ pub fn to_kml(ds: &Dataset, name_field: Option<usize>) -> crate::Result<String> 
                 let name = xml(&fd.name, "KML", || format!("{}, field name '{}'", ds.name, fd.name.escape_debug()))?
                     .replace('\t', "&#9;")
                     .replace('\n', "&#10;");
-                Ok(format!("<Data name=\"{name}\"><value>{value}</value></Data>"))
+                // An opaque source id can look numeric, including ids accepted from malformed
+                // XML ID attributes. Explicit string typing keeps its exact spelling on read.
+                let ty = if kml_typed_string(fd) { " xsi:type=\"xs:string\"" } else { "" };
+                Ok(format!("<Data name=\"{name}\"><value{ty}>{value}</value></Data>"))
             })
             .collect::<crate::Result<String>>()?;
-        out.push_str(&format!(
-            "<Placemark><name>{}</name>{description}<ExtendedData>{data}</ExtendedData>{}</Placemark>\n",
-            xml(&name, "KML", || feature_place(&ds.name, f.id, "name"))?,
-            kml_geometry(g)
-        ));
+        write!(
+            out,
+            "<Placemark><name>{}</name>{description}<ExtendedData>{data}</ExtendedData>",
+            xml(&name, "KML", || feature_place(&ds.name, f.id, "name"))?
+        )?;
+        write_kml_geometry(out, g)?;
+        out.write_all(b"</Placemark>\n")?;
     }
-    out.push_str("</Document></kml>\n");
-    Ok(out)
+    out.write_all(b"</Document></kml>\n")?;
+    Ok(())
+}
+
+/// A GPX track segment of `pts`.
+fn write_gpx_segment(out: &mut impl Write, pts: &[Coord]) -> std::io::Result<()> {
+    out.write_all(b"<trkseg>")?;
+    for c in pts {
+        write!(out, "<trkpt lat=\"{}\" lon=\"{}\"/>", c.y, c.x)?;
+    }
+    out.write_all(b"</trkseg>")
 }
 
 /// A GPX file: points become waypoints, lines tracks (polygon outlines too).
 /// A cancelled run ([`crate::progress`]) stops it with [`crate::DataError::Cancelled`].
 pub fn to_gpx(ds: &Dataset, name_field: Option<usize>) -> crate::Result<String> {
-    let mut out = String::from(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<gpx version=\"1.1\" creator=\"RustGIS\" xmlns=\"http://www.topografix.com/GPX/1/1\">\n",
-    );
+    let mut out = Vec::new();
+    write_gpx(ds, name_field, &mut out)?;
+    text(out)
+}
+
+/// [`to_gpx`]'s document, written to `out` as it is made: GPX holds its waypoints before its
+/// tracks, so the features are gone through for each, and no track waits in memory.
+pub(crate) fn write_gpx(ds: &Dataset, name_field: Option<usize>, out: &mut impl Write) -> crate::Result<()> {
+    out.write_all(
+        b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<gpx version=\"1.1\" creator=\"RustGIS\" xmlns=\"http://www.topografix.com/GPX/1/1\">\n",
+    )?;
     let pt = |c: &Coord| format!("lat=\"{}\" lon=\"{}\"", c.y, c.x);
-    let mut tracks = String::new();
-    for (r, f) in ds.features.iter().enumerate() {
-        crate::progress::step(1)?;
-        let Some(g) = &f.geometry else { continue };
-        let name = name_field.map(|fi| ds.value(r, fi).to_file_text()).unwrap_or_else(|| f.id.to_string());
-        let name = xml(&name, "GPX", || feature_place(&ds.name, f.id, "name"))?;
-        match g {
-            Geometry::Point(c) => out.push_str(&format!("<wpt {}><name>{name}</name></wpt>\n", pt(c))),
-            Geometry::MultiPoint(v) => v.iter().for_each(|c| out.push_str(&format!("<wpt {}><name>{name}</name></wpt>\n", pt(c)))),
-            Geometry::Line(parts) => {
-                let segs: String = parts
-                    .iter()
-                    .map(|p| format!("<trkseg>{}</trkseg>", p.iter().map(|c| format!("<trkpt {}/>", pt(c))).collect::<String>()))
-                    .collect();
-                tracks.push_str(&format!("<trk><name>{name}</name>{segs}</trk>\n"));
+    for tracks in [false, true] {
+        for (r, f) in ds.features.iter().enumerate() {
+            // Each feature counts once, in the first pass.
+            if tracks {
+                crate::progress::check()?;
+            } else {
+                crate::progress::step(1)?;
             }
-            Geometry::Polygon(polys) => {
-                let segs: String = polys
-                    .iter()
-                    .filter_map(|r| r.first())
-                    .map(|p| format!("<trkseg>{}</trkseg>", p.iter().map(|c| format!("<trkpt {}/>", pt(c))).collect::<String>()))
-                    .collect();
-                tracks.push_str(&format!("<trk><name>{name}</name>{segs}</trk>\n"));
+            let Some(g) = &f.geometry else { continue };
+            // Waypoints in the first pass, tracks in the second: a feature the pass doesn't write
+            // costs it no name.
+            let written = match g {
+                Geometry::Point(_) | Geometry::MultiPoint(_) => !tracks,
+                Geometry::Line(_) | Geometry::Polygon(_) => tracks,
+            };
+            if !written {
+                continue;
+            }
+            let name = name_field.map(|fi| ds.value(r, fi).to_file_text()).unwrap_or_else(|| f.id.to_string());
+            let name = xml(&name, "GPX", || feature_place(&ds.name, f.id, "name"))?;
+            match g {
+                Geometry::Point(c) if !tracks => writeln!(out, "<wpt {}><name>{name}</name></wpt>", pt(c))?,
+                Geometry::MultiPoint(v) if !tracks => {
+                    for c in v {
+                        writeln!(out, "<wpt {}><name>{name}</name></wpt>", pt(c))?;
+                    }
+                }
+                Geometry::Line(parts) if tracks => {
+                    write!(out, "<trk><name>{name}</name>")?;
+                    for p in parts {
+                        write_gpx_segment(out, p)?;
+                    }
+                    out.write_all(b"</trk>\n")?;
+                }
+                Geometry::Polygon(polys) if tracks => {
+                    write!(out, "<trk><name>{name}</name>")?;
+                    for ring in polys.iter().filter_map(|r| r.first()) {
+                        write_gpx_segment(out, ring)?;
+                    }
+                    out.write_all(b"</trk>\n")?;
+                }
+                _ => {}
             }
         }
     }
-    out.push_str(&tracks);
-    out.push_str("</gpx>\n");
-    Ok(out)
+    out.write_all(b"</gpx>\n")?;
+    Ok(())
 }
 
 /// Well-known text for a geometry.
 pub fn wkt(g: &Geometry) -> String {
-    fn coord(out: &mut String, p: &Coord) {
-        let _ = write!(out, "{} {}", p.x, p.y);
+    let mut out = Vec::new();
+    // A `Vec` takes every write, and the text is ASCII.
+    let _ = write_wkt(&mut out, g);
+    text(out).unwrap_or_default()
+}
+
+/// [`wkt`]'s text, written to `out`.
+fn write_wkt(out: &mut impl Write, g: &Geometry) -> std::io::Result<()> {
+    fn coord(out: &mut impl Write, p: &Coord) -> std::io::Result<()> {
+        write!(out, "{} {}", p.x, p.y)
     }
-    fn list(out: &mut String, v: &[Coord]) {
+    /// Coordinates, comma-separated.
+    fn list(out: &mut impl Write, v: &[Coord]) -> std::io::Result<()> {
         for (i, p) in v.iter().enumerate() {
             if i > 0 {
-                out.push_str(", ");
+                out.write_all(b", ")?;
             }
-            coord(out, p);
+            coord(out, p)?;
         }
+        Ok(())
     }
-    fn rings(out: &mut String, rs: &[Vec<Coord>]) {
+    /// Each ring's coordinates in parentheses, comma-separated.
+    fn rings(out: &mut impl Write, rs: &[Vec<Coord>]) -> std::io::Result<()> {
         for (i, r) in rs.iter().enumerate() {
             if i > 0 {
-                out.push_str(", ");
+                out.write_all(b", ")?;
             }
-            out.push('(');
-            list(out, r);
-            out.push(')');
+            out.write_all(b"(")?;
+            list(out, r)?;
+            out.write_all(b")")?;
         }
+        Ok(())
     }
-    let mut out = String::new();
     match g {
         Geometry::Point(p) => {
-            out.push_str("POINT (");
-            coord(&mut out, p);
-            out.push(')');
+            out.write_all(b"POINT (")?;
+            coord(out, p)?;
         }
         Geometry::MultiPoint(v) => {
-            out.push_str("MULTIPOINT (");
+            out.write_all(b"MULTIPOINT (")?;
             for (i, p) in v.iter().enumerate() {
                 if i > 0 {
-                    out.push_str(", ");
+                    out.write_all(b", ")?;
                 }
-                out.push('(');
-                coord(&mut out, p);
-                out.push(')');
+                out.write_all(b"(")?;
+                coord(out, p)?;
+                out.write_all(b")")?;
             }
-            out.push(')');
         }
         Geometry::Line(parts) if parts.len() == 1 => {
-            out.push_str("LINESTRING (");
+            out.write_all(b"LINESTRING (")?;
             if let Some(p) = parts.first() {
-                list(&mut out, p);
+                list(out, p)?;
             }
-            out.push(')');
         }
         Geometry::Line(parts) => {
-            out.push_str("MULTILINESTRING (");
-            for (i, p) in parts.iter().enumerate() {
-                if i > 0 {
-                    out.push_str(", ");
-                }
-                out.push('(');
-                list(&mut out, p);
-                out.push(')');
-            }
-            out.push(')');
+            out.write_all(b"MULTILINESTRING (")?;
+            rings(out, parts)?;
         }
         Geometry::Polygon(polys) => {
             if polys.len() == 1 {
-                out.push_str("POLYGON (");
+                out.write_all(b"POLYGON (")?;
                 if let Some(rs) = polys.first() {
-                    rings(&mut out, rs);
+                    rings(out, rs)?;
                 }
-                out.push(')');
             } else {
-                out.push_str("MULTIPOLYGON (");
+                out.write_all(b"MULTIPOLYGON (")?;
                 for (i, rs) in polys.iter().enumerate() {
                     if i > 0 {
-                        out.push_str(", ");
+                        out.write_all(b", ")?;
                     }
-                    out.push('(');
-                    rings(&mut out, rs);
-                    out.push(')');
+                    out.write_all(b"(")?;
+                    rings(out, rs)?;
+                    out.write_all(b")")?;
                 }
-                out.push(')');
             }
         }
     }
-    out
+    out.write_all(b")")
+}
+
+/// A sink that refuses a comma: whether [`write_wkt`] fails on it says whether a geometry's text
+/// is quoted in a CSV cell, without making the text. Text without a comma is a coordinate at most.
+struct NoComma;
+
+impl Write for NoComma {
+    /// Takes the bytes, or fails on a comma among them.
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if bytes.contains(&b',') { Err(std::io::ErrorKind::InvalidData.into()) } else { Ok(bytes.len()) }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 /// Decodes an encoded polyline (Google's algorithm; `precision` 5, or 6 as OSRM and Valhalla
@@ -522,34 +631,45 @@ impl WktParser {
 
 /// CSV with a `wkt` geometry column and every attribute; cancellable between features.
 pub fn to_wkt_csv(ds: &Dataset) -> crate::Result<String> {
-    to_wkt_csv_reporting(ds).map(|(csv, _)| csv)
+    let mut out = Vec::new();
+    write_wkt_csv(ds, &mut out)?;
+    text(out)
 }
 
 /// As [`to_wkt_csv`], also returning how many field names were prefixed with an apostrophe to
 /// guard against spreadsheet formula evaluation.
 pub fn to_wkt_csv_reporting(ds: &Dataset) -> crate::Result<(String, usize)> {
+    let guarded_headers = ds.fields.iter().filter(|f| crate::io::csv_needs_guard(&f.name)).count();
+    Ok((to_wkt_csv(ds)?, guarded_headers))
+}
+
+/// [`to_wkt_csv`]'s text, written to `out` as it is made. Field names and text cells that start
+/// like a spreadsheet formula take an apostrophe, as in plain CSV.
+pub(crate) fn write_wkt_csv(ds: &Dataset, out: &mut impl Write) -> crate::Result<()> {
     let q = |s: &str| {
         if s.contains([',', '"', '\n', '\r']) { format!("\"{}\"", s.replace('"', "\"\"")) } else { s.to_string() }
     };
-    let mut guarded_headers = 0usize;
-    let mut out = String::from("wkt");
+    out.write_all(b"wkt")?;
     for f in &ds.fields {
-        out.push(',');
-        let name = crate::io::csv_header(&f.name);
-        guarded_headers += usize::from(name != f.name);
-        out.push_str(&q(&name));
+        write!(out, ",{}", q(&crate::io::csv_header(&f.name)))?;
     }
-    out.push('\n');
+    out.write_all(b"\n")?;
     for f in &ds.features {
         crate::progress::step(1)?;
-        out.push_str(&q(&f.geometry.as_ref().map(wkt).unwrap_or_default()));
-        for v in &f.attrs {
-            out.push(',');
-            out.push_str(&q(&crate::io::csv_cell(v)));
+        if let Some(g) = &f.geometry {
+            // As `q` would: WKT holds no quote or line break and starts like no formula, so its
+            // cell is quoted for a comma alone, with nothing in it to escape.
+            let quote: &[u8] = if write_wkt(&mut NoComma, g).is_err() { b"\"" } else { b"" };
+            out.write_all(quote)?;
+            write_wkt(out, g)?;
+            out.write_all(quote)?;
         }
-        out.push('\n');
+        for v in &f.attrs {
+            write!(out, ",{}", q(&crate::io::csv_cell(v)))?;
+        }
+        out.write_all(b"\n")?;
     }
-    Ok((out, guarded_headers))
+    Ok(())
 }
 
 #[cfg(test)]
@@ -689,5 +809,105 @@ mod tests {
         let (ext, _) = crate::io::read_csv_with(external, "ext", &opts).unwrap();
         assert_eq!(ext.fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["'-foo"]);
         assert_eq!(ext.features[0].geometry, Some(Geometry::Point(Coord::new(1.0, 2.0))));
+    }
+
+    /// A guarded field name that comes out the same as another field's name (`=1+1` next to
+    /// `'=1+1`) is said in the export notice; names that don't clash say nothing more.
+    #[test]
+    fn guarded_header_that_clashes_with_another_field_is_said() {
+        let mut ds = Dataset::new(
+            "clash",
+            GeometryType::Point,
+            vec![Field::new("=1+1", FieldType::Text), Field::new("'=1+1", FieldType::Text), Field::new("@x", FieldType::Text)],
+        );
+        ds.push(
+            Some(Geometry::Point(Coord::new(1.0, 2.0))),
+            vec![Value::Text("a".into()), Value::Text("b".into()), Value::Text("c".into())],
+        );
+        let csv = to_wkt_csv(&ds).unwrap();
+        assert_eq!(csv.lines().next(), Some("wkt,'=1+1,'=1+1,'@x"));
+        for ext in ["wkt", "csv"] {
+            let notes = crate::io::export_losses_notes(&ds, ext, None, "clash.csv").unwrap();
+            let texts: Vec<&str> = notes.texts().collect();
+            assert!(
+                texts
+                    .iter()
+                    .any(|n| n.ends_with("they read back with that prefix; 1 of them now has the same header as another field: '=1+1'")),
+                "{ext}: {texts:?}"
+            );
+        }
+        let mut plain = Dataset::new("plain", GeometryType::Point, vec![Field::new("=1+1", FieldType::Text)]);
+        plain.push(Some(Geometry::Point(Coord::new(1.0, 2.0))), vec![Value::Text("a".into())]);
+        let notes = crate::io::export_losses_notes(&plain, "wkt", None, "plain.csv").unwrap();
+        let texts: Vec<&str> = notes.texts().collect();
+        assert!(texts.iter().any(|n| n.ends_with("it reads back with that prefix")), "{texts:?}");
+        assert!(!texts.iter().any(|n| n.contains("same header")), "{texts:?}");
+    }
+
+    /// Each geometry shape's text in KML, GPX and a WKT cell, the empty and one-coordinate ones
+    /// too: a cell is quoted only when its text holds a comma.
+    #[test]
+    fn kml_gpx_and_wkt_csv_text_of_each_geometry_shape() {
+        let (a, b) = (Coord::new(1.5, -2.0), Coord::new(3.0, 4.0));
+        let kml_point = |c: &str| format!("<Point><coordinates>{c}</coordinates></Point>");
+        let kml_line = |c: &str| format!("<LineString><coordinates>{c}</coordinates></LineString>");
+        let ring = |side: &str, c: &str| format!("<{side}><LinearRing><coordinates>{c}</coordinates></LinearRing></{side}>");
+        let outer = ring("outerBoundaryIs", "1.5,-2 3,4");
+        let inner = ring("innerBoundaryIs", "3,4");
+        let many = |parts: &str| format!("<MultiGeometry>{parts}</MultiGeometry>");
+        let (pa, pb) = (r#"lat="-2" lon="1.5""#, r#"lat="4" lon="3""#);
+        let wpt = |at: &str| format!("<wpt {at}><name>1</name></wpt>\n");
+        let trk = |segments: &str| format!("<trk><name>1</name>{segments}</trk>\n");
+        let ab = format!("<trkseg><trkpt {pa}/><trkpt {pb}/></trkseg>");
+        let only_b = format!("<trkseg><trkpt {pb}/></trkseg>");
+        let cases = [
+            (Geometry::Point(a), kml_point("1.5,-2"), wpt(pa), "POINT (1.5 -2)"),
+            (Geometry::MultiPoint(vec![]), many(""), String::new(), "MULTIPOINT ()"),
+            (Geometry::MultiPoint(vec![a]), many(&kml_point("1.5,-2")), wpt(pa), "MULTIPOINT ((1.5 -2))"),
+            (
+                Geometry::MultiPoint(vec![a, b]),
+                many(&(kml_point("1.5,-2") + &kml_point("3,4"))),
+                wpt(pa) + &wpt(pb),
+                "\"MULTIPOINT ((1.5 -2), (3 4))\"",
+            ),
+            (Geometry::Line(vec![]), many(""), trk(""), "MULTILINESTRING ()"),
+            (Geometry::Line(vec![vec![b]]), kml_line("3,4"), trk(&only_b), "LINESTRING (3 4)"),
+            (Geometry::Line(vec![vec![a, b]]), kml_line("1.5,-2 3,4"), trk(&ab), "\"LINESTRING (1.5 -2, 3 4)\""),
+            (
+                Geometry::Line(vec![vec![a, b], vec![b]]),
+                many(&(kml_line("1.5,-2 3,4") + &kml_line("3,4"))),
+                trk(&(ab.clone() + &only_b)),
+                "\"MULTILINESTRING ((1.5 -2, 3 4), (3 4))\"",
+            ),
+            (Geometry::Polygon(vec![]), many(""), trk(""), "MULTIPOLYGON ()"),
+            (
+                Geometry::Polygon(vec![vec![vec![b]]]),
+                format!("<Polygon>{}</Polygon>", ring("outerBoundaryIs", "3,4")),
+                trk(&only_b),
+                "POLYGON ((3 4))",
+            ),
+            (
+                Geometry::Polygon(vec![vec![vec![a, b], vec![b]]]),
+                format!("<Polygon>{outer}{inner}</Polygon>"),
+                trk(&ab),
+                "\"POLYGON ((1.5 -2, 3 4), (3 4))\"",
+            ),
+            (
+                Geometry::Polygon(vec![vec![vec![a, b], vec![b]], vec![]]),
+                many(&format!("<Polygon>{outer}{inner}</Polygon><Polygon></Polygon>")),
+                trk(&ab),
+                "\"MULTIPOLYGON (((1.5 -2, 3 4), (3 4)), ())\"",
+            ),
+        ];
+        for (g, kml, gpx, cell) in cases {
+            let mut ds = Dataset::new("t", GeometryType::Point, vec![]);
+            ds.push(Some(g), vec![]);
+            let k = to_kml(&ds, None).unwrap();
+            let placemark = format!("<Placemark><name>1</name><ExtendedData></ExtendedData>{kml}</Placemark>\n</Document>");
+            assert!(k.contains(&placemark), "{k}");
+            let x = to_gpx(&ds, None).unwrap();
+            assert!(x.ends_with(&format!("GPX/1/1\">\n{gpx}</gpx>\n")), "{x}");
+            assert_eq!(to_wkt_csv(&ds).unwrap(), format!("wkt\n{cell}\n"));
+        }
     }
 }

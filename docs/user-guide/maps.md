@@ -71,7 +71,9 @@ view to it, and says so.
 **Rotating and tilting the map.** Drag with the right mouse button, or hold ++ctrl++ and drag
 with the Pan tool, to turn the map about the centre of the view (to the right turns it clockwise)
 and to tilt it (up tilts it further), as in MapLibre; or hold ++shift++ and press ++arrow-left++ or ++arrow-right++ to turn it, ++arrow-up++ or ++arrow-down++
-to tilt it. The north arrow turns with the map to point north and leans back as it tilts; click
+to tilt it (after a click or a scroll in the
+[attribute table](analysis.md#the-attribute-table), the arrow keys move between its cells
+instead). The north arrow turns with the map to point north and leans back as it tilts; click
 it to face north and look straight down again. The bearing (the compass direction the top of the
 view faces, in degrees clockwise from north) and the pitch (the tilt from looking straight down,
 0 to 85 degrees) work as in MapLibre. They are saved with the project, its bookmarks and bookmark
@@ -79,17 +81,18 @@ files, and exported maps are drawn turned and tilted. A tilted map keeps the sca
 of the view: nearer ground is larger, farther ground smaller and drawn coarser, fading into fog
 and, past about 72 degrees, a sky above the horizon. Labels stay upright, and those too far away
 to read are left out. Point markers stand upright, facing you, as MapLibre's circles do, smaller
-with distance (aggregated, masked, blended or diagrammed point layers, and layers of more than 50,000 points,
-keep their markers on the ground). Extruded layers (Style › Extrusion) stand up in perspective on a tilted
-map, as in MapLibre: walls lit by the way they face and darker toward their foot, roofs at their
-height, with the labels of extruded features on their roofs. While a tilted map moves, the
-picture drawn last is laid over the ground and the extrusions and markers are moved with it, and the map is
-drawn again once it settles. `map.setBearing` sets the bearing (`{"bearing": 90}`
-puts east at the top; `{"by": 15}` turns it further), `map.setPitch` the pitch (`{"pitch": 60}`,
-or `{"by": 10}`), `map.resetNorth` faces north and looks straight down, and `map.goToXY` takes a
-`bearing` and a `pitch` too. Page layout map frames take their own bearing and pitch (see
-[Layouts](layouts.md)), and the globe turns and tilts the same way: tilted, its camera swings
-back about the centre of view, so the horizon comes into sight past the curve of the Earth.
+with distance and fading into the fog, image markers too (aggregated, masked, blended or diagrammed
+point layers, and layers of more than 50,000 points, keep their markers on the ground). Extruded
+layers (Style › Extrusion) stand up in perspective on a tilted map, as in MapLibre: walls lit by the
+way they face and darker toward their foot, roofs at their height, with the labels of extruded
+features on their roofs. While a tilted map moves, the picture drawn last is laid over the ground
+and the extrusions and markers are moved with it, and the map is drawn again once it settles.
+`map.setBearing` sets the bearing (`{"bearing": 90}` puts east at the top; `{"by": 15}` turns it
+further), `map.setPitch` the pitch (`{"pitch": 60}`, or `{"by": 10}`), `map.resetNorth` faces north
+and looks straight down, and `map.goToXY` takes a `bearing` and a `pitch` too. Page layout map
+frames take their own bearing and pitch (see [Layouts](layouts.md)), and the globe turns and tilts
+the same way: tilted, its camera swings back about the centre of view, so the horizon comes into
+sight past the curve of the Earth.
 
 <figure markdown="span">
   ![Countries extruded by population on a map tilted 55° and turned 20°, lit and shaded, with labels on their roofs](https://assets.rustgis.app/images/extrusion.webp)
@@ -158,6 +161,27 @@ polygon layer of that name comes back. A plain `"walls": "#RRGGBB"` takes the la
 `{"walls": {"layer": "Geology"}}` keeps the walls' colour, `{"walls": {"color": "#806040"}}` keeps the layer, and
 `{"walls": {"layer": null}}` takes the layer off and keeps the colour.
 
+Soil over rock: `"walls": {"layer": "Geology", "top": {"layer": "Soils", "thickness": 150}}` adds a
+band along the top of the walls from a second polygon layer. Along each wall the band runs under
+the ground's edge, `thickness` metres deep (before exaggeration, so it is stretched as the relief
+is), in the solid fill the second layer's symbology gives the polygon under the box's edge there
+(as the walls take theirs; its hatches, markers, gradients and shapebursts are left off, said with
+how many polygons). Off its polygons there is no band, and the rock reaches the ground. In place
+of a number, `"thickness": {"field": "depth_m"}` takes each polygon's thickness from a numeric
+field of the second layer (metres, before exaggeration): under a polygon with no value over 0
+there is no band, said with how many, and a field the layer no longer has as a number (deleted,
+renamed or turned to text since) gives no band at all, said. The band
+is outlined along the ground and its foot, so the walls' contacts stop there, and two soil classes
+meet at a short line across it. It never reaches below the base: where the ground stands less
+than its thickness over the base it stops there, said. The band is schematic: real soil is a few
+metres deep at most, and a band that shows at the block's scale is far thicker, so give the figure
+a note such as "soil thickness not to scale". It works without a walls layer too, over the walls'
+colour. The top layer is checked, followed and said as the walls layer is (a polygon layer holding
+all its features, with a name of its own; renamed with it; when it is removed, or a project opens
+without it, no band until a layer of that name comes back). `"top": false` takes the band off, and
+a plain `"walls": "#RRGGBB"` takes it off with the layer. Only the map view draws the band: a 3D
+model's walls (`map.exportBlock`) leave it out, said. Saved projects require `terrain-block-walls-top`.
+
 `"shape": "circle"` cuts a round block: the largest circle inside the box (the DEM's extent or
 `"extent"`), centred in it, or a smaller one with `"radius"` (map units; one larger than the
 box's circle takes the box's). It reads the same at any bearing, which suits a figure that
@@ -169,12 +193,13 @@ takes it back to the box. A block kept from before stays round when another key 
 `"shape": {"layer": "Bacias", "where": "nome = 'Rio Doce'"}` cuts the block to a study area: the
 polygons of a polygon layer that the expression picks (written as a definition query, among the
 rows the layer's own definition query keeps; all of them without `"where"`). Only the ground
-inside their outer rings is drawn and sets the base, the block's box is the one round them (so
+inside them is drawn and sets the base, the block's box is the one round them (so
 no `"extent"`), and it works over elevation tiles too. The walls stand along the outline where
 it faces you, a concave outline's hidden where nearer ground or walls stand in front of them,
 with everything a box's walls have; a wall's corner is outlined where the outline turns by more
-than 45°. A `"where"` that picks no polygon is refused. Holes are not cut: the ground inside
-them is drawn, and a notice says how many. Several polygons each stand as their own block on the
+than 45°. A `"where"` that picks no polygon is refused. Each hole is a well: its ground isn't
+drawn, its walls stand along it where they face you (on its far side), and its floor is drawn at
+the base, in the walls' colour in shade. Several polygons each stand as their own block on the
 same base (dissolve touching ones first for one outline). The outline follows the polygons to about a third of the
 finest mesh cell (a ring narrower than that is left out, and said), and is read again when the
 layer is edited. A box kept from before is dropped when the block is cut to polygons.
@@ -197,6 +222,30 @@ are schematic unless they come from a field: say so in the figure's caption. `"w
 block takes the water out of the walls (the rest of the block stays as it was); while it is there, taking the terrain's water off, or giving
 it a layer without the depth field, is refused. Deleting the depth field keeps the water's own
 `depth` for all the water, or takes the water out of the walls when there is none, and says so.
+
+When the bed is measured, `"bed": "Bathymetry"` in the block's water names a raster layer of the
+bed's heights (metres on the DEM's vertical datum, stretched by the exaggeration as the level is;
+a topo-bathymetric DEM can be named as its own bed, and a raster of depths turns into heights with
+the raster calculator, `level − depth`). Along each wall's water the floor is then the bed's height,
+read at steps of the bed's cell at the block's centre, longer where that would take more than
+16 384 heights along all the walls' water (read once and kept until the layer, its data or the box
+change), with
+no shore ramp, as the bed reaches the shore itself; where the bed lies above the level there is
+no water. Where the bed has no data (off the raster, its no-data cells) the floor is the field's
+depth or the `"depth"`, with the ramp, as without a bed, and no water without either; one notice
+says along how many stretches and in how many water bodies. The bed alone is enough, without a
+depth or field. The water's shading runs from the level to the deepest point of each stretch.
+`map.terrain` refuses a bed that isn't a raster layer, or a name more than one layer has, before
+the terrain changes, and so a new box for the block that moves it off the bed it keeps. The bed's
+footprint is checked against the block's box when its data is there as the command runs; a bed
+still being read gives no floor until it is, and one whose data lands later off the box is kept,
+the frame then saying it has no heights along the walls' water. The bed is kept by name and
+follows its renames; removing it says the walls fall back to the depth or field meanwhile, and so
+does a project that opens without it, and a layer of its name that isn't a raster (renamed or
+added to it) is said by the frame. A bed deeper
+than the block's base is drawn at the base: give the block a larger `"depth"`. Only the walls show
+the bed: the ground over the water stays flat at its level. Saved projects require
+`terrain-block-water-bed`.
 
 **Water** on the terrain lies flat: `map.terrain` with `{"water": {"layer": "Lakes"}}` names a
 polygon layer of water bodies, and inside each polygon the ground is level, at the lowest height
@@ -768,8 +817,10 @@ project switches its countries when the new borders arrive; others keep the laye
 ## Projections
 
 The flat map is drawn in Web Mercator by default. **View › Projection** switches it to another
-projection, and clicking the coordinate system in the status bar opens the **Coordinate
-System** dialog, which also takes a projected EPSG code (such as `3035`, `32633` for UTM zone
+projection. The coordinate system button in the status bar opens the **Coordinate System**
+dialog, as does **Coordinate System…** on the right-click menu of the map's entry at the top of
+the Layers pane (also on the menus of the map's tab and of its entry in the Browser, for the map
+in view). The dialog also takes a projected EPSG code (such as `3035`, `32633` for UTM zone
 33N or `2056` for Switzerland) or an ESRI code, the one `.prj` files and ArcGIS name (such as
 `ESRI:102033` for South America Albers Equal Area Conic, or `ESRI:54030` for World Robinson). A
 code whose projection method RustGIS can't compute is refused with the reason, rather than drawn
