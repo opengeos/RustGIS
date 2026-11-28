@@ -18,6 +18,8 @@ pub(in crate::cmd::layout) fn duplicate_element(s: &mut Session, p: &Value) -> C
         c.visible = e.visible;
         c.background = e.background;
     }
+    // A profile's copy keeps beside the same frame: its box is the frame's side.
+    l.fit_profiles();
     crate::cmd::say_name_cut(s, "Duplicate Element", "the copy's name", &e.name, &name);
     // Its offset can take a text's ink past the page's edge, as a move does (#2703); the lines it
     // loses are the original's, said when it was set.
@@ -260,6 +262,10 @@ pub(crate) fn color(p: &Value, k: &str, d: Rgba) -> Result<Rgba, String> {
 
 pub(in crate::cmd::layout) fn add_element(s: &mut Session, p: &Value) -> CmdResult {
     let kind = ps(p, "kind").ok_or("kind is required")?;
+    // A profile reads its own keys (#2863 part 2), several of them other kinds' too.
+    if kind == "profile" {
+        return add_profile(s, p);
+    }
     if kind != "legend" && kind != "scaleBar" && p.get("textSize").is_some_and(|v| !v.is_null()) {
         return Err(ONLY_LAYOUT_TEXT_SIZE.into());
     }

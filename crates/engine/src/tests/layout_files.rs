@@ -125,6 +125,7 @@ fn a_saved_layout_file_requires_what_its_elements_use_and_reads_back_the_same() 
         ("outline", include_str!("../../../../schema/fixtures/layout_chart_outline.rgis")),
         ("border", include_str!("../../../../schema/fixtures/layout_frame_border.rgis")),
         ("section", include_str!("../../../../schema/fixtures/layout_section.rgis")),
+        ("profile", include_str!("../../../../schema/fixtures/layout_profile.rgis")),
         ("legend-text", include_str!("../../../../schema/fixtures/layout_legend_text.rgis")),
         ("legend-fit", include_str!("../../../../schema/fixtures/layout_legend_fit.rgis")),
         ("legend-class-labels", include_str!("../../../../schema/fixtures/layout_legend_class_labels.rgis")),

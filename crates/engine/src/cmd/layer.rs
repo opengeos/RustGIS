@@ -7557,6 +7557,7 @@ fn references_follow_layer(s: &mut Session, old: &str, new: &str) {
                     replace(layer)
                 }
                 ElementKind::Colorbar { frame, layer: Some(layer), .. } if frames.contains(frame) => replace(layer),
+                ElementKind::Profile(p) if frames.contains(&p.frame) => replace(&mut p.layer),
                 ElementKind::Text { text, .. } if texts_read_this_map => {
                     match renamed_statistics(text, rustgis_map::layout::MAX_TEXT_CHARS, braces, &mut replace) {
                         Renamed::To(renamed) => *text = renamed,
@@ -7718,10 +7719,10 @@ fn removed_notice(keys: [&'static str; 2], count: usize, named: &[&str]) -> Opti
     Some(crate::notice_text::NoticeText::format(key, [("count", count.to_string().into()), ("names", names.into())]))
 }
 
-/// After layers called `names` are removed: a table's, chart's or colorbar's layer, and a text's
-/// layer statistics (#2853), keep the name, so a layer of that name brings them back, and are drawn
-/// without it meanwhile: how many elements, said once. Which elements read the active map is as for
-/// a rename (`references_follow_layer`).
+/// After layers called `names` are removed: a table's, chart's, colorbar's or profile's layer, and a
+/// text's layer statistics (#2853), keep the name, so a layer of that name brings them back, and are
+/// drawn without it meanwhile: how many elements, said once. Which elements read the active map is
+/// as for a rename (`references_follow_layer`).
 fn layouts_follow_removal(s: &mut Session, names: &[String]) {
     use rustgis_map::layout::ElementKind;
 
@@ -7739,6 +7740,7 @@ fn layouts_follow_removal(s: &mut Session, names: &[String]) {
                     vec![layer]
                 }
                 ElementKind::Colorbar { frame, layer: Some(layer), .. } if frames.contains(frame) => vec![layer],
+                ElementKind::Profile(p) if frames.contains(&p.frame) => vec![&p.layer],
                 ElementKind::Text { text, .. } if texts_read_this_map => {
                     rustgis_map::layout::stat_tokens(text).iter().map(|t| t.layer).collect()
                 }

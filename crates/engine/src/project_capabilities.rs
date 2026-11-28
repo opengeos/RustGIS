@@ -169,6 +169,7 @@ const COMMAND_CAPABILITIES: &[(&str, CommandCheck)] = &[
     ("blank-paper", command_uses_blank_paper),
     ("layout-frame-border", command_uses_frame_border),
     ("layout-section", command_uses_section),
+    ("layout-profile", command_uses_profile),
     ("layout-text-size", command_uses_text_size),
     ("layout-legend-fit", command_uses_legend_fit),
     ("layout-legend-class-labels", command_uses_legend_class_labels),
@@ -487,6 +488,26 @@ fn command_uses_section(id: &str, params: &Value) -> bool {
         // A layout file, read as `layout.import` reads it, which `report.existingTemplate` also does.
         "layout.import" | "report.existingTemplate" => imported_layout_uses(params, &["\"sections\""], |e| e.kind.has_sections()),
         "script.run" => params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, command_uses_section)),
+        _ => false,
+    }
+}
+
+/// The keys of `layout.update` only a profile reads (#2863 part 2), besides a `section` given as a
+/// name, which a map frame takes as an object.
+const PROFILE_ONLY_KEYS: &[&str] = &["band", "side", "gap", "thickness", "unit", "lineColor", "lineWidth", "guides", "min"];
+
+/// A layout command that adds or changes a profile beside a map frame (#2863 part 2): an older
+/// reader refuses the kind `profile`, and the keys only a profile reads.
+fn command_uses_profile(id: &str, params: &Value) -> bool {
+    match id {
+        "layout.addElement" => params.get("kind").and_then(Value::as_str).is_some_and(|k| k.trim().eq_ignore_ascii_case("profile")),
+        "layout.update" => {
+            PROFILE_ONLY_KEYS.iter().any(|k| params.get(*k).is_some_and(|v| !v.is_null()))
+                || params.get("section").is_some_and(Value::is_string)
+        }
+        // A layout file, read as `layout.import` reads it, which `report.existingTemplate` also does.
+        "layout.import" | "report.existingTemplate" => imported_layout_uses(params, &["\"Profile\""], |e| e.kind.is_profile()),
+        "script.run" => params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, command_uses_profile)),
         _ => false,
     }
 }
@@ -1279,6 +1300,7 @@ fn layout_capabilities(layouts: &[rustgis_map::layout::Layout]) -> Vec<&'static 
         (elements().any(charts_outlined), "layout-chart-outline"),
         (elements().any(|e| e.kind.has_custom_border()), "layout-frame-border"),
         (elements().any(|e| e.kind.has_sections()), "layout-section"),
+        (elements().any(|e| e.kind.is_profile()), "layout-profile"),
         (elements().any(|e| e.kind.has_custom_text_size()), "layout-text-size"),
         (elements().any(legends_fitting), "layout-legend-fit"),
         (elements().any(legend_labels_classes), "layout-legend-class-labels"),
@@ -1594,6 +1616,7 @@ mod tests {
             (&["blank-paper"], "map.basemap", json!({"name": "blank", "color": "#112233"})),
             (&["layout-frame-border"], "layout.update", json!({"element": 1, "border": {}})),
             (&["layout-section"], "layout.update", json!({"element": 1, "section": {"name": "A", "y": 0}})),
+            (&["layout-profile"], "layout.update", json!({"element": 2, "thickness": 20})),
             (&["layout-text-size"], "layout.update", json!({"element": 1, "textSize": 12})),
             (&["layout-legend-fit"], "layout.update", json!({"element": 1, "fit": "adjustSize"})),
             (&["layout-legend-class-labels"], "layout.update", json!({"element": 1, "classLabels": {"a": {"x": "X"}}})),

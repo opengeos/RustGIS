@@ -1241,6 +1241,23 @@ pub fn paint(painter: &Painter, r: Rect, name: &str, ink: Color32, accent: Color
                 p.line(&[(12.0, y), (18.0, y)], 1.1, ink);
             }
         }
+        // A ridge's profile over its base and distance ticks, a dashed section line above it.
+        "layout_profile" => {
+            let ridge = [(3.0, 15.0), (6.0, 12.0), (9.0, 13.0), (12.5, 7.0), (15.5, 10.0), (18.0, 9.0), (21.0, 14.0)];
+            for w in ridge.windows(2) {
+                if let [a, b] = w {
+                    p.fill(&[(a.0, 17.0), *a, *b, (b.0, 17.0)], p.tint(60));
+                }
+            }
+            p.line(&ridge, 1.4, ink);
+            p.line(&[(3.0, 17.0), (21.0, 17.0)], 1.2, ink);
+            for x in [3.0, 9.0, 15.0, 21.0] {
+                p.line(&[(x, 17.0), (x, 19.5)], 1.0, ink);
+            }
+            for x in [3.0, 8.0, 13.0, 18.0] {
+                p.line(&[(x, 4.0), (x + 3.0, 4.0)], 1.3, accent);
+            }
+        }
         // A gradient bar over its tick marks.
         "colorbar" => {
             for i in 0..9 {
@@ -1363,6 +1380,7 @@ pub const ALL: &[&str] = &[
     "stats",
     "chart",
     "colorbar",
+    "layout_profile",
     "count",
     "calc_geom",
     "table",

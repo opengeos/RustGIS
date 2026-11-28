@@ -119,6 +119,9 @@ pub struct LayoutView {
     text_warning: Option<String>,
     /// The last notice of the section lines the page's frames don't draw.
     section_warning: Option<String>,
+    /// The last notices of the profiles the page doesn't draw, or draws from fewer samples than
+    /// cells (#2863).
+    profile_warning: Vec<String>,
     /// The texts of the layout drawn (by its index) cut off on its page, with their lines left
     /// out of their box, as the Format pane tells them (#2346).
     text_losses: Option<(usize, Vec<rustgis_engine::render::layout::TextLoss>)>,
@@ -212,6 +215,7 @@ pub(crate) fn follow_project(app: &mut RustGisApp) {
         app.layout.viewed = None;
         app.layout.text_warning = None;
         app.layout.section_warning = None;
+        app.layout.profile_warning.clear();
         app.layout.text_losses = None;
         app.layout.views.clear();
     }
@@ -289,6 +293,7 @@ impl LayoutView {
         }
         self.text_warning = None;
         self.section_warning = None;
+        self.profile_warning.clear();
         self.text_losses = None;
         if let Some(old) = self.viewed.replace(name.to_string()) {
             self.views.insert(old, (self.zoom, self.pan));
@@ -429,6 +434,17 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
                     app.session.warn(note.clone());
                 }
                 app.layout.section_warning = note;
+            }
+            let notes = rustgis_engine::render::layout::profiles_not_drawn(&layout, &app.session.project.maps);
+            let said = rustgis_engine::render::layout::profiles_notice(&notes.into_iter().map(|n| (n, 1)).collect(), 1);
+            if said != app.layout.profile_warning {
+                // (The command that added or changed one has just said so.)
+                for note in said.iter().filter(|n| !app.layout.profile_warning.contains(n)) {
+                    if app.session.notices.last().is_none_or(|last| last.text != *note) {
+                        app.session.warn(note.clone());
+                    }
+                }
+                app.layout.profile_warning = said;
             }
             // The Format pane is drawn before the page: a count that changed shows on the next
             // frame, without waiting for an input event.

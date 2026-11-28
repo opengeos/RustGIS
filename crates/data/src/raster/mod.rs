@@ -1350,6 +1350,25 @@ impl Raster {
         if wrapped < w { wrapped } else { c }
     }
 
+    /// The value of `band` at a longitude/latitude point, read bilinearly between the four cell
+    /// centres around it, in the raster's own system: the nearest cell's where one of the four is
+    /// no-data or off the grid, and `None` where that one is too. The elevation profiles read
+    /// this (`profile.*`, and a layout's profiles beside a map frame, #2863).
+    pub fn bilinear(&self, band: usize, lonlat: Coord) -> Option<f64> {
+        let w = self.transformer.from_lonlat(lonlat)?;
+        let (x, y) = self.transform.to_pixel(w);
+        let (x, y) = (x - 0.5, y - 0.5);
+        let (c0, r0) = (x.floor() as i64, y.floor() as i64);
+        let (fx, fy) = (x - c0 as f64, y - r0 as f64);
+        let v = |c: i64, r: i64| self.value(band, c, r).map(f64::from);
+        match (v(c0, r0), v(c0 + 1, r0), v(c0, r0 + 1), v(c0 + 1, r0 + 1)) {
+            (Some(a), Some(b), Some(c), Some(d)) => {
+                Some(a * (1.0 - fx) * (1.0 - fy) + b * fx * (1.0 - fy) + c * (1.0 - fx) * fy + d * fx * fy)
+            }
+            _ => v(x.round() as i64, y.round() as i64),
+        }
+    }
+
     /// Cell size in the raster's units (x, y).
     pub fn cell_size(&self) -> (f64, f64) {
         (self.transform.pixel_width.abs(), self.transform.pixel_height.abs())
