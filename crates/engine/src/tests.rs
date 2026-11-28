@@ -7846,6 +7846,9 @@ fn shaded_relief_keeps_its_shadow_softness() {
         s.run("raster.symbology", &json!({"type": "shadedRelief", "shadowSoftness": default})).unwrap();
         assert_eq!(softness(&s), None, "{default}: the default");
     }
+    s.run("raster.symbology", &json!({"type": "shadedRelief", "shadowSoftness": 2})).unwrap();
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(softness(&s), None, "undone");
     assert!(!saved(&mut s).contains("shadow_softness"), "the default saves nothing new");
     // The fixture reads back as saved, requiring what it sets by name.
     let fixture = Project::from_json(include_str!("../../../schema/fixtures/shaded_relief_shadow_softness.rgis")).unwrap();

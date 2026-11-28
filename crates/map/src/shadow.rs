@@ -63,8 +63,11 @@ pub enum Unlit {
 /// are split over up to `threads` threads, each the same as on one. Looks at `stop` between rows,
 /// and at the run's Cancel (see [`rustgis_data::progress`]) on a thread that has one (the browser,
 /// which works it out where it is asked). On the desktop the worker has none: a cancelled export
-/// that waited for it alone sets `stop`. A sun under about 5° traces far over gentle ground: the
-/// cost grows with the raster's width as well as its cells.
+/// that waited for it alone sets `stop`. The trace runs down to the disc's lower edge
+/// (`altitude` less `soft_edge`): with that edge near the horizon or below it (a sun under about
+/// 5° at the default disc, under about 15° at the widest), each cell traces far over gentle ground
+/// and the cost grows with the raster's width as well as its cells, some ten times that of an edge
+/// at 5°. No softness costs much more than a sun on the horizon does at the default disc.
 pub fn light(
     r: &Raster,
     band: usize,
