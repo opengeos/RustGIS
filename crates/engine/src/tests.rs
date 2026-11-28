@@ -41,6 +41,9 @@ mod said_not_silent;
 mod cancellation;
 
 #[cfg(not(target_arch = "wasm32"))]
+#[path = "tests/cube_first.rs"]
+mod cube_first;
+#[cfg(not(target_arch = "wasm32"))]
 #[path = "tests/cube_mask.rs"]
 mod cube_mask;
 #[cfg(not(target_arch = "wasm32"))]
@@ -128,6 +131,9 @@ mod layout_publication_parts;
 
 #[path = "tests/layout_typed_values.rs"]
 mod layout_typed_values;
+
+#[path = "tests/layout_report_text.rs"]
+mod layout_report_text;
 
 #[path = "tests/sde_connections.rs"]
 mod sde_connections;
@@ -31299,17 +31305,17 @@ fn csv_and_gpx_exports_say_what_they_leave_out() {
     assert!(n.iter().any(|t| t.contains("'height'")) && n.iter().any(|t| t.contains("tracks")), "{n:?}");
     let n = said(&mut s, "data.convert", json!({"layer": "Areas", "format": "csv"}));
     assert!(n.iter().any(|t| t.contains("wasn't written, only the attributes")), "{n:?}");
-    // Both formats count the row without geometry and name the omitted null field.
+    // Both formats count the row without geometry; KML also declares the all-null field.
     let mut rows = layer("Rows", GeometryType::Point, vec![(Geometry::Point(Coord::new(1.0, 2.0)), vec![V::Text("P".into()), V::Null])]);
     rows.push(None, vec![V::Text("no place".into()), V::Null]);
     s.map_mut().add_dataset(rows);
     for format in ["kml", "gpx"] {
         let n = said(&mut s, "data.convert", json!({"layer": "Rows", "format": format}));
         assert!(n.iter().any(|t| t.contains("1 features without drawable geometry were left out")), "{format}: {n:?}");
-        assert_eq!(n.len(), 2, "{format}: {n:?}");
         if format == "kml" {
-            assert!(n.iter().any(|t| t.contains("KML omitted 1 field with no values in the placemarks written ('height')")), "{n:?}");
+            assert_eq!(n.len(), 1, "{n:?}");
         } else {
+            assert_eq!(n.len(), 2, "{n:?}");
             assert!(n.iter().any(|t| t.contains("1 field wasn't written: 'height'")), "{n:?}");
         }
     }
@@ -31449,9 +31455,24 @@ fn exporting_features_adds_or_replaces_a_table_in_an_existing_geopackage() {
         l.sync_source(&rustgis_geom::Extent::new(-20.0, -20.0, 20.0, 20.0), true);
     });
     assert_eq!(kind(&s), Some(rustgis_data::GeometryType::Polygon));
+    let in_place = s.map_mut().layers.iter_mut().find(|layer| layer.name == "InPlace").unwrap();
+    let moved = rustgis_map::symbology::MovedLabel { id: in_place.dataset.features.row(0).unwrap().id(), at: [4.0, 5.0] };
+    in_place.labels.default.moved.push(moved);
+    let mut class = in_place.labels.default.clone();
+    class.name = "Subset".into();
+    in_place.labels.classes.push(class);
     let mark = s.notice_mark();
     s.run("share.exportLayer", &json!({"layer": "Cities", "path": path, "mode": "replaceTable", "tableName": "Countries"})).unwrap();
     assert_eq!(kind(&s), Some(rustgis_data::GeometryType::Point), "the new table's");
+    assert!(s.map().layer_by_name("InPlace").unwrap().labels.in_order().all(|class| class.moved.is_empty()));
+    assert_eq!(
+        s.notices_since(mark)
+            .iter()
+            .filter(|note| note.text == "InPlace: 2 saved label move(s) reset: replacement data may reuse feature ids")
+            .count(),
+        1,
+        "the replacement command says the reset without requiring a render frame"
+    );
     let read = s.map().layer_by_name("InPlace").map(|l| l.load_all().map(|ds| ds.features.len()));
     assert_eq!(read, Some(Ok(cities)), "its features are the new table's");
     assert!(s.notices_since(mark).iter().any(|n| n.text.ends_with("1 layer reads Countries in place, now the new table")));
@@ -57470,7 +57491,7 @@ fn reads_made_ahead_are_taken_by_the_command() {
         assert_eq!(unread(&s), before + 1, "{:?}", s.notices.iter().map(|n| &n.text).collect::<Vec<_>>());
     }
 
-    // A field added while the read ran: it is read again, with that field kept.
+    // A saved field absent from the source must not receive positional source values.
     let path = dir.join("fields.geojson");
     std::fs::write(&path, points).unwrap();
     let id = s.run("layer.addData", &json!({"path": path.display().to_string(), "stream": true})).unwrap()["layer"].as_u64().unwrap();
@@ -57480,7 +57501,8 @@ fn reads_made_ahead_are_taken_by_the_command() {
     extra.name = "added".into();
     s.map_mut().layer_mut(id as u32).unwrap().dataset.fields.push(extra);
     s.run("layer.rename", &json!({"layer": id, "name": "Renamed while reading"})).unwrap();
-    crate::cmd::reads::read_land(&mut s, read).unwrap();
+    let error = crate::cmd::reads::read_land(&mut s, read).unwrap_err();
+    assert!(error.contains("added") && error.contains("Reload Data"), "{error}");
     assert_eq!(s.map().layer(id as u32).unwrap().name, "Renamed while reading");
     assert!(s.map().layer(id as u32).unwrap().dataset.fields.iter().any(|f| f.name == "added"));
 

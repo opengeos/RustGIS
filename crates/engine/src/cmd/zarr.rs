@@ -1053,7 +1053,7 @@ impl PendingRead {
         crate::render::rustgis_tiles::cache::with_optional_still(self.still.clone(), || {
             let _diagnostic_scope = self.capture.enter();
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| read_step(&self.zt, self.step, self.key.clone())))
-                .unwrap_or_else(|_| Err(format!("{}: reading step {} failed unexpectedly", self.zt.store, self.step)))
+                .unwrap_or_else(|payload| Err(crate::bug(&format!("{}: reading step {}", self.zt.store, self.step), payload.as_ref())))
         })
     }
 
@@ -1923,8 +1923,8 @@ impl ReduceRun {
 pub fn reduce_start(s: &Session, p: &Value) -> Result<ReduceRun, String> {
     let stat = Stat::parse(p)?;
     // A variable of classes is summarised by cube.reduce, which reads its dates in order; so is a
-    // median, which holds every date's value, and first, which ranks them.
-    if stat.categorical() || matches!(stat, Stat::Median | Stat::First) {
+    // median, which holds every date's value, and first and firstDate, which rank them.
+    if stat.categorical() || matches!(stat, Stat::Median | Stat::First | Stat::FirstDate) {
         return Err(format!(
             "zarr.reduce takes mean, min, max, sum, std, count or countAbove: {} is cube.reduce's (give it this layer or store)",
             stat.code()
