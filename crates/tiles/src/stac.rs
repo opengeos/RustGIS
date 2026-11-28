@@ -1032,7 +1032,11 @@ impl Item {
             return Ok(());
         }
         // The scheme is the letters before the first colon (`data:` and `mailto:` have no `//`).
-        let scheme = lower.split_once(':').map(|(s, _)| s).filter(|s| s.len() > 1 && s.bytes().all(|b| b.is_ascii_alphabetic()));
+        let scheme = lower
+            .split_once(':')
+            .map(|(s, _)| s)
+            .filter(|s| s.len() > 1 && s.starts_with(|c: char| c.is_ascii_alphabetic()))
+            .filter(|s| s.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'-' | b'.')));
         let slashes = lower.split_once(':').is_some_and(|(_, rest)| rest.starts_with("//"));
         let what = match (scheme, slashes) {
             (Some(scheme), true) => format!("a {scheme}:// address"),
