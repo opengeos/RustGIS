@@ -1,5 +1,7 @@
 //! The tools.
 
+mod check_dem;
+pub use check_dem::PLAUSIBLE_ELEVATION;
 mod check_geometry;
 mod geometry;
 mod network_analysis;
@@ -1135,6 +1137,73 @@ pub static TOOLS: &[ToolSpec] = &[
             P { name: "output", label: "Output Name", kind: K::Text, required: false, default: "", help: "Output table name." },
         ],
         run: tabulate_area::run,
+    },
+    ToolSpec {
+        id: "checkDem",
+        name: "Check DEM",
+        toolbox: "Analysis › Terrain",
+        summary: "Finds steps, spikes, pits and implausible values in an elevation model, as points with a summary; it changes nothing.",
+        params: &[
+            P {
+                name: "input",
+                label: "Elevation Raster",
+                kind: K::RasterLayer,
+                required: true,
+                default: "",
+                help: "The elevation model to check. Thresholds are in its elevation unit (metres by default).",
+            },
+            P { name: "band", label: "Band", kind: K::Number, required: false, default: "1", help: "1-based band of elevations." },
+            P {
+                name: "stepRatio",
+                label: "Step Ratio",
+                kind: K::Number,
+                required: false,
+                default: "5",
+                help: "A step is a drop to a neighbour more than this many times the drops just before and after it on the same line, so a cliff whose face goes on dropping is not one.",
+            },
+            P {
+                name: "stepHeight",
+                label: "Step Height",
+                kind: K::Number,
+                required: false,
+                default: "20",
+                help: "The least drop that is a step.",
+            },
+            P {
+                name: "spikeHeight",
+                label: "Spike Height",
+                kind: K::Number,
+                required: false,
+                default: "30",
+                help: "A cell this far above the median of its eight neighbours is a spike, this far below a pit.",
+            },
+            P {
+                name: "lowest",
+                label: "Lowest Elevation",
+                kind: K::Number,
+                required: false,
+                default: "-500",
+                help: "Values below this are out of range (a no-data such as -32768 or -9999 the file doesn't declare).",
+            },
+            P {
+                name: "highest",
+                label: "Highest Elevation",
+                kind: K::Number,
+                required: false,
+                default: "9000",
+                help: "Values above this are out of range.",
+            },
+            P {
+                name: "runLength",
+                label: "Flat Run Length",
+                kind: K::Number,
+                required: false,
+                default: "100",
+                help: "A run of this many cells along a row holding the band's lowest or highest value is a flat run: an undeclared no-data, or water held level at the edge of the range.",
+            },
+            P { name: "output", label: "Output Name", kind: K::Text, required: false, default: "", help: "Output point layer name." },
+        ],
+        run: check_dem::run,
     },
     ToolSpec {
         id: "zonalStats",
@@ -11444,6 +11513,11 @@ mod tests {
         let mut ran = 0;
         for spec in TOOLS {
             if !spec.params.iter().any(|p| p.name.eq_ignore_ascii_case("output") && matches!(p.kind, K::Text)) {
+                continue;
+            }
+            // `inputs()` holds no raster, so a tool that reads one stops before it makes anything:
+            // it isn't counted among those expected to run here.
+            if spec.params.iter().any(|p| p.required && matches!(p.kind, K::RasterLayer)) {
                 continue;
             }
             tested += 1;

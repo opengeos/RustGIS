@@ -7702,6 +7702,81 @@ fn custom_projections_switch_keep_scale_query_and_render() {
     }
 }
 
+/// A Shaded Relief drawn from a band holding values no elevation has (an undeclared no-data of
+/// -32768, a height of 65535) says so and names them; a clean band, or one whose no-data is
+/// declared, says nothing (#3151).
+#[test]
+fn shaded_relief_names_values_no_elevation_has() {
+    let dir = std::env::temp_dir().join(format!("rustgis-engine-relief-values-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut s = Session::new(Project::default());
+    for (name, head, values, said) in [
+        (
+            "hole.asc",
+            "",
+            "812 815 -32768
+809 811 814
+806 808 810",
+            Some("as low as -32768"),
+        ),
+        (
+            "high.asc",
+            "",
+            "812 815 65535
+809 811 814
+806 808 810",
+            Some("as high as 65535"),
+        ),
+        (
+            "clean.asc",
+            "",
+            "812 815 818
+809 811 814
+806 808 810",
+            None,
+        ),
+        (
+            "declared.asc",
+            "NODATA_value -32768
+",
+            "812 815 -32768
+809 811 814
+806 808 810",
+            None,
+        ),
+    ] {
+        let path = dir.join(name);
+        std::fs::write(
+            &path,
+            format!(
+                "ncols 3
+nrows 3
+xllcorner 10
+yllcorner 40
+cellsize 0.001
+{head}{values}"
+            ),
+        )
+        .unwrap();
+        let id = s.run("layer.addData", &json!({"path": path})).unwrap()["layer"].as_u64().unwrap();
+        let mark = s.notice_mark();
+        s.run("raster.symbology", &json!({"layer": id, "type": "shadedRelief"})).unwrap();
+        let notice = s.notices_since(mark).iter().find(|n| n.text.contains("holds values no elevation has")).map(|n| n.text.clone());
+        match said {
+            Some(values) => {
+                let notice = notice.unwrap_or_else(|| panic!("{name}: {:?}", s.notices_since(mark)));
+                assert!(notice.contains(values) && notice.contains("Check DEM (checkDem)"), "{notice}");
+            }
+            None => assert_eq!(notice, None, "{name}"),
+        }
+        // Another symbology says nothing of it.
+        let mark = s.notice_mark();
+        s.run("raster.symbology", &json!({"layer": id, "type": "stretch"})).unwrap();
+        assert!(!s.notices_since(mark).iter().any(|n| n.text.contains("no elevation has")), "{name}");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// Shaded Relief's cast shadows: set, kept when left out, clamped, a new one without; saved with
 /// the project only when there are some, and drawn in an export (waited for).
 #[test]

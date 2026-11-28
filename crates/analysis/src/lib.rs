@@ -48,8 +48,9 @@ pub use density::{
 pub use parallel::scratch_budget;
 pub use parameters::StatisticList;
 pub use tools::{
-    SimplifyNotes, TOOLS, find_field_case_insensitive, holds_coordinates, in_its_units, layer_raster_crs, max_buffer_bytes, min_pad,
-    param_applies, past_pole, points_from, points_in, projected_crs, raster_crs, raster_crs_in, simplify_geometry, zonal_bands,
+    PLAUSIBLE_ELEVATION, SimplifyNotes, TOOLS, find_field_case_insensitive, holds_coordinates, in_its_units, layer_raster_crs,
+    max_buffer_bytes, min_pad, param_applies, past_pole, points_from, points_in, projected_crs, raster_crs, raster_crs_in,
+    simplify_geometry, zonal_bands,
 };
 
 use rustgis_data::Dataset;

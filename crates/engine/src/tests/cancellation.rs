@@ -372,6 +372,7 @@ pub(super) fn long_commands(boundaries: bool) {
         ("kernelDensity", json!({"input": "Cities", "crs": "EPSG:3857", "pixelSize": if boundaries { 2000 } else { 1000000 }})),
         ("kriging", json!({"input": "Cities", "field": "pop_max", "pixelSize": if boundaries { 0.01 } else { 1.0 }})),
         ("tabulateArea", json!({"raster": dem, "zones": "Countries"})),
+        ("checkDem", json!({"input": dem})),
         ("tabulateIntersection", json!({"zones": "Countries", "classes": "Squares", "includeEmptyZones": true})),
         ("serviceArea", json!({"network": "Rivers", "facilities": "Cities", "breaks": "50", "snapDistance": 100000})),
         ("odCostMatrix", json!({"network": "Rivers", "origins": "Cities", "destinations": "Cities", "count": 1, "snapDistance": 100000})),

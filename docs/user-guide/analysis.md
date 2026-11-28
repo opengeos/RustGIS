@@ -469,6 +469,7 @@ Use these ids in `gp.run`'s `tool` parameter (`gp.tools` lists the available too
 | Ordinary Kriging | `kriging` | Analysis › Interpolation |
 | Zonal Statistics | `zonalStats` | Analysis › Raster |
 | Tabulate Area | `tabulateArea` | Analysis › Raster |
+| Check DEM | `checkDem` | Analysis › Terrain |
 | Kernel Density | `kernelDensity` | Analysis › Density |
 
 **Raster to PMTiles** (`rasterToPmtiles`) writes Web Mercator PNG tiles using the raster's current
@@ -2475,6 +2476,48 @@ refuses more than 1,000 class columns or 10 million output values. On the deskto
 the background with progress and Cancel; independent zones use several threads within the
 mask memory budget. Each zone's mask is filled as one step before its cells are scanned, so
 Cancel can wait for that mask fill to finish.
+
+## Checking an elevation model
+
+**Check DEM** (`checkDem`) looks for what a relief shading would show glaring and a stretched grey
+raster hides: seams, stripes, spikes and pits, cliffs at the edge of a reservoir in a surface
+model, and no-data the file doesn't declare. It writes a point layer, one point per finding, with
+`kind`, `size`, `unit` (`elevation` for a height, `cells` for a run) and the `elevation` there,
+and a summary of the counts per kind and the share of the model's cells affected. It reports and
+changes nothing: fill or smooth with the tools made for that, or mask the values with
+`raster.mask`.
+
+- **step**: a cell whose drop to a neighbour is more than `stepHeight` (default 20) and more than
+  `stepRatio` (default 5) times the drops just before and just after it on the same line (from
+  the cell behind it, and from the neighbour to the one beyond). A cliff, whose face goes on
+  dropping, is not one; a seam between two tiles at different levels is. Its `size` is the drop.
+- **spike** and **pit**: a cell more than `spikeHeight` (default 30) above or below the median of
+  its eight neighbours. Its `size` is how far.
+- **out of range**: a run along a row of values below `lowest` (default −500) or above `highest`
+  (default 9,000), such as −32768 or −9999 written for no-data. Its `size` is the run's length in
+  cells. Those values aren't compared with their neighbours, so a hole of them isn't also a field
+  of pits.
+- **flat run**: a run of at least `runLength` (default 100) cells along a row holding the band's
+  lowest or highest value: a no-data of 0, or the sea held at 0. A lake held level at any other
+  value is not one.
+
+Thresholds are in the model's elevation unit; the defaults are metres. Cells at the edge, or next
+to no-data or a value out of range, lack the neighbours the spike and pit rule compares, and the
+summary says how many. The layer holds the first 100,000 findings, from the top row down; past
+that the rest are counted in the summary and a notice. A model held as an overview of a larger
+file is checked as it is held, and a notice says so.
+
+The defaults were set on real models (#3151): on a 1-second SRTM tile of the Quadrilátero
+Ferrífero, 82% of the steps and 88% of the spikes and pits found lie within a cell of where SRTM
+and the Copernicus 30 m model differ by more than 10 m (12% of all cells do), and the Copernicus tile shows its steps
+along a reservoir's shore; on the ANADEM terrain model of the Serra do Brigadeiro there are 16
+steps a million cells, on rock walls, and no spikes or pits.
+
+```json
+{"tool":"checkDem","params":{"input":"srtm","stepHeight":10,"output":"srtm_findings"}}
+```
+
+On the desktop it runs in the background with progress and Cancel, on several threads.
 
 ## Zonal statistics and polygon clipping
 
