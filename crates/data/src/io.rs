@@ -230,6 +230,16 @@ pub struct LayerRead {
     pub dataset: Dataset,
     pub report: ReadReport,
     pub styles: Vec<(String, crate::kml::Style)>,
+    /// Notices shared with other layers from this file. When present, Add Data can pick a layer
+    /// using these notices and its own report, without borrowing another layer's report.
+    pub sibling_messages: Option<std::sync::Arc<crate::loss::Notes>>,
+}
+
+impl LayerRead {
+    /// A layer read without styles or notices shared with other layers.
+    pub fn plain(dataset: Dataset, report: ReadReport) -> Self {
+        Self { dataset, report, styles: Vec::new(), sibling_messages: None }
+    }
 }
 
 /// Whether a file holds several layers ([`read_layers`] reads them all): a zip, KML, KMZ, GPX or
@@ -278,8 +288,9 @@ fn read_city_member(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<V
 }
 
 /// Reads every layer of a file held in memory: the Shapefiles and other files of a zip, a KML or
-/// KMZ's points, lines and polygons (with their styles), or a GPX's waypoints, routes, tracks and
-/// track points. Other files give their one layer. A file read as it is added (KML and KMZ,
+/// KMZ's points, lines and polygons (with their styles), a GPX's waypoints, routes, tracks and
+/// track points, or a GML collection's layers by feature type and geometry property. A file
+/// read as it is added (KML and KMZ,
 /// LandXML, RSS, Atom, GeoRSS, XML that isn't a city model) stays within [`BYTES_FLOOR`], as
 /// before #2408; the others take [`max_bytes`].
 pub fn read_layers(file_name: &str, bytes: &[u8]) -> Result<Vec<LayerRead>> {
@@ -293,13 +304,12 @@ pub fn read_layers(file_name: &str, bytes: &[u8]) -> Result<Vec<LayerRead>> {
     if bytes.len() as u64 > max {
         return Err(DataError::Format(file_size_error(file_name, max)));
     }
-    let plain =
-        |v: Vec<(Dataset, ReadReport)>| v.into_iter().map(|(dataset, report)| LayerRead { dataset, report, styles: Vec::new() }).collect();
+    let plain = |v: Vec<(Dataset, ReadReport)>| v.into_iter().map(|(d, r)| LayerRead::plain(d, r)).collect();
     let mut out: Vec<LayerRead> = match ext.as_str() {
         "zip" => read_zip_layers(file_name, bytes, &CsvOptions::default())?,
         "kml" | "kmz" => crate::kml::read(file_name, bytes)?
             .into_iter()
-            .map(|l| LayerRead { dataset: l.dataset, report: l.report, styles: l.styles })
+            .map(|l| LayerRead { dataset: l.dataset, report: l.report, styles: l.styles, sibling_messages: None })
             .collect(),
         "gpx" => plain(crate::gpx::read(file_name, bytes)?),
         "rss" | "atom" | "georss" => plain(crate::georss::read(file_name, bytes)?),
@@ -318,7 +328,7 @@ pub fn read_layers(file_name: &str, bytes: &[u8]) -> Result<Vec<LayerRead>> {
             } else if text.contains("<kml") {
                 crate::kml::read(file_name, bytes)?
                     .into_iter()
-                    .map(|l| LayerRead { dataset: l.dataset, report: l.report, styles: l.styles })
+                    .map(|l| LayerRead { dataset: l.dataset, report: l.report, styles: l.styles, sibling_messages: None })
                     .collect()
             } else {
                 return Err(DataError::Format(format!(
@@ -328,7 +338,7 @@ pub fn read_layers(file_name: &str, bytes: &[u8]) -> Result<Vec<LayerRead>> {
         }
         // A CityGML city model, or the features of a collection.
         "gml" if crate::citygml::looks_like_citygml(bytes) => plain(crate::citygml::read(file_name, bytes, None)?),
-        "gml" => plain(crate::gml::read(file_name, bytes)?),
+        "gml" => crate::gml::read_layers(file_name, bytes)?,
         "dxf" => plain(crate::dxf::read(file_name, bytes, &crate::dxf::Options::default())?),
         // OpenStreetMap PBF, not a vector tile (`.pbf` too).
         "pbf" if crate::osm::looks_like_osm_pbf(bytes) => plain(crate::osm::read(file_name, bytes)?),
@@ -4147,7 +4157,7 @@ fn read_zip_layers_budget(file_name: &str, bytes: &[u8], opts: &CsvOptions, budg
         match read_shapefile_parts(ShapefileParts { shp, shx, dbf, prj, cpg }, &name, crs) {
             Ok((mut dataset, report)) => {
                 dataset.source = Some(format!("{file_name}/{n}"));
-                out.push(LayerRead { dataset, report, styles: Vec::new() });
+                out.push(LayerRead::plain(dataset, report));
             }
             Err(DataError::Cancelled) => return Err(DataError::Cancelled),
             Err(e) => skipped.push(format!("{n} ({e})")),
@@ -4169,7 +4179,7 @@ fn read_zip_layers_budget(file_name: &str, bytes: &[u8], opts: &CsvOptions, budg
         match crate::mapinfo::read_bytes(&mif, mid.as_deref(), &name) {
             Ok((mut dataset, report)) => {
                 dataset.source = Some(format!("{file_name}/{n}"));
-                out.push(LayerRead { dataset, report, styles: Vec::new() });
+                out.push(LayerRead::plain(dataset, report));
             }
             Err(DataError::Cancelled) => return Err(DataError::Cancelled),
             Err(e) => skipped.push(format!("{n} ({e})")),
@@ -4204,9 +4214,7 @@ fn read_zip_layers_budget(file_name: &str, bytes: &[u8], opts: &CsvOptions, budg
             continue;
         }
         let leaf = n.rsplit('/').next().unwrap_or(&n);
-        let plain = |reads: Vec<(Dataset, ReadReport)>| {
-            reads.into_iter().map(|(dataset, report)| LayerRead { dataset, report, styles: Vec::new() }).collect::<Vec<_>>()
-        };
+        let plain = |reads: Vec<(Dataset, ReadReport)>| reads.into_iter().map(|(d, r)| LayerRead::plain(d, r)).collect::<Vec<_>>();
         let mut table = false;
         // A city model has many layers.
         let read = if ext_of(&n) == "dbf" {
