@@ -71,9 +71,18 @@ pub(crate) fn gives_picture(p: &Value) -> bool {
 
 /// The picture a command's `image` or `path` gives, none when it gives neither; refused when both
 /// are given, either is of the wrong kind, the file can't be read or isn't a PNG or JPEG of at most
-/// 16 MiB, or the image can't be drawn. Reads the file on the command's thread, as
-/// `layout.addElement` always has: at most 16 MiB, then decoded once to check that it draws (the
-/// decoded copy is kept for the page).
+/// 16 MiB, or the image can't be drawn.
+///
+/// Runs on the command's thread (the UI thread in the app): bounded work, not work that grows with
+/// a layer. The file is read whole, as `layout.addElement` always read it, at most 16 MiB
+/// (`graphics::MAX_PICTURE`). The image is then decoded once, here, because whether it draws
+/// decides whether the command is taken: one that can't be drawn is refused, the layout left as it
+/// was, rather than added or kept as a grey box. The decoder doesn't start on an image declaring
+/// over [`rustgis_render::layout::PICTURE_MAX_DECLARED`] pixels a side and allocates at most
+/// [`rustgis_render::layout::PICTURE_MAX_DECODED_MB`] MiB. The decoded copy stays in the cache of
+/// decoded pictures of the thread that decoded it ([`rustgis_render::layout::picture_draws`]): the
+/// Layout view draws on the same thread and finds it there; an export the app writes on another
+/// thread decodes it again, once, on that thread.
 pub(in crate::cmd::layout) fn picture_given(p: &Value) -> Result<Option<GivenPicture>, String> {
     let given = |k: &str| p.get(k).filter(|v| !v.is_null());
     if given("image").is_some() && given("path").is_some() {
