@@ -115,6 +115,7 @@ diagram cut to a circle or to polygons), `terrain-block-polygon` (one cut to pol
 `terrain-block-water` (water in a block diagram's walls),
 `terrain-block-water-bed` (that water's floor read from a bed raster),
 `terrain-block-walls-layer` (the layer a block diagram's walls are coloured by),
+`terrain-block-walls-top` (the band along the top of its walls from a second layer),
 `shaded-relief-effects` (cast shadows, sky visibility, fill light or rock colour),
 `shaded-relief-light` (a Shaded Relief's ambient or balanced light),
 `shaded-relief-shadow-softness` (a softness stored for a Shaded Relief's cast shadows, or set by a saved step;
@@ -155,6 +156,10 @@ Every capability a saved command can need, except `table-export-order` (no tool 
 `share.exportTable`), also reads a `model.run` whose `graph` is given inline, in a saved task step,
 script line, notebook cell or history entry: each of the graph's tool nodes needs what the same
 tool as a step needs.
+
+`report.existingTemplate` imports a layout file as `layout.import` does. Wherever this section says
+a saved `layout.import` whose `text` has something requires a capability, so does a saved
+`report.existingTemplate` step that passes it as `text` or as base64 `data`.
 
 Projects with a background on a layout element, or a saved task step, script, notebook command
 cell or history entry that gives one (`layout.addElement` or `layout.update` with a
@@ -316,6 +321,13 @@ layer's labels and saving the legend again without its own (#3187). Saved `layou
 an empty object need nothing. A saved `layout.import` whose `text` has such a legend requires it as
 well, and a layout file (`.rgislayout`) with one lists it in its header.
 
+Projects with a legend that shows feature counts (`show_counts` on a legend element) require
+`layout-legend-counts`, so an older reader refuses them instead of drawing no numbers and saving
+the legend again without the setting (#3237). Saved `layout.addElement` and `layout.update`
+commands with `"showCounts": true` require it too; `false` and `null` need nothing. A saved
+`layout.import` or `report.existingTemplate` carrying such a legend requires it as well, and a
+layout file (`.rgislayout`) with one lists it in its header.
+
 Projects with a scale bar that has subdivisions, divisions before zero, labels below, a unit
 label of its own or placed elsewhere, decimals or a fit other than the defaults
 (`subdivisions`, `divisions_before_zero`, `label_position`, `unit_label`, `unit_label_position`,
@@ -349,7 +361,7 @@ saved presentation with one in a map page's title requires it too, and so does a
 `presentation.mapPage` or `presentation.updatePage` whose `title` holds one, or a saved
 `presentation.import` whose `text` has such a map page (a blank page's text is drawn with no map
 frame, so no figure fills in there). Other braces (`{scale}`, `{foo}`, `{count:}`) need nothing.
-Files read by `path` or `data` are not looked into, as for every other layout capability, and a
+Files read by `path` are not looked into, as for every other layout capability, and a
 presentation file (`.rgispres`) has no header to list a capability in, so an older reader opens one
 with the token printed as written.
 
