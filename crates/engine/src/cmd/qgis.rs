@@ -107,10 +107,9 @@ fn marker_images() -> impl FnMut(&str, Option<&qgis::SvgColours>) -> Result<(Str
 }
 
 /// Reads a raster image or SVG marker's image for the importer: its `base64:` text, or its file's,
-/// an SVG marker's `param(…)` values set from `colours` (the last of what it returns says whether
-/// it had any),
-/// within what a picture marker keeps (`symbology::MAX_PICTURE_BYTES` of base64, 2 MiB), checked
-/// as `layer.marker` checks an image; with its height over its width. Its base64's length is added
+/// within what a picture marker keeps (`symbology::MAX_PICTURE_BYTES` of base64, 2 MiB), an SVG
+/// marker's `param(…)` values set from `colours`, then checked as `layer.marker` checks an image.
+/// With it, its height over its width and whether any value was set. Its base64's length is added
 /// to `read`, or for a file that doesn't read (past the limit, or failing part way) what was read
 /// of it, so the import's bound overshoots by one file at most. Checking it decodes it, within
 /// `render::MARKER_PIXELS` and what the run has left of `render::RUN_MARKER_PIXELS`, as

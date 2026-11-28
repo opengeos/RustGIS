@@ -1020,7 +1020,7 @@ pub(super) enum Paint {
     /// A raster image marker's: the file as it is.
     Raster,
     /// An SVG marker's, for any colours: one with no `param(…)` value, or one not drawn.
-    Svg,
+    AnyColours,
     /// An SVG marker's with these colours set in it ([`SvgColours`], its lengths by their bits).
     In(Rgba, Rgba, u32, u32),
 }
@@ -1030,7 +1030,7 @@ impl Paint {
     /// colours' first, then the one for any.
     fn of(colours: Option<&SvgColours>) -> [Paint; 2] {
         match colours {
-            Some(c) => [Paint::In(c.fill, c.outline, c.outline_width.to_bits(), c.size.to_bits()), Paint::Svg],
+            Some(c) => [Paint::In(c.fill, c.outline, c.outline_width.to_bits(), c.size.to_bits()), Paint::AnyColours],
             None => [Paint::Raster, Paint::Raster],
         }
     }

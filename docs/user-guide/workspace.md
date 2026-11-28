@@ -439,7 +439,8 @@ approximated (vector tile styles, text matched ignoring letter case, a memory la
 raster image and SVG markers whose image RustGIS can't use as circles (one at a web address, which it
 doesn't fetch, on a network share (`\\host\share`, `file://host/share`), a relative name with `://` in it, or kept inside a `.qgz`; one a field or an expression gives, which RustGIS doesn't evaluate; a file that doesn't open or isn't a PNG, JPEG or SVG; one past
 2 MiB of base64, 2048 × 2048 pixels or as much to draw, an SVG with filters, text, images, animation or links to other files, the images it keeps or the pixels or memory of marker images it decodes
-until it restarts; an SVG of QGIS's own library, which RustGIS doesn't bring), SVG markers with parameters of their own drawn without them, image markers of a fixed aspect ratio in their image's own,
+until it restarts; an SVG of QGIS's own library, which RustGIS doesn't bring),
+SVG markers with parameters of their own drawn without them, image markers of a fixed aspect ratio in their image's own,
 see-through ones opaque and those anchored off their centre along lines centred,
 dashed polygon outlines solid, label halos with sharp corners drawn round and blended ones drawn
 over the map, label backgrounds of other shapes drawn as rectangles, label distances from lines
