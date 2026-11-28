@@ -4,7 +4,8 @@
 //! [`NAMESPACE_WORK`] times its size to resolve, before parsing it. Nesting thousands of elements
 //! deep exhausts the stack while the document is parsed or walked, and crafted namespace
 //! declarations (or attributes) make the parse grow as their number times the elements they stand
-//! around; a hostile file must be an error, never a crash.
+//! around; a hostile file must be an error, never a crash. Where a DTD is allowed, so are entities
+//! that expand to far more than the document is long.
 
 use std::collections::HashMap;
 
@@ -84,7 +85,8 @@ fn too_much() -> String {
 /// rather than too shallow, and too much work rather than too little (an attribute with no prefix
 /// counts as looked up). With a DTD allowed, an entity whose value holds markup is refused too:
 /// expanded, it would nest in ways the text doesn't show; so are entities whose uses after the
-/// DOCTYPE (in comments and CDATA too) expand to more than [`ENTITY_EXPANSION`] bytes a byte.
+/// DOCTYPE (in comments and CDATA too) expand to more than [`ENTITY_EXPANSION`] bytes a byte, and
+/// than [`MIN_ENTITY_EXPANSION`].
 /// Returns the steps of namespace work it counted.
 pub fn check_limits(text: &str, allow_dtd: bool) -> Result<u64, String> {
     let b = text.as_bytes();
@@ -95,6 +97,7 @@ pub fn check_limits(text: &str, allow_dtd: bool) -> Result<u64, String> {
     let mut declared: Vec<Vec<&[u8]>> = Vec::new();
     let mut prefixes: HashMap<&[u8], usize> = HashMap::new();
     let mut work = 0u64;
+    let mut counted = false;
     let limit = namespace_budget(text.len());
     let find = |from: usize, pat: &[u8]| -> Option<usize> { b.get(from..)?.windows(pat.len()).position(|w| w == pat).map(|p| from + p) };
     while i < b.len() {
@@ -136,8 +139,17 @@ pub fn check_limits(text: &str, allow_dtd: bool) -> Result<u64, String> {
                     j = find(j + 2, b"?>").map(|e| e + 2).ok_or("the document's DOCTYPE has an unclosed instruction")?;
                     continue;
                 }
-                if allow_dtd && quote.is_none() {
-                    entities.extend(b.get(j..).and_then(entity));
+                if quote.is_none() && bracket > 0 {
+                    let at = b.get(j..).unwrap_or(&[]);
+                    // The parser ends these at their first `>`, in quotes or not: so does this, to
+                    // read what follows as it does.
+                    if [&b"<!ELEMENT"[..], b"<!ATTLIST", b"<!NOTATION"].iter().any(|d| at.starts_with(d)) {
+                        j = find(j, b">").map(|e| e + 1).ok_or("the document's DOCTYPE never ends")?;
+                        continue;
+                    }
+                    if allow_dtd {
+                        entities.extend(entity(at));
+                    }
                 }
                 match (quote, c) {
                     (Some(q), c) if c == q => quote = None,
@@ -161,7 +173,8 @@ pub fn check_limits(text: &str, allow_dtd: bool) -> Result<u64, String> {
                 return Err("the document declares entities holding markup, which aren't read".into());
             }
             let most = (text.len() as u64).saturating_mul(ENTITY_EXPANSION).max(MIN_ENTITY_EXPANSION);
-            if !entities.is_empty() && expansion(&entities, b.get(j..).unwrap_or(&[])) > most {
+            // Once: a document has one DOCTYPE, and each count reads all that follows.
+            if !entities.is_empty() && !std::mem::replace(&mut counted, true) && expansion(&entities, b.get(j..).unwrap_or(&[])) > most {
                 return Err(TOO_MUCH_ENTITY_TEXT.into());
             }
             i = j + 1;
@@ -260,12 +273,20 @@ fn close(prefixes: &mut HashMap<&[u8], usize>, prefix: &[u8]) {
     }
 }
 
-/// The name and quoted value of the general entity `decl` starts by declaring, if it does.
+/// The name and quoted value of the entity `decl` starts by declaring, if it does. A parameter
+/// entity (`%`) counts too: roxmltree expands it as a general one.
 fn entity(decl: &[u8]) -> Option<(&[u8], &[u8])> {
-    let rest = decl.strip_prefix(b"<!ENTITY")?.trim_ascii_start();
-    let (name, rest) = rest.split_at(rest.iter().position(u8::is_ascii_whitespace)?);
+    let rest = decl.strip_prefix(b"<!ENTITY")?;
+    if !rest.first()?.is_ascii_whitespace() {
+        return None;
+    }
+    let rest = rest.trim_ascii_start();
+    let rest = rest.strip_prefix(b"%").map_or(rest, |r| r.trim_ascii_start());
+    // A name ends before the next declaration at the latest, so reading them all stays linear.
+    let end = rest.iter().position(|&c| c.is_ascii_whitespace() || matches!(c, b'"' | b'\'' | b'<'))?;
+    let (name, rest) = rest.split_at(end);
     let (&quote, rest) = rest.trim_ascii_start().split_first()?;
-    // A parameter entity's `%` and an external one's keyword stand where the quote would.
+    // An external entity's keyword stands where the quote would.
     if !matches!(quote, b'"' | b'\'') {
         return None;
     }
@@ -440,6 +461,23 @@ mod tests {
         for doc in [declaring(&short, &"&e;".repeat(500)), declaring(&nested, "&b;"), declaring(&long, "<a/>")] {
             assert!(parse(&doc, ParsingOptions { allow_dtd: true, ..ParsingOptions::default() }).is_ok());
         }
+        // Declared where the parser reads them: as a parameter entity, which it expands as any
+        // other, or after a declaration it ends at a `>` inside quotes.
+        let uses = format!(r#"<r v="{}"/>"#, "&e;".repeat(4000));
+        let value = "a".repeat(100_000);
+        for subset in
+            [format!(r#"<!ENTITY % e "{value}">"#), format!(r#"<!ATTLIST r x CDATA "> <!ENTITY e '{value}'> <!ATTLIST r y CDATA "> "#)]
+        {
+            let doc = format!("<!DOCTYPE r [{subset}]>{uses}");
+            assert_eq!(check_limits(&doc, true).unwrap_err(), TOO_MUCH_ENTITY_TEXT);
+        }
+        // Counted in time that grows with the document's length, however it is broken.
+        let started = std::time::Instant::now();
+        for doc in [format!("<!DOCTYPE r [{} ]><r/>", "<!ENTITY".repeat(50_000)), "<!x [<!ENTITY a ''>]>".repeat(50_000)] {
+            // Refused or not, which the parser decides: only the time is looked at.
+            let _ = check_limits(&doc, true);
+        }
+        assert!(started.elapsed() < std::time::Duration::from_secs(1), "{:?}", started.elapsed());
         // A service's capabilities are held to it too.
         let capabilities = format!(r#"<!DOCTYPE WMS_Capabilities [{long}]><WMS_Capabilities v="{}"/>"#, "&e;".repeat(4000));
         let refused = crate::ogc::parse("https://x.example/wms", capabilities.as_bytes()).unwrap_err();

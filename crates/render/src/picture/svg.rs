@@ -34,9 +34,9 @@ pub(super) enum Refusal {
     /// It has more to draw than the cap given, or more elements than [`ELEMENTS`].
     TooMuch,
     /// Its style sheets and `style` attributes come to more than [`STYLE_UNITS`], the attributes
-    /// of its elements to more than [`ATTRIBUTE_PAIRS`], its namespaces to more than
-    /// [`rustgis_data::xml::check_limits`] allows, as what its entities expand to may, or an entity of it holds a tag, whose
-    /// expansion no count sees: more to read than the readers do in time.
+    /// of its elements to more than [`ATTRIBUTE_PAIRS`], its namespaces or what its entities
+    /// expand to more than [`rustgis_data::xml::check_limits`] allows, or an entity of it holds a
+    /// tag, whose expansion no count sees: more to read than the readers do in time.
     TooMuchToRead,
     /// It has more XML nodes than [`XML_NODES`], or nests deeper than [`DEPTH`].
     TooNested,
