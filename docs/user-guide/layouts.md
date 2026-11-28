@@ -59,11 +59,14 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
     be, a globe, an inset or none), the north arrow (auto, always or none), the legend or not, which
     can be set always on a box and to list the context layers, the colorbar and the scale bar or
     not, whether the map may be veiled for the legend's room, and the decimal mark; a choice the
-    sheet can't use is off and isn't sent. The **placement** is the arrangement (below): `best`, the
-    favourite, one by name or one saved, or **Custom**, a corner for each surround (a corner another
-    has swaps the two; on Panel, Editorial and Modular only the north arrow and scale bar take one,
-    the locator and legend sitting in the column; a surround left out in the elements takes none, as
-    a figure's locator unless asked for); a chosen one can be made the favourite, once the layout is
+    sheet can't use is off and isn't sent. Under them, the north arrow's style, the scale bar's
+    units and style, and the legend's title and columns (Auto, or 1 to 6) can be picked, and
+    layers ticked to be left out of the legend (every layer of that name). The
+    **placement** is the arrangement (below): `best`, the favourite, one by name or one saved, or
+    **Custom**, a corner for each surround (a corner another has swaps the two; on Panel, Editorial
+    and Modular only the north arrow and scale bar take one, the locator and legend sitting in the
+    column; a surround left out in the elements takes none, as a figure's locator unless asked for);
+    a chosen one can be made the favourite, once the layout is
     made. A saved one removed after it was picked is said at Create and nothing is made. A figure
     goes from its size to its map, its elements, its placement, its reference (each line typed; with
     no heading, and it can be left out) and the review, as it takes no style, accent or other text.
@@ -214,8 +217,11 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
     It uses the map's basemap, not its web tiles, in a round frame, the globe
     nearly filling it and the area outlined in red; `"inset"` shows the surrounding region (about
     four times the area across) on the map itself, outlined the same way; `"none"` (a figure's
-    default) leaves it out. The legend stops short of it; a frame with no room for a legend beside
-    it leaves the legend out, with a warning. Undo takes the globe's map away with the layout; a
+    default) leaves it out. `["inset", "globe"]` draws both side by side in the locator's corner
+    (or at the top of a style's column, sharing its width): the inset outlines the area, and the
+    globe outlines the inset. Their order in the list changes nothing, and the answer's `locator`
+    names both maps, the inset's first. The legend stops short of the locator; a frame with no room
+    for a legend beside it leaves the legend out, with a warning. Undo takes the globe's map away with the layout; a
     globe map no layout shows any more (its layout deleted) is replaced by the next sheet's rather
     than left beside it, which a warning says.
   - **The style** (`"style"`, on any sheet, portrait or landscape): `"classic"` (the default) sets
@@ -430,7 +436,7 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
     short fills each column in turn and leaves out the last rows (a **Fit**, below, can change
     that).
     A legend says when its box loses rows or closes its columns up when it is given `"columns"`,
-    `"textSize"` (`null` included), `"showNoData"`, `"labels"`, `"classLabels"`, `"fit"` or `"showLayerNames"`, and,
+    `"textSize"` (`null` included), `"showNoData"`, `"labels"`, `"classLabels"`, `"fit"`, `"showLayerNames"` or `"showCounts"`, and,
     in columns, at a text size of its own or with a fit, when its box or what it lists changes. A
     legend in one column at the default size and with no fit is told so only when given one of
     those. A manual legend is checked when it is added or changed, as it always has been, not again
@@ -456,6 +462,14 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
     and over a web layer's legend picture, is left off. A layer drawn in one symbol keeps its name
     beside its swatch, since that is what labels it; classes that carry no label of their own
     (some raster classes) are then drawn as bare swatches.
+  - **Feature counts** (`"showCounts"`, off by default): on, each class row, and the row of a
+    layer drawn in one symbol, ends in the number of features it stands for, such as
+    `Highway (12)`: those the layer's definition query, display filters and time window keep (the
+    page's in a map series), wherever the frame looks. A class with none shows `(0)` where every
+    class is listed. Rasters, web layers, size and diagram rows, streamed layers (read in place, a
+    view at a time), and Unique Values by an expression over too many features and classes show no
+    number.
+    A project with such a legend can't be opened by an older RustGIS.
   - **In scripts and files**: scripts set `"fit": "adjustSize"` and `"showLayerNames": false` on
     `layout.addElement` and `layout.update` (a scale bar's `fit` takes its own values); an unknown
     fit is refused, and `null` leaves each as it is. Each change is one undo step, and a value set
@@ -998,6 +1012,9 @@ previews, edits and plays it.
   coloured page, an **Image** page a picture with a caption, and a **Video** page a video file or
   URL with an optional poster picture.
 - Each page has a title, speaker notes and a duration (for **Play**), and can move up or down.
+- A **Map** page follows its map by name. While the project has no map of that name, the page is
+  drawn over the active map; deleting the map (or the offline area that goes with it),
+  importing a presentation that names it, or opening a project with such a page says which pages.
 - **Publish › Output › Presentation › Export Presentation** writes an HTML slideshow (arrow
   keys, `N` for notes, `P` to play; videos play in place), a PDF (kept as vectors as a layout's
   is), or the first page as PNG.

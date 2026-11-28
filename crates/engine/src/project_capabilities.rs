@@ -172,6 +172,7 @@ const COMMAND_CAPABILITIES: &[(&str, CommandCheck)] = &[
     ("layout-text-size", command_uses_text_size),
     ("layout-legend-fit", command_uses_legend_fit),
     ("layout-legend-class-labels", command_uses_legend_class_labels),
+    ("layout-legend-counts", command_uses_legend_counts),
     ("layout-picture-source", command_uses_picture_source),
     ("layout-scale-bar-details", command_uses_scale_bar_details),
     ("dggs-system", command_uses_dggs_system),
@@ -183,6 +184,7 @@ const COMMAND_CAPABILITIES: &[(&str, CommandCheck)] = &[
     ("layout-text-statistics", command_uses_text_statistics),
     ("layout-publication-parts", command_sets_publication_parts),
     ("layout-publication-legend", command_sets_publication_legend),
+    ("shaded-relief-shadow-softness", command_sets_shadow_softness),
 ];
 
 /// A saved `layout.publication` that leaves out or sets up its grid, scale bar or north arrow
@@ -211,6 +213,17 @@ fn command_sets_publication_legend(id: &str, params: &Value) -> bool {
             params.get("legend").is_some_and(|v| !v.is_null() && v.as_object().is_none_or(|o| !o.values().all(nothing)))
         }
         "script.run" => params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, command_sets_publication_legend)),
+        _ => false,
+    }
+}
+
+/// A saved `raster.symbology` that sets a Shaded Relief's shadow softness (#3144): an older reader
+/// runs it without the key, saying nothing, so the shadows would be traced at the default disc.
+/// `null` asks for that default.
+fn command_sets_shadow_softness(id: &str, params: &Value) -> bool {
+    match id {
+        "raster.symbology" => params.get("shadowSoftness").is_some_and(|v| !v.is_null()),
+        "script.run" => params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, command_sets_shadow_softness)),
         _ => false,
     }
 }
@@ -294,11 +307,11 @@ fn command_uses_text_statistics(id: &str, params: &Value) -> bool {
         "presentation.mapPage" | "presentation.updatePage" => params.get("title").is_some_and(holds_statistic),
         // A layout file, read as `layout.import` reads it, which `report.existingTemplate` also does.
         "layout.import" | "report.existingTemplate" => imported_layout_uses(params, &STATISTIC_KEYS, text_statistics),
-        "presentation.import" => params
-            .get("text")
-            .and_then(Value::as_str)
+        "presentation.import" => crate::cmd::items::inline_text(params)
+            .ok()
+            .flatten()
             .filter(|t| STATISTIC_KEYS.iter().any(|key| t.contains(key)) || t.contains('\\'))
-            .and_then(|t| serde_json::from_str::<rustgis_map::presentation::Presentation>(t).ok())
+            .and_then(|t| serde_json::from_str::<rustgis_map::presentation::Presentation>(&t).ok())
             .is_some_and(|p| presentation_uses_text_statistics(&p)),
         "script.run" => params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, command_uses_text_statistics)),
         _ => false,
@@ -388,7 +401,9 @@ fn command_uses_text_size(id: &str, params: &Value) -> bool {
         "layout.update" => {
             params.get("textSize").is_some_and(|v| !v.is_null()) || params.get("grid").is_some_and(|g| sized(g, "labelSize", GRID_LABEL_PT))
         }
-        "layout.import" => imported_layout_uses(params, &["\"text_size\"", "\"label_size\""], |e| e.kind.has_custom_text_size()),
+        "layout.import" | "report.existingTemplate" => {
+            imported_layout_uses(params, &["\"text_size\"", "\"label_size\""], |e| e.kind.has_custom_text_size())
+        }
         "script.run" => params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, command_uses_text_size)),
         _ => false,
     }
@@ -410,8 +425,8 @@ fn legends_fitting(e: &rustgis_map::layout::Element) -> bool {
 /// fewer and `null` keep a legend as an older reader draws it; a scale bar's fit names aren't a
 /// legend's, and a value the command refuses changes nothing, so neither needs it. A key given to
 /// another kind counts too, though its command refuses it: an over-count that asks for the
-/// capability sooner, never a missing one. A `layout.import` requires it for such a legend once
-/// its layout is read into range, so a fit or layer-names value that isn't one, read as the
+/// capability sooner, never a missing one. An imported layout file requires it for such a legend
+/// once its layout is read into range, so a fit or layer-names value that isn't one, read as the
 /// default, needs nothing.
 fn command_uses_legend_fit(id: &str, params: &Value) -> bool {
     use crate::cmd::layout::{legend_columns_param, legend_fit_param, legend_names_param};
@@ -453,6 +468,23 @@ fn legend_labels_classes(e: &rustgis_map::layout::Element) -> bool {
     e.kind.legend_labels_classes()
 }
 
+/// A layout command that makes a legend show feature counts (#3237): an older reader ignores
+/// `showCounts`, and a legend saved with it, drawing no numbers. `false` and `null` ask for what
+/// it draws.
+fn command_uses_legend_counts(id: &str, params: &Value) -> bool {
+    match id {
+        "layout.addElement" | "layout.update" => crate::cmd::layout::legend_counts_param(params) == Ok(Some(true)),
+        "layout.import" | "report.existingTemplate" => imported_layout_uses(params, &["\"show_counts\""], legend_counts_features),
+        "script.run" => params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, command_uses_legend_counts)),
+        _ => false,
+    }
+}
+
+/// Whether a layout element is a legend that shows feature counts.
+fn legend_counts_features(e: &rustgis_map::layout::Element) -> bool {
+    e.kind.legend_counts_features()
+}
+
 /// Whether a layout element is a picture that keeps the file it was read from: an older reader
 /// would draw it without its file, the word Picture where it has no image, and save it again
 /// without the file.
@@ -484,7 +516,7 @@ fn command_uses_picture_source(id: &str, params: &Value) -> bool {
 fn command_uses_frame_border(id: &str, params: &Value) -> bool {
     match id {
         "layout.update" => params.get("border").is_some_and(|b| !b.is_null()),
-        "layout.import" => imported_layout_uses(params, &["\"border_"], |e| e.kind.has_custom_border()),
+        "layout.import" | "report.existingTemplate" => imported_layout_uses(params, &["\"border_"], |e| e.kind.has_custom_border()),
         "script.run" => params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, command_uses_frame_border)),
         _ => false,
     }
@@ -504,13 +536,13 @@ fn command_uses_section(id: &str, params: &Value) -> bool {
 }
 
 /// A `layout.page` command that gives the page a colour other than white (#2855), read as the
-/// command reads it: an older reader ignores `color` and opens the page white. A `layout.import`
-/// whose layout has one needs it too.
+/// command reads it: an older reader ignores `color` and opens the page white. An imported layout
+/// file that has one needs it too.
 fn command_colours_the_page(id: &str, params: &Value) -> bool {
     match id {
         "layout.page" => crate::cmd::opaque_color(params, "color")
             .is_ok_and(|c| c.flatten().is_some_and(|c| c != rustgis_map::Rgba::rgb(0xFF, 0xFF, 0xFF))),
-        "layout.import" => imported_layout(params, &["\"paper\""]).is_some_and(|mut l| {
+        "layout.import" | "report.existingTemplate" => imported_layout(params, &["\"paper\""]).is_some_and(|mut l| {
             l.clamp();
             l.paper.is_some()
         }),
@@ -538,7 +570,7 @@ fn command_uses_blank_paper(id: &str, params: &Value) -> bool {
 fn command_uses_element_background(id: &str, params: &Value) -> bool {
     match id {
         "layout.addElement" | "layout.update" => params.get("background").is_some_and(|b| !b.is_null()),
-        "layout.import" => imported_layout_uses(params, &["\"background\""], |e| e.background.is_some()),
+        "layout.import" | "report.existingTemplate" => imported_layout_uses(params, &["\"background\""], |e| e.background.is_some()),
         "script.run" => params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, command_uses_element_background)),
         _ => false,
     }
@@ -549,7 +581,7 @@ fn command_uses_element_background(id: &str, params: &Value) -> bool {
 /// and `layout.update`, so such a command fails there instead of losing the ink.
 fn command_uses_element_ink(id: &str, params: &Value) -> bool {
     match id {
-        "layout.import" => imported_layout_uses(params, &["\"color\""], |e| e.kind.ink().is_some()),
+        "layout.import" | "report.existingTemplate" => imported_layout_uses(params, &["\"color\""], |e| e.kind.ink().is_some()),
         "script.run" => params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, command_uses_element_ink)),
         _ => false,
     }
@@ -566,7 +598,7 @@ fn wraps(e: &rustgis_map::layout::Element) -> bool {
 fn command_uses_element_wrap(id: &str, params: &Value) -> bool {
     match id {
         "layout.addElement" | "layout.update" => params.get("wrap").and_then(crate::cmd::bool_value) == Some(true),
-        "layout.import" => imported_layout_uses(params, &["\"wrap\""], wraps),
+        "layout.import" | "report.existingTemplate" => imported_layout_uses(params, &["\"wrap\""], wraps),
         "script.run" => params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, command_uses_element_wrap)),
         _ => false,
     }
@@ -586,9 +618,9 @@ fn text_blocks(e: &rustgis_map::layout::Element) -> bool {
 /// in any case) and `null`, which leaves a text as it is, keep a text as an older reader draws it.
 /// A value the command refuses on a text needs nothing either: the command changes nothing. The
 /// keys are read here alone, so a block key given to another kind counts too, though its command
-/// refuses it: an over-count that asks for the capability sooner, never a missing one. A
-/// `layout.import` requires it for such a text once its layout is read into range, so a name it
-/// doesn't know or a spacing that isn't a number, read as the default, needs nothing.
+/// refuses it: an over-count that asks for the capability sooner, never a missing one. An
+/// imported layout file requires it for such a text once its layout is read into range, so a name
+/// it doesn't know or a spacing that isn't a number, read as the default, needs nothing.
 fn command_uses_text_block(id: &str, params: &Value) -> bool {
     use rustgis_map::layout::{LINE_SPACING, TextCase, TextVAlign};
     match id {
@@ -600,7 +632,9 @@ fn command_uses_text_block(id: &str, params: &Value) -> bool {
                 crate::cmd::layout::text_block_settings(&one, usual).is_ok_and(|set| set != usual)
             })
         }
-        "layout.import" => imported_layout_uses(params, &["\"valign\"", "\"line_spacing\"", "\"case\""], text_blocks),
+        "layout.import" | "report.existingTemplate" => {
+            imported_layout_uses(params, &["\"valign\"", "\"line_spacing\"", "\"case\""], text_blocks)
+        }
         "script.run" => params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, command_uses_text_block)),
         _ => false,
     }
@@ -630,7 +664,9 @@ fn command_uses_chart_data(id: &str, params: &Value) -> bool {
                 || params.get("bars").and_then(Value::as_u64).is_some_and(|n| n != CHART_BARS as u64)
                 || params.get("other").and_then(crate::cmd::bool_value) == Some(true)
         }
-        "layout.import" => imported_layout_uses(params, &["\"group\"", "\"statistic\"", "\"order\"", "\"bars\"", "\"other\""], charts_data),
+        "layout.import" | "report.existingTemplate" => {
+            imported_layout_uses(params, &["\"group\"", "\"statistic\"", "\"order\"", "\"bars\"", "\"other\""], charts_data)
+        }
         "script.run" => params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, command_uses_chart_data)),
         _ => false,
     }
@@ -661,7 +697,7 @@ fn command_uses_chart_look(id: &str, params: &Value) -> bool {
                 && (only_chart() || text("orientation").as_deref() == Some("vertical") || params.get("title").is_some_and(|t| !t.is_null()))
         }
         "layout.update" => only_chart(),
-        "layout.import" => imported_layout_uses(
+        "layout.import" | "report.existingTemplate" => imported_layout_uses(
             params,
             &["\"orientation\"", "\"values\"", "\"decimals\"", "\"title\"", "\"bar_color\"", "\"label_align\""],
             charts_look,
@@ -686,7 +722,7 @@ fn command_uses_chart_classes(id: &str, params: &Value) -> bool {
             params.get("kind").and_then(Value::as_str).is_some_and(|k| k.trim().eq_ignore_ascii_case("chart")) && classes()
         }
         "layout.update" => classes(),
-        "layout.import" => imported_layout_uses(params, &["\"classes\""], charts_classes),
+        "layout.import" | "report.existingTemplate" => imported_layout_uses(params, &["\"classes\""], charts_classes),
         "script.run" => params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, command_uses_chart_classes)),
         _ => false,
     }
@@ -706,7 +742,7 @@ fn command_uses_chart_stack(id: &str, params: &Value) -> bool {
             params.get("kind").and_then(Value::as_str).is_some_and(|k| k.trim().eq_ignore_ascii_case("chart")) && stack()
         }
         "layout.update" => stack(),
-        "layout.import" => imported_layout_uses(params, &["\"stack\""], charts_stack),
+        "layout.import" | "report.existingTemplate" => imported_layout_uses(params, &["\"stack\""], charts_stack),
         "script.run" => params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, command_uses_chart_stack)),
         _ => false,
     }
@@ -744,7 +780,7 @@ fn command_uses_scale_bar_details(id: &str, params: &Value) -> bool {
                 || fixed_decimals(id)
                 || name("fit").and_then(ScaleBarFit::from_name).is_some_and(|v| v != ScaleBarFit::default())
         }
-        "layout.import" => imported_layout_uses(
+        "layout.import" | "report.existingTemplate" => imported_layout_uses(
             params,
             &[
                 "\"subdivisions\"",
@@ -782,7 +818,9 @@ fn command_uses_chart_facing(id: &str, params: &Value) -> bool {
             params.get("kind").and_then(Value::as_str).is_some_and(|k| k.trim().eq_ignore_ascii_case("chart")) && facing()
         }
         "layout.update" => facing(),
-        "layout.import" => imported_layout_uses(params, &["\"mirror\"", "\"max\"", "\"hide_labels\""], charts_facing),
+        "layout.import" | "report.existingTemplate" => {
+            imported_layout_uses(params, &["\"mirror\"", "\"max\"", "\"hide_labels\""], charts_facing)
+        }
         "script.run" => params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, command_uses_chart_facing)),
         _ => false,
     }
@@ -808,30 +846,32 @@ fn command_uses_chart_outline(id: &str, params: &Value) -> bool {
             params.get("kind").and_then(Value::as_str).is_some_and(|k| k.trim().eq_ignore_ascii_case("chart")) && outlined()
         }
         "layout.update" => outlined(),
-        "layout.import" => imported_layout_uses(params, &["\"bar_outline\""], charts_outlined),
+        "layout.import" | "report.existingTemplate" => imported_layout_uses(params, &["\"bar_outline\""], charts_outlined),
         "script.run" => params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, command_uses_chart_outline)),
         _ => false,
     }
 }
 
-/// Whether a `layout.import` carries its layout as `"text"` with an element `uses`: an older
-/// reader reads it without the keys it doesn't know. One read from a `"path"` is a layout file,
-/// whose own header requires what it uses (#2277). Every save asks, so a text with none of the
-/// feature's `keys` (a saved layout writes them only when set) isn't read through, unless it has a
-/// backslash: JSON may spell a key with escapes (`"\u0063olor"`). It is read once, whatever its
-/// keys.
+/// Whether a command carries its layout inline with an element `uses`, as `layout.import` and
+/// `report.existingTemplate` do: an older reader reads it without the keys it doesn't know. One
+/// read from a `"path"` is a layout file, whose own header requires what it uses (#2277). Every
+/// save asks, so a text with none of the feature's `keys` (a saved layout writes them only when
+/// set) isn't read through, unless it has a backslash: JSON may spell a key with escapes
+/// (`"\u0063olor"`). It is read once, whatever its keys.
 fn imported_layout_uses(params: &Value, keys: &[&str], uses: fn(&rustgis_map::layout::Element) -> bool) -> bool {
     imported_layout(params, keys).is_some_and(|l| l.elements.iter().any(uses))
 }
 
-/// A `layout.import`'s layout, read only when its text names one of `keys` (or escapes, which
-/// could hide one).
+/// The layout a command carries inline, read only when its text names one of `keys` (or escapes,
+/// which could hide one). `data` (base64) goes before `text`, as `report.existingTemplate` reads
+/// them; one it refuses is no layout. `data` is decoded for each check, rather than keeping it:
+/// only a step that carries it pays, and only on a save.
 fn imported_layout(params: &Value, keys: &[&str]) -> Option<rustgis_map::layout::Layout> {
-    params
-        .get("text")
-        .and_then(Value::as_str)
+    crate::cmd::items::inline_text(params)
+        .ok()
+        .flatten()
         .filter(|t| keys.iter().any(|key| t.contains(key)) || t.contains('\\'))
-        .and_then(|t| serde_json::from_str::<rustgis_map::layout::Layout>(t).ok())
+        .and_then(|t| serde_json::from_str::<rustgis_map::layout::Layout>(&t).ok())
 }
 
 /// Require only executable payloads being saved: graph files omit steps, web tools omit graphs.
@@ -1002,6 +1042,15 @@ fn relief_light(layer: &Layer) -> bool {
     )
 }
 
+/// Whether a layer sets how soft its Shaded Relief's cast shadows are (#3144): an older reader
+/// would trace them at the default and save the layer again without the setting.
+fn sets_shadow_softness(layer: &Layer) -> bool {
+    layer
+        .raster
+        .as_ref()
+        .is_some_and(|r| matches!(&r.style.renderer, RasterRenderer::ShadedRelief { shadow_softness, .. } if shadow_softness.is_some()))
+}
+
 /// Whether a layer is a window of a Zarr variable following the time slider (#1720): an older
 /// reader would drop the window and read the whole map at each step.
 fn zarr_window(layer: &Layer) -> bool {
@@ -1044,6 +1093,7 @@ fn layer_capabilities(layer: &Layer) -> Vec<&'static str> {
     [
         (relief_effects(layer), "shaded-relief-effects"),
         (relief_light(layer), "shaded-relief-light"),
+        (sets_shadow_softness(layer), "shaded-relief-shadow-softness"),
         (layer.size_by.is_some(), super::SIZE_BY_CAPABILITY),
         (layer.has_picture_markers(), "picture-markers"),
         (layer.any_picture(svg_picture), "svg-markers"),
@@ -1080,7 +1130,7 @@ fn map_capabilities<'a>(maps: impl IntoIterator<Item = &'a Map>) -> Vec<&'static
     let (mut polygon, mut svg) = (false, false);
     let (mut offline_area_id, mut paper, mut native, mut guided, mut weighed, mut cleared, mut deduped) =
         (false, false, false, false, false, false, false);
-    let (mut crisp, mut bed) = (false, false);
+    let (mut crisp, mut bed, mut soft) = (false, false, false);
     for map in maps {
         offline_area_id |= map.offline_area_id.is_some();
         // A blank basemap's paper colour (#2532), which an older reader would draw and save white.
@@ -1115,6 +1165,7 @@ fn map_capabilities<'a>(maps: impl IntoIterator<Item = &'a Map>) -> Vec<&'static
         }
         relief |= map.layers.iter().any(relief_effects);
         light |= map.layers.iter().any(relief_light);
+        soft |= map.layers.iter().any(sets_shadow_softness);
         sized |= map.layers.iter().any(|layer| layer.size_by.is_some());
         pictures |= map.layers.iter().any(Layer::has_picture_markers);
         svg |= map.layers.iter().any(|layer| layer.any_picture(svg_picture));
@@ -1135,6 +1186,7 @@ fn map_capabilities<'a>(maps: impl IntoIterator<Item = &'a Map>) -> Vec<&'static
         (walls_layer, "terrain-block-walls-layer"),
         (relief, "shaded-relief-effects"),
         (light, "shaded-relief-light"),
+        (soft, "shaded-relief-shadow-softness"),
         (legends, "normalized-legend-urls"),
         (sized, super::SIZE_BY_CAPABILITY),
         (pictures, "picture-markers"),
@@ -1274,6 +1326,7 @@ fn layout_capabilities(layouts: &[rustgis_map::layout::Layout]) -> Vec<&'static 
         (elements().any(|e| e.kind.has_custom_text_size()), "layout-text-size"),
         (elements().any(legends_fitting), "layout-legend-fit"),
         (elements().any(legend_labels_classes), "layout-legend-class-labels"),
+        (elements().any(legend_counts_features), "layout-legend-counts"),
         (elements().any(pictures_with_files), "layout-picture-source"),
         (elements().any(bar_details), "layout-scale-bar-details"),
         (layouts.iter().any(|l| l.paper.is_some()), "layout-page-color"),
@@ -1590,6 +1643,7 @@ mod tests {
             (&["layout-text-size"], "layout.update", json!({"element": 1, "textSize": 12})),
             (&["layout-legend-fit"], "layout.update", json!({"element": 1, "fit": "adjustSize"})),
             (&["layout-legend-class-labels"], "layout.update", json!({"element": 1, "classLabels": {"a": {"x": "X"}}})),
+            (&["layout-legend-counts"], "layout.update", json!({"element": 1, "showCounts": true})),
             (&["layout-picture-source"], "layout.update", json!({"element": 1, "path": "logo.png"})),
             (&["dggs-system"], "a5Grid", json!({"system": "H3"})),
             (&["dggs-system"], "a5Aggregate", json!({"system": "S2"})),
@@ -1601,6 +1655,9 @@ mod tests {
             (&["layout-text-statistics"], "layout.addElement", json!({"kind": "text", "text": "{count:Cities}"})),
             (&["layout-publication-parts"], "layout.publication", json!({"grid": "none"})),
             (&["layout-publication-legend"], "layout.publication", json!({"legend": "none"})),
+            (&["shaded-relief-shadow-softness"], "raster.symbology", json!({"type": "shadedRelief", "shadowSoftness": 1.5})),
+            // `null` is the default an older reader draws.
+            (&[], "raster.symbology", json!({"type": "shadedRelief", "shadowSoftness": null})),
             // An SVG image is a picture marker as well, in a node as in a saved command.
             (&["picture-markers", "svg-markers"], "layer.marker", json!({"image": svg})),
             (&[], "buffer", json!({"input": "Cities", "distance": 1})),
@@ -1620,6 +1677,59 @@ mod tests {
         }
         let missing: Vec<&str> = COMMAND_CAPABILITIES.iter().map(|&(name, _)| name).filter(|name| !covered.contains(name)).collect();
         assert!(missing.is_empty(), "add a sample for each command capability, missing: {missing:?}");
+    }
+
+    /// `report.existingTemplate` imports a layout file as `layout.import` does, so a step of it
+    /// requires what a `layout.import` of the same file does (#3226), by `text` or by `data`. Every
+    /// `layout_*` fixture is walked, so a capability added with one and read for `layout.import`
+    /// alone fails here.
+    #[test]
+    fn a_report_template_requires_what_layout_import_does() {
+        use base64::Engine;
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../schema/fixtures");
+        let needs = |id: &str, params: Value| -> Vec<&str> {
+            let step = [ModelStep { tool: id.into(), params }];
+            model_capabilities(&step, None)
+        };
+        let mut imported = std::collections::BTreeSet::new();
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            if !name.starts_with("layout_") || !name.ends_with(".rgis") {
+                continue;
+            }
+            let project = Project::from_json(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            for layout in serde_json::to_value(&project).unwrap()["layouts"].as_array().unwrap() {
+                let text = layout.to_string();
+                let data = base64::engine::general_purpose::STANDARD.encode(&text);
+                let required = needs("layout.import", json!({"text": text}));
+                assert_eq!(needs("report.existingTemplate", json!({"text": text})), required, "{name} as text");
+                assert_eq!(needs("report.existingTemplate", json!({"data": data})), required, "{name} as data");
+                imported.extend(required);
+            }
+        }
+        // The fixtures reach each capability an imported layout asks for.
+        for capability in [
+            "layout-element-background",
+            "layout-element-ink",
+            "layout-element-wrap",
+            "layout-text-block",
+            "layout-chart-data",
+            "layout-chart-look",
+            "layout-chart-classes",
+            "layout-chart-stack",
+            "layout-chart-facing",
+            "layout-chart-outline",
+            "layout-frame-border",
+            "layout-text-size",
+            "layout-scale-bar-details",
+            "layout-page-color",
+        ] {
+            assert!(imported.contains(capability), "no layout fixture asks for {capability}");
+        }
+        // A layout named, or read from a file with its own header (#2277), needs nothing.
+        assert!(needs("report.existingTemplate", json!({"layout": "Layout"})).is_empty());
+        assert!(needs("report.existingTemplate", json!({"path": "regions.rgislayout"})).is_empty());
     }
 
     /// An inline graph is read as the run reads it: only an object with `nodes`, only nodes of kind
@@ -2282,6 +2392,10 @@ mod tests {
         let mut damaged = base["layouts"][0].clone();
         damaged["elements"][1]["kind"]["Legend"]["fit"] = json!("adjustFrame");
         damaged["elements"][1]["kind"]["Legend"]["show_layer_names"] = json!("no");
+        let data = |text: &str| {
+            use base64::Engine;
+            base64::engine::general_purpose::STANDARD.encode(text)
+        };
         for (id, params, required) in [
             ("layout.addElement", json!({"kind": "legend", "fit": "adjustSize"}), true),
             ("layout.addElement", json!({"kind": "legend", "showLayerNames": false, "fit": "shrink"}), true),
@@ -2303,6 +2417,20 @@ mod tests {
             // A report section's template is a layout file read as `layout.import` reads it.
             ("report.existingTemplate", json!({"text": saved["layouts"][0].to_string()}), true),
             ("report.existingTemplate", json!({"text": base["layouts"][0].to_string()}), false),
+            // It reads `data` (base64) before `text`.
+            ("report.existingTemplate", json!({"data": data(&saved["layouts"][0].to_string())}), true),
+            ("report.existingTemplate", json!({"data": data(&base["layouts"][0].to_string())}), false),
+            ("report.existingTemplate", json!({"data": "not base64"}), false),
+            (
+                "report.existingTemplate",
+                json!({"data": data(&saved["layouts"][0].to_string()), "text": base["layouts"][0].to_string()}),
+                true,
+            ),
+            (
+                "report.existingTemplate",
+                json!({"data": data(&base["layouts"][0].to_string()), "text": saved["layouts"][0].to_string()}),
+                false,
+            ),
         ] {
             // A scale bar's fit name is its details' to require, not this.
             let bar = params.get("fit") == Some(&json!("adjustWidth"));
@@ -3102,6 +3230,10 @@ mod tests {
         let base = with_text("{scale} {count:} {foo}");
         assert_eq!(base.get("requires"), None);
         let layout = saved["layouts"][0].to_string();
+        let data = {
+            use base64::Engine;
+            base64::engine::general_purpose::STANDARD.encode(&layout)
+        };
         for (id, params, required) in [
             ("layout.addElement", json!({"kind": "text", "text": "{sum:Sites:visits}"}), true),
             ("layout.addElement", json!({"kind": "text", "text": "{scale}"}), false),
@@ -3124,6 +3256,7 @@ mod tests {
             ("layout.import", json!({"text": layout}), true),
             // A report section's template is a layout file read as `layout.import` reads it.
             ("report.existingTemplate", json!({"text": layout}), true),
+            ("report.existingTemplate", json!({"data": data}), true),
         ] {
             let script = format!("{id} {params}");
             for value in [
@@ -3149,6 +3282,10 @@ mod tests {
         let blank_page = |title: &str| json!({"title": title, "kind": {"type": "blank", "text": "", "background": [255, 255, 255, 255]}});
         let presentation = |page: Value| json!({"name": "P", "width": 297, "height": 210, "pages": [page]}).to_string();
         let base = serde_json::to_value(Project::default()).unwrap();
+        let data = |title: &str| {
+            use base64::Engine;
+            base64::engine::general_purpose::STANDARD.encode(presentation(map_page(title)))
+        };
         for (page, required) in [(map_page("{count:Sites}"), true), (map_page("Sites"), false), (blank_page("{count:Sites}"), false)] {
             let mut document = base.clone();
             document["presentations"] = json!([{"name": "P", "width": 297, "height": 210, "pages": [page.clone()]}]);
@@ -3164,6 +3301,9 @@ mod tests {
             ("presentation.import", json!({"text": presentation(map_page("{count:Sites}"))}), true),
             ("presentation.import", json!({"text": presentation(map_page("Sites"))}), false),
             ("presentation.import", json!({"text": presentation(blank_page("{count:Sites}"))}), false),
+            // It reads `data` (base64) before `text`.
+            ("presentation.import", json!({"data": data("{count:Sites}")}), true),
+            ("presentation.import", json!({"data": data("Sites"), "text": presentation(map_page("{count:Sites}"))}), false),
         ] {
             let script = format!("{id} {params}");
             for value in [
@@ -3288,7 +3428,7 @@ mod tests {
         }))
         .unwrap();
         let clean = Layer::new_raster(1, "DEM", raster);
-        for field in ["shadow", "sky", "fill", "rock", "ambient", "balanced"] {
+        for field in ["shadow", "sky", "fill", "rock", "ambient", "balanced", "shadow_softness"] {
             let mut value = serde_json::to_value(&clean).unwrap();
             value["raster"]["style"]["renderer"]["ShadedRelief"][field] = match field {
                 "rock" => serde_json::to_value(rustgis_map::raster::Rock::DEFAULT).unwrap(),
@@ -3303,7 +3443,11 @@ mod tests {
                 json_bytes(&map_file_bytes(p.map()).unwrap()),
                 json_bytes(&layer_file_bytes(&layer).unwrap()),
             ] {
-                let needs = if matches!(field, "ambient" | "balanced") { "shaded-relief-light" } else { "shaded-relief-effects" };
+                let needs = match field {
+                    "ambient" | "balanced" => "shaded-relief-light",
+                    "shadow_softness" => "shaded-relief-shadow-softness",
+                    _ => "shaded-relief-effects",
+                };
                 assert_eq!(document["requires"], json!([needs]), "{field}: {document}");
             }
         }
