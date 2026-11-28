@@ -1,5 +1,5 @@
 //! The wizard's elements step: what is drawn around the map, and in which mode.
-use super::arrange::{LOCATOR, SCALE_BAR, surround_labels};
+use super::arrange::{LOCATOR, NORTH_ARROW, SCALE_BAR, surround_labels};
 use super::*;
 use rustgis_engine::cmd::layout::{publication_style_cards, publication_style_has_column};
 use rustgis_engine::map::layout::colorbar_layer;
@@ -128,7 +128,7 @@ impl Draft {
     pub(super) fn draws(&self, at: usize, s: &Session) -> bool {
         match at {
             LOCATOR => self.draws_locator(s),
-            1 => self.draws_arrow(s),
+            NORTH_ARROW => self.draws_arrow(s),
             SCALE_BAR => self.draws_scale_bar(s),
             _ => self.draws_legend_place(s),
         }
@@ -194,7 +194,7 @@ pub(super) fn elements_value(s: &Session, d: &Draft) -> String {
     }
     if d.draws_arrow(s) {
         let when = if e.north == NorthChoice::Always { tl_raw!("Always") } else { tl_raw!("Auto") };
-        on.push(i18n::fmt("{surround}: {choice}", &[("surround", surround_labels()[1]), ("choice", when)]));
+        on.push(i18n::fmt("{surround}: {choice}", &[("surround", surround_labels()[NORTH_ARROW]), ("choice", when)]));
     }
     let mut said = |is: bool, line: &str| {
         if is {

@@ -83,6 +83,9 @@ fn corner_labels() -> [&'static str; 4] {
 /// The locator's place in [`Homes`].
 pub(super) const LOCATOR: usize = 0;
 
+/// The north arrow's.
+pub(super) const NORTH_ARROW: usize = 1;
+
 /// The scale bar's.
 pub(super) const SCALE_BAR: usize = 3;
 
