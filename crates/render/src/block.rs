@@ -1883,8 +1883,8 @@ pub(crate) fn draw_walls(
                 // The band's foot `t` along the stretch: its thickness under the ground's edge
                 // drawn there, never below the base. That edge is the mesh's (`ta` to `tz`), which
                 // can stand off the ground read at the stretch's ends, and the ground inside the
-                // stretch off both (rounds 4 and 5): its height is the line's between the ends there,
-                // plus how far the edge shows from that line over how far a pixel of height moves.
+                // stretch off both (rounds 4 and 5): its height is read through its screen point
+                // ([`up_through`]), from the line's between the ends there.
                 let mut under = |t: f64| {
                     let m = Coord::new(ends[0].x + (ends[1].x - ends[0].x) * t, ends[0].y + (ends[1].y - ends[0].y) * t);
                     let (gu, gv) = cam.ground_px(m);
@@ -1894,15 +1894,18 @@ pub(crate) fn draw_walls(
                             .map(|(x, y)| (x * k, y * k))
                             .filter(|p| p.0.is_finite() && p.1.is_finite())
                     };
-                    let line = ra.2 + (rz.2 - ra.2) * t;
-                    let (Some(p), Some(q)) = (seen_up(line), seen_up(line - 1.0)) else { return None };
-                    let (dx, dy, top) = (p.0 - q.0, p.1 - q.1, top_at(t));
-                    let len = dx * dx + dy * dy;
-                    let edge = if len > 1e-18 { line + ((top.0 - p.0) * dx + (top.1 - p.1) * dy) / len } else { line };
+                    let (line, top) = (ra.2 + (rz.2 - ra.2) * t, top_at(t));
+                    let edge = up_through(&cam, (gu, gv), line, top, (w, h, k));
                     let (foot, base) = (edge - run.thickness / per, b.base / per);
                     band_at_base |= foot < base;
+                    // Never over the top on screen, whatever the heights (round 8): where it would
+                    // stand up the vertical from the top, it is the top.
+                    let (Some(p), Some(q), Some(at)) = (seen_up(line), seen_up(line - 1.0), seen_up(foot.max(base))) else {
+                        return None;
+                    };
+                    let over_top = (at.0 - top.0) * (p.0 - q.0) + (at.1 - top.1) * (p.1 - q.1) > 0.0;
                     // With how far over the base the foot would stand (under 0: it stops there).
-                    seen_up(foot.max(base)).map(|p| (p, foot - base))
+                    Some((if over_top { top } else { at }, foot - base))
                 };
                 let (Some((ba, over_a)), Some((bz, over_z))) = (under(t0), under(t1)) else { continue };
                 // Where the foot meets the base inside the stretch, it bends there: along the base
@@ -2104,6 +2107,30 @@ pub(crate) fn draw_walls(
         crate::approximations::band_at_base();
     }
     draw_water(pm, &mut waters, k);
+}
+
+/// The height (up px, as [`rustgis_map::Camera::project_raised`] takes it) at which the vertical
+/// over ground offsets `(u, v)` passes screen point `at` (physical px, `k` of them a logical px),
+/// read along the vertical's line on screen (the part of `at` across it left out) from its
+/// points at `near` and a pixel of height either side. A vertical's heights and its points' places
+/// along that line match by a projective map, which keeps cross-ratios, so the height is exact
+/// (round 8), not a straight-line estimate's. `near` where it can't be told.
+fn up_through(cam: &rustgis_map::Camera, (u, v): (f64, f64), near: f64, at: (f64, f64), (w, h, k): (f64, f64, f64)) -> f64 {
+    let seen = |up: f64| cam.project_raised(u, v, up, w, h).map(|(x, y)| (x * k, y * k));
+    let (Some(p0), Some(p1), Some(p2)) = (seen(near), seen(near - 1.0), seen(near + 1.0)) else { return near };
+    let (dx, dy) = (p2.0 - p1.0, p2.1 - p1.1);
+    let len = dx.hypot(dy);
+    // Places along the line from `p0`, up the vertical.
+    let place = |p: (f64, f64)| ((p.0 - p0.0) * dx + (p.1 - p0.1) * dy) / len;
+    let (s1, s2, s) = (place(p1), place(p2), place(at));
+    if len < 1e-12 || s.abs() < 1e-12 || (s2 - s1).abs() < 1e-12 {
+        return near;
+    }
+    // The cross-ratio of (p0, p1; p2, at) along the line equals that of their heights (near,
+    // near − 1; near + 1, x): (x − near + 1) / (2 (x − near)).
+    let c = s2 * (s - s1) / ((s2 - s1) * s);
+    let x = (near - 1.0 - 2.0 * c * near) / (1.0 - 2.0 * c);
+    if x.is_finite() { x } else { near }
 }
 
 /// Draws the top band's `fills` (#2607), then strokes its `lines` as the walls' outlines are, at
@@ -3993,6 +4020,64 @@ mod tests {
         }
         assert!(rock.is_empty(), "rock under the band (x, px): {rock:?}");
         assert!(red_at(-500.0, 100.0) && red_at(500.0, 150.0) && !red_at(500.0, 50.0));
+    }
+
+    #[test]
+    fn a_thin_band_hangs_from_a_mesh_edge_far_under_the_ground_read() {
+        // #2607, round 8, CodeRabbit's case: a 600 × 500 view at 60°, 5 m a pixel, heights
+        // doubled, the DEM at 280 m (560) and the mesh's edge at 200 m (400) along the south
+        // wall, the band 1 m deep (0.4 px). Its foot hangs from the edge drawn: no band shows over
+        // the top line, where a foot taken from a straight-line estimate of the edge's height
+        // stands about 9 px up.
+        use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster};
+        let red = Rgba::rgb(220, 30, 30);
+        let (mut m, _, _, _) = block_under_soils(&[([-3000.0, -1500.0, 3000.0, 0.0], "argissolo", red)], 1.0);
+        let gt = GeoTransform { origin_x: -5000.0, origin_y: 5000.0, pixel_width: 20.0, pixel_height: -20.0 };
+        let dem =
+            Raster::new("dem", 500, 500, vec![vec![280.0; 500 * 500]], gt, Crs::WebMercator, None, ColorHint::Gray, "Float32").unwrap();
+        if let Some(l) = m.layers.iter_mut().find(|l| l.name == "dem") {
+            l.raster = Some(rustgis_map::RasterLayer::from_path(dem, "dem.tif"));
+        }
+        if let Some(block) = m.view.terrain.as_mut().and_then(|t| t.block.as_mut()) {
+            block.depth = Some(1000.0);
+        }
+        let res = 5.0;
+        let camera = rustgis_map::Camera { center: Coord::new(0.0, 0.0), res, bearing: 0.0, pitch: 60.0 };
+        let g = Ground::of(&m, &camera).unwrap();
+        let b = g.block(&m).unwrap();
+        let dry: WaterRuns = (0..b.sides()).map(|_| Vec::new()).collect();
+        let (pm, at) = south_wall_seen(&m, &b, &g, res, &dry, 0.0, 4, Some(400.0));
+        let band = |c: tiny_skia::ColorU8| c.alpha() > 0 && u16::from(c.red()) > 2 * u16::from(c.green());
+        let above: Vec<_> = (-18..=18)
+            .flat_map(|i| (0..40).map(move |j| (50.0 * f64::from(i), 410.0 + 5.0 * f64::from(j))))
+            .filter(|&(x, metres)| {
+                let (px, py) = at(x, metres);
+                pm.pixel(px, py).is_some_and(|c| band(c.demultiply()))
+            })
+            .collect();
+        assert!(above.is_empty(), "band over the top line at {} points, e.g. {:?}", above.len(), above.first());
+    }
+
+    #[test]
+    fn the_height_through_a_screen_point_is_read_exactly() {
+        // #2607, round 8: CodeRabbit's case, a 600 × 500 view at 60°, 5 m a pixel, heights
+        // doubled: the mesh's edge at 200 m (80 up px), the DEM at 280 m (112). Read from the DEM's
+        // height, the height through the edge's screen point is the edge's, not a straight-line
+        // estimate's (80.9 there, which stood a 0.4 px band's foot over its top).
+        let camera = rustgis_map::Camera { center: Coord::new(0.0, 0.0), res: 5.0, bearing: 0.0, pitch: 60.0 };
+        let (w, h) = (600.0, 500.0);
+        for (k, bearing) in [(1.0, 0.0), (2.0, 0.0), (1.0, 40.0)] {
+            let camera = rustgis_map::Camera { bearing, ..camera };
+            for y in [-1000.0, -400.0, 0.0, 600.0] {
+                let gp = camera.ground_px(Coord::new(300.0, y));
+                let top = camera.project_raised(gp.0, gp.1, 80.0, w, h).map(|(x, y)| (x * k, y * k)).unwrap();
+                let up = up_through(&camera, gp, 112.0, top, (w, h, k));
+                assert!((up - 80.0).abs() < 1e-6, "k {k}, bearing {bearing}, y {y}: {up}");
+                // From under it too, and from itself.
+                assert!((up_through(&camera, gp, 40.0, top, (w, h, k)) - 80.0).abs() < 1e-6);
+                assert!((up_through(&camera, gp, 80.0, top, (w, h, k)) - 80.0).abs() < 1e-6);
+            }
+        }
     }
 
     /// The band's thickness reads and saves as a number, or as `{"field": name}` (#2607).
