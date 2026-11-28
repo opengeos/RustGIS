@@ -178,7 +178,7 @@ fn a_polygon_without_area_keeps_its_label_point() {
 #[test]
 fn a_label_moved_by_hand_stays_where_it_was_put() {
     let (mut m, id) = map(Geometry::Polygon(vec![u()]), true);
-    let fid = m.layer(id).unwrap().dataset.features.get(0).unwrap().id;
+    let fid = m.layer(id).unwrap().dataset.features.first().unwrap().id;
     m.layer_mut(id).unwrap().labels.default.moved = vec![rustgis_map::symbology::MovedLabel { id: fid, at: [0.0, 0.1] }];
     let v = view();
     let placed = at(&v, one(&mut m, &v));
@@ -191,7 +191,7 @@ fn a_curved_label_has_no_pole() {
     let v = view();
     let render_curved = |on: bool| {
         let (mut m, id) = map(g.clone(), on);
-        // A name too long for the centre line falls back to a straight label.
+        // Along the centre line, or straight where it does not fit: the same either way.
         let l = m.layer_mut(id).unwrap();
         l.labels.default.placement = LabelPlacement::Curved;
         render(&mut m, &v).unwrap().labels.into_iter().map(|l| (l.x, l.y)).collect::<Vec<_>>()

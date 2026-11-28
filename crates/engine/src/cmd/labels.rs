@@ -276,7 +276,7 @@ pub fn commands() -> Vec<C> {
             let clears = matches!(to, Some(None));
             let id = s.layer_id(p)?;
             let held = held_geometries(s.map().layer(id).ok_or("no such layer")?);
-            let lines = held.1;
+            let (_, lines, _) = held;
             let guide = label_guide(s, p, s.map().layer(id).ok_or("no such layer")?)?;
             // A repeat or line offset given where it does nothing (not along a line), kept for
             // when the class is placed along one, and said (#2639).
@@ -788,7 +788,7 @@ pub(crate) fn lock_holds(l: &Layer, b: &Labeling) -> bool {
 /// where there was none, locks the labels again too; another distance on the same side doesn't.
 fn same_places(l: &Layer, b: &Labeling) -> bool {
     let held = held_geometries(l);
-    let lines = held.1;
+    let (_, lines, _) = held;
     let classes = |labels: &Labeling| {
         let tries = |c: &LabelClass| c.other_positions && tries_other_places(held, c);
         // -1 below, 1 above, 0 on the line (-0.0 too).

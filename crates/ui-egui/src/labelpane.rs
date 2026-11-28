@@ -886,7 +886,8 @@ fn position(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
     if l.geometry_type() == rustgis_engine::data::GeometryType::Polygon && cur != LabelPlacement::Curved && c.it.guide.is_none() {
         ui.add_space(4.0);
         let mut on = c.it.other_positions;
-        let help = tl!("The label goes to the point inside the polygon farthest from its edges; if that is taken, where it goes without this.");
+        let help =
+            tl!("The label goes to the point inside the polygon farthest from its edges; if that is taken, where it goes without this.");
         if ui.checkbox(&mut on, tl!("Try other places inside the polygon")).on_hover_text(help).changed() {
             run(app, "labels.placement", c.params(json!({"otherPositions": on})));
         }
