@@ -2593,7 +2593,7 @@ fn formatted(
     let n = head.len();
     section(ui, ("stac_head", id), tl!("Item"), head, n);
     if let Some(props) = doc.get("properties").and_then(|p| p.as_object()) {
-        let rows = props.iter().take(FORMATTED_ROWS).map(|(k, v)| (k.clone(), short_value(v))).collect();
+        let rows = props.iter().take(FORMATTED_ROWS).map(|(k, v)| (short_value(&serde_json::Value::String(k.chars().take(SHORT_VALUE_CHARS + 1).collect())), short_value(v))).collect();
         section(ui, ("stac_props", id), tl!("Properties"), rows, props.len());
     }
     let mut add = None;
