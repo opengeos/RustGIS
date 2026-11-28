@@ -166,8 +166,10 @@ fn marker_image(
     let b64 = set.unwrap_or(b64);
     // As `layer.marker` checks one, decoded once for the run, where drawing it finds it.
     let aspect = rustgis_render::picture_marker_check(&b64).map_err(|why| {
-        // A wider outline is more to draw: that refusal is these colours' alone.
-        *own_refusal = painted && why == rustgis_render::MarkerRefusal::TooMuchToDraw;
+        // A wider outline is more to draw, past the cap or past what the run has left: that
+        // refusal is these colours' alone.
+        use rustgis_render::MarkerRefusal::{PastRunPixels, TooMuchToDraw};
+        *own_refusal = painted && matches!(why, TooMuchToDraw | PastRunPixels);
         why.whose()
     })?;
     Ok((b64, aspect, painted))

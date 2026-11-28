@@ -141,7 +141,10 @@ pub(super) fn read(sym: Node, reference: Option<f64>, turned: bool, layer: &str,
         && layers.iter().any(|(l, _)| painted(*l, report))
     {
         out.symbol.marker = Marker::Circle;
-        report.approximated(layer, "SVG markers whose colours the style sets, coloured by a field or an expression, drawn as circles");
+        report.approximated(
+            layer,
+            "SVG markers whose colours the style sets, with colours or outline widths from a field or an expression, drawn as circles",
+        );
     }
     // A line of stacked strokes draws each with its own colour and width.
     if sym.attribute("type") == Some("line") && out.stacked() && (by.stroke.is_some() || by.stroke_width.is_some()) {

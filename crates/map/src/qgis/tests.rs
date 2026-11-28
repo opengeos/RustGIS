@@ -1643,7 +1643,8 @@ fn a_painted_svg_markers_refusal_is_its_own_colours() {
 /// outline width a field sets, stays a circle, which takes them. One with its own colours is drawn.
 #[test]
 fn a_painted_svg_marker_coloured_by_a_field_is_a_circle_that_takes_it() {
-    const CIRCLE: &str = "SVG markers whose colours the style sets, coloured by a field or an expression, drawn as circles";
+    const CIRCLE: &str =
+        "SVG markers whose colours the style sets, with colours or outline widths from a field or an expression, drawn as circles";
     let by_field = |property: &str| {
         svg_marker("a.svg", "").replace(
             "</layer>",
