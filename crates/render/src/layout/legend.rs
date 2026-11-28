@@ -1225,9 +1225,10 @@ pub(super) fn legend_picture(pm: &mut Canvas, r: Rect, y: f32, pic: &Pixmap, ppp
 /// its rows as [`legend`] draws them, the classes a frame shows at the renderer's scale denominator
 /// `scale` (as the layout finds it for a frame, a complete source read through as [`render`] reads
 /// it), or every class with `all_classes`. For sizing a legend to its content. `None` when a
-/// complete source can't be read, as [`render`] then draws no page. A WMS or WMTS layer's legend
-/// picture still on its way isn't waited for, nor counted ([`tile_legends_pending`] says whether
-/// one is). Its layers' rows are measured by the `labels` it shows for them, else their names.
+/// listed layer's complete source can't be read; one in `exclude` isn't read. A WMS or WMTS
+/// layer's legend picture still on its way isn't waited for, nor counted
+/// ([`tile_legends_pending`] says whether one is). Its layers' rows are measured by the `labels`
+/// it shows for them, else their names.
 pub fn legend_sizes_mm(
     map: &mut Map,
     scale: f64,
@@ -1296,7 +1297,7 @@ pub struct LegendFitted {
 }
 
 /// The rows of the legend `asked` of `map` at the renderer's scale denominator `scale`, as the
-/// drawing makes them, given to `with`. `None` when a complete source can't be read.
+/// drawing makes them, given to `with`. `None` when a listed layer's complete source can't be read.
 fn asked_rows<T>(map: &mut Map, scale: f64, asked: &LegendAsked, with: impl FnOnce(&[LegendRow]) -> T) -> Option<T> {
     let LegendAsked { all_classes, hide_other, show_no_data, layer_names, text_size, exclude, labels, class_labels } = *asked;
     let drawn =
@@ -1346,7 +1347,7 @@ fn measure_mm(m: Measured, columns: usize) -> (f64, f64) {
 /// The columns and text size the legend `asked` of `map` at the renderer's scale denominator
 /// `scale` is drawn at under its `fit` from its `columns`, in a room of `room_mm` (its box less its
 /// title, as [`legend_title_mm`] gives it), and whether it is still wider or taller than that: the
-/// drawing's own rule ([`fit_legend`]). `None` when a complete source can't be read.
+/// drawing's own rule ([`fit_legend`]). `None` when a listed layer's complete source can't be read.
 pub fn legend_fitted_mm(
     map: &mut Map,
     scale: f64,
