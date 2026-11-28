@@ -2158,6 +2158,7 @@ pub(crate) mod tests {
     fn openrouter_privacy_change_stops_the_previous_request() {
         let mut app = RustGisApp::with_sample();
         let mut cfg = Config::from_env("openrouter");
+        cfg.key = "k".into();
         cfg.openrouter_private = false;
         let mut agent = Agent::new(cfg.clone(), &app.session);
         assert!(matches!(agent.ask("hello", &app.session), Step::Send(_)));
