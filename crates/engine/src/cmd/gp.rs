@@ -487,8 +487,11 @@ impl PluginRun {
     pub fn run(&self, control: &rustgis_plugins::tools::Control) -> Result<rustgis_analysis::ToolResult, String> {
         self.continuation.check()?;
         // A bug in a tool must not take the app down.
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.job.run(control)))
-            .unwrap_or_else(|_| Err(format!("{} failed unexpectedly", self.job.name())))
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.job.run(control))).unwrap_or_else(|payload| {
+            // A bug in a tool run in the background: said as one, with its reference.
+            let incident = rustgis_data::incident::caught(payload.as_ref());
+            Err(rustgis_data::incident::message(self.job.name(), false, &incident.id))
+        })
     }
 }
 
