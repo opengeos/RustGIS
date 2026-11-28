@@ -4158,7 +4158,7 @@ fn geopackage_values_that_dont_fit_a_number_field_are_said() {
             said,
             [
                 ("t: 4 values aren't numbers and were read as empty, in 'pop', 'area'".to_string(), dropped),
-                ("t: 1 whole number was rounded to the nearest decimal number, as a decimal field doesn't keep more than 15 or 16 digits, in 'big'".to_string(), rounded),
+                ("t: 1 number was rounded to the nearest decimal number, changing digits before the point, as a decimal field doesn't keep more than 15 or 16 digits, in 'big'".to_string(), rounded),
                 ("t: 2 text values aren't valid UTF-8 and were read with U+FFFD in place of the bytes that can't be read, in 'name'; a GeoPackage holds its text in UTF-8".to_string(), Some(crate::loss::LossCode::ChangedEncoding)),
             ]
         );
@@ -4170,12 +4170,16 @@ fn geopackage_values_that_dont_fit_a_number_field_are_said() {
 #[test]
 fn number_text_that_rounds_and_text_that_isnt_utf8_are_counted() {
     let (mut unread, mut rounded) = (Vec::new(), Vec::new());
-    for (text, ty) in
-        [("9007199254740993", FieldType::Double), ("9223372036854775809", FieldType::Integer), ("9007199254740993.0", FieldType::Double)]
-    {
+    for (text, ty) in [
+        ("9007199254740993", FieldType::Double),
+        ("9223372036854775809", FieldType::Integer),
+        ("9007199254740993.0", FieldType::Double),
+        // A fraction that rounds up into the whole number changes it.
+        ("2.99999999999999999", FieldType::Double),
+    ] {
         assert!(matches!(super::number_text(text, ty, &mut unread, Some(&mut rounded), 0), Value::Float(_)), "{text}");
     }
-    assert_eq!((unread.as_slice(), rounded.as_slice()), (&[][..], &[3][..]));
+    assert_eq!((unread.as_slice(), rounded.as_slice()), (&[][..], &[4][..]));
     rounded.clear();
     for (text, ty) in [
         ("2.5", FieldType::Double),

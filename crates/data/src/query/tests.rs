@@ -82,6 +82,8 @@ fn number_literals_are_exact_or_refused() {
         "9007199254740993.5",
         "12345678901234567000.0",
         "1.2345678901234567891e19",
+        // A fraction that rounds up into the whole number changes it.
+        "1000000000000000.99",
     ] {
         assert!(parse(text, &d).is_err_and(|e| e.contains("exact") || e.contains("rounded")), "{text}");
     }

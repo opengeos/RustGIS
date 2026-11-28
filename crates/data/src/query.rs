@@ -830,8 +830,9 @@ fn number_token(t: &str) -> Result<Tok, String> {
     Ok(Tok::Num(n))
 }
 
-/// Whether a decimal literal's whole-number digits, its exponent applied, would be rounded: digits
-/// written out (`9007199254740993.0`, `1.2345678901234567891e19`) must be held exactly; zeros an
+/// Whether a decimal literal's whole-number digits, its exponent applied, would be changed: digits
+/// written out (`9007199254740993.0`, `1.2345678901234567891e19`) must be read back as written,
+/// a fraction rounding up into them (`1000000000000000.99`) included; zeros an
 /// exponent adds past them (`1e307`) weren't written, so only the written digits need holding.
 /// `false` for one that isn't written in digits.
 pub(crate) fn whole_digits_round(t: &str) -> bool {
@@ -854,9 +855,12 @@ pub(crate) fn whole_digits_round(t: &str) -> bool {
     let written: String = digits.chars().take(point).collect();
     let added = point.saturating_sub(digits.len());
     if added == 0 {
-        // No whole-number digits but zeros (`0.1`): a zero, which every decimal holds.
+        // The whole part of the decimal read must be the one written: a decimal that can't hold
+        // those digits (`9007199254740993.0`) changes them, and so does a fraction that rounds up
+        // into them (`1000000000000000.99` reads as 1000000000000001).
         let written = written.trim_start_matches('0');
-        !crate::io::double_holds(if written.is_empty() { "0" } else { written })
+        let written = if written.is_empty() { "0" } else { written };
+        !t.parse::<f64>().is_ok_and(|x| x.is_finite() && format!("{:.0}", x.abs().trunc()) == written)
     } else {
         !crate::io::double_holds(&format!("{written}e{added}"))
     }

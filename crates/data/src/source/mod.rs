@@ -492,13 +492,13 @@ pub fn rounded_dates_note(fields: &[crate::Field], counts: &[usize]) -> Option<c
     let (numbers, dates) = (counted(true), counted(false));
     let text = match (numbers, dates) {
         (true, true) => format!(
-            "{total} values were rounded, date-times to the microsecond and whole numbers to the nearest decimal number, as more digits than that aren't kept, in {}",
+            "{total} values were rounded, date-times to the microsecond and numbers to the nearest decimal number, as more digits than that aren't kept, in {}",
             crate::io::named_fields(fields, counts)
         ),
         (true, false) => {
-            let what = if total == 1 { "1 whole number was".to_string() } else { format!("{total} whole numbers were") };
+            let what = if total == 1 { "1 number was".to_string() } else { format!("{total} numbers were") };
             format!(
-                "{what} rounded to the nearest decimal number, as a decimal field doesn't keep more than 15 or 16 digits, in {}",
+                "{what} rounded to the nearest decimal number, changing digits before the point, as a decimal field doesn't keep more than 15 or 16 digits, in {}",
                 crate::io::named_fields(fields, counts)
             )
         }
