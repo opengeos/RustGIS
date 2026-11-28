@@ -2095,6 +2095,71 @@ fn a_streamed_shapefile_says_dates_it_could_not_read_once() {
     assert!(err.contains("Load All Features"), "{err}");
 }
 
+/// A project saves the total even when its view holds fewer rows. Reopening compares
+/// the source header once, before the first redraw, and accepts old projects.
+#[test]
+fn linked_source_count_is_compared_on_project_reopen() {
+    struct Dir(std::path::PathBuf);
+    impl Drop for Dir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+    let dir = Dir(std::env::temp_dir().join(format!("rustgis-linked-count-{}-{nanos}", std::process::id())));
+    std::fs::create_dir(&dir.0).unwrap();
+    let path = dir.0.join("points.geojson");
+    let project = dir.0.join("linked.rgis");
+    let write = |count| {
+        let features: Vec<_> = (1..=count)
+            .map(|rank| json!({"type": "Feature", "geometry": {"type": "Point", "coordinates": [0, rank]}, "properties": {"rank": rank}}))
+            .collect();
+        std::fs::write(&path, json!({"type": "FeatureCollection", "features": features}).to_string()).unwrap();
+    };
+    let view = rustgis_geom::Extent::new(-0.1, 0.9, 0.1, 1.1);
+    write(2);
+    let mut s = Session::new(Project::default());
+    s.run("map.basemap", &json!({"name": "paper"})).unwrap();
+    s.run("layer.addData", &json!({"path": path, "name": "Parcels", "stream": true})).unwrap();
+    s.run("layer.definitionQuery", &json!({"layer": "Parcels", "where": "rank = 1"})).unwrap();
+    s.map_mut().sync_sources(&view, 1000.0, true);
+    assert_eq!(s.map().layer_by_name("Parcels").unwrap().dataset.features.len(), 1);
+    s.run("project.save", &json!({"path": project})).unwrap();
+    let mut saved: serde_json::Value = serde_json::from_slice(&std::fs::read(&project).unwrap()).unwrap();
+    assert_eq!(saved["maps"][0]["layers"][0]["source"]["saved_feature_count"], 2);
+    assert_eq!(saved["requires"], json!(["linked-source-feature-count"]));
+
+    for (count, legacy, expected) in [
+        (2, false, None),
+        (1, false, Some("Parcels: the source has 1 feature, 1 fewer than when the project was saved")),
+        (3, false, Some("Parcels: the source has 3 features, 1 more than when the project was saved")),
+        (1, true, None),
+    ] {
+        write(count);
+        if legacy {
+            saved.as_object_mut().unwrap().remove("requires");
+            saved["maps"][0]["layers"][0]["source"].as_object_mut().unwrap().remove("saved_feature_count");
+            std::fs::write(&project, saved.to_string()).unwrap();
+        }
+        let mut reopened = Session::new(Project::default());
+        let mark = reopened.notice_mark();
+        reopened.run("project.open", &json!({"path": project})).unwrap();
+        if expected.is_some() {
+            assert_eq!(reopened.notices_since(mark).iter().filter(|note| Some(note.text.as_str()) == expected).count(), 1);
+        }
+        for _ in 0..2 {
+            reopened.map_mut().sync_sources(&view, 1000.0, true);
+            reopened.notice_landed_rasters();
+        }
+        let notes = reopened.notices_since(mark);
+        let changes: Vec<_> = notes.iter().filter(|note| note.text.contains("the source has")).collect();
+        assert_eq!(changes.iter().map(|note| note.text.as_str()).collect::<Vec<_>>(), expected.into_iter().collect::<Vec<_>>());
+        if let Some(note) = changes.first() {
+            assert!(note.translated(|key, _| key.to_string()).unwrap().contains("{change}"));
+        }
+    }
+}
+
 /// A Shapefile read in place says, once, the text values `<Null>` its view reads took for empty,
 /// and its streamed exports (Export, Data Interop) say them too; a clean one says nothing (#2059).
 #[test]

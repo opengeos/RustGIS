@@ -3007,6 +3007,7 @@ impl Session {
         let mut landed = Vec::new();
         let mut dates: Vec<rustgis_data::loss::Note> = Vec::new();
         let mut not_utf8 = Vec::new();
+        let mut source_counts = Vec::new();
         let mut source_errors = Vec::new();
         let mut source_error_count = 0;
         for map in &mut self.project.maps {
@@ -3063,6 +3064,9 @@ impl Session {
                 for note in layer.source.as_mut().map(|source| source.take_read_notes()).unwrap_or_default() {
                     dates.push(note.prefixed(&layer.name));
                 }
+                if let Some((saved, current)) = layer.source.as_mut().and_then(|source| source.take_feature_count_change()) {
+                    source_counts.push(notice_text::NoticeText::source_count_changed(&layer.name, saved, current));
+                }
                 if layer.source.as_mut().is_some_and(|source| source.take_display_window()) {
                     landed.push(&*layer);
                 }
@@ -3073,6 +3077,9 @@ impl Session {
         }
         for note in dates {
             self.say(note);
+        }
+        for text in source_counts {
+            self.notify_text(text, false);
         }
         for (loss, note) in not_utf8 {
             match loss {

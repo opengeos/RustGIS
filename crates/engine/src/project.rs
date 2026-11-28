@@ -134,6 +134,7 @@ pub const CAPABILITIES: &[&str] = &[
     "layout-publication-parts",
     "layout-publication-legend",
     "shaded-relief-shadow-softness",
+    LINKED_SOURCE_FEATURE_COUNT,
 ];
 /// An offline area keeping the versions that lost a sync or a Bring Back
 /// (`OfflineArea::conflicts`, #2468): an older reader would save it again without them.
@@ -147,6 +148,8 @@ pub(crate) const NATIVE_COORDINATES: &str = "native-coordinates";
 pub(crate) const PROJECT_CRS: &str = "project-crs";
 /// Independent marker sizes alongside classified point colours (`Layer::size_by`).
 pub(crate) const SIZE_BY_CAPABILITY: &str = "classified-point-size";
+/// A linked source's baseline for comparing its count on the next open.
+pub(crate) const LINKED_SOURCE_FEATURE_COUNT: &str = "linked-source-feature-count";
 /// The most entries a document's `requires` may list: past it the document is refused without
 /// the rest being read.
 pub(crate) const MAX_REQUIRES: usize = 256;
@@ -1814,6 +1817,9 @@ impl Project {
                         && let Err(e) = src.open()
                     {
                         log::warn!("{}: {e}", l.name);
+                    }
+                    if opened {
+                        src.check_feature_count();
                     }
                 }
                 l.normalize_selection();

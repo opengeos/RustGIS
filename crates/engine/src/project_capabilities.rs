@@ -1062,6 +1062,10 @@ fn removes_duplicate_labels(layer: &Layer) -> bool {
     layer.labels.in_order().any(|c| c.remove_duplicates.is_some())
 }
 
+fn saves_source_count(layer: &Layer) -> bool {
+    layer.source.as_ref().and_then(|source| source.feature_count_for_save()).is_some()
+}
+
 /// The capabilities a layer needs, in [`map_capabilities`]'s order.
 fn layer_capabilities(layer: &Layer) -> Vec<&'static str> {
     [
@@ -1077,6 +1081,7 @@ fn layer_capabilities(layer: &Layer) -> Vec<&'static str> {
         (label_clearance(layer), "label-clearance"),
         (removes_duplicate_labels(layer), "label-duplicates"),
         (held_natively(&layer.dataset), super::NATIVE_COORDINATES),
+        (saves_source_count(layer), super::LINKED_SOURCE_FEATURE_COUNT),
     ]
     .into_iter()
     .filter_map(|(used, name)| used.then_some(name))
@@ -1105,6 +1110,7 @@ fn map_capabilities<'a>(maps: impl IntoIterator<Item = &'a Map>) -> Vec<&'static
     let (mut offline_area_id, mut paper, mut native, mut guided, mut weighed, mut cleared, mut deduped) =
         (false, false, false, false, false, false, false);
     let (mut crisp, mut bed, mut walls_top, mut soft) = (false, false, false, false);
+    let mut source_count = false;
     for map in maps {
         offline_area_id |= map.offline_area_id.is_some();
         // A blank basemap's paper colour (#2532), which an older reader would draw and save white.
@@ -1113,6 +1119,7 @@ fn map_capabilities<'a>(maps: impl IntoIterator<Item = &'a Map>) -> Vec<&'static
         weighed |= map.layers.iter().any(label_weight);
         cleared |= map.layers.iter().any(label_clearance);
         deduped |= map.layers.iter().any(removes_duplicate_labels);
+        source_count |= map.layers.iter().any(saves_source_count);
         // A tile layer drawn nearest (#2804), which an older reader would draw and save blended.
         crisp |= map.tiles.iter().any(|t| t.resampling != rustgis_map::raster::Resampling::Bilinear);
         // An older reader doesn't know the MGRS graticule (#1042 piece 8): it refuses the
@@ -1180,6 +1187,7 @@ fn map_capabilities<'a>(maps: impl IntoIterator<Item = &'a Map>) -> Vec<&'static
         (mgrs, "graticule-mgrs"),
         (on_top, "graticule-on-top"),
         (grid_color, "graticule-color"),
+        (source_count, super::LINKED_SOURCE_FEATURE_COUNT),
     ]
     .into_iter()
     .filter_map(|(used, name)| used.then_some(name))
