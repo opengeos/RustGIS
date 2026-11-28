@@ -1093,7 +1093,7 @@ impl Host for Between<'_> {
                 .s
                 .as_session_plugin(plugin.clone(), |s| {
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| bridge(s).0))
-                        .unwrap_or_else(|_| Err(format!("'{op}' failed unexpectedly")))
+                        .unwrap_or_else(|payload| Err(crate::bug(&format!("'{op}'"), payload.as_ref())))
                 })
                 .and_then(|r| r);
         }

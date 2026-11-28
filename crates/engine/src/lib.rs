@@ -686,6 +686,13 @@ impl RoomMade {
     }
 }
 
+/// What a bug RustGIS caught while doing `what` says ([`rustgis_data::incident::message`]), with its
+/// incident's reference: the panic `payload` is told apart from a refusal, and its details kept.
+pub(crate) fn bug(what: &str, payload: &(dyn std::any::Any + Send)) -> String {
+    let incident = rustgis_data::incident::caught(payload);
+    rustgis_data::incident::message(what, false, &incident.id)
+}
+
 /// What a command run worked on, as its parameters name it, for the messages it says: a layer, a
 /// table or an input by name, cut short. File paths are left out, as they can hold a login.
 fn run_target(params: &Value) -> Option<String> {
@@ -3681,12 +3688,13 @@ impl Session {
         if severity == rustgis_data::diagnostics::Severity::Error && self.rerun_said.iter().any(|said| said == text.as_str()) {
             return;
         }
-        self.diagnostics.push_redacted(severity, source.unwrap_or("Application"), &text, loss, self.run.clone());
-        // A bug's failure keeps its details (the panic's message and place) under it, for a report.
+        let record = self.diagnostics.push_redacted(severity, source.unwrap_or("Application"), &text, loss, self.run.clone());
+        // A bug's failure keeps its details (the panic's message and place) under it, for a report,
+        // scrubbed as a message is, logins in use included.
         if severity == rustgis_data::diagnostics::Severity::Error
             && let Some(incident) = rustgis_data::incident::named_in(text.as_str()).and_then(rustgis_data::incident::find)
         {
-            self.diagnostics.detail_newest(&incident.details());
+            self.diagnostics.detail(record, Self::redacted(&incident.details()).as_str());
         }
         self.notices.push(Notice {
             text: text.into_string(),

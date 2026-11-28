@@ -155,9 +155,10 @@ mod prefs {
 }
 
 /// What the start of a run says of the last one: an internal error it met (`crash_log`, which a
-/// caught one writes too), and, when it didn't close (`unclean`), the command it was running then.
-/// Without a crash log, a run that didn't close was stopped from outside, most often by running out
-/// of memory.
+/// caught one writes too) and, when it didn't close (`unclean`), the command it was running then,
+/// said apart, as the error may have been an earlier command's. Without a crash log, a run that
+/// didn't close was stopped from outside (most often by running out of memory) or by a crash
+/// RustGIS can't catch, such as a stack overflow.
 fn last_run_notice(app: &RustGisApp, crash_log: Option<&std::path::Path>, unclean: bool, last: Option<&running::Breadcrumb>) -> String {
     use rustgis_ui_egui::i18n::{fmt, t};
     let what = last.map(|b| {
@@ -168,20 +169,26 @@ fn last_run_notice(app: &RustGisApp, crash_log: Option<&std::path::Path>, unclea
             None => fmt("{command}, started {at} UTC", &[("command", name), ("at", &at)]),
         }
     });
-    match (crash_log, unclean, what) {
-        (Some(log), true, Some(what)) => fmt(
-            "RustGIS closed after an internal error last time, while running {what}. The details are in {path}; please attach them to a bug report.",
-            &[("what", &what), ("path", &log.display().to_string())],
-        ),
-        (Some(log), _, _) => fmt(
+    let report = |log: &std::path::Path| {
+        fmt(
             "RustGIS ran into an internal error last time. The details are in {path}; please attach them to a bug report.",
             &[("path", &log.display().to_string())],
-        ),
-        (None, _, what) => fmt(
-            "RustGIS closed without a crash report last time, while running {what}: it was most likely stopped from outside, by the computer running out of memory, a forced quit or a power cut. If it happens again with the same data, try a smaller part of it, such as by filtering or clipping it first.",
-            &[("what", &what.unwrap_or_default())],
-        ),
-    }
+        )
+    };
+    let closed = match (unclean, &what, crash_log) {
+        (false, _, _) => None,
+        (true, Some(what), _) => Some(fmt("RustGIS didn't close normally last time, while running {what}.", &[("what", what)])),
+        (true, None, _) => Some(t("RustGIS didn't close normally last time, between commands.").to_string()),
+    };
+    let cause = (unclean && crash_log.is_none()).then(|| {
+        let mut cause = t("With no crash report, it was most likely stopped from outside (the computer running out of memory, a forced quit or a power cut) or by a crash RustGIS can't catch, such as a stack overflow.").to_string();
+        if what.is_some() {
+            cause.push(' ');
+            cause.push_str(t("If it happens again with the same data, try a smaller part of it, such as by filtering or clipping it first."));
+        }
+        cause
+    });
+    [closed, cause, crash_log.map(report)].into_iter().flatten().collect::<Vec<_>>().join(" ")
 }
 
 /// Crash reports. A panic, caught or not, is written to `crash.log` in the settings folder (a
@@ -748,6 +755,12 @@ fn main() -> eframe::Result {
         app
     };
     let mut app = app.with_services(services);
+    // The marker, shared from here: what runs is noted in it, start-up commands (a project or file
+    // opened) included, so a run that ends without closing says what it was doing.
+    let other_copy = marker.as_ref().is_err_and(|no| no.other_copy);
+    let marker: running::Shared = std::sync::Arc::new(std::sync::Mutex::new(marker.ok()));
+    let crumbs = marker.clone();
+    app.session.on_run = Some(Box::new(move |run| running::note(&crumbs, run)));
     // Add Data and Load All read on a thread of their own, so a large file doesn't hold the window.
     app.reads_off_frame = true;
     // Linked local files changed by another program are reported, with Reload Data (#1477).
@@ -757,7 +770,7 @@ fn main() -> eframe::Result {
     if let Err(e) = app.start(&rustgis_ui_egui::Start { blank, after_crash: unclean, ..Default::default() }) {
         log::warn!("start-up: {e}");
     }
-    if crashed.is_some() || unclean && last_command.is_some() {
+    if crashed.is_some() || unclean {
         // Notices are shown as written: translate this one now that the language is known.
         rustgis_ui_egui::i18n::set_current(app.chosen_lang());
         app.session.notify(last_run_notice(&app, crashed.as_deref(), unclean, last_command.as_ref()), true);
@@ -777,7 +790,7 @@ fn main() -> eframe::Result {
     // update that hasn't run yet. A settings folder that can't lock, or can't be written, can't
     // tell a second copy apart, and is asked anyway: a note the installer may still be at work on
     // is left alone, and asked about again once it can't be, and the notice isn't put off for good.
-    if !marker.as_ref().is_err_and(|no| no.other_copy)
+    if !other_copy
         && let Some((text, error)) = {
             rustgis_ui_egui::i18n::set_current(app.chosen_lang());
             app.update.last_install_notice()
@@ -826,11 +839,7 @@ fn main() -> eframe::Result {
             builder.with_default_menu(false);
         }));
     }
-    let marker: running::Shared = std::sync::Arc::new(std::sync::Mutex::new(marker.ok()));
     let held = marker.clone();
-    // What runs, noted in the marker, so a run that ends without closing says what it was doing.
-    let crumbs = marker.clone();
-    app.session.on_run = Some(Box::new(move |run| running::note(&crumbs, run)));
     let menus = Menus::default();
     let result = eframe::run_native(
         "RustGIS",

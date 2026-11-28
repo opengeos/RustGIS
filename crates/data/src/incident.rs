@@ -98,15 +98,22 @@ pub fn last_id() -> Option<String> {
     LAST.with(|last| last.borrow().clone())
 }
 
-/// The incident a catch site caught: the one [`install`] recorded on this thread, or, without the
-/// hook, one made from what was caught.
+/// The incident a catch site caught: the one [`install`] recorded for this panic, or, without the
+/// hook, one made from what was caught. The panic is told by its message: this thread's last one
+/// when it matches (a catch site that drops what it caught leaves an older one there), else the
+/// newest kept with that message, as a worker's panic raised again on its caller's thread is
+/// (`analysis::parallel`), so it keeps the reference the crash log gave it.
 pub fn caught(payload: &(dyn std::any::Any + Send)) -> Incident {
-    if let Some(id) = LAST.with(|last| last.borrow_mut().take())
-        && let Some(found) = find(&id)
-    {
+    let message = payload_text(payload);
+    let last = LAST.with(|last| last.borrow_mut().take());
+    let found = last
+        .and_then(|id| find(&id))
+        .filter(|found| found.message == message)
+        .or_else(|| lock(&RECENT).iter().rev().find(|i| i.message == message).cloned());
+    if let Some(found) = found {
         return found;
     }
-    let incident = Incident { id: new_id(), message: payload_text(payload), location: None };
+    let incident = Incident { id: new_id(), message, location: None };
     keep(incident.clone());
     incident
 }
@@ -137,6 +144,10 @@ pub fn named_in(text: &str) -> Option<&str> {
 mod tests {
     use super::*;
 
+    fn find_by_message(message: &str) -> Option<Incident> {
+        lock(&RECENT).iter().rev().find(|i| i.message == message).cloned()
+    }
+
     #[test]
     fn a_caught_panic_is_an_incident_with_its_place_and_a_message_naming_it() {
         install();
@@ -146,12 +157,29 @@ mod tests {
         assert!(incident.location.as_deref().is_some_and(|at| at.contains("incident.rs")), "{incident:?}");
         assert_eq!(find(&incident.id).as_ref(), Some(&incident));
         let said = message("Buffer", true, &incident.id);
+        assert!(said.contains("failed unexpectedly"), "the words tests look for: {said}");
         assert!(said.starts_with("Buffer failed unexpectedly, a bug in RustGIS (incident "), "{said}");
         assert!(said.contains("the project is as it was before"), "{said}");
         assert_eq!(named_in(&said), Some(incident.id.as_str()));
         assert!(incident.details().contains("the bug") && incident.details().contains(&incident.id));
         // Caught once: the next catch on this thread doesn't take it again.
         assert_eq!(last_id(), None);
+        // Raised on another thread and caught here (a worker's, raised again on its caller), it
+        // keeps its reference.
+        let worker = std::thread::scope(|s| {
+            std::thread::Builder::new()
+                .spawn_scoped(s, || std::panic::catch_unwind(|| panic!("the worker's bug")).unwrap_err())
+                .unwrap()
+                .join()
+        })
+        .unwrap();
+        let on_worker = find_by_message("the worker's bug");
+        assert_eq!(Some(caught(worker.as_ref()).id), on_worker.map(|i| i.id));
+        // A stale reference from an earlier panic, its payload dropped, isn't given to another.
+        let _ = std::panic::catch_unwind(|| panic!("dropped"));
+        let other = caught(&"a different payload");
+        assert_eq!(other.message, "a different payload");
+        assert_eq!(other.location, None);
         assert_eq!(named_in("Buffer failed: no layer"), None);
     }
 }

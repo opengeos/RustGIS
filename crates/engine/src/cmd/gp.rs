@@ -550,7 +550,7 @@ pub fn plugin_start(s: &mut Session, tool: &str, params: &Value) -> Result<Plugi
         let job = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             rustgis_plugins::tools::prepare_pinned(plugin.plugin(), tid, &inputs, resolved)
         }))
-        .unwrap_or_else(|_| Err(format!("{} failed unexpectedly", spec.name)))?;
+        .unwrap_or_else(|payload| Err(crate::bug(spec.name, payload.as_ref())))?;
         Ok((job, full_ids(&inputs.loaded), inputs.messages.clone(), inputs.losses.clone()))
     })?;
     // What reading its inputs approximated (a raster's overview read for a file read in place),
@@ -748,9 +748,9 @@ impl ToolRun {
                 ToolDone { inputs: Vec::new(), result, full_ids: full_ids(&inputs.loaded) }
             })
         }))
-        .unwrap_or_else(|_| ToolDone {
+        .unwrap_or_else(|payload| ToolDone {
             inputs: Vec::new(),
-            result: Err(format!("{name} failed unexpectedly")),
+            result: Err(crate::bug(name, payload.as_ref())),
             full_ids: FullIds::new(),
         });
         done.inputs = captured.as_ref().map_or_else(Vec::new, rustgis_data::provenance::Capture::inputs);
