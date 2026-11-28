@@ -395,8 +395,42 @@ pub(crate) fn append_geometry(
 /// The most vertices one layer's mesh may take (40 bytes each: 80 MB, well inside the 256 MiB
 /// `max_buffer_size` devices and WebGL offer). A layer of a million tiny polygons (3D buildings
 /// as faces) would tessellate to tens of millions — seconds per frame, for a mesh the device
-/// then refuses — while the CPU path splats its sub-pixel features in milliseconds.
+/// then refuses — while the CPU path splats its sub-pixel features in milliseconds. A layer cut
+/// into tiles may take more, from what the scene has left ([`layer_room`]), when each of its
+/// tiles keeps to [`MAX_TILE_VERTICES`].
 pub(crate) const MAX_LAYER_VERTICES: usize = 2_000_000;
+
+/// The most vertices a tile's mesh may take for its layer to take more than
+/// [`MAX_LAYER_VERTICES`]: 2^20, from two to eight a pixel of the tile (a power of two map units,
+/// 362 to 724 pixels on a side). Denser, its features are mostly smaller than a pixel, which the
+/// CPU splats quicker than lyon tessellates them: such a layer draws on the CPU. Within its own
+/// limit, a layer's tiles may be as dense as one mesh of it.
+pub(crate) const MAX_TILE_VERTICES: usize = 1 << 20;
+
+/// The vertices a GPU scene's layer meshes may take together past what each layer may always take
+/// ([`MAX_LAYER_VERTICES`]): a sixteenth of the computer's memory at 40 bytes a vertex, from 6
+/// million (240 MB: the browser, a phone, a computer whose memory isn't known) to 16 million
+/// (640 MB). Highlights, extrusions, the basemap and the graticule aren't counted: they are
+/// bounded by their own data. A share of the memory (`memory::scaled`), not of what is free now
+/// (`memory::planned`): it is asked once a scene, too often to ask the system what is free.
+/// [`rustgis_data::memory::thread_scratch`], asked while drawing too, makes the same choice, and a
+/// phone takes the floor, as it does there.
+pub(crate) fn scene_vertices() -> usize {
+    const FLOOR: usize = 6_000_000;
+    const CEILING: usize = 16_000_000;
+    if rustgis_data::memory::on_phone() {
+        return FLOOR;
+    }
+    rustgis_data::memory::scaled(rustgis_data::memory::physical().map(|m| m / 4), FLOOR, CEILING, 40)
+}
+
+/// The vertices the next layer's meshes may take when the scene's meshes hold `meshed` of a
+/// budget of `scene` ([`scene_vertices`]): [`MAX_LAYER_VERTICES`], as every layer may, or what
+/// the budget has left when that is more. So a layer that meshes on its own meshes in any
+/// scene, and the scene passes its budget by no more than those layers do.
+pub(crate) fn layer_room(scene: usize, meshed: usize) -> usize {
+    MAX_LAYER_VERTICES.max(scene.saturating_sub(meshed))
+}
 
 /// The vertex limit of meshes that aren't a layer's (highlights, the basemap, the graticule,
 /// extrusion roofs): small or bounded by their own data.
@@ -469,11 +503,13 @@ fn stroke_reach(g: &Geometry, s: &Symbol, wireframe: bool, ppp: f32, map_per_px:
 /// the rest meshed on several threads, or made one mesh when `tiling` is `None` (a tilted view,
 /// whose far strokes are wider than a tile's reach); its markers follow them as one command.
 /// Tiled, its lines and polygons are those within a tile of the cull's tiles
-/// ([`crate::mesh_tiles::feature_area`]), which may be more than `visible` keeps, out of view. `limit` is what is left of the layer's
-/// [`MAX_LAYER_VERTICES`] (its earlier batches took the rest). `Ok` with the mesh vertices pushed; `Err(Refused)` when lyon refused a
-/// feature, `Err(TooDense)` when the mesh would pass `limit`, `Err(Imprecise)` when the
-/// features reach too far for f32 at this zoom — the caller then draws the layer (or batch)
-/// with tiny-skia instead (nothing is pushed part-way).
+/// ([`crate::mesh_tiles::feature_area`]), which may be more than `visible` keeps, out of view.
+/// `limit` is what is left of the layer's room ([`layer_room`]; its earlier batches took the
+/// rest). One mesh, and each tile, keeps to [`MAX_LAYER_VERTICES`] of it; for the tiles to take
+/// more than that together, each keeps to [`MAX_TILE_VERTICES`]. `Ok` with the mesh vertices pushed; `Err(Refused)`
+/// when lyon refused a feature, `Err(TooDense)` when the meshes would pass those limits,
+/// `Err(Imprecise)` when the features reach too far for f32 at this zoom — the caller then
+/// draws the layer (or batch) with tiny-skia instead (nothing is pushed part-way).
 pub(crate) fn collect_layer(
     cmds: &mut Vec<DrawCmd>,
     layer: &Layer,
@@ -495,6 +531,8 @@ pub(crate) fn collect_layer(
     let mut estimate = 0usize;
     let mut features = Vec::new();
     let mut markers = Vec::new();
+    // One mesh is one buffer: it keeps to a layer's own limit, whatever room the scene leaves.
+    let one = limit.min(MAX_LAYER_VERTICES);
     // Tiled, a tile's mesh takes every feature reaching it, wherever the cull's edge lies, so a
     // kept tile is the one meshing it again makes: lines and polygons are kept by the tiles' area
     // (a tile past them all round), markers by the cull.
@@ -530,7 +568,7 @@ pub(crate) fn collect_layer(
         // tiles take only each feature's part in them, and keep to the limit as they're made.
         if tiling.is_none() {
             estimate = estimate.saturating_add(n);
-            if estimate > limit {
+            if estimate > one {
                 return Err(TessError::TooDense);
             }
         }
@@ -574,10 +612,10 @@ pub(crate) fn collect_layer(
             for f in shown {
                 // The estimate is rough: a feature estimated not to fit isn't started, and
                 // `append_geometry` stops one that overflows at the first vertex past the limit.
-                if v.len().saturating_add(f.estimate) > limit {
+                if v.len().saturating_add(f.estimate) > one {
                     return Err(TessError::TooDense);
                 }
-                append_geometry(&mut v, &mut i, &mut Vec::new(), f.geometry, &f.symbol, origin, wireframe, ppp, map_per_px, limit)?;
+                append_geometry(&mut v, &mut i, &mut Vec::new(), f.geometry, &f.symbol, origin, wireframe, ppp, map_per_px, one)?;
             }
             let used = v.len();
             let mesh = (!i.is_empty()).then(|| DrawCmd::Mesh { origin, vertices: Arc::new(v), indices: Arc::new(i), square: None });
@@ -686,6 +724,16 @@ mod tests {
     use super::*;
     use rustgis_data::GeometryType;
     use rustgis_map::Marker;
+
+    #[test]
+    fn a_layer_may_take_its_own_limit_or_what_the_scene_has_left() {
+        assert_eq!(layer_room(6_000_000, 0), 6_000_000);
+        assert_eq!(layer_room(6_000_000, 3_500_000), 2_500_000);
+        assert_eq!(layer_room(6_000_000, 5_000_000), MAX_LAYER_VERTICES, "its own, however full the scene");
+        assert_eq!(layer_room(6_000_000, 9_000_000), MAX_LAYER_VERTICES);
+        let budget = scene_vertices();
+        assert!((6_000_000..=16_000_000).contains(&budget), "{budget}");
+    }
 
     fn square(x: f64, y: f64, s: f64) -> Vec<Coord> {
         vec![Coord::new(x, y), Coord::new(x + s, y), Coord::new(x + s, y + s), Coord::new(x, y + s)]

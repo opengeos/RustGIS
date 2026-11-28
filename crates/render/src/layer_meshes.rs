@@ -34,8 +34,9 @@ use crate::mesh_tiles::MadeTile;
 /// The most bytes of meshes kept, with what each was made from ([`ENTRY_BYTES`] and its rows):
 /// about 3.3 million vertices on the desktop and 0.8 million in the browser. Past it, the meshes
 /// used longest ago go first, but never one a scene being drawn has used ([`Scene`]): when the
-/// newest doesn't fit beside those, it isn't kept. A layer's mesh is at most
-/// [`crate::mesh::MAX_LAYER_VERTICES`] vertices, 80 MB.
+/// newest doesn't fit beside those, it isn't kept. A layer's meshes are mostly at most
+/// [`crate::mesh::MAX_LAYER_VERTICES`] vertices, 80 MB; one cut into tiles may hold more, from the
+/// scene's budget ([`crate::mesh::layer_room`]), and isn't kept past this.
 pub(crate) const MAX_BYTES: usize = if cfg!(target_arch = "wasm32") { 32 << 20 } else { 128 << 20 };
 
 /// What a kept mesh is counted as holding beside its data and rows: its layer's look (the
@@ -230,15 +231,16 @@ impl Drop for Scene {
 }
 
 /// The commands of the mesh kept for the layer that looks as `look`, made as `made` from `rows`,
-/// pushed onto `cmds`, and its vertices; `None`, pushing nothing, when none is kept.
-pub(crate) fn take(cmds: &mut Vec<DrawCmd>, look: &LayerLook, made: &Made, rows: &[bool]) -> Option<usize> {
+/// pushed onto `cmds`, and its vertices; `None`, pushing nothing, when none is kept or the one
+/// kept has more than `room` vertices (the layers below took more of the scene's budget). Not
+/// counted as used then, so the mesh made in its place can be kept instead.
+pub(crate) fn take(cmds: &mut Vec<DrawCmd>, look: &LayerLook, made: &Made, rows: &[bool], room: usize) -> Option<usize> {
     let vertices = with_meshes(|m| {
         m.clock += 1;
         let clock = m.clock;
-        let k = m
-            .kept
-            .iter_mut()
-            .find(|k| k.look.id() == look.id() && k.made.same(made) && k.look.change(look) == Change::Same && k.rows == rows)?;
+        let k = m.kept.iter_mut().find(|k| {
+            k.look.id() == look.id() && k.made.same(made) && k.look.change(look) == Change::Same && k.rows == rows && k.vertices <= room
+        })?;
         k.used = clock;
         cmds.extend(k.cmds.iter().filter_map(share));
         Some(k.vertices)
@@ -625,7 +627,7 @@ mod tests {
                 .into_iter()
                 .zip(sizes)
                 .filter(|(id, n)| {
-                    let taken = take(&mut Vec::new(), &look(m, *id), &made, &[true]).is_some();
+                    let taken = take(&mut Vec::new(), &look(m, *id), &made, &[true], usize::MAX).is_some();
                     if !taken {
                         keep_within(max, live(m, *id), look(m, *id), made.clone(), &[true], &[mesh(*n)], Vec::new(), *n, 0);
                     }
@@ -693,7 +695,7 @@ mod tests {
         let keep_at = |l: &rustgis_map::Layer, dx: f64, n: usize| {
             keep_within(max, l.instance_id(), look(l), at(dx), &[true], &[mesh(n)], Vec::new(), n, 0)
         };
-        let has = |l: &rustgis_map::Layer, dx: f64| take(&mut Vec::new(), &look(l), &at(dx), &[true]);
+        let has = |l: &rustgis_map::Layer, dx: f64| take(&mut Vec::new(), &look(l), &at(dx), &[true], usize::MAX);
         {
             let _old = Scene::begin();
             keep_at(&la, 0.0, 500);
@@ -718,6 +720,18 @@ mod tests {
         keep_at(&other, 0.0, 400);
         keep_at(&other, 1.0, 400);
         assert_eq!((has(&la, 0.0), has(&other, 0.0)), (Some(500), Some(400)));
+        drop(_scene);
+        // One past the room a scene has for the layer isn't taken, nor counted as used by it: the
+        // mesh made in its place within the room is kept instead.
+        clear();
+        {
+            let _old = Scene::begin();
+            keep_at(&la, 0.0, 500);
+        }
+        let _scene = Scene::begin();
+        assert_eq!(take(&mut Vec::new(), &look(&la), &at(0.0), &[true], 499), None);
+        keep_at(&la, 0.0, 300);
+        assert_eq!(take(&mut Vec::new(), &look(&la), &at(0.0), &[true], 499), Some(300));
     }
 
     /// A map closed lets go of its layers' meshes with the next frame drawn, of any map and on

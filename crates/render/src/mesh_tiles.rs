@@ -391,8 +391,20 @@ fn append_cut(
     Ok(())
 }
 
+/// The vertex limits a layer's tiles keep to beside the layer's room: each tile's mesh, one
+/// buffer, at most `own`; for the layer to take more than `own` together, every tile at most
+/// `dense` ([`crate::mesh::MAX_TILE_VERTICES`]).
+#[derive(Clone, Copy)]
+struct Caps {
+    own: usize,
+    dense: usize,
+}
+
+/// The limits the scene's layers keep to.
+const CAPS: Caps = Caps { own: crate::mesh::MAX_LAYER_VERTICES, dense: crate::mesh::MAX_TILE_VERTICES };
+
 /// One tile's mesh: its features in layer order, each whole or cut to the tile grown by its
-/// reach. `Ok(None)` when nothing draws there.
+/// reach, within `own` vertices. `Ok(None)` when nothing draws there.
 fn tile_mesh(
     features: &[Feature<'_>],
     tile: Tile,
@@ -401,7 +413,7 @@ fn tile_mesh(
     wireframe: bool,
     ppp: f32,
     map_per_px: f64,
-    limit: usize,
+    (limit, own): (usize, usize),
     used: &AtomicUsize,
 ) -> Result<MadeTile, TessError> {
     let origin = tile.corner(side);
@@ -411,8 +423,7 @@ fn tile_mesh(
     for &k in members {
         let Some(f) = features.get(k) else { continue };
         // Tiles finished already past the limit: the layer is refused whatever this one holds,
-        // so it stops early. A tile's own room is the whole limit, so whether the layer meshes
-        // doesn't hang on which tiles finished first (the same on any number of threads).
+        // so it stops early.
         if used.load(Ordering::Relaxed) > limit {
             return Err(TessError::TooDense);
         }
@@ -422,12 +433,12 @@ fn tile_mesh(
         if e.min_x >= grown.min_x && e.max_x <= grown.max_x && e.min_y >= grown.min_y && e.max_y <= grown.max_y {
             // Whole, it takes about its estimate; cut, only its part here, bounded as it's made.
             need = need.max(v.len().saturating_add(f.estimate));
-            if need > limit {
+            if need > own {
                 return Err(TessError::TooDense);
             }
-            crate::mesh::append_geometry(&mut v, &mut i, &mut no_points, f.geometry, &f.symbol, origin, wireframe, ppp, map_per_px, limit)?;
+            crate::mesh::append_geometry(&mut v, &mut i, &mut no_points, f.geometry, &f.symbol, origin, wireframe, ppp, map_per_px, own)?;
         } else {
-            append_cut(&mut v, &mut i, f, &grown, origin, wireframe, ppp, map_per_px, limit)?;
+            append_cut(&mut v, &mut i, f, &grown, origin, wireframe, ppp, map_per_px, own)?;
         }
     }
     // Each part is refused once it passes the room left: it fits a limit as low as the vertices.
@@ -456,11 +467,11 @@ pub(crate) fn tile_meshes(
     map_per_px: f64,
     limit: usize,
 ) -> Option<Result<(Vec<MadeTile>, usize), TessError>> {
-    tile_meshes_on(features, area, kept, wireframe, ppp, map_per_px, limit, None)
+    tile_meshes_on(features, area, kept, wireframe, ppp, map_per_px, limit, CAPS, None)
 }
 
-/// [`tile_meshes`] on `threads` threads, or as [`threads_for`] decides.
-#[expect(clippy::too_many_arguments, reason = "the layer, the scene's area and scale, the tiles kept and the threads")]
+/// [`tile_meshes`] within `caps`, on `threads` threads, or as [`threads_for`] decides.
+#[expect(clippy::too_many_arguments, reason = "the layer, the scene's area and scale, the tiles kept, the limits and the threads")]
 fn tile_meshes_on(
     features: &[Feature<'_>],
     area: &Extent,
@@ -469,6 +480,7 @@ fn tile_meshes_on(
     ppp: f32,
     map_per_px: f64,
     limit: usize,
+    caps: Caps,
     threads: Option<usize>,
 ) -> Option<Result<(Vec<MadeTile>, usize), TessError>> {
     let side = tile_side(map_per_px)?;
@@ -478,24 +490,29 @@ fn tile_meshes_on(
         tiles.iter().map(|(tile, _)| kept.binary_search_by(|k| k.tile.cmp(tile)).ok().and_then(|i| kept.get(i))).collect();
     let to_make: Vec<&(Tile, Vec<usize>)> = tiles.iter().zip(&taken).filter(|(_, k)| k.is_none()).map(|(t, _)| t).collect();
     let threads = threads.unwrap_or_else(|| threads_for(features, &to_make));
+    // A tile's own room is the layer's limit, or one buffer's when that is less: not what the
+    // tiles finished first left, so whether the layer meshes doesn't hang on which those were
+    // (the same on any number of threads).
+    let own = limit.min(caps.own);
     // The vertices of the tiles made or taken so far: past `limit` the layer is refused, and the
     // tiles still at work stop at their next feature, so it never holds much more than `limit`
-    // (by the tiles at work at once, each at most `limit`).
+    // (by the tiles at work at once, each at most `own`).
     let used = AtomicUsize::new(taken.iter().flatten().map(|k| k.vertices()).fold(0, usize::saturating_add));
     if used.load(Ordering::Relaxed) > limit {
         return Some(Err(TessError::TooDense));
     }
     let made = crate::tile_mesh::parallel_on(&to_make, threads, |(tile, members)| {
-        tile_mesh(features, *tile, members, side, wireframe, ppp, map_per_px, limit, &used)
+        tile_mesh(features, *tile, members, side, wireframe, ppp, map_per_px, (limit, own), &used)
     });
     let mut made = made.into_iter();
     let mut out = Vec::with_capacity(tiles.len());
     let mut used = 0usize;
+    let mut densest = 0usize;
     for k in taken {
         let tile = match k {
             // One that wouldn't fit the limit would be refused again, and with it the layer, in
             // its place in grid order (an error in a tile before it is the layer's).
-            Some(k) if k.need > limit => return Some(Err(TessError::TooDense)),
+            Some(k) if k.need > own => return Some(Err(TessError::TooDense)),
             Some(k) => k.share(),
             // A tile that panicked (hostile data) leaves the layer to the CPU, as lyon refusing it.
             None => match made.next().flatten().unwrap_or(Err(TessError::Refused)) {
@@ -507,7 +524,13 @@ fn tile_meshes_on(
         if used > limit {
             return Some(Err(TessError::TooDense));
         }
+        densest = densest.max(tile.need);
         out.push(tile);
+    }
+    // Past a layer's own limit only with every tile within a dense tile's: a denser one's
+    // features are mostly under a pixel, quicker splatted. Within it, as any layer may.
+    if used > caps.own && densest > caps.dense {
+        return Some(Err(TessError::TooDense));
     }
     Some(Ok((out, used)))
 }
@@ -597,7 +620,7 @@ mod tests {
         let features: Vec<Feature<'_>> = geoms.iter().map(|g| feature(g, symbol(rustgis_map::Rgba::rgb(9, 99, 199), 3.0))).collect();
         let area = Extent::new(-2048.0, -2048.0, 2048.0, 2048.0);
         let made = |threads| {
-            let (cmds, used) = tile_meshes_on(&features, &area, &[], false, 1.0, 1.0, usize::MAX, Some(threads)).unwrap().unwrap();
+            let (cmds, used) = tile_meshes_on(&features, &area, &[], false, 1.0, 1.0, usize::MAX, CAPS, Some(threads)).unwrap().unwrap();
             let cmds = commands(&cmds);
             let bytes: Vec<Vec<u8>> = cmds
                 .iter()
@@ -627,7 +650,8 @@ mod tests {
         let line = Geometry::Line(vec![pts]);
         let f = feature(&line, symbol(rustgis_map::Rgba::rgb(0, 0, 0), 2.0));
         let area = Extent::new(-1024.0, -1024.0, 1024.0, 1024.0);
-        let (all, used) = tile_meshes_on(std::slice::from_ref(&f), &area, &[], false, 1.0, 1.0, usize::MAX, Some(1)).unwrap().unwrap();
+        let (all, used) =
+            tile_meshes_on(std::slice::from_ref(&f), &area, &[], false, 1.0, 1.0, usize::MAX, CAPS, Some(1)).unwrap().unwrap();
         let all = commands(&all);
         assert!(tiles(&all).len() >= 4, "{}", tiles(&all).len());
         assert!(used < f.estimate, "cut to the area: {used} of {}", f.estimate);
@@ -635,14 +659,45 @@ mod tests {
         // Room for the biggest tile but not the whole estimate: it meshes.
         let room = used.max(biggest);
         assert!(room < f.estimate);
-        assert!(tile_meshes_on(std::slice::from_ref(&f), &area, &[], false, 1.0, 1.0, room, Some(1)).unwrap().is_ok());
+        assert!(tile_meshes_on(std::slice::from_ref(&f), &area, &[], false, 1.0, 1.0, room, CAPS, Some(1)).unwrap().is_ok());
         // Past the limit by a vertex, or with room for each tile but not all: refused alike on
         // any number of threads.
         for limit in [used - 1, biggest.max(used / 2)] {
             for threads in [1, 8] {
-                let short = tile_meshes_on(std::slice::from_ref(&f), &area, &[], false, 1.0, 1.0, limit, Some(threads)).unwrap();
+                let short = tile_meshes_on(std::slice::from_ref(&f), &area, &[], false, 1.0, 1.0, limit, CAPS, Some(threads)).unwrap();
                 assert!(matches!(short, Err(TessError::TooDense)), "limit {limit}, {threads} threads");
             }
+        }
+    }
+
+    /// A layer takes more than its own limit only when each of its tiles keeps to a dense tile's:
+    /// a denser one's features are mostly under a pixel, quicker splatted on the CPU. Within its
+    /// own limit, a tile may be as dense as before.
+    #[test]
+    fn a_layer_past_its_own_limit_needs_every_tile_within_a_dense_ones() {
+        // Four lines alike, each in a tile of its own: a tile's need (its estimate, more than
+        // its vertices) is less than the four's vertices.
+        let line = |x: f64| {
+            Geometry::Line(vec![(0..120u32).map(|k| Coord::new(x + f64::from(k) * 3.0, 100.0 + f64::from(k % 2) * 40.0)).collect()])
+        };
+        let lines = [line(20.0), line(600.0), line(1100.0), line(1700.0)];
+        let s = symbol(rustgis_map::Rgba::rgb(0, 0, 0), 1.0);
+        let features: Vec<Feature<'_>> = lines.iter().map(|l| feature(l, s)).collect();
+        let area = Extent::new(10.0, 10.0, 2100.0, 500.0);
+        let made =
+            |caps: Caps, threads: usize| tile_meshes_on(&features, &area, &[], false, 1.0, 1.0, usize::MAX, caps, Some(threads)).unwrap();
+        let Ok((tiles, used)) = made(CAPS, 1) else { panic!("meshed") };
+        let needs: Vec<usize> = tiles.iter().filter(|t| t.cmd.is_some()).map(|t| t.need).collect();
+        assert!(needs.len() >= 4, "{needs:?}");
+        let densest = needs.iter().copied().max().unwrap_or(0);
+        assert!(densest < used, "{needs:?} of {used}");
+        for threads in [1, 8] {
+            // Past its own limit, with a tile past a dense one's: refused.
+            assert!(matches!(made(Caps { own: used - 1, dense: densest - 1 }, threads), Err(TessError::TooDense)), "{threads} threads");
+            // Every tile within: it meshes.
+            assert!(made(Caps { own: used - 1, dense: densest }, threads).is_ok(), "{threads} threads");
+            // Within its own limit, however dense a tile.
+            assert!(made(Caps { own: used, dense: 1 }, threads).is_ok(), "{threads} threads");
         }
     }
 
@@ -716,7 +771,7 @@ mod tests {
         let before = Extent::new(-1800.0, -1500.0, 700.0, 900.0);
         let after = Extent::new(-1000.0, -1100.0, 1535.0, 1300.0);
         let made = |area: &Extent, kept: &[MadeTile]| {
-            tile_meshes_on(&features, area, kept, false, 1.0, 1.0, usize::MAX, Some(1)).unwrap().unwrap()
+            tile_meshes_on(&features, area, kept, false, 1.0, 1.0, usize::MAX, CAPS, Some(1)).unwrap().unwrap()
         };
         let (kept, _) = made(&before, &[]);
         let (fresh, fresh_used) = made(&after, &[]);
@@ -742,7 +797,7 @@ mod tests {
     }
 
     fn made_within(features: &[Feature<'_>], area: &Extent, kept: &[MadeTile], limit: usize) -> Result<(Vec<MadeTile>, usize), TessError> {
-        tile_meshes_on(features, area, kept, false, 1.0, 1.0, limit, Some(1)).unwrap()
+        tile_meshes_on(features, area, kept, false, 1.0, 1.0, limit, CAPS, Some(1)).unwrap()
     }
 
     #[test]
