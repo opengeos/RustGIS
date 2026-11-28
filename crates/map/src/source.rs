@@ -1308,9 +1308,10 @@ impl SourceLayer {
         self.handle.as_ref().filter(|h| h.visits_extent_chunks()).cloned()
     }
 
-    /// A source capable of a complete, ordered render traversal.
+    /// A source capable of a complete, ordered render traversal. A failed opening or schema
+    /// check must not be bypassed by the renderer's direct access to the handle.
     pub fn chunk_source(&self) -> Option<Arc<dyn FeatureSource>> {
-        self.handle.as_ref().filter(|h| h.streams_chunks()).cloned()
+        self.handle.as_ref().filter(|h| self.error.is_none() && h.streams_chunks()).cloned()
     }
 
     /// Reuses a complete source's thinning decision for a projection and LOD level. Both

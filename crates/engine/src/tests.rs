@@ -57460,7 +57460,7 @@ fn reads_made_ahead_are_taken_by_the_command() {
         assert_eq!(unread(&s), before + 1, "{:?}", s.notices.iter().map(|n| &n.text).collect::<Vec<_>>());
     }
 
-    // A field added while the read ran: it is read again, with that field kept.
+    // A saved field absent from the source must not receive positional source values.
     let path = dir.join("fields.geojson");
     std::fs::write(&path, points).unwrap();
     let id = s.run("layer.addData", &json!({"path": path.display().to_string(), "stream": true})).unwrap()["layer"].as_u64().unwrap();
@@ -57470,7 +57470,8 @@ fn reads_made_ahead_are_taken_by_the_command() {
     extra.name = "added".into();
     s.map_mut().layer_mut(id as u32).unwrap().dataset.fields.push(extra);
     s.run("layer.rename", &json!({"layer": id, "name": "Renamed while reading"})).unwrap();
-    crate::cmd::reads::read_land(&mut s, read).unwrap();
+    let error = crate::cmd::reads::read_land(&mut s, read).unwrap_err();
+    assert!(error.contains("added") && error.contains("Reload Data"), "{error}");
     assert_eq!(s.map().layer(id as u32).unwrap().name, "Renamed while reading");
     assert!(s.map().layer(id as u32).unwrap().dataset.fields.iter().any(|f| f.name == "added"));
 
