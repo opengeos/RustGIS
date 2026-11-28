@@ -435,12 +435,23 @@ pub(crate) fn file_command(
     if s.downloads_files() {
         return download_command(s, command, p, build);
     }
+    // A file drawn with installed fonts waits for their folders to be read, as the downloaded
+    // one does, and says when a scan started while it was drawn.
+    if uses_fonts(command) && cjk_scan_pending() {
+        return Err(CJK_PENDING.into());
+    }
     let mark = s.notice_mark();
     let path = super::ps(p, "path").ok_or("path is required")?;
-    let made = build(s, Output { path, room: None })?;
+    let out = Output { path, room: None };
+    let (made, pending_cjk) =
+        if uses_fonts(command) { rustgis_render::fonts::track_pending_cjk(|| build(s, out)) } else { (build(s, out), false) };
+    let made = made?;
     rustgis_data::io::write_atomic(std::path::Path::new(path), &made.bytes).map_err(|e| format!("{path}: {e}"))?;
     for note in made.notes {
         s.say(note);
+    }
+    if pending_cjk {
+        s.warn(CJK_STARTED);
     }
     s.retain_written_notices(mark);
     if let Some(done) = made.done {
@@ -493,6 +504,8 @@ pub(crate) fn download_command(
         }
     };
     let said: Vec<String> = held.iter().map(|notice| notice.text.clone()).collect();
+    // Said if the queue refuses the file, as when it isn't made.
+    let unsent = held.clone();
     let Made { bytes, answer, done, taken, .. } = made;
     let done = done.unwrap_or_else(|| format!("Download offered: {name}"));
     let then: Then = Box::new(move |s: &mut Session, _: &mut Value| {
@@ -520,7 +533,15 @@ pub(crate) fn download_command(
         #[cfg(not(target_arch = "wasm32"))]
         crs_used: Vec::new(),
     };
-    let mut out = super::gp::queue_export(s, wrote)?;
+    let mut out = match super::gp::queue_export(s, wrote) {
+        Ok(out) => out,
+        Err(why) => {
+            for notice in unsent {
+                s.relay_notice(notice);
+            }
+            return Err(why);
+        }
+    };
     if let Some(messages) = out["messages"].as_array_mut() {
         messages.extend(said.into_iter().map(Value::String));
     }
@@ -1002,5 +1023,35 @@ mod tests {
         let table_err =
             write_here(&mut s, &serde_json::json!({"layer": "NoSuchLayer", "path": "out.csv"}), "share.exportTable").unwrap_err();
         assert!(!table_err.contains("CJK font folder scan"), "{table_err}");
+
+        // A file command that draws with fonts waits on the desktop too, before anything is made.
+        let made = std::cell::Cell::new(false);
+        let build = |_: &mut Session, _: Output<'_>| {
+            made.set(true);
+            Err::<Made, String>("not reached".into())
+        };
+        let err = file_command(&mut s, "presentation.export", &serde_json::json!({"path": "deck.pdf"}), build).unwrap_err();
+        assert!(err.contains("CJK font folder scan is still running"), "{err}");
+        assert!(!made.get());
+    }
+
+    /// A download the queue refuses (a file not made within the room, past the limit) says what
+    /// making it said, as one that isn't made does.
+    #[test]
+    fn a_download_the_queue_refuses_says_what_making_it_said() {
+        let mut s = Session::new(crate::Project::default());
+        s.queue_gp_files = true;
+        s.download_cap = Some(10);
+        s.registry.commands.push(crate::CommandSpec::new("test.bigFile", "Big file", "Test", |s, p| {
+            download_command(s, "test.bigFile", p, |s, _| {
+                s.warn("made it with a note");
+                Ok(Made::new(vec![0; 100], serde_json::Value::Null))
+            })
+        }));
+        let mark = s.notice_mark();
+        let err = s.run("test.bigFile", &serde_json::json!({"path": "big.bin"})).unwrap_err();
+        assert!(err.contains("big.bin"), "{err}");
+        assert!(s.notices_since(mark).iter().any(|n| n.text == "made it with a note"), "{:?}", s.notices_since(mark));
+        assert!(s.take_gp_files().is_empty());
     }
 }
