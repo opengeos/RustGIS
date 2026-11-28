@@ -293,14 +293,15 @@ pub(super) fn elements_value(s: &Session, d: &Draft) -> String {
         let choice = joined([Some(when), style]);
         on.push(i18n::fmt("{surround}: {choice}", &[("surround", surround_labels()[NORTH_ARROW]), ("choice", &choice)]));
     }
-    // The legend and scale bar by name, and the looks sent with them.
+    // The legend and scale bar by name, and the looks sent with them: the parts in logical order,
+    // each line put in display form once, as a whole.
     let looked = |name: &str, look: String| match look.is_empty() {
-        true => name.to_string(),
+        true => i18n::display(name),
         false => i18n::fmt("{surround}: {choice}", &[("surround", name), ("choice", &look)]),
     };
     let (title, columns) = d.legend_look(s);
-    let title = title.map(|t| i18n::fmt("“{title}”", &[("title", t)]));
-    let columns = columns.map(|n| i18n::fmt("Columns: {count}", &[("count", &n.to_string())]));
+    let title = title.map(|t| i18n::fmt_raw("“{title}”", &[("title", t)]));
+    let columns = columns.map(|n| i18n::fmt_raw("Columns: {count}", &[("count", &n.to_string())]));
     let legend = looked(tl_raw!("Legend"), joined([title.as_deref(), columns.as_deref()]));
     let (units, style) = d.scale_look(s);
     let scale = joined([units.map(|u| tl_raw!(u.label())), style.map(|v| tl_raw!(v.label()))]);
@@ -791,6 +792,29 @@ mod tests {
         assert!(h.query_by_label(want).is_some());
         let h = review(Elements { legend: false, ..looks() });
         assert!(h.query_by_label_contains("Key").is_none(), "no legend, no title");
+    }
+
+    /// In a right-to-left language the legend's and scale bar's lines are put in display form once,
+    /// as a whole, with a look and without one.
+    #[test]
+    fn the_review_shows_the_looks_right_to_left() {
+        let app = app();
+        let previous = i18n::current();
+        i18n::set_current(i18n::lang_from_tag("fa").unwrap());
+        let mut d = Draft::new(&app.session);
+        let title = "نقشه GIS 2026";
+        d.elements = Elements { legend_title: title.into(), legend_columns: Some(2), ..Elements::default() };
+        let looked = elements_value(&app.session, &d);
+        let parts =
+            format!("{} · {}", i18n::fmt_raw("“{title}”", &[("title", title)]), i18n::fmt_raw("Columns: {count}", &[("count", "2")]));
+        let legend = i18n::fmt("{surround}: {choice}", &[("surround", tl_raw!("Legend")), ("choice", &parts)]);
+        let bare = [i18n::display(tl_raw!("Legend")), i18n::display(tl_raw!("Scale bar"))];
+        d.elements = Elements::default();
+        let plain = elements_value(&app.session, &d);
+        i18n::set_current(previous);
+        assert!(looked.lines().any(|l| l == legend), "{looked}");
+        assert!(looked.lines().any(|l| l == bare[1]), "{looked}");
+        assert!(plain.lines().any(|l| l == bare[0]), "{plain}");
     }
 
     /// Create draws the looks picked; Undo takes the layout away.
