@@ -83,7 +83,7 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<Layer>> {
         duplicate_placemarks: 0,
         rows: Vec::new(),
         keys: Vec::new(),
-        string_keys: HashSet::new(),
+        string_keys: Default::default(),
         skipped: 0,
         geometry_losses: GeometryLosses::default(),
     };
@@ -214,8 +214,8 @@ struct Reader {
     rows: Vec<Row>,
     /// Extended data keys, in the order first seen.
     keys: Vec<String>,
-    /// Keys whose accepted values explicitly use XML Schema string typing, bounded by MAX_KEYS.
-    string_keys: HashSet<String>,
+    /// Explicit string keys from retained points, lines and polygons, each bounded by MAX_KEYS.
+    string_keys: [HashSet<String>; 3],
     /// Extended data entries past the column cap.
     dropped_keys: usize,
     duplicate_entries: usize,
@@ -621,6 +621,7 @@ impl Reader {
         // geometry's loss.
         let losses = std::mem::take(&mut parts.losses);
         let mut data = Vec::new();
+        let mut string_indices = Vec::new();
         let mut seen = HashSet::new();
         let mut duplicates = 0usize;
         if let Some(ext) = child(pm, "ExtendedData") {
@@ -651,8 +652,8 @@ impl Reader {
                         }
                         self.keys.push(k.clone());
                     }
-                    if string && !self.string_keys.contains(&k) {
-                        self.string_keys.insert(k.clone());
+                    if string {
+                        string_indices.push(data.len());
                     }
                     data.push((k, v));
                 }
@@ -665,8 +666,17 @@ impl Reader {
         // A placemark mixing kinds (a MultiGeometry of a point and a line) gives one feature per
         // kind, each in its layer.
         let mut any = false;
-        let mut push = |geometry: Geometry, zm: &Cell<bool>, rows: &mut Vec<Row>| {
+        let mut push = |geometry: Geometry, zm: &Cell<bool>, rows: &mut Vec<Row>, typed: &mut HashSet<String>| {
             any = true;
+            // Only retained rows affect inference, and each geometry layer is typed separately.
+            // The temporary indices avoid another string copy for each placemark's annotation.
+            for index in &string_indices {
+                if let Some((key, _)) = data.get(*index)
+                    && !typed.contains(key)
+                {
+                    typed.insert(key.clone());
+                }
+            }
             rows.push(Row {
                 geometry,
                 id: pm.attribute("id").map(str::to_string),
@@ -680,14 +690,14 @@ impl Reader {
         };
         match parts.points.as_slice() {
             [] => {}
-            [p] => push(Geometry::Point(*p), &parts.zm[0], &mut self.rows),
-            _ => push(Geometry::MultiPoint(parts.points), &parts.zm[0], &mut self.rows),
+            [p] => push(Geometry::Point(*p), &parts.zm[0], &mut self.rows, &mut self.string_keys[0]),
+            _ => push(Geometry::MultiPoint(parts.points), &parts.zm[0], &mut self.rows, &mut self.string_keys[0]),
         }
         if !parts.lines.is_empty() {
-            push(Geometry::Line(parts.lines), &parts.zm[1], &mut self.rows);
+            push(Geometry::Line(parts.lines), &parts.zm[1], &mut self.rows, &mut self.string_keys[1]);
         }
         if !parts.polygons.is_empty() {
-            push(Geometry::Polygon(parts.polygons), &parts.zm[2], &mut self.rows);
+            push(Geometry::Polygon(parts.polygons), &parts.zm[2], &mut self.rows, &mut self.string_keys[2]);
         }
         if any {
             self.geometry_losses.add(&losses);
@@ -735,7 +745,11 @@ impl Reader {
                     3 => r.style.as_deref(),
                     _ => r.id.as_deref(),
                 };
-                r.data.iter().find(|(dk, _)| dk == k).is_none_or(|(_, v)| v == fixed.unwrap_or_default())
+                r.data.iter().find(|(dk, _)| dk == k).is_none_or(|(_, v)| match fixed {
+                    Some(fixed) => v == fixed,
+                    // An explicit empty Data id differs from an absent source identifier.
+                    None => i != 4 && v.is_empty(),
+                })
             };
             if (i != 1 || k == "description") && self.rows.iter().all(repeats) {
                 continue;
@@ -774,9 +788,15 @@ impl Reader {
                 ds.push_next(Some(r.geometry.clone()), attrs);
                 zm_rows += usize::from(r.zm);
             }
-            // Fixed columns and explicitly typed strings stay text; other data is inferred.
+            // Fixed columns and this layer's explicitly typed strings stay text; other data
+            // is inferred from its own retained rows, even when only one kind is present.
+            let string_keys = match *kind {
+                GeometryType::Point => &self.string_keys[0],
+                GeometryType::Polyline => &self.string_keys[1],
+                _ => &self.string_keys[2],
+            };
             crate::io::type_text_columns_keeping(&mut ds, |column, _| {
-                column < fixed_fields || keys.get(column - fixed_fields).is_some_and(|(key, _)| self.string_keys.contains(key))
+                column < fixed_fields || keys.get(column - fixed_fields).is_some_and(|(key, _)| string_keys.contains(key))
             });
             let mut report = ReadReport::default();
             // The notes go with the first layer only.
@@ -1172,6 +1192,51 @@ mod tests {
         assert_eq!(layer.dataset.value(0, layer.dataset.field_index("id").unwrap()), &Value::Text(" 1e3 ".into()));
         assert_eq!(layer.dataset.value(0, layer.dataset.fields.iter().position(|f| f.name == "ID").unwrap()), &Value::Int(7));
         assert_eq!(layer.dataset.value(0, layer.dataset.field_index("other").unwrap()), &Value::Int(9));
+    }
+
+    /// Skipped placemarks and other geometry layers cannot determine a retained column's type.
+    #[test]
+    fn explicit_kml_string_types_follow_retained_geometry_layers() {
+        let point = "<Point><coordinates>1,2</coordinates></Point>";
+        let line = "<LineString><coordinates>1,2 2,3</coordinates></LineString>";
+        let polygon =
+            "<Polygon><outerBoundaryIs><LinearRing><coordinates>0,0 1,0 0,1 0,0</coordinates></LinearRing></outerBoundaryIs></Polygon>";
+        for (typed_geometry, plain_geometry, plain_kind) in [
+            ("", point, GeometryType::Point),
+            ("", line, GeometryType::Polyline),
+            ("", polygon, GeometryType::Polygon),
+            (point, line, GeometryType::Polyline),
+            (line, polygon, GeometryType::Polygon),
+        ] {
+            let xml = format!(
+                r#"<kml xmlns:i="http://www.w3.org/2001/XMLSchema-instance" xmlns:t="http://www.w3.org/2001/XMLSchema">
+              <Placemark><ExtendedData><Data name="code"><value i:type="t:string"> 1e3 </value></Data></ExtendedData>{typed_geometry}</Placemark>
+              <Placemark><ExtendedData><Data name="code"><value>7</value></Data></ExtendedData>{plain_geometry}</Placemark></kml>"#
+            );
+            let layers = read("kinds.kml", xml.as_bytes()).unwrap();
+            let plain = &layers.iter().find(|layer| layer.dataset.geometry_type == plain_kind).unwrap().dataset;
+            assert_eq!(plain.value(0, plain.field_index("code").unwrap()), &Value::Int(7));
+            if !typed_geometry.is_empty() {
+                let typed = &layers.iter().find(|layer| layer.dataset.geometry_type != plain_kind).unwrap().dataset;
+                assert_eq!(typed.value(0, typed.field_index("code").unwrap()), &Value::Text(" 1e3 ".into()));
+            }
+        }
+    }
+
+    /// A missing XML id is null, while explicitly empty extended data is present text. Only
+    /// present, equal identifiers coalesce; retaining both columns reports the collision.
+    #[test]
+    fn empty_kml_data_identifier_does_not_repeat_an_absent_xml_identifier() {
+        let xml = br#"<kml xmlns:i="http://www.w3.org/2001/XMLSchema-instance" xmlns:t="http://www.w3.org/2001/XMLSchema">
+          <Placemark id="A"><ExtendedData><Data name="id"><value i:type="t:string">A</value></Data></ExtendedData><Point><coordinates>1,2</coordinates></Point></Placemark>
+          <Placemark><ExtendedData><Data name="id"><value i:type="t:string"></value></Data></ExtendedData><Point><coordinates>3,4</coordinates></Point></Placemark></kml>"#;
+        let layer = read("ids.kml", xml).unwrap().remove(0);
+        let ds = &layer.dataset;
+        assert_eq!(ds.value(1, ds.field_index("id").unwrap()), &Value::Null);
+        let data = ds.field_index("id_1").expect("empty data differs from an absent source id");
+        assert_eq!(ds.value(0, data), &Value::Text("A".into()));
+        assert_eq!(ds.value(1, data), &Value::Text(String::new()));
+        assert_eq!(layer.report.messages.iter().filter(|n| n.contains("'id' → 'id_1'")).count(), 1);
     }
 
     #[test]
