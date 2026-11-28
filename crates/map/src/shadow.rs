@@ -269,7 +269,8 @@ impl Way {
 /// The sun as each cell's trace needs it.
 struct Sun {
     way: Way,
-    /// The tangents of the disc's lower and upper edges.
+    /// The tangents of the disc's lower and upper edges, the upper one infinite when the disc
+    /// reaches the zenith.
     low: f64,
     high: f64,
     altitude: f64,
@@ -282,7 +283,10 @@ impl Sun {
         let altitude = altitude.clamp(0.0, 90.0);
         let soft = soft_edge(Some(soft));
         let edge = |a: f64| a.clamp(-89.9, 89.9).to_radians().tan();
-        Sun { way: Way::new(r, azimuth), low: edge(altitude - soft), high: edge(altitude + soft), altitude, soft }
+        // A disc reaching the zenith has no upper edge any terrain hides it past: the share above
+        // the terrain is still lit, however steep that is.
+        let high = if altitude + soft >= 90.0 { f64::INFINITY } else { edge(altitude + soft) };
+        Sun { way: Way::new(r, azimuth), low: edge(altitude - soft), high, altitude, soft }
     }
 
     /// The share of the disc above the steepest tangent `t` seen toward it, 0 to 255.
@@ -610,6 +614,20 @@ mod tests {
                     assert_eq!(g[row * 60 + col], want, "uphill {uphill}, cell {col},{row}");
                 }
             }
+        }
+    }
+
+    /// A disc reaching past the zenith (a high sun, a wide disc) keeps the share of it above the
+    /// terrain seen, however steep: none of it is hidden whole at the upper edge's 89.9°.
+    #[test]
+    fn a_disc_past_the_zenith_keeps_its_share_above_steep_terrain() {
+        let r = dem(3, 3, |_, _| 0.0);
+        let t: f64 = 1000.0;
+        for (altitude, soft) in [(80.0, 15.0), (88.0, SOFT_EDGE)] {
+            let share = (altitude + soft - t.atan().to_degrees()) / (2.0 * soft);
+            let lit = Sun::new(&r, 315.0, altitude, soft).lit(t);
+            assert_eq!(lit, (share * 255.0).round() as u8, "{altitude}° ± {soft}°");
+            assert!(lit > 0, "{altitude}° ± {soft}°");
         }
     }
 }
