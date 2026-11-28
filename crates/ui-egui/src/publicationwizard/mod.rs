@@ -870,6 +870,9 @@ mod tests {
         open(&mut app);
         let mut h = harness(app);
         resize(&mut h, vec2(-500.0, -400.0));
+        // Taller entries, so the nine overflow by far more than a platform's font metrics differ.
+        h.ctx.all_styles_mut(|s| s.spacing.interact_size.y = 40.0);
+        h.run_steps(30);
         // The top of the list, where its first step is before any scrolling.
         let first = h.get_by_role_and_label(Role::Button, "Size").rect();
         let inside = |h: &egui_kittest::Harness<'static, RustGisApp>, name: &str| {
