@@ -148,6 +148,8 @@ mod workspacepanes;
 mod worldviewui;
 mod zarrui;
 
+use std::sync::Arc;
+
 use rustgis_engine::cmd::service_added::Removal;
 use rustgis_engine::render::rustgis_tiles::failure::Failure;
 use rustgis_engine::render::rustgis_tiles::{address::Reach, cache};
@@ -259,6 +261,17 @@ const LAYOUT_ARRANGEMENTS_PREF: &str = "layout_saved_arrangements";
 
 /// A result an asynchronous service fills in when it's done (the app polls it each frame).
 pub type Slot<T> = std::sync::Arc<std::sync::Mutex<Option<T>>>;
+
+/// What a bug RustGIS caught while doing `what` says, in the interface's language, with its
+/// incident's reference: the session finds the incident by it and keeps its details in Messages
+/// once the text is said ([`rustgis_engine::data::incident`]).
+pub(crate) fn bug(what: &str, payload: &(dyn std::any::Any + Send)) -> String {
+    let incident = rustgis_engine::data::incident::caught(payload);
+    crate::i18n::fmt(
+        "{what} failed unexpectedly, a bug in RustGIS (incident {id}). The details are in Messages; please include them in a bug report",
+        &[("what", what), ("id", &incident.id)],
+    )
+}
 
 /// Runs `work` on a thread of its own named `name`, off the frame. When the system refuses one,
 /// `slot` gets the refusal as its error instead and `work` is dropped unrun, so the job ends with
@@ -391,7 +404,7 @@ fn read_download(
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         rustgis_engine::cmd::raster::read_download_shared_page(name, bytes.clone(), page, place)
     }))
-    .unwrap_or_else(|_| Err(tl!("Reading the download failed unexpectedly").to_string()))
+    .unwrap_or_else(|payload| Err(crate::bug(tl!("Reading the download"), payload.as_ref())))
 }
 
 /// A shell's overrides of the Settings › Start-up preferences for one launch.
@@ -501,8 +514,10 @@ pub struct Services {
     /// [`RustGisApp::photos`]. `None` where there is no camera to ask.
     pub take_photo: Option<Box<dyn Fn() -> Result<(), String>>>,
     /// Offers bytes as a download named `file_name`; success means submission to the host's
-    /// download mechanism. Browsers do not expose confirmation that the file was saved.
-    pub download: Option<Box<dyn Fn(&str, Vec<u8>) -> Result<(), String>>>,
+    /// download mechanism. Browsers do not expose confirmation that the file was saved. The bytes
+    /// may be shared with what the session holds (a raster layer's file), so they aren't copied
+    /// to be offered.
+    pub download: Option<Box<dyn Fn(&str, Arc<Vec<u8>>) -> Result<(), String>>>,
     /// Starts saving a project on a phone: written back to the document given (one the project
     /// was opened from or last saved as, with leave to write it), or through the native picker
     /// when there is none. The shell reports the eventual result through
@@ -2649,7 +2664,7 @@ impl RustGisApp {
                 rustgis_engine::render::pdf::Options::default(),
             )
         }))
-        .unwrap_or_else(|_| Err("the layout export failed unexpectedly".into()));
+        .unwrap_or_else(|payload| Err(crate::bug("the layout export", payload.as_ref())));
         if let Err(e) = &r {
             self.session.notify(e.clone(), true);
         }
@@ -2934,7 +2949,7 @@ impl RustGisApp {
             }
         };
         let file = format!("{stem}.rgis");
-        if let Err(e) = self.services.download.as_ref().ok_or(tl!("no download service"))?(&file, text.into_bytes()) {
+        if let Err(e) = self.services.download.as_ref().ok_or(tl!("no download service"))?(&file, Arc::new(text.into_bytes())) {
             self.session.project.name = old;
             return Err(e);
         }
@@ -2964,7 +2979,7 @@ impl RustGisApp {
     fn download(&mut self, name: &str, bytes: Vec<u8>) -> bool {
         match &self.services.download {
             Some(d) => {
-                if let Err(e) = d(name, bytes) {
+                if let Err(e) = d(name, Arc::new(bytes)) {
                     self.session.notify(e, true);
                     return false;
                 }
@@ -2998,14 +3013,19 @@ impl RustGisApp {
                 Some(download) => download(&name, bytes),
                 None => Err(tl!("this build has no download service").into()),
             };
-            // gp.fileDelivered reports delivery failures from its history record. The app also
-            // reports acknowledgment failures before dispatch, without repeating engine notices.
+            // gp.fileDelivered reports delivery failures itself. The app also reports
+            // acknowledgment failures before dispatch, without repeating engine notices.
+            // Asked before the acknowledgment forgets the file.
+            let export = self.session.is_export_file(id);
             let completed = self.acknowledge_gp_file(id, delivered.as_ref().err().map(String::as_str));
             let result = delivered.and(completed);
-            self.gp.last = Some(match &result {
-                Ok(_) => (true, self.session.project.gp_history.last().map(|h| h.messages.clone()).unwrap_or_default()),
-                Err(error) => (false, vec![error.clone()]),
-            });
+            // An export isn't a tool run: the Geoprocessing pane keeps showing the last one.
+            if !export {
+                self.gp.last = Some(match &result {
+                    Ok(_) => (true, self.session.project.gp_history.last().map(|h| h.messages.clone()).unwrap_or_default()),
+                    Err(error) => (false, vec![error.clone()]),
+                });
+            }
             requested = complete_gp_file(requested, id, &result);
         }
         requested
@@ -3392,6 +3412,19 @@ impl RustGisApp {
     /// ([`RustGisApp::chrome`]) shows [`RustGisApp::background_status`] while it is.
     pub fn background_busy(&self) -> bool {
         chrome::background_busy(self)
+    }
+
+    /// Whether any work a command started runs on in the background: what [`background_busy`]
+    /// shows, a tool run or a raster made in the background. The desktop's run marker keeps the
+    /// command that started it until then, as that work is what most often runs out of memory.
+    ///
+    /// [`background_busy`]: RustGisApp::background_busy
+    pub fn work_under_way(&self) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.gp.tool_run.is_some() || self.workflow.job.is_some() {
+            return true;
+        }
+        self.background_busy()
     }
 
     /// Draws that work's progress and Cancel into `ui`, as the desktop's status bar does; with a
@@ -5240,7 +5273,7 @@ impl RustGisApp {
                     let bytes = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         rustgis_engine::cmd::report::report_bytes(session, i, 150.0, true)
                     }))
-                    .unwrap_or_else(|_| Err("the report export failed unexpectedly".into()))
+                    .unwrap_or_else(|payload| Err(crate::bug("the report export", payload.as_ref())))
                     .inspect_err(|e| self.session.notify(e.clone(), true))?
                     .0;
                     self.download(&format!("{name}.pdf"), bytes);
@@ -5330,7 +5363,7 @@ impl RustGisApp {
                 let session = &mut self.session;
                 let (name, bytes, notes) =
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rustgis_engine::cmd::items::item_output(session, kind, p)))
-                        .unwrap_or_else(|_| Err("saving failed unexpectedly".into()))
+                        .unwrap_or_else(|payload| Err(crate::bug("saving", payload.as_ref())))
                         .inspect_err(|e| {
                             // An area a field package made before it failed goes too.
                             rustgis_engine::cmd::field::forget_new_areas(&mut self.session, areas);
@@ -5419,7 +5452,7 @@ impl RustGisApp {
                 let session = &mut self.session;
                 let png =
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rustgis_engine::cmd::share::map_png_fitted(session, 192.0)))
-                        .unwrap_or_else(|_| Err("the capture failed unexpectedly".into()))?;
+                        .unwrap_or_else(|payload| Err(crate::bug("the capture", payload.as_ref())))?;
                 let pm = rustgis_engine::render::decode_png(&png).ok_or("could not draw the map")?;
                 let size = [pm.width() as usize, pm.height() as usize];
                 self.ui.copy_image = Some(egui::ColorImage::from_rgba_premultiplied(size, pm.data()));
@@ -5449,7 +5482,7 @@ impl RustGisApp {
                 let png = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     rustgis_engine::cmd::layout::layout_bytes(session, li, false, dpi, false)
                 }))
-                .unwrap_or_else(|_| Err(tl!("the capture failed unexpectedly").into()))?;
+                .unwrap_or_else(|payload| Err(crate::bug(tl!("the capture"), payload.as_ref())))?;
                 let pm = rustgis_engine::render::decode_png(&png).ok_or_else(|| tl!("could not draw the layout").to_string())?;
                 let size = [pm.width() as usize, pm.height() as usize];
                 self.ui.copy_image = Some(egui::ColorImage::from_rgba_premultiplied(size, pm.data()));
@@ -5473,7 +5506,7 @@ impl RustGisApp {
             "ui.printMap" => {
                 let session = &mut self.session;
                 let pdf = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rustgis_engine::cmd::share::map_pdf(session, 300.0)))
-                    .unwrap_or_else(|_| Err("printing failed unexpectedly".into()))
+                    .unwrap_or_else(|payload| Err(crate::bug("printing", payload.as_ref())))
                     .inspect_err(|e| self.session.notify(e.clone(), true))?;
                 let name = format!("{}.pdf", self.session.map().name);
                 if self.services.download.is_some() {
@@ -5631,7 +5664,7 @@ impl RustGisApp {
                     let bytes = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         rustgis_engine::cmd::presentation::export_bytes(session, i, "html", 110.0)
                     }))
-                    .unwrap_or_else(|_| Err("the presentation export failed unexpectedly".into()))
+                    .unwrap_or_else(|payload| Err(crate::bug("the presentation export", payload.as_ref())))
                     .inspect_err(|e| self.session.notify(e.clone(), true))?
                     .0;
                     self.download(&format!("{name}.html"), bytes);
@@ -5785,7 +5818,7 @@ impl RustGisApp {
                 let session = &mut self.session;
                 let png =
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rustgis_engine::cmd::share::map_png_fitted(session, 192.0)))
-                        .unwrap_or_else(|_| Err("Export Map failed unexpectedly".into()));
+                        .unwrap_or_else(|payload| Err(crate::bug("Export Map", payload.as_ref())));
                 let png = match png {
                     Ok(p) => p,
                     Err(e) => {
@@ -6880,7 +6913,7 @@ impl RustGisApp {
                         })
                     })
                 }));
-                let read = read.unwrap_or_else(|_| Err(tl!("Reading the window failed unexpectedly").to_string()));
+                let read = read.unwrap_or_else(|payload| Err(crate::bug(tl!("Reading the window"), payload.as_ref())));
                 // Stopped by `left`: said as one given up before its turn is. A read that failed
                 // for its own reason keeps it.
                 read.map_err(|e| {
@@ -10280,7 +10313,7 @@ mod download_service_tests {
         let downloaded = file.clone();
         let mut app = RustGisApp::with_sample().with_services(Services {
             download: Some(Box::new(move |_, bytes| {
-                *downloaded.lock().unwrap() = bytes;
+                *downloaded.lock().unwrap() = std::sync::Arc::unwrap_or_clone(bytes);
                 Ok(())
             })),
             ..Default::default()
@@ -10305,7 +10338,7 @@ mod download_service_tests {
         let downloaded = file.clone();
         let mut app = RustGisApp::with_sample().with_services(Services {
             download: Some(Box::new(move |_, bytes| {
-                *downloaded.lock().unwrap() = bytes;
+                *downloaded.lock().unwrap() = std::sync::Arc::unwrap_or_clone(bytes);
                 Ok(())
             })),
             ..Default::default()
@@ -10343,7 +10376,7 @@ mod download_service_tests {
                     if !accept {
                         return Err("browser rejected download".into());
                     }
-                    taken.lock().unwrap().push((name.to_string(), bytes));
+                    taken.lock().unwrap().push((name.to_string(), bytes.to_vec()));
                     Ok(())
                 })),
                 ..Default::default()
@@ -10414,7 +10447,7 @@ mod download_service_tests {
         use rustgis_engine::geom::Coord;
         // A NaN accepted, a NaN refused, and finite numbers only (nothing to say).
         for (accept, first) in [(true, f64::NAN), (false, f64::NAN), (true, 2.5)] {
-            let download: Box<dyn Fn(&str, Vec<u8>) -> Result<(), String>> =
+            let download: Box<dyn Fn(&str, std::sync::Arc<Vec<u8>>) -> Result<(), String>> =
                 if accept { Box::new(|_, _| Ok(())) } else { Box::new(|_, _| Err("browser rejected download".into())) };
             let mut app = RustGisApp::with_sample().with_services(Services { download: Some(download), ..Default::default() });
             let mut ds = Dataset::new("Gauges", GeometryType::Point, vec![Field::new("level", FieldType::Double)]);
@@ -10441,7 +10474,7 @@ mod download_service_tests {
         use rustgis_engine::geom::Coord;
         let changed = |app: &RustGisApp| app.session.notices.iter().filter(|n| n.text.contains("changed to fit a Shapefile")).count();
         let with = |accept: bool| {
-            let download: Box<dyn Fn(&str, Vec<u8>) -> Result<(), String>> =
+            let download: Box<dyn Fn(&str, std::sync::Arc<Vec<u8>>) -> Result<(), String>> =
                 if accept { Box::new(|_, _| Ok(())) } else { Box::new(|_, _| Err("browser rejected download".into())) };
             let mut app = RustGisApp::with_sample().with_services(Services { download: Some(download), ..Default::default() });
             let mut ds = Dataset::new(

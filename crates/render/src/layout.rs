@@ -524,6 +524,7 @@ fn draw_page(
                 text_size,
                 fit,
                 show_layer_names,
+                class_labels,
             } => {
                 if let Some(&(_, mi, cam, ..)) = frame(*f)
                     && let Some(map) = maps.get(mi)
@@ -552,6 +553,7 @@ fn draw_page(
                         names,
                         exclude,
                         labels,
+                        class_labels,
                         scale,
                         size,
                         text_size: *text_size,
@@ -663,6 +665,7 @@ fn draw_page(
                 });
                 match data {
                     Some(data) => {
+                        drawn_chart(e.id, &data);
                         let look = e.kind.chart_look().unwrap_or_default();
                         chart(&mut pm, r, &data, &look, color.unwrap_or(INK), ppp, layout.decimal_comma)
                     }
@@ -1009,6 +1012,7 @@ pub(crate) fn legend_pin_pages() -> Vec<(Layout, Vec<Map>)> {
             text_size: rustgis_map::layout::LEGEND_TEXT_PT,
             fit: rustgis_map::layout::LegendFit::Manual,
             show_layer_names: rustgis_map::layout::LayerNames::Shown,
+            class_labels: Default::default(),
         };
         f(&mut kind);
         l.add("Legend", at, kind);

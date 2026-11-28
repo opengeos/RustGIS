@@ -43,30 +43,37 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
     (a sheet turned Auto, Portrait or Landscape, or a figure), the map extent and the layout's name,
     the style (each beside an outline of where its title, map and footer go, and its column or panel
     if it has one, with the accent colour picked, or else its own, where the sheet takes it, which
-    Classic's doesn't; a click on the outline picks the style), the placement, the texts (title, the
-    active map's name until one is typed; subtitle, note and credit line, or none; an Editorial
-    sheet's column heading), the sources and reference (each one per line, with its heading; the
-    reference can be left out) and the accent colour, then shows what was picked; **Create** makes
-    the layout as the menu does. **Insert Statistic**, on the texts and sources steps, adds a layer
-    figure of the active map to the field the cursor was last in there (the note or the sources,
-    where it was in none). The map extent is the view, the features one layer shows (hidden or not,
-    in their longitude/latitude box) or the selected features (a point or a straight line is widened
-    to 0.01°, and what lies past ±180° or ±90° is left out of the frame; an area with nothing to
-    frame, one gone by Create, or one picked before the map or the project was switched or the map
-    renamed, is said and nothing is made); without a name the layout is `Publication`; the review
-    says when a layout has that name, so the new one is numbered. The **placement** is the
-    arrangement (below): `best`, the favourite, one by name or one saved, or **Custom**, a corner
-    for each surround (a corner another has swaps the two; on Panel, Editorial and Modular only the
-    north arrow and scale bar take one, the locator and legend sitting in the column, and a figure
-    gives the locator none, as it draws none); a chosen one can be made the favourite, once the
-    layout is made. A saved one removed after it was picked is said at Create and nothing is made. A
-    figure goes from its size to its map, its placement, its reference (each line typed; with no
-    heading, and it can be left out) and the review, as it takes no style, accent or other text. A
-    field left empty is left out (for the credit line, the reference and the headings, the command's
-    default applies); the title is the exception: empty, it means no title. A layout the command
-    refuses is said, and the wizard stays open. The window can be resized. Its steps are listed on
-    the left, and a click goes to one; a narrow screen leaves the list out, and the heading still
-    says which step this is.
+    Classic's doesn't; a click on the outline picks the style), the elements, the placement, the
+    texts (title, the active map's name until one is typed; subtitle, note and credit line, or none;
+    an Editorial sheet's column heading), the sources and reference (each one per line, with its
+    heading; the reference can be left out) and the accent colour, then shows what was picked;
+    **Create** makes the layout as the menu does. **Insert Statistic**, on the texts and sources
+    steps, adds a layer figure of the active map to the field the cursor was last in there (the note
+    or the sources, where it was in none). The map extent is the view, the features one layer shows
+    (hidden or not, in their longitude/latitude box) or the selected features (a point or a straight
+    line is widened to 0.01°, and what lies past ±180° or ±90° is left out of the frame; an area
+    with nothing to frame, one gone by Create, or one picked before the map or the project was
+    switched or the map renamed, is said and nothing is made); without a name the layout is
+    `Publication`; the review says when a layout has that name, so the new one is numbered. The
+    **elements** are what is drawn around the map: the locator (the default, named as what it will
+    be, a globe, an inset or none), the north arrow (auto, always or none), the legend or not, which
+    can be set always on a box and to list the context layers, the colorbar and the scale bar or
+    not, whether the map may be veiled for the legend's room, and the decimal mark; a choice the
+    sheet can't use is off and isn't sent. Under them, the north arrow's style, the scale bar's
+    units and style, and the legend's title and columns (Auto, or 1 to 6) can be picked. The
+    **placement** is the arrangement (below): `best`, the favourite, one by name or one saved, or
+    **Custom**, a corner for each surround (a corner another has swaps the two; on Panel, Editorial
+    and Modular only the north arrow and scale bar take one, the locator and legend sitting in the
+    column; a surround left out in the elements takes none, as a figure's locator unless asked for);
+    a chosen one can be made the favourite, once the layout is
+    made. A saved one removed after it was picked is said at Create and nothing is made. A figure
+    goes from its size to its map, its elements, its placement, its reference (each line typed; with
+    no heading, and it can be left out) and the review, as it takes no style, accent or other text.
+    A field left empty is left out (for the credit line, the reference and the headings, the
+    command's default applies); the title is the exception: empty, it means no title. A layout the
+    command refuses is said, and the wizard stays open. The window can be resized. Its steps are
+    listed on the left, and a click goes to one; a narrow screen leaves the list out, and the
+    heading still says which step this is.
   - **The map**: the `extent` given (or the view) fitted north-up, without tilt, at a round scale,
     two significant figures, rounded up so it still fits within the strips the graticule's labels
     take inside the frame. A graticule's step follows the extent (2° for a state, 15′ for a city),
@@ -425,7 +432,7 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
     short fills each column in turn and leaves out the last rows (a **Fit**, below, can change
     that).
     A legend says when its box loses rows or closes its columns up when it is given `"columns"`,
-    `"textSize"` (`null` included), `"showNoData"`, `"labels"`, `"fit"` or `"showLayerNames"`, and,
+    `"textSize"` (`null` included), `"showNoData"`, `"labels"`, `"classLabels"`, `"fit"` or `"showLayerNames"`, and,
     in columns, at a text size of its own or with a fit, when its box or what it lists changes. A
     legend in one column at the default size and with no fit is told so only when given one of
     those. A manual legend is checked when it is added or changed, as it always has been, not again
@@ -458,6 +465,17 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
     a fit, leaves its layer names off or has more than three columns can't be opened by an older
     RustGIS, and a layout file (`.rgislayout`) with such a legend lists that in its header, so an
     older RustGIS refuses it as well.
+  - **Class labels** (`"classLabels"`, commands and scripts only): the legend's own text for a
+    class, leaving the layer, the Layers pane and every other legend as they are:
+    `layout.update {"element": 3, "classLabels": {"Roads": {"Primary": "Main roads"}}}`.
+    A class is named by the label the layer shows for it, a range or `<all other values>` included;
+    its text is up to 200 characters. A text for the missing-value row shows when `"showNoData"` is
+    on. Each entry replaces that class's text; `null` or `""` shows the layer's label again, a
+    layer's `null` all of its own, and `{}` every layer's. A layer or class that isn't there is
+    refused, and a layer drawn in one symbol has no classes to rename (use `"labels"`). The text
+    follows a renamed layer. If the layer's label for a class changes later, the legend shows the
+    new one. A project or layout file with such a legend lists it in its `requires`, so a RustGIS
+    that checks that list and doesn't know the capability refuses to open it.
   - **Text size** (`"textSize"`, 4 to 100 points, 9 by default; a size outside that range is
     refused): the size of its layers' names and classes' labels. Its title, rows, indents and the
     gap between columns follow in proportion, and so do a web layer's legend pictures and the length
@@ -558,9 +576,11 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
   `layout.update={"element":7,"angle":-90}` to turn one.
 - **Text clipping**: the layout view and PNG, PDF and SVG exports warn when a text element or
   legend title runs off the page, or a text element has more lines than its height allows.
-  The notice counts and names the affected elements with their IDs. A line may extend beyond
-  its element's width while remaining on the page; that alone is not clipped. Reduce the size,
-  add line breaks, turn on **Wrap to the box**, or resize or move the element to keep all its text;
+  The notice counts and names the affected elements with their IDs. Exporting a report that draws
+  a layout as a page says the same of that page's texts, in a notice for each such layout that
+  names it. A line may extend beyond its element's width while remaining on the page; that alone
+  is not clipped. Reduce the size, add line breaks, turn on **Wrap to the box**, or resize or move
+  the element to keep all its text;
   when every text it names is already wrapped, the notice suggests only the size and the box, and
   a legend's title, which has no wrap, is told to add line breaks. Lines left out below a text's
   box are said as soon as they are: `layout.addElement` and `layout.update` warn how many lines
@@ -752,9 +772,9 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
   are drawn whole. Features of a hidden class, or points drawn as an image, show none and
   leave the bar to the others. A bar whose features have several colours or show none,
   and an Other bar, keep the bar colour, and the chart says how many bars do, and why, when it
-  is added or changed. The bars follow the symbology when it changes; those counts are not said
-  again then. The bars take the layer's colours whether the frame draws the layer or not: a
-  layer turned off, or outside its visible scale range, still colours them.
+  is added, told what to draw or colored by class, and when the layout is exported. The bars follow the symbology when it
+  changes. The bars take the layer's colours whether the frame draws the layer or not: a layer
+  turned off, or outside its visible scale range, still colours them.
   **Labels** puts the labels of bars running across at the left of their column, or **By the
   bars**, against them. Keep a title out of the chart to style it as you like with a text
   element. From a command:
@@ -774,14 +794,21 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
   colour; a value whose features have several colours, or show none, keeps its palette colour,
   and the chart says how many do. Stretches below zero run the other way from the zero line, and
   **Values** writes the bar's total. An Other bar is stacked too, from the bars it gathers. A
-  box too short to leave the bars room under the title and key shows the chart's placeholder,
-  and the chart says so when it is added, resized, retitled or turned (not when the layer's data
-  changes): make it taller. A stack field deleted from the layer leaves the bars whole, and the
+  box too short to leave the bars room under the title and key shows the chart's placeholder:
+  make it taller. A stack field deleted from the layer leaves the bars whole, and the
   chart's next change lets the stack go, saying so. Turning grouping off, taking a mean, minimum
   or maximum, or moving the chart to a layer without the field lets the stack go, and the chart
   says so. From a command:
   `layout.update={"element":6,"group":"continent","stack":"income_grp"}`, and `"stack":""` for
   whole bars again; `layout.addElement` takes it too.
+- **What a chart says**: exporting a layout (or the Assistant viewing it) says again what each chart it shows leaves out, and
+  whether its box is too small for it, read as the exported page draws it, on every page of a map
+  series it exports: charts with the same notice are named together in one, by name and element
+  number, the first ten and how many more there are. Exporting a report that draws a layout as a
+  page says the same of that page's charts, naming each with its layout. A box is too small when
+  columns are left no height by their labels and values (the chart shows its placeholder), or when
+  bars, or the room they run in, come under a point. The chart also says that when it is added,
+  resized, retitled, turned, or given or denied values or labels.
 - **Facing charts**: two charts side by side compare two fields per category back to back, such
   as the share of businesses against the share of people in each district. **Mirror** draws a
   chart as its mirror image, its text reading as ever: bars running across start from the right
@@ -957,6 +984,9 @@ previews, edits and plays it.
   coloured page, an **Image** page a picture with a caption, and a **Video** page a video file or
   URL with an optional poster picture.
 - Each page has a title, speaker notes and a duration (for **Play**), and can move up or down.
+- A **Map** page follows its map by name. While the project has no map of that name, the page is
+  drawn over the active map; deleting the map (or the offline area that goes with it), or
+  importing a presentation that names it, says which pages.
 - **Publish › Output › Presentation › Export Presentation** writes an HTML slideshow (arrow
   keys, `N` for notes, `P` to play; videos play in place), a PDF (kept as vectors as a layout's
   is), or the first page as PNG.

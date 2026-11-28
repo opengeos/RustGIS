@@ -473,6 +473,7 @@ fn installed(mut layer: rustgis_map::RasterLayer, dest: &std::path::Path) -> rus
 /// cell with a value.
 #[derive(Default)]
 struct Remaps {
+    terrain: Vec<(String, rasterops::TerrainEdges)>,
     empty: Vec<(String, f64, f64)>,
     emptied: Option<String>,
 }
@@ -483,6 +484,13 @@ impl Remaps {
     fn then(self) -> Then {
         let mut notes: Vec<String> = rasterops::empty_ranges_note(&self.empty).into_iter().collect();
         notes.extend(self.emptied.map(|name| format!("{name}: the remap left no cells with values")));
+        for (stage, (name, edges)) in self.terrain.into_iter().enumerate() {
+            if edges.clamped > 0 || edges.filled > 0 {
+                let limit = if edges.at_most { "at most " } else { "" };
+                let margin = if edges.at_most { "; counts include repeated intermediate tile margins" } else { "" };
+                notes.push(format!("{name}, terrain step {}: {limit}{} output cells used clamped boundary neighbours; {limit}{} output cells used the centre height for invalid neighbours{margin}", stage + 1, edges.clamped, edges.filled));
+            }
+        }
         notices(notes)
     }
 }
@@ -588,7 +596,10 @@ impl RasterRun {
                 rustgis_analysis::run_under(name, control, || reading_files(name, work))
             })
         }))
-        .unwrap_or_else(|_| Err(format!("{name} failed unexpectedly")))
+        .unwrap_or_else(|payload| {
+            let incident = rustgis_data::incident::caught(payload.as_ref());
+            Err(rustgis_data::incident::message(name, false, &incident.id))
+        })
         .map(|m| Made {
             ran: Some((name, map)),
             continuation: Some(continuation),
@@ -1606,30 +1617,37 @@ fn apply_function(
     target: Option<&Raster>,
     remaps: &mut Remaps,
     ground: Option<&rustgis_geom::Extent>,
+    core: Option<([usize; 4], bool)>,
 ) -> Result<Vec<f32>, String> {
     let band = band_of(p, r)?;
     let zf = f(p, "zFactor").unwrap_or(1.0).clamp(0.0001, 100_000.0);
-    match ps(p, "function").ok_or("function is required")? {
-        "slope" => match p.get("units") {
-            None => rasterops::slope_on(r, band, zf, ground),
-            Some(Value::String(units)) if units == "degrees" => rasterops::slope_on(r, band, zf, ground),
-            // A part read with a margin: its cells past Float32's range are counted where they're
-            // kept ([`super::in_blocks::Shape::overflow`]).
-            Some(Value::String(units)) if units == "percent" && ground.is_some() => {
-                rasterops::slope_percent_cells_on(r, band, zf, ground).map(|(p, _)| p)
-            }
-            Some(Value::String(units)) if units == "percent" => rasterops::slope_percent_on(r, band, zf, ground),
-            _ => Err("slope units must be degrees or percent".into()),
-        },
-        "aspect" => rasterops::aspect_on(r, band, ground),
-        "hillshade" => rasterops::hillshade_on(
-            r,
-            band,
-            f(p, "azimuth").unwrap_or(315.0),
-            f(p, "altitude").unwrap_or(45.0).clamp(0.0, 90.0),
-            zf,
-            ground,
-        ),
+    let function = ps(p, "function").ok_or("function is required")?;
+    let terrain = match function {
+        "slope" => Some(match p.get("units") {
+            None => rasterops::TerrainFunction::Slope,
+            Some(Value::String(units)) if units == "degrees" => rasterops::TerrainFunction::Slope,
+            Some(Value::String(units)) if units == "percent" => rasterops::TerrainFunction::SlopePercent,
+            _ => return Err("slope units must be degrees or percent".into()),
+        }),
+        "aspect" => Some(rasterops::TerrainFunction::Aspect),
+        "hillshade" => Some(rasterops::TerrainFunction::Hillshade {
+            azimuth: f(p, "azimuth").unwrap_or(315.0),
+            altitude: f(p, "altitude").unwrap_or(45.0).clamp(0.0, 90.0),
+        }),
+        _ => None,
+    };
+    if let Some(terrain) = terrain {
+        let (core, at_most) = core.unwrap_or(([0, 0, r.width as usize, r.height as usize], false));
+        let zf = if function == "aspect" { 1.0 } else { zf };
+        let (pixels, mut edges, overflow) = rasterops::terrain_reported(r, band, zf, ground, Some(core), terrain)?;
+        if overflow > 0 && ground.is_none() {
+            return Err(format!("{overflow} {}", rasterops::PERCENT_OVERFLOW));
+        }
+        edges.at_most = at_most;
+        remaps.terrain.push((format!("{} ({function})", r.name), edges));
+        return Ok(pixels);
+    }
+    match function {
         "ndvi" => {
             let (nir, red) = (p.get("nir").and_then(Value::as_u64).unwrap_or(4), p.get("red").and_then(Value::as_u64).unwrap_or(3));
             rasterops::band_math(r, &format!("(b{nir} - b{red}) / (b{nir} + b{red})"))
@@ -1710,10 +1728,10 @@ fn function_work(s: &Session, p: &Value) -> Result<Work, String> {
         let shape = function_shape(&p);
         return Ok(Box::new(move || {
             let met = std::cell::RefCell::new(BlockRemaps::default());
-            let made = blocks.with_halo(halo).run(
-                |block, ground| {
+            let made = blocks.with_halo(halo).run_window(
+                |block, ground, core| {
                     let mut remaps = Remaps::default();
-                    let pixels = apply_function(block, &p, None, &mut remaps, Some(ground))?;
+                    let pixels = apply_function(block, &p, None, &mut remaps, Some(ground), Some((core, false)))?;
                     met.borrow_mut().add(remaps);
                     Ok(pixels)
                 },
@@ -1727,10 +1745,11 @@ fn function_work(s: &Session, p: &Value) -> Result<Work, String> {
         let src = src.read()?;
         let target = read_target(target.as_ref())?;
         let mut remaps = Remaps::default();
-        let pixels = apply_function(&src, &p, target.as_deref(), &mut remaps, None)?;
+        let pixels = apply_function(&src, &p, target.as_deref(), &mut remaps, None, None)?;
         // Only a resample takes another raster's grid.
         let raster = derive_function(target.as_deref().unwrap_or(&src), &name, &p, pixels)?;
-        if is_hillshade(&p) { made_hillshade(raster, &defaults) } else { made_then(raster, None, Some(remaps.then())) }
+        let made = made_then(raster, None, Some(remaps.then()))?;
+        Ok(if is_hillshade(&p) { hillshade_look(made, &defaults) } else { made })
     }))
 }
 
@@ -1812,6 +1831,7 @@ pub(crate) fn also(mut m: Made, then: Then) -> Made {
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Default)]
 struct BlockRemaps {
+    terrain: Vec<(String, rasterops::TerrainEdges)>,
     /// The ranges that match nothing, as every block so far found them; `None` before the first.
     empty: Option<Vec<(String, f64, f64)>>,
     /// Whether every block so far was left with no value, and the raster it was said of.
@@ -1822,6 +1842,15 @@ struct BlockRemaps {
 impl BlockRemaps {
     /// Adds what one block's remaps met.
     fn add(&mut self, r: Remaps) {
+        for (i, (name, edges)) in r.terrain.into_iter().enumerate() {
+            if let Some((_, total)) = self.terrain.get_mut(i) {
+                total.clamped = total.clamped.saturating_add(edges.clamped);
+                total.filled = total.filled.saturating_add(edges.filled);
+                total.at_most |= edges.at_most;
+            } else {
+                self.terrain.push((name, edges));
+            }
+        }
         self.empty = Some(match self.empty.take() {
             None => r.empty,
             Some(mut e) => {
@@ -1840,7 +1869,7 @@ impl BlockRemaps {
 
     /// What every block's remaps met together.
     fn met(self) -> Remaps {
-        Remaps { empty: self.empty.unwrap_or_default(), emptied: self.emptied.flatten() }
+        Remaps { terrain: self.terrain, empty: self.empty.unwrap_or_default(), emptied: self.emptied.flatten() }
     }
 }
 
@@ -1881,13 +1910,26 @@ fn function_chain_work(s: &Session, p: &Value) -> Result<Work, String> {
             let shape = function_shape(&last);
             return Ok(Box::new(move || {
                 let met = std::cell::RefCell::new(BlockRemaps::default());
-                let made = blocks.with_halo(halo).run(
-                    |block, ground| {
+                let made = blocks.with_halo(halo).run_window(
+                    |block, ground, core| {
                         let mut remaps = Remaps::default();
                         let mut cur: Option<Raster> = None;
                         for (i, st) in steps.iter().enumerate() {
                             let input = cur.as_ref().unwrap_or(block);
-                            let pixels = apply_function(input, st, None, &mut remaps, Some(ground))
+                            // Earlier outputs in the remaining halo feed later terrain steps.
+                            let halo: usize = steps
+                                .iter()
+                                .skip(i + 1)
+                                .filter_map(|st| ps(st, "function").and_then(super::in_blocks::function_halo))
+                                .map(|v| v as usize)
+                                .sum();
+                            let kept = [
+                                core[0].saturating_sub(halo),
+                                core[1].saturating_sub(halo),
+                                core[2].saturating_add(halo).min(input.width as usize),
+                                core[3].saturating_add(halo).min(input.height as usize),
+                            ];
+                            let pixels = apply_function(input, st, None, &mut remaps, Some(ground), Some((kept, halo > 0)))
                                 .map_err(|e| format!("step {} ({}): {e}", i + 1, func(st)))?;
                             cur = Some(derive_function(input, &input.name, st, pixels)?);
                         }
@@ -1914,7 +1956,7 @@ fn function_chain_work(s: &Session, p: &Value) -> Result<Work, String> {
             let target = read_target(target.as_ref()).map_err(|e| format!("step {} ({f}): {e}", i + 1))?;
             let input = cur.as_ref().unwrap_or(&src);
             let pixels =
-                apply_function(input, st, target.as_deref(), &mut remaps, None).map_err(|e| format!("step {} ({f}): {e}", i + 1))?;
+                apply_function(input, st, target.as_deref(), &mut remaps, None, None).map_err(|e| format!("step {} ({f}): {e}", i + 1))?;
             // Only a resample takes another raster's grid; otherwise the grid is the current one.
             let next = derive_function(target.as_deref().unwrap_or(input), &input.name, st, pixels)?;
             cur = Some(next);
@@ -2625,7 +2667,8 @@ fn convert(s: &mut Session, p: &Value) -> CmdResult {
     let construction_notes = s.constructions.export_notes(s.map().instance_id(), layer)?;
     let mut ds = Cow::Borrowed(feature_ds(s, p)?);
     let report = rustgis_data::export::filter_dataset(&mut ds, layer.definition_query.as_deref()).map_err(|e| e.to_string())?;
-    let (text, notes) = converted(&ds, p)?;
+    let (text, notes) = converted(&ds, p, None)?;
+    let text = String::from_utf8(text).map_err(|e| e.to_string())?;
     let null_numbers = rustgis_data::export::numbers_written_as_null(&ds.features, &ds.fields, conversion_format(p)?);
     let target = ds.name.clone();
     let query_note = super::share::query_export_note(&target, &layer.name, &report);
@@ -2653,10 +2696,14 @@ pub(crate) fn convert_work(s: &Session, p: &Value) -> Result<super::exports::Wor
     conversion_format(p)?;
     let params = p.clone();
     let (constructions, map) = (s.constructions.clone(), s.map().instance_id());
+    let download = s.download_room()?;
     Ok(Box::new(move || {
         let construction_notes = constructions.export_notes(map, &layer)?;
         let format = conversion_format(&params)?;
-        let chunks = if layer.is_streamed() && matches!(format, "geojson" | "csv") { layer.chunk_export()? } else { None };
+        // A download is made whole, in memory.
+        let chunks =
+            if download.is_none() && layer.is_streamed() && matches!(format, "geojson" | "csv") { layer.chunk_export()? } else { None };
+        let mut held = None;
         let query = layer.definition_query.as_deref();
         let (mut notes, null_numbers, query_report) = if let Some((source, ds)) = chunks {
             let result = rustgis_data::export::write_source_as_filtered(
@@ -2701,24 +2748,28 @@ pub(crate) fn convert_work(s: &Session, p: &Value) -> Result<super::exports::Wor
             (notes, result.null_numbers, result.query)
         } else {
             let (mut ds, unreadable) = if layer.is_streamed() {
-                let (ds, unreadable) = layer.load_all_counted()?;
+                let (ds, unreadable) =
+                    if download.is_some() { super::exports::read_for_download(&layer)? } else { layer.load_all_counted()? };
                 (Cow::Owned(ds), unreadable)
             } else {
                 (Cow::Borrowed(&layer.dataset), rustgis_map::Unreadable::default())
             };
             let report = rustgis_data::export::filter_dataset(&mut ds, query).map_err(|e| e.to_string())?;
             rustgis_data::progress::begin(ds.features.len());
-            let (text, notes) = converted(&ds, &params)?;
+            let (text, notes) = converted(&ds, &params, download)?;
             let mut notes: rustgis_data::loss::Notes = notes;
             super::share::coalesce_read_zm(&mut notes, &path, &ds, &unreadable);
-            rustgis_data::io::write_atomic(std::path::Path::new(&path), text.as_bytes()).map_err(|e| format!("{path}: {e}"))?;
+            held = super::exports::place(download.is_some(), &path, text)?;
             if unreadable.rows > 0 {
                 notes.push(super::whole::unread_note(&path, unreadable.rows));
             }
             notes.extend(super::share::read_notes(&path, &ds.name, &unreadable));
             (notes, rustgis_data::export::numbers_written_as_null(&ds.features, &ds.fields, format), report)
         };
-        let bytes = std::fs::metadata(&path).map_err(|e| format!("{path}: {e}"))?.len();
+        let bytes = match &held {
+            Some(bytes) => bytes.len() as u64,
+            None => std::fs::metadata(&path).map_err(|e| format!("{path}: {e}"))?.len(),
+        };
         notes.extend(construction_notes);
         notes.push(format!("Exported {path}"));
         let target = path.clone();
@@ -2737,6 +2788,7 @@ pub(crate) fn convert_work(s: &Session, p: &Value) -> Result<super::exports::Wor
             diagnostics: Vec::new(),
             refused_notes,
             written_path: Some(path),
+            download: held,
             then,
             #[cfg(not(target_arch = "wasm32"))]
             owner: None,
@@ -2754,8 +2806,9 @@ fn conversion_format(p: &Value) -> Result<&str, String> {
     }
 }
 
-/// Serializes a complete dataset and collects its loss notices for delivery after success.
-fn converted(ds: &Dataset, p: &Value) -> Result<(String, rustgis_data::loss::Notes), String> {
+/// Serializes a complete dataset and collects its loss notices for delivery after success. For a
+/// `download`, the text is stopped as soon as it passes that room.
+fn converted(ds: &Dataset, p: &Value, download: Option<super::exports::Room>) -> Result<(Vec<u8>, rustgis_data::loss::Notes), String> {
     let name_field =
         ps(p, "nameField").and_then(|n| ds.field_index(n)).or_else(|| ds.fields.iter().position(|f| f.name.eq_ignore_ascii_case("name")));
     let format = conversion_format(p)?;
@@ -2763,12 +2816,10 @@ fn converted(ds: &Dataset, p: &Value) -> Result<(String, rustgis_data::loss::Not
     // in: the text and what it loses are read from the copy there. A feature with a place that
     // can't be given there is written without its geometry, and said.
     let (lonlat, unplaced) = ds.in_lonlat_leaving_out()?;
-    let text = match format {
-        "geojson" => rustgis_data::io::to_geojson_text(&lonlat).map_err(|e| e.to_string())?,
-        "csv" => rustgis_data::io::to_csv(&lonlat).map_err(|e| e.to_string())?,
-        "kml" => rustgis_data::interop::to_kml(&lonlat, name_field).map_err(|e| e.to_string())?,
-        "gpx" => rustgis_data::interop::to_gpx(&lonlat, name_field).map_err(|e| e.to_string())?,
-        _ => rustgis_data::interop::to_wkt_csv(&lonlat).map_err(|e| e.to_string())?,
+    let encode = |limit: &rustgis_data::capped::Limit| rustgis_data::io::text_bytes_within(&lonlat, format, name_field, limit);
+    let text = match download {
+        Some(room) => room.encode(ps(p, "path").unwrap_or(&ds.name), encode)?,
+        None => encode(&rustgis_data::capped::Limit::none()).map_err(|e| e.to_string())?,
     };
     let target = ps(p, "path").unwrap_or(&ds.name);
     let mut notes = rustgis_data::export_notes([(ds, ds.lonlat_extent())], target, rustgis_data::raster::Crs::LonLat);

@@ -118,6 +118,8 @@ diagram cut to a circle or to polygons), `terrain-block-polygon` (one cut to pol
 `terrain-block-walls-top` (the band along the top of its walls from a second layer),
 `shaded-relief-effects` (cast shadows, sky visibility, fill light or rock colour),
 `shaded-relief-light` (a Shaded Relief's ambient or balanced light),
+`shaded-relief-shadow-softness` (a softness stored for a Shaded Relief's cast shadows, or set by a saved step;
+`raster.symbology` stores the default as none),
 `blank-paper` (a blank basemap's paper colour) and
 `normalized-legend-urls` for normalized legend addresses. Project
 requirements include offline map snapshots. `table-export-order` protects saved task commands,
@@ -304,6 +306,13 @@ the legend at its size, its names shown and in three columns, and saving it agai
 Saved `layout.addElement` and `layout.update` commands that set one require it too;
 `"fit": "manual"`, `"showLayerNames": true`, three columns or fewer, `null`, and a scale bar's own
 `fit` values need nothing. A saved `layout.import` whose `text` has such a legend requires it as
+well, and a layout file (`.rgislayout`) with one lists it in its header.
+
+Projects with a legend that gives a class its own text (`class_labels` on a legend element)
+require `layout-legend-class-labels`, so an older reader refuses them instead of drawing the
+layer's labels and saving the legend again without its own (#3187). Saved `layout.addElement` and
+`layout.update` commands whose `classLabels` give a text require it too; `null`, a blank text and
+an empty object need nothing. A saved `layout.import` whose `text` has such a legend requires it as
 well, and a layout file (`.rgislayout`) with one lists it in its header.
 
 Projects with a scale bar that has subdivisions, divisions before zero, labels below, a unit

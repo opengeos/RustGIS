@@ -183,6 +183,10 @@ pub(in crate::cmd::layout) fn update(s: &mut Session, p: &Value) -> CmdResult {
     // ([`ElementKind::null_resets`]), so they are changes too.
     let current = s.project.layouts.get(li).and_then(|l| l.element(id)).map(|e| &e.kind);
     let bar = matches!(current, Some(ElementKind::ScaleBar { .. }));
+    // A chart's title is read with its options, which refuse one that isn't text.
+    if matches!(current, Some(ElementKind::Legend { .. } | ElementKind::Colorbar { .. })) {
+        given_name(p, "title", "text")?;
+    }
     let null_changes = |k: &str| matches!(k, "dash" | "background" | "border") || current.is_some_and(|kind| kind.null_resets(k));
     let changes = p.as_object().is_some_and(|o| {
         o.iter().any(|(k, v)| (!v.is_null() || null_changes(k.as_str())) && !matches!(k.as_str(), "layout" | "element" | "locked"))
@@ -192,6 +196,11 @@ pub(in crate::cmd::layout) fn update(s: &mut Session, p: &Value) -> CmdResult {
     }
     // A new layer (tables and charts) or field (charts) must exist in the frame's map.
     let checked = checked_update(s, p, li, id)?;
+    // Only tables have rows: read before anything changes.
+    let new_rows = match s.project.layouts.get(li).and_then(|l| l.element(id)).map(|e| &e.kind) {
+        Some(ElementKind::Table { .. }) => table_rows(p)?,
+        _ => None,
+    };
     // A chart's options, read over its own on the layer it will chart.
     let (new_chart, chart_field, chart_said) = match chart_update(s, p, li, id, checked.as_ref())? {
         Some((o, f, said)) => (Some(o), f, said),
@@ -203,18 +212,18 @@ pub(in crate::cmd::layout) fn update(s: &mut Session, p: &Value) -> CmdResult {
         let l = s.project.layouts.get(li).ok_or("no layout")?;
         match l.element(id).map(|e| &e.kind) {
             Some(ElementKind::Colorbar { frame, .. }) => {
-                let layer = match ps(p, "layer") {
+                let layer = match given_name(p, "layer", "a raster layer's name")? {
                     Some(n) if n.trim().is_empty() => Some(None),
                     Some(n) => Some(colorbar_layer(s, l, *frame, Some(n))?),
                     None => None,
                 };
-                Some((layer, orientation(p)?, tick_side(p)?))
+                Some((layer, orientation(p)?, tick_side(p)?, ticks(p)?))
             }
             _ => None,
         }
     };
     // Set back to no layer: it follows the map's default, which may have nothing to show (#1679).
-    let emptied_colorbar = matches!(&colorbar, Some((Some(None), _, _)));
+    let emptied_colorbar = matches!(&colorbar, Some((Some(None), ..)));
     // A north arrow's or scale bar's new look, and a map frame's grid: `"grid": false` removes it,
     // `true` adds the default one, an object changes the options it names, and null (not set)
     // leaves it as it is.
@@ -262,6 +271,9 @@ pub(in crate::cmd::layout) fn update(s: &mut Session, p: &Value) -> CmdResult {
             _ => None,
         };
         let mut said = held_to_limits(p, Shape::of_kind(kind));
+        if matches!(kind, ElementKind::Table { .. }) {
+            said.extend(held_rows(p));
+        }
         if let (Some((_, Some(_))), Some(v)) = (&sections, p.get("section")) {
             said.extend(held_width(v, "section width", rustgis_map::layout::SECTION_WIDTHS));
         }
@@ -419,6 +431,18 @@ pub(in crate::cmd::layout) fn update(s: &mut Session, p: &Value) -> CmdResult {
             _ => None,
         }
     };
+    // And its classes' labels, the same way.
+    let new_class_labels = {
+        let l = s.project.layouts.get(li).ok_or("no layout")?;
+        match l.element(id).map(|e| &e.kind) {
+            Some(ElementKind::Legend { frame, class_labels, .. }) => match legend_class_labels(s, l, *frame, p)? {
+                Some(given) => Some(with_class_labels(class_labels, given)?),
+                None => None,
+            },
+            _ if p.get("classLabels").is_some_and(|v| !v.is_null()) => return Err(ONLY_LEGEND_CLASS_LABELS.into()),
+            _ => None,
+        }
+    };
     // Its background (#2257): the keys given over those it has, or none with null.
     let new_background = {
         let e = s.project.layouts.get(li).and_then(|l| l.element(id)).ok_or_else(|| format!("no element {id}"))?;
@@ -495,7 +519,7 @@ pub(in crate::cmd::layout) fn update(s: &mut Session, p: &Value) -> CmdResult {
         *ink = col;
     }
     // A colorbar turned keeps its size: its length and thickness swap, unless given.
-    if let (ElementKind::Colorbar { orientation, .. }, Some((_, Some(o), _))) = (&e.kind, &colorbar)
+    if let (ElementKind::Colorbar { orientation, .. }, Some((_, Some(o), ..))) = (&e.kind, &colorbar)
         && o != orientation
         && f(p, "w").is_none()
         && f(p, "h").is_none()
@@ -565,8 +589,12 @@ pub(in crate::cmd::layout) fn update(s: &mut Session, p: &Value) -> CmdResult {
             text_size,
             fit,
             show_layer_names,
+            class_labels,
             ..
         } => {
+            if let Some(given) = new_class_labels {
+                *class_labels = given;
+            }
             if let Some(names) = new_exclude {
                 *exclude = names;
             }
@@ -602,7 +630,7 @@ pub(in crate::cmd::layout) fn update(s: &mut Session, p: &Value) -> CmdResult {
             if let Some(t) = new_title {
                 *title = t;
             }
-            if let Some((new_layer, new_orientation, new_side)) = colorbar {
+            if let Some((new_layer, new_orientation, new_side, new_ticks)) = colorbar {
                 if let Some(nl) = new_layer {
                     *layer = nl;
                 }
@@ -612,9 +640,9 @@ pub(in crate::cmd::layout) fn update(s: &mut Session, p: &Value) -> CmdResult {
                 if let Some(t) = new_side {
                     *tick_side = t;
                 }
-            }
-            if let Some(v) = ticks(p) {
-                *n = v;
+                if let Some(v) = new_ticks {
+                    *n = v;
+                }
             }
             if let Some(v) = b(p, "reverse") {
                 *reverse = v;
@@ -666,8 +694,8 @@ pub(in crate::cmd::layout) fn update(s: &mut Session, p: &Value) -> CmdResult {
             }
         }
         ElementKind::Table { rows, layer, .. } => {
-            if let Some(v) = p.get("rows").and_then(Value::as_u64) {
-                *rows = v.clamp(1, 500) as usize;
+            if let Some(v) = new_rows {
+                *rows = v;
             }
             if let Some((l, _)) = &checked {
                 *layer = l.clone();
@@ -822,7 +850,15 @@ pub(in crate::cmd::layout) fn checked_update(
     Ok({
         let l = s.project.layouts.get(li).ok_or("no layout")?;
         let e = l.element(id).ok_or_else(|| format!("no element {id}"))?;
-        match (&e.kind, ps(p, "layer"), ps(p, "field")) {
+        let new_layer = match &e.kind {
+            ElementKind::Table { .. } | ElementKind::Chart { .. } => given_name(p, "layer", "a feature layer's name")?,
+            _ => None,
+        };
+        let new_field = match &e.kind {
+            ElementKind::Chart { .. } => given_name(p, "field", "a field's name")?,
+            _ => ps(p, "field"),
+        };
+        match (&e.kind, new_layer, new_field) {
             (ElementKind::Table { frame, layer, .. } | ElementKind::Chart { frame, layer, .. }, nl, nf) if nl.is_some() || nf.is_some() => {
                 let map = match l.element(*frame).map(|f| &f.kind) {
                     Some(ElementKind::MapFrame { map, .. }) => map.clone(),

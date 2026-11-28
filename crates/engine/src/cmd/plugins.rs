@@ -16,6 +16,8 @@ use crate::{CmdResult, CommandSpec as C, Session};
 
 #[path = "plugin_fetch.rs"]
 pub mod fetch;
+#[path = "plugin_summary.rs"]
+pub mod summary;
 
 pub fn commands() -> Vec<C> {
     vec![
@@ -696,6 +698,8 @@ impl Bridge<'_> {
         Ok(json!({"layer": id, "skipped": report.skipped}))
     }
 
+    /// Runs a command a plugin asked for, as the plugin may: a RustGIS command's bug is said as
+    /// one, with its incident reference.
     fn command(&mut self, id: &str, params: &Value) -> CmdResult {
         if id.starts_with(rustgis_plugins::PREFIX) {
             return Err("plugins can't run other plugins' commands".into());
@@ -740,7 +744,11 @@ impl Bridge<'_> {
             let op = s.authorize(id, params)?;
             super::workflows::steps_of(s, |s| s.invoke(op, crate::policy::Txn::Shared))
         })
-        .unwrap_or_else(|_| Err(format!("{label} failed unexpectedly")));
+        .unwrap_or_else(|payload| {
+            // A RustGIS command the plugin ran hit a bug: said as ours, with its reference.
+            let incident = rustgis_data::incident::caught(payload.as_ref());
+            Err(rustgis_data::incident::message(label, false, &incident.id))
+        });
         if let Some(before) = before {
             let mut dropped = false;
             for m in &mut self.s.project.maps {
@@ -921,6 +929,7 @@ impl Session {
         let queued_before = self.queued_authority();
         // The downloads this call leaves to the app: its own, apart from a calling command's.
         let outer = self.call_requests.replace(Vec::new());
+        let outer_summaries = std::mem::take(&mut self.call_summaries);
         let mark = self.notice_mark();
         let res = self.guarded(label, mutates, |s| {
             let fetches = fetch::Calls::for_plugin(&plugin.manifest.id);
@@ -975,6 +984,8 @@ impl Session {
             }
         }
         self.call_requests = outer;
+        // The summaries this call left to read off the frame (#3183), read once it is kept.
+        let summaries = std::mem::replace(&mut self.call_summaries, outer_summaries);
         // A session's program this command found failed, and started again: the command line
         // has no poll, so this is where it hears of it.
         #[cfg(not(target_arch = "wasm32"))]
@@ -1000,6 +1011,9 @@ impl Session {
         // and with no command waiting nothing would take it.
         let documents: Vec<(u64, Value)> =
             requested.iter().filter(|(n, asked)| !giving_up && fetch::is_document(asked) && !self.url_waits.has(*n)).cloned().collect();
+        // So is a summary this call left (one asked for again is already being read).
+        let summarised: Vec<u64> =
+            requested.iter().filter(|(_, asked)| !giving_up && summary::is_summary(asked)).map(|(n, _)| *n).collect();
         // The errors this run said stay: the next run, doing the same again, doesn't repeat them.
         let earlier = self.rerun_said.len();
         let said: Vec<String> = self.notices_since(mark).iter().filter(|n| n.error).map(|n| n.text.clone()).collect();
@@ -1013,6 +1027,9 @@ impl Session {
         } else {
             for (n, asked) in &documents {
                 self.url_waits.read_document(*n, asked);
+            }
+            for left in summaries.into_iter().filter(|l| summarised.contains(&l.number())) {
+                self.url_waits.read_summary(left, id);
             }
         }
         res
@@ -1087,7 +1104,7 @@ impl Host for Between<'_> {
                 .s
                 .as_session_plugin(plugin.clone(), |s| {
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| bridge(s).0))
-                        .unwrap_or_else(|_| Err(format!("'{op}' failed unexpectedly")))
+                        .unwrap_or_else(|payload| Err(crate::bug(&format!("'{op}'"), payload.as_ref())))
                 })
                 .and_then(|r| r);
         }

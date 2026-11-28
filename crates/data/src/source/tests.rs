@@ -787,12 +787,99 @@ fn whole_reads_by_chunk_stay_within_the_memory_budget() {
         let src = open_path(&p, None).unwrap();
         assert!(src.visits_chunks(), "{ext}");
         let once = src.read(&Request::all()).unwrap().features;
-        let (whole, report) = materialize_within(src.as_ref(), MAX_READ_BYTES).unwrap();
+        let (whole, report) = materialize_within(src.as_ref(), MAX_READ_BYTES, None).unwrap();
         assert_eq!(whole.features.to_vec(), once, "{ext}");
         assert_eq!(report.skipped, 0, "{ext}");
         let half = chunk_memory::features_bytes(&once) as u64 / 2;
-        let error = materialize_within(src.as_ref(), half).unwrap_err().to_string();
+        let error = materialize_within(src.as_ref(), half, None).unwrap_err().to_string();
         assert!(error.contains("clip or filter it first"), "{ext}: {error}");
+    }
+}
+
+/// A source as its provider answers, counting its whole reads and the features it walks.
+struct Counted {
+    inner: Box<dyn FeatureSource>,
+    reads: std::sync::atomic::AtomicUsize,
+    walked: std::sync::atomic::AtomicUsize,
+}
+
+impl Counted {
+    /// `inner`, nothing read yet.
+    fn new(inner: Box<dyn FeatureSource>) -> Counted {
+        Counted { inner, reads: Default::default(), walked: Default::default() }
+    }
+}
+
+impl FeatureSource for Counted {
+    fn info(&self) -> &SourceInfo {
+        self.inner.info()
+    }
+
+    fn read(&self, req: &Request) -> Result<Batch> {
+        self.reads.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.inner.read(req)
+    }
+
+    fn visits_chunks(&self) -> bool {
+        self.inner.visits_chunks()
+    }
+
+    fn visits_extent_chunks(&self) -> bool {
+        self.inner.visits_extent_chunks()
+    }
+
+    fn visit_chunks(&self, extent: Option<Extent>, bytes: usize, visit: &mut dyn FnMut(Vec<Feature>) -> Result<()>) -> Result<Batch> {
+        self.inner.visit_chunks(extent, bytes, &mut |chunk| {
+            self.walked.fetch_add(chunk.len(), std::sync::atomic::Ordering::Relaxed);
+            visit(chunk)
+        })
+    }
+
+    fn remote(&self) -> Option<Arc<remote::Remote>> {
+        self.inner.remote()
+    }
+}
+
+/// A budgeted read of a GeoJSON read in place, whose few features hold large geometries its count
+/// says nothing of, is refused as it is walked: it is never read at once, nor walked to its end.
+/// Within the budget it gives what one read gives.
+#[test]
+fn a_budgeted_read_of_a_geojson_stops_before_all_its_geometry_is_held() {
+    use std::sync::atomic::Ordering::Relaxed;
+    const FEATURES: usize = 12;
+    // 960 kB of coordinates a feature: more than a chunk in all.
+    let line = vec!["[1,2]"; 60_000].join(",");
+    let feature = format!(r#"{{"type":"Feature","properties":{{}},"geometry":{{"type":"LineString","coordinates":[{line}]}}}}"#);
+    let p = dir().join("budget-lines.geojson");
+    std::fs::write(&p, format!(r#"{{"type":"FeatureCollection","features":[{}]}}"#, vec![feature; FEATURES].join(","))).unwrap();
+    let src = Counted::new(open_path(&p, None).unwrap());
+    assert_eq!(src.info().count, Some(FEATURES as u64));
+    let error = materialize_up_to(&src, 1 << 20, "over the budget").unwrap_err().to_string();
+    assert!(error.contains("over the budget"), "{error}");
+    assert_eq!(src.reads.load(Relaxed), 0, "refused without a read of the whole source");
+    let walked = src.walked.load(Relaxed);
+    assert!(walked > 0 && walked < FEATURES, "{walked} features walked");
+
+    let (ds, report) = materialize_up_to(&src, MAX_READ_BYTES, "over the budget").unwrap();
+    assert_eq!(ds.features.to_vec(), src.inner.read(&Request::all()).unwrap().features);
+    assert_eq!(report.skipped, 0);
+    assert!(report.messages.is_empty(), "{:?}", report.messages);
+}
+
+/// A file read by its web address can only be read at once, and its count doesn't say what its
+/// geometry and text decode to: a budgeted read refuses it, even with its bytes already fetched.
+#[test]
+fn a_budgeted_read_refuses_a_file_by_its_web_address_before_reading_it() {
+    for (url, parquet) in [("https://test.example/budget.fgb", false), ("https://test.example/budget.geoparquet", true)] {
+        remote::testing::serve(url, big(4, parquet));
+        // Fetched whole, as a view of its whole extent leaves it: a read now needs nothing more.
+        let view: Arc<dyn FeatureSource> = Arc::from(open_url_blocking(url).unwrap());
+        assert!(read_blocking(&view, &Request::all()).unwrap().complete, "{url}");
+        let src = Counted::new(open_url_blocking(url).unwrap());
+        assert!(src.inner.read(&Request::all()).unwrap().complete, "{url}");
+        let error = materialize_up_to(&src, MAX_READ_BYTES, "over the budget").unwrap_err().to_string();
+        assert!(error.contains("by its web address") && error.contains("download"), "{url}: {error}");
+        assert_eq!(src.reads.load(std::sync::atomic::Ordering::Relaxed), 0, "{url}");
     }
 }
 
@@ -4093,6 +4180,124 @@ fn geopackage_writes_fine_date_time_text_as_a_date_time() {
     crate::io::write_path(&ds, &path).unwrap();
     let stored: String = rusqlite::Connection::open(&path).unwrap().query_row("SELECT seen FROM fine", [], |r| r.get(0)).unwrap();
     assert_eq!(stored, "2026-03-05T14:30:00.123Z");
+}
+
+/// Text or a blob another program left in a GeoPackage number column, and a whole number past 2^53
+/// in a decimal column, read as empty or rounded and said, on the desktop and in the browser; a
+/// clean file says nothing.
+#[test]
+fn geopackage_values_that_dont_fit_a_number_field_are_said() {
+    let workspace = tempfile::tempdir().unwrap();
+    let path = workspace.path().join("t.gpkg");
+    let mut t = Dataset::new("t", GeometryType::Point, vec![Field::new("pop", FieldType::Integer), Field::new("area", FieldType::Double)]);
+    for (p, a) in [(1, 1.5), (2, 2.5), (3, 3.5), (4, 4.5)] {
+        t.push(Some(Geometry::Point(Coord::new(1.0, 2.0))), vec![Value::Int(p), Value::Float(a)]);
+    }
+    crate::io::write_path(&t, &path).unwrap();
+    let read = || {
+        let desktop = open_path(&path, None).unwrap();
+        let browser = gpkg_mem::GpkgMemSource::open_shared(Shared(Arc::new(std::fs::read(&path).unwrap())), None).unwrap();
+        [desktop.as_ref(), &browser as &dyn FeatureSource].map(|src| {
+            let (ds, report) = materialize(src).unwrap();
+            let values: Vec<Vec<Value>> = ds.features.iter().map(|f| f.attrs.clone()).collect();
+            let said: Vec<_> = report.messages.iter().map(|n| (n.text.clone(), n.loss)).collect();
+            (values, said)
+        })
+    };
+    for (_, said) in read() {
+        assert_eq!(said, []);
+    }
+    let c = rusqlite::Connection::open(&path).unwrap();
+    // The spatial index's triggers call functions only SpatiaLite has; the geometry stays.
+    let triggers: Vec<String> = c
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'trigger'")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(|n| n.unwrap())
+        .collect();
+    for t in triggers {
+        c.execute(&format!("DROP TRIGGER \"{t}\""), []).unwrap();
+    }
+    // NUMERIC reads as a decimal field and keeps a whole number as one.
+    c.execute("ALTER TABLE t ADD COLUMN big NUMERIC", []).unwrap();
+    c.execute("UPDATE t SET big = 9007199254740993 WHERE fid = 1", []).unwrap();
+    c.execute("UPDATE t SET big = 5 WHERE fid = 2", []).unwrap();
+    // A blob in a text column is its text: nothing lost, nothing said.
+    c.execute("ALTER TABLE t ADD COLUMN name TEXT", []).unwrap();
+    c.execute("UPDATE t SET name = x'6869' WHERE fid = 3", []).unwrap();
+    // Bytes that aren't UTF-8 in a text column, stored as text and as a blob: read with U+FFFD in
+    // their place, and said.
+    c.execute("UPDATE t SET name = CAST(x'ff68' AS TEXT) WHERE fid = 4", []).unwrap();
+    c.execute("UPDATE t SET name = x'ff69' WHERE fid = 1", []).unwrap();
+    c.execute("UPDATE t SET pop = 'n/a', area = 'n/a' WHERE fid = 2", []).unwrap();
+    c.execute("UPDATE t SET pop = x'00ff', area = x'00' WHERE fid = 3", []).unwrap();
+    c.execute("UPDATE t SET pop = '', area = '<Null>' WHERE fid = 4", []).unwrap();
+    drop(c);
+    for (values, said) in read() {
+        assert_eq!(values[0], [Value::Int(1), Value::Float(1.5), Value::Float(9_007_199_254_740_992.0), Value::Text("\u{FFFD}i".into())]);
+        assert_eq!(values[1], [Value::Null, Value::Null, Value::Float(5.0), Value::Null]);
+        assert_eq!(values[2], [Value::Null, Value::Null, Value::Null, Value::Text("hi".into())]);
+        assert_eq!(values[3], [Value::Null, Value::Null, Value::Null, Value::Text("\u{FFFD}h".into())]);
+        let dropped = Some(crate::loss::LossCode::DroppedValue);
+        let rounded = Some(crate::loss::LossCode::ChangedRounded);
+        assert_eq!(
+            said,
+            [
+                ("t: 4 values aren't numbers and were read as empty, in 'pop', 'area'".to_string(), dropped),
+                ("t: 1 number was rounded to the nearest decimal number, changing digits before the point, as a decimal field doesn't keep more than 15 or 16 digits, in 'big'".to_string(), rounded),
+                ("t: 2 text values aren't valid UTF-8 and were read with U+FFFD in place of the bytes that can't be read, in 'name'; a GeoPackage holds its text in UTF-8".to_string(), Some(crate::loss::LossCode::ChangedEncoding)),
+            ]
+        );
+    }
+}
+
+/// Number text a decimal can't hold as written is counted as rounded, and text or a blob that isn't
+/// UTF-8 as not valid in it; numbers that fit and UTF-8 text are counted as nothing.
+#[test]
+fn number_text_that_rounds_and_text_that_isnt_utf8_are_counted() {
+    let (mut unread, mut rounded) = (Vec::new(), Vec::new());
+    for (text, ty) in [
+        ("9007199254740993", FieldType::Double),
+        ("9223372036854775809", FieldType::Integer),
+        ("9007199254740993.0", FieldType::Double),
+        // A fraction that rounds up into the whole number changes it.
+        ("2.99999999999999999", FieldType::Double),
+    ] {
+        assert!(matches!(super::number_text(text, ty, &mut unread, Some(&mut rounded), 0), Value::Float(_)), "{text}");
+    }
+    assert_eq!((unread.as_slice(), rounded.as_slice()), (&[][..], &[4][..]));
+    rounded.clear();
+    for (text, ty) in [
+        ("2.5", FieldType::Double),
+        ("0.1", FieldType::Double),
+        ("12", FieldType::Integer),
+        ("1e3", FieldType::Double),
+        // A long fraction reads as the nearest decimal: no whole-number digit is lost.
+        ("0.12345678901234567891", FieldType::Double),
+        ("1.00000000000000001", FieldType::Double),
+    ] {
+        super::number_text(text, ty, &mut unread, Some(&mut rounded), 0);
+    }
+    assert!(unread.is_empty() && rounded.is_empty(), "{unread:?} {rounded:?}");
+    // NaN and infinity written as words are kept, uncounted; a number in digits past a decimal's
+    // range is empty, and counted.
+    for text in ["nan", "inf", "-Infinity"] {
+        assert!(
+            matches!(super::number_text(text, FieldType::Double, &mut unread, Some(&mut rounded), 0), Value::Float(f) if !f.is_finite()),
+            "{text}"
+        );
+    }
+    assert!(unread.is_empty() && rounded.is_empty(), "{unread:?} {rounded:?}");
+    for text in ["1e400", "-1e400"] {
+        assert_eq!(super::number_text(text, FieldType::Double, &mut unread, Some(&mut rounded), 0), Value::Null, "{text}");
+    }
+    assert_eq!((unread.as_slice(), rounded.as_slice()), (&[2][..], &[][..]));
+    let mut not_utf8 = Vec::new();
+    assert_eq!(super::utf8_text(b"hi", &mut not_utf8, 0), Value::Text("hi".into()));
+    assert!(not_utf8.is_empty());
+    assert_eq!(super::utf8_text(b"\xffh", &mut not_utf8, 1), Value::Text("\u{FFFD}h".into()));
+    assert_eq!(not_utf8, [0, 1]);
 }
 
 /// Text another program left in a GeoPackage yes/no column reads as yes or no when it is a yes/no
