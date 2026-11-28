@@ -310,8 +310,8 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
     // A later pass failing where an earlier one held (its shorter page leaving the texts too
     // little room) settles on the last that held: only the first pass's failure is the request's.
     let (mut held, mut settled) = (0.0f64, false);
-    // The least a panel with headline figures is cut to: a shorter one fails the next pass, and the
-    // sheet would be left uncut.
+    // The least a panel is cut to: a shorter one fails the next pass, and the sheet would be left
+    // uncut.
     let mut panel_needs = 0.0f64;
     let warned = warnings.len();
     let (w, h, (fx, fy, fw, fh), column) = loop {
@@ -727,12 +727,13 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
                             }
                             y += if i + 1 < headlines.len() { 2.0 * k } else { 3.0 * k };
                         }
-                        if !under && !headlines.is_empty() {
-                            // The height down to here, the 30·k the check below asks for the locator and
-                            // the legend with 1·k to spare (a pass may land 0.5 mm short), and what the
-                            // sources and reference take from the map once under it.
+                        if !under {
+                            // The height down to here and the 30·k the check below asks for the locator
+                            // and the legend, or the 40·k the map's frame needs, if more, each with 1·k to
+                            // spare (a pass may land 0.5 mm short); and what the sources and reference
+                            // take from the map once under it.
                             let moved = foot - footer(&mut Vec::new(), &plain, true, true);
-                            panel_needs = y - top + ip + 31.0 * k + moved;
+                            panel_needs = (y - top + ip + 31.0 * k).max(41.0 * k) + moved;
                         }
                         // The sources and the reference, stacked up from the panel's foot.
                         let mut yb = panel_bottom - ip;

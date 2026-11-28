@@ -129,6 +129,9 @@ mod layout_edge;
 #[path = "tests/layout_panel_figures.rs"]
 mod layout_panel_figures;
 
+#[path = "tests/layout_panel_cut.rs"]
+mod layout_panel_cut;
+
 #[path = "tests/layout_chart_notices.rs"]
 mod layout_chart_notices;
 
