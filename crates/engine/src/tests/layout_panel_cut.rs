@@ -166,3 +166,23 @@ fn a_tall_area_stays_whole() {
     // A4's margin and padding put an uncut panel's top at 15 mm.
     assert!((named(&tall, "Panel Box").y - 15.0).abs() < 1e-6);
 }
+
+#[test]
+fn the_cut_counts_the_layers_the_final_frame_lists() {
+    // One-colour layers running past the frame are left out of the legend as context: a frame the
+    // legend makes taller can take them whole, and its legend lists them.
+    for half in [8.0, 9.0, 10.0, 11.0, 12.0, 14.0, 16.0] {
+        let mut s = world();
+        let (w, so, e, n) = (-55.0, -9.0 - half, -35.0, -9.0 + half);
+        let ring = json!([[[w, so], [e, so], [e, n], [w, n], [w, so]]]);
+        let fc = json!({"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": ring}}]});
+        let path = std::env::temp_dir().join(format!("rustgis-3266-{}-{half}.geojson", std::process::id()));
+        std::fs::write(&path, fc.to_string()).unwrap();
+        for i in 0..3 {
+            s.run("layer.addData", &json!({"path": path.display().to_string(), "name": format!("Block {i}")})).unwrap();
+        }
+        let _ = std::fs::remove_file(path);
+        let (_, warnings) = panel_of(s, json!({"extent": area(-16.0)})).unwrap();
+        assert!(!warnings.contains(LEGEND_CUT), "half {half}: {warnings}");
+    }
+}

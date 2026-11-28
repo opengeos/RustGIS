@@ -921,36 +921,47 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
             // frame needs, plus what moves under the map, which that pass has yet to give back. Or it
             // cuts the legend: those texts, then the locator and the whole legend.
             let least = area.zip(panel_head).map_or(0.0, |((cut, fw), (head, tw, moved))| {
-                // The legend as the frame cut to the area lists it: the width sets the scale, cut or
-                // not. A frame the least makes taller could keep other context layers; the legend
-                // would then say it doesn't fit.
-                let inner = ((fw - 2.0 * room_side).max(fw / 2.0), (lh - 2.0 * room_end).max(lh / 2.0));
-                let fitted = fit_scale(s.map(), &extent, inner.0, inner.1).filter(|_| !whole_globe);
-                let legend_h = fitted.map_or(0.0, |(center, scale)| {
-                    let scale = round_scale(scale);
-                    let at = crate::render::layout::frame_render_scale(s.map(), center, scale);
-                    let context = context_at(s, center, scale, (fw, cut));
-                    // A legend whose size isn't known isn't counted: it gets a fixed size, said.
-                    let rows = legend_sizes(s, at, &context).map_or(0.0, |sizes| sizes[0].1);
-                    let bar = colorbar
-                        .then(|| rustgis_map::layout::colorbar_layer(s.map(), None))
-                        .flatten()
-                        .filter(|l| l.raster.as_ref().is_some_and(|r| rustgis_map::layout::color_scale(r).is_some()))
-                        .map_or(0.0, |l| colorbar_mm(&l.name, tw - 2.0 * legend_pad) + if rows > 0.0 { 2.0 } else { 0.0 });
-                    rows + bar
-                });
-                // The locator shrinks to 0.45 of the column before the legend under it does.
-                let column = match legend_h {
-                    h if h <= 0.0 => 0.0,
-                    h if locators.is_empty() => h + 2.0 * legend_pad,
-                    h => {
-                        let (n, gap) = (locators.len() as f64, 3.0 * k);
-                        let side = ((tw - (n - 1.0) * gap) / n).min(52.0 * k);
-                        let under = 3.0 * k + h + 2.0 * legend_pad;
-                        (under / 0.55).min(side + under)
+                // A frame the legend makes taller can take context layers whole, and its legend
+                // lists them: measured again at that height, until it asks for no taller one.
+                let mut judged = cut;
+                for _ in 0..3 {
+                    let least = {
+                        // The legend as a frame `judged` tall lists it: the width sets the scale, cut or not.
+                        let inner = ((fw - 2.0 * room_side).max(fw / 2.0), (lh - 2.0 * room_end).max(lh / 2.0));
+                        let fitted = fit_scale(s.map(), &extent, inner.0, inner.1).filter(|_| !whole_globe);
+                        let legend_h = fitted.map_or(0.0, |(center, scale)| {
+                            let scale = round_scale(scale);
+                            let at = crate::render::layout::frame_render_scale(s.map(), center, scale);
+                            let context = context_at(s, center, scale, (fw, judged));
+                            // A legend whose size isn't known yet (a layer or picture still loading) counts as no
+                            // rows here; the placement later gives it a fixed size and warns if that doesn't fit.
+                            let rows = legend_sizes(s, at, &context).map_or(0.0, |sizes| sizes[0].1);
+                            let bar = colorbar
+                                .then(|| rustgis_map::layout::colorbar_layer(s.map(), None))
+                                .flatten()
+                                .filter(|l| l.raster.as_ref().is_some_and(|r| rustgis_map::layout::color_scale(r).is_some()))
+                                .map_or(0.0, |l| colorbar_mm(&l.name, tw - 2.0 * legend_pad) + if rows > 0.0 { 2.0 } else { 0.0 });
+                            rows + bar
+                        });
+                        // The locator shrinks to 0.45 of the column before the legend under it does.
+                        let column = match legend_h {
+                            h if h <= 0.0 => 0.0,
+                            h if locators.is_empty() => h + 2.0 * legend_pad,
+                            h => {
+                                let (n, gap) = (locators.len() as f64, 3.0 * k);
+                                let side = ((tw - (n - 1.0) * gap) / n).min(52.0 * k);
+                                let under = 3.0 * k + h + 2.0 * legend_pad;
+                                (under / 0.55).min(side + under)
+                            }
+                        };
+                        ((head + 31.0 * k).max(41.0 * k) + moved).max(head + column + 1.0 * k)
+                    };
+                    if least <= judged {
+                        break;
                     }
-                };
-                ((head + 31.0 * k).max(41.0 * k) + moved).max(head + column + 1.0 * k)
+                    judged = least;
+                }
+                judged
             });
             // Only a frame clearly too tall is cut.
             target = area.map(|(cut, _)| cut.max(least)).filter(|n| *n < 0.97 * lh);
