@@ -3903,9 +3903,10 @@ fn queue(s: &mut Session, file_name: String, bytes: Arc<Vec<u8>>, from: Delivery
     let size = bytes.capacity();
     if matches!(from, Delivery::Export(_)) && size > cap {
         return Err(format!(
-            "{file_name}: {} MiB, more than the {} MiB a command can download in the browser; export less (a selection of features, a smaller size or fewer pages), use the Export buttons, or use the desktop app",
+            "{file_name}: {} MiB, more than the {} MiB a command can download in the browser; {}",
             mib(size),
-            mib(cap)
+            mib(cap),
+            super::exports::SMALLER
         ));
     }
     if s.waiting_download_count() >= MAX_DOWNLOADS || size > cap.saturating_sub(held) {

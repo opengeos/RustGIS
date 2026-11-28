@@ -16,6 +16,7 @@ use rustgis_map::{Layer, Map, Rgba};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use super::exports::{Output, Parts};
 use super::ps;
 use crate::{CmdResult, CommandSpec as C, Session};
 
@@ -206,7 +207,13 @@ pub fn commands() -> Vec<C> {
 /// The shared item bytes of a kind: its name, bytes and source. Rasters drawn into it without
 /// their cast shadows are said (see [`super::share::saying_shadows`]).
 pub fn share_bytes(s: &mut Session, kind: &str, p: &Value) -> Result<(String, Vec<u8>, String), String> {
-    let (name, bytes, source, notes) = share_output(s, kind, p)?;
+    share_bytes_within(s, kind, p, Output::UNLIMITED)
+}
+
+/// [`share_bytes`] for the file `out` describes: a downloaded one is stopped as it passes its
+/// room.
+fn share_bytes_within(s: &mut Session, kind: &str, p: &Value, out: Output<'_>) -> Result<(String, Vec<u8>, String), String> {
+    let (name, bytes, source, notes) = share_output(s, kind, p, out)?;
     for note in notes {
         s.say(note);
     }
@@ -218,6 +225,7 @@ pub(crate) fn share_output(
     s: &mut Session,
     kind: &str,
     p: &Value,
+    out: Output<'_>,
 ) -> Result<(String, Vec<u8>, String, Vec<rustgis_data::loss::Note>), String> {
     let what = match kind {
         "webMap" => "The web map",
@@ -235,7 +243,7 @@ pub(crate) fn share_output(
         }
         _ => Vec::new(),
     };
-    let (name, bytes, source) = super::share::saying_shadows(s, what, |s| share_bytes_inner(s, kind, p))?;
+    let (name, bytes, source) = super::share::saying_shadows(s, what, |s| share_bytes_inner(s, kind, p, out))?;
     Ok((name, bytes, source, notes))
 }
 
@@ -266,45 +274,49 @@ impl Unplaced {
 }
 
 /// Build the saved payload for each share kind; web tools carry capabilities of their steps.
-fn share_bytes_inner(s: &mut Session, kind: &str, p: &Value) -> Result<(String, Vec<u8>, String), String> {
+fn share_bytes_inner(s: &mut Session, kind: &str, p: &Value, out: Output<'_>) -> Result<(String, Vec<u8>, String), String> {
+    // The features read whole so far, which a download's reads are held to together.
+    let mut held = 0;
     match kind {
         "webMap" => {
             let mut m = map_of(s, p)?;
-            m.layers.iter_mut().filter(|l| shared_layer("webMap", l)).try_for_each(|l| load_whole(s, l))?;
+            m.layers.iter_mut().filter(|l| shared_layer("webMap", l)).try_for_each(|l| load_whole(s, l, out, &mut held))?;
             let mut unplaced = Unplaced::default();
-            let html = web_map_html(&m, &m.name, &mut unplaced)?;
+            let html = out.file(|w| write_web_map(w, &m, &m.name, &mut unplaced))?;
             unplaced.say(s, "The web map");
-            Ok((m.name.clone(), html.into_bytes(), m.name))
+            Ok((m.name.clone(), html, m.name))
         }
         "webLayer" => {
             let mut l = layer_of(s, p)?;
-            load_whole(s, &mut l)?;
+            load_whole(s, &mut l, out, &mut held)?;
             let mut unplaced = Unplaced::default();
-            let zip = web_layer_zip(s, &l, &mut unplaced)?;
+            let zip = web_layer_zip(s, &l, &mut unplaced, out)?;
             unplaced.say(s, "The web layer");
             Ok((l.name.clone(), zip, l.name.clone()))
         }
         "webStyle" => {
             let l = layer_of(s, p)?;
             let style = web_style(&l);
-            Ok((l.name.clone(), serde_json::to_vec_pretty(&style).map_err(|e| e.to_string())?, l.name.clone()))
+            Ok((l.name.clone(), out.json_pretty(&style)?, l.name.clone()))
         }
         "locator" => {
             let l = layer_of(s, p)?;
             let fields: Option<Vec<String>> =
                 p.get("fields").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect());
             let mut unplaced = Unplaced::default();
-            let loc = locator(&l, fields.as_deref(), &mut unplaced)?;
+            let loc = locator(&l, fields.as_deref(), &mut unplaced, out)?;
             unplaced.say(s, "The locator");
-            Ok((l.name.clone(), serde_json::to_vec(&loc).map_err(|e| e.to_string())?, l.name.clone()))
+            Ok((l.name.clone(), out.json(&loc)?, l.name.clone()))
         }
         "geodataService" => {
             let mut m = map_of(s, p)?;
-            m.layers.iter_mut().filter(|l| shared_layer("geodataService", l)).try_for_each(|l| load_whole(s, l))?;
+            m.layers.iter_mut().filter(|l| shared_layer("geodataService", l)).try_for_each(|l| load_whole(s, l, out, &mut held))?;
             let mut layers: Vec<&Dataset> = m.layers.iter().filter(|l| shared_layer("geodataService", l)).map(|l| &l.dataset).collect();
             layers.extend(s.project.tables.iter().map(|t| &t.dataset));
             let mut unplaced = Unplaced::default();
-            let zip = ogc_zip(&m.name, &layers, &[], &mut unplaced)?;
+            let mut parts = out.parts();
+            ogc_entries(&mut parts, &m.name, &layers, &mut unplaced)?;
+            let zip = parts.zip()?;
             let name = m.name.clone();
             drop(layers);
             unplaced.say(s, "The geodata service");
@@ -314,17 +326,14 @@ fn share_bytes_inner(s: &mut Session, kind: &str, p: &Value) -> Result<(String, 
             let i = shared_model(s, p)?;
             let m = s.project.models.get_mut(i).ok_or("make a model first (ModelBuilder)")?;
             let name = m.name.clone();
-            let (bytes, report) = crate::durable::output(m, None, |m| {
-                let tool = crate::model::to_web_tool_file(&m.name, &m.steps);
-                serde_json::to_vec_pretty(&tool).map_err(|e| e.to_string())
-            })?;
+            let (bytes, report) = crate::durable::output(m, None, |m| out.json_pretty(&crate::model::to_web_tool_file(&m.name, &m.steps)))?;
             crate::durable::notify(s, &report);
             Ok((name.clone(), bytes, name))
         }
         "webScene" => {
             let mut m = map_of(s, p)?;
-            m.layers.iter_mut().filter(|l| shared_layer("webScene", l)).try_for_each(|l| load_whole(s, l))?;
-            let scene = gltf(&m, s.view_size)?;
+            m.layers.iter_mut().filter(|l| shared_layer("webScene", l)).try_for_each(|l| load_whole(s, l, out, &mut held))?;
+            let scene = gltf(&m, s.view_size, out)?;
             for note in scene.notes() {
                 s.say(note);
             }
@@ -362,9 +371,12 @@ fn map_of(s: &Session, p: &Value) -> Result<Map, String> {
 
 /// A streamed layer shares its whole source, not the features read for the current view; what
 /// that read couldn't read as it is (rows left out, dates read as null or rounded) is said.
-fn load_whole(s: &mut Session, l: &mut Layer) -> Result<(), String> {
+/// For a download, the layers read are held together to what the web app reads for one
+/// ([`super::exports::read_for_download_after`]), `held` counting their bytes.
+fn load_whole(s: &mut Session, l: &mut Layer, out: Output<'_>, held: &mut usize) -> Result<(), String> {
     if l.is_streamed() {
-        let (ds, unread) = l.load_all_counted()?;
+        let (ds, unread) = if out.downloads() { super::exports::read_for_download_after(l, *held)? } else { l.load_all_counted()? };
+        *held = held.saturating_add(ds.features.held_bytes());
         l.dataset = ds;
         super::whole::Unread::of(l.name.clone(), unread).say(s);
     }
@@ -389,6 +401,10 @@ fn target(input: &impl super::InputSource, p: &Value, name: &str, ext: &str) -> 
     if let Some(path) = ps(p, "path") {
         return Ok(path.to_string());
     }
+    // A data store is a folder, which the browser can't write to.
+    if s.downloads_files() {
+        return Err("the web app has no data stores; pass a path, and the file downloads under the name it ends in".into());
+    }
     let store = match ps(p, "store") {
         Some(n) => s.project.data_stores.iter().find(|d| d.name.eq_ignore_ascii_case(n)).ok_or_else(|| format!("no data store '{n}'"))?,
         None => s.project.data_stores.first().ok_or("pass a path, or register a data store (Publish › Manage › Data Stores)")?,
@@ -397,7 +413,12 @@ fn target(input: &impl super::InputSource, p: &Value, name: &str, ext: &str) -> 
     Ok(PathBuf::from(&store.path).join(format!("{}.{ext}", safe(name))).display().to_string())
 }
 
+/// Writes a share of `kind` to its path or data store and records the item the Manage commands
+/// update; where files are downloaded, downloads it instead ([`download_share`]).
 fn share(s: &mut Session, p: &Value, kind: &str) -> CmdResult {
+    if s.downloads_files() {
+        return download_share(s, p, kind);
+    }
     let written = s.notice_mark();
     let ((name, bytes, source), chart_note) = if kind == "linkChart" { link_chart_item(s, p)? } else { (share_bytes(s, kind, p)?, None) };
     let ext = KINDS.iter().find(|k| k.0 == kind).map_or("bin", |k| k.1);
@@ -447,12 +468,46 @@ fn share(s: &mut Session, p: &Value, kind: &str) -> CmdResult {
     Ok(json!({"item": id, "path": path, "bytes": bytes.len()}))
 }
 
+/// [`share`] where files are downloaded. No shared item is recorded: the Manage commands
+/// update an item's file in place, and a download can't be.
+fn download_share(s: &mut Session, p: &Value, kind: &str) -> CmdResult {
+    // Refused without a path before anything is made.
+    target(s, p, "", "")?;
+    super::exports::download_command(s, &format!("share.{kind}"), p, |s, out| {
+        let path = out.path;
+        let ((name, bytes, _), chart_note) =
+            if kind == "linkChart" { link_chart_item(s, p)? } else { (share_bytes_within(s, kind, p, out)?, None) };
+        note_label_classes(s, kind, p);
+        note_export(s, kind, p, path);
+        if let Some(note) = chart_note {
+            s.notify(note, false);
+        }
+        let answer = json!({"path": path, "bytes": bytes.len()});
+        let done = format!(
+            "Shared {name} as the download {path}; it isn't listed under Jobs, as the web app can't update a downloaded file (share it again to replace it)"
+        );
+        Ok(super::exports::Made { done: Some(done), ..super::exports::Made::new(bytes, answer) })
+    })
+}
+
 /// Re-shares an item in place, from its source or a new one.
 fn update_item(s: &mut Session, p: &Value, kind: &str, new_source: Option<&str>) -> CmdResult {
+    refuse_update(s, kind)?;
     let q = update_params(s, p, kind, new_source)?;
     share(s, &q, kind)
 }
 
+/// Refuses, where files are downloaded, updating a shared item of `kind`: its file stays where
+/// it was written, which the browser can't write to.
+fn refuse_update(s: &Session, kind: &str) -> Result<(), String> {
+    if !s.downloads_files() {
+        return Ok(());
+    }
+    Err(format!("the web app can't update a shared file in place; run share.{kind} with a path, which downloads it again"))
+}
+
+/// `share.dataStore`: registers or removes a folder shares are written to, or lists them.
+/// Registering is refused where files are downloaded.
 fn data_store(s: &mut Session, p: &Value) -> CmdResult {
     if let Some(n) = ps(p, "remove") {
         let before = s.project.data_stores.len();
@@ -461,6 +516,11 @@ fn data_store(s: &mut Session, p: &Value) -> CmdResult {
             return Err(format!("no data store '{n}'"));
         }
     } else if let Some(path) = ps(p, "path") {
+        if s.downloads_files() {
+            return Err(format!(
+                "{path}: the web app can't write to a folder, so it keeps no data stores; share with a path, and the file downloads under the name it ends in"
+            ));
+        }
         if !Path::new(path).is_dir() {
             return Err(format!("{path} isn't a folder"));
         }
@@ -483,7 +543,12 @@ fn data_store(s: &mut Session, p: &Value) -> CmdResult {
     Ok(json!({"stores": s.project.data_stores}))
 }
 
+/// `share.upload`: copies a file into a data store, never over a file there. Refused where files
+/// are downloaded.
 fn upload(s: &mut Session, p: &Value) -> CmdResult {
+    if s.downloads_files() {
+        return Err("the web app can't copy files into a folder; upload files to a data store in the desktop app".into());
+    }
     let src = ps(p, "path").ok_or("path is required")?;
     let file = Path::new(src).file_name().map(|n| n.to_string_lossy().into_owned()).ok_or("path must name a file")?;
     let store = match ps(p, "store") {
@@ -550,10 +615,14 @@ fn css(c: Rgba) -> String {
 /// A layer's visible features as GeoJSON, each with its drawn style: in longitude/latitude,
 /// whatever system the layer holds its coordinates in. One with a place that can't be given there
 /// is left out, counted in `unplaced`.
-fn styled_features(l: &Layer, budget: &mut usize, unplaced: &mut Unplaced) -> Result<Vec<Value>, String> {
+fn styled_features(
+    l: &Layer,
+    budget: &mut usize,
+    unplaced: &mut Unplaced,
+    mut each: impl FnMut(Value) -> Result<(), String>,
+) -> Result<(), String> {
     let rows = l.visible_rows();
     let opacity = 1.0 - f64::from(l.transparency.clamp(0.0, 100.0)) / 100.0;
-    let mut out = Vec::new();
     // Its symbol by expression (no map scale: the page zooms on its own).
     let styler = l.styler(None);
     let to = l.dataset.lonlat_conversion().map_err(|e| format!("{}: {e}", l.name))?;
@@ -572,23 +641,37 @@ fn styled_features(l: &Layer, budget: &mut usize, unplaced: &mut Unplaced) -> Re
         let sym = styler.symbol(row);
         let props: serde_json::Map<String, Value> =
             l.dataset.fields.iter().enumerate().map(|(i, f)| (f.name.clone(), json!(l.dataset.value(row, i).to_string()))).collect();
-        out.push(json!({
+        each(json!({
             "type": "Feature",
             "geometry": rustgis_data::io::geometry_to_geojson(&g),
             "properties": props,
             "style": {"fill": css(sym.fill), "stroke": css(sym.stroke), "width": sym.stroke_width, "size": sym.size, "opacity": opacity},
-        }));
+        }))?;
         *budget -= 1;
     }
-    Ok(out)
+    Ok(())
 }
 
 /// A self-contained web map page: the map's layers (rasters as images) drawn on a canvas in Web
-/// Mercator, with pan, zoom, a layer list and pop-ups. No libraries or server.
-fn web_map_html(m: &Map, title: &str, unplaced: &mut Unplaced) -> Result<String, String> {
+/// Mercator, with pan, zoom, a layer list and pop-ups. No libraries or server. Its layers are
+/// written to `page` as they are made, so a page held to a limit stops there.
+fn write_web_map(page: &mut dyn std::io::Write, m: &Map, title: &str, unplaced: &mut Unplaced) -> Result<(), String> {
+    let failed = |e: std::io::Error| e.to_string();
     let mut budget = MAX_FEATURES;
     let mut pictures = 0usize;
-    let mut layers = Vec::new();
+    let mut separator = "";
+    write!(
+        page,
+        r#"<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{title}</title>
+<style>html,body{{margin:0;height:100%;overflow:hidden;font-family:system-ui,sans-serif}}canvas{{display:block}}
+#panel{{position:fixed;top:8px;right:8px;background:#fffe;border-radius:6px;padding:6px 10px;font-size:13px;max-height:60vh;overflow:auto;box-shadow:0 1px 4px #0003}}
+#pop{{position:fixed;display:none;background:#fff;border-radius:6px;padding:6px 8px;font-size:12px;box-shadow:0 1px 6px #0004;max-width:320px;max-height:40vh;overflow:auto}}
+h1{{position:fixed;left:10px;top:4px;margin:0;font-size:16px;background:#fffc;padding:2px 8px;border-radius:4px}}</style></head>
+<body><h1>{title}</h1><canvas id="c"></canvas><div id="panel"></div><div id="pop"></div><script>
+const L=["#,
+        title = html_escape(title)
+    )
+    .map_err(failed)?;
     // Bottom-most first, as drawn.
     for l in m.layers.iter().rev().filter(|l| l.visible) {
         if l.is_raster() {
@@ -615,23 +698,27 @@ fn web_map_html(m: &Map, title: &str, unplaced: &mut Unplaced) -> Result<String,
             if pictures > MAX_PAGE_PICTURES {
                 return Err("the map's rasters would make the page too large; hide some of them".into());
             }
-            layers.push(
-                json!({"name": l.name, "image": base64::engine::general_purpose::STANDARD.encode(png), "bounds": [a.x, a.y, b.x, b.y]}),
-            );
+            let layer =
+                json!({"name": l.name, "image": base64::engine::general_purpose::STANDARD.encode(png), "bounds": [a.x, a.y, b.x, b.y]});
+            write!(page, "{separator}{}", script_json(&layer)).map_err(failed)?;
         } else {
-            layers.push(json!({"name": l.name, "features": styled_features(l, &mut budget, unplaced)?}));
+            // A feature at a time, its members in the order a whole layer's value has them.
+            write!(page, r#"{separator}{{"features":["#).map_err(failed)?;
+            let mut between = "";
+            styled_features(l, &mut budget, unplaced, |feature| {
+                write!(page, "{between}{}", script_json(&feature)).map_err(failed)?;
+                between = ",";
+                Ok(())
+            })?;
+            write!(page, r#"],"name":{}}}"#, script_json(&json!(l.name))).map_err(failed)?;
         }
+        separator = ",";
     }
     let c = m.center_lonlat();
     let bg = css(m.palette().0);
-    Ok(format!(
-        r#"<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{title}</title>
-<style>html,body{{margin:0;height:100%;overflow:hidden;font-family:system-ui,sans-serif}}canvas{{display:block}}
-#panel{{position:fixed;top:8px;right:8px;background:#fffe;border-radius:6px;padding:6px 10px;font-size:13px;max-height:60vh;overflow:auto;box-shadow:0 1px 4px #0003}}
-#pop{{position:fixed;display:none;background:#fff;border-radius:6px;padding:6px 8px;font-size:12px;box-shadow:0 1px 6px #0004;max-width:320px;max-height:40vh;overflow:auto}}
-h1{{position:fixed;left:10px;top:4px;margin:0;font-size:16px;background:#fffc;padding:2px 8px;border-radius:4px}}</style></head>
-<body><h1>{title}</h1><canvas id="c"></canvas><div id="panel"></div><div id="pop"></div><script>
-const L={layers};const R=6378137,cv=document.getElementById('c'),g=cv.getContext('2d');
+    write!(
+        page,
+        r#"];const R=6378137,cv=document.getElementById('c'),g=cv.getContext('2d');
 const merc=(lon,lat)=>{{lat=Math.max(-85,Math.min(85,lat));return [R*lon*Math.PI/180,R*Math.log(Math.tan(Math.PI/4+lat*Math.PI/360))]}};
 let [cx,cy]=merc({lon},{lat}),res={res};const on=L.map(()=>true);const imgs=L.map(l=>{{if(!l.image)return null;const i=new Image();i.onload=draw;i.src='data:image/png;base64,'+l.image;return i}});
 const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;');const P=document.getElementById('panel');L.slice().reverse().forEach((l,ri)=>{{const k=L.length-1-ri;const d=document.createElement('label');d.style.display='block';d.innerHTML='<input type=checkbox checked> '+esc(l.name);d.firstChild.onchange=e=>{{on[k]=e.target.checked;draw()}};P.appendChild(d)}});
@@ -654,13 +741,12 @@ if(hit){{pop.innerHTML='<b>'+esc(L[k].name)+'</b><br>'+Object.entries(f.properti
 onresize=draw;draw();
 </script></body></html>
 "#,
-        title = html_escape(title),
-        layers = script_json(&Value::Array(layers)),
         lon = if c.x.is_finite() { c.x } else { 0.0 },
         lat = if c.y.is_finite() { c.y } else { 0.0 },
         res = if m.camera.res.is_finite() && m.camera.res > 0.0 { m.camera.res } else { 40_000.0 },
         bg = bg
-    ))
+    )
+    .map_err(failed)
 }
 
 /// Says, when a shared web map, web layer or OGC API Features item has layers that lost Z or M
@@ -886,9 +972,8 @@ fn zoom_range(l: &Layer) -> (Option<f32>, Option<f32>) {
 }
 
 /// Static OGC API – Features collections (landing page, conformance, collections and their
-/// items), plus extra files.
-fn ogc_zip(title: &str, layers: &[&Dataset], extra: &[(String, Vec<u8>)], unplaced: &mut Unplaced) -> Result<Vec<u8>, String> {
-    let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
+/// items), added to the archive's `parts`.
+fn ogc_entries(parts: &mut Parts<'_>, title: &str, layers: &[&Dataset], unplaced: &mut Unplaced) -> Result<(), String> {
     let mut cols = Vec::new();
     let mut used: HashMap<String, usize> = HashMap::new();
     let mut taken = std::collections::HashSet::new();
@@ -911,31 +996,34 @@ fn ogc_zip(title: &str, layers: &[&Dataset], extra: &[(String, Vec<u8>)], unplac
             col["extent"] =
                 json!({"spatial": {"bbox": [[e.min_x, e.min_y, e.max_x, e.max_y]], "crs": "http://www.opengis.net/def/crs/OGC/1.3/CRS84"}});
         }
-        entries.push((format!("collections/{id}.json"), serde_json::to_vec_pretty(&col).map_err(|e| e.to_string())?));
+        parts.push(format!("collections/{id}.json"), serde_json::to_vec_pretty(&col).map_err(|e| e.to_string())?)?;
         // GeoJSON is longitude/latitude, whatever system the layer holds its coordinates in; a
         // feature with a place that can't be given there is written without its geometry.
         let (lonlat, lost) = ds.in_lonlat_leaving_out()?;
         unplaced.add(&ds.name, lost);
-        let mut fc = rustgis_data::io::to_geojson(&lonlat);
-        fc["numberReturned"] = json!(ds.features.len());
-        entries.push((format!("collections/{id}/items.json"), serde_json::to_vec(&fc).map_err(|e| e.to_string())?));
+        parts.make(format!("collections/{id}/items.json"), |w| {
+            rustgis_data::io::write_geojson_items(&lonlat, w).map_err(|e| e.to_string())
+        })?;
         cols.push(col);
     }
     let landing = json!({"title": title, "links": [
         {"href": "conformance.json", "rel": "conformance"}, {"href": "collections.json", "rel": "data"}]});
     let conformance = json!({"conformsTo": ["http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/core", "http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/geojson"]});
-    entries.push(("index.json".into(), serde_json::to_vec_pretty(&landing).map_err(|e| e.to_string())?));
-    entries.push(("conformance.json".into(), serde_json::to_vec_pretty(&conformance).map_err(|e| e.to_string())?));
-    entries.push(("collections.json".into(), serde_json::to_vec_pretty(&json!({"collections": cols})).map_err(|e| e.to_string())?));
-    entries.extend(extra.iter().cloned());
-    rustgis_data::zip::write(&entries)
+    parts.push("index.json".into(), serde_json::to_vec_pretty(&landing).map_err(|e| e.to_string())?)?;
+    parts.push("conformance.json".into(), serde_json::to_vec_pretty(&conformance).map_err(|e| e.to_string())?)?;
+    parts.push("collections.json".into(), serde_json::to_vec_pretty(&json!({"collections": cols})).map_err(|e| e.to_string())?)
 }
 
 /// A web layer: the layer as an OGC API Features collection, its style, and a viewer page.
-fn web_layer_zip(s: &Session, l: &Layer, unplaced: &mut Unplaced) -> Result<Vec<u8>, String> {
-    let style = serde_json::to_vec_pretty(&web_style(l)).map_err(|e| e.to_string())?;
+fn web_layer_zip(s: &Session, l: &Layer, unplaced: &mut Unplaced, out: Output<'_>) -> Result<Vec<u8>, String> {
+    let mut parts = out.parts();
+    ogc_entries(&mut parts, &l.name, &[&l.dataset], unplaced)?;
+    parts.make("style.json".into(), |w| serde_json::to_writer_pretty(w, &web_style(l)).map_err(|e| e.to_string()))?;
+    let src = safe(&l.name);
     // The same features as the collection's items, counted there.
-    let geojson = serde_json::to_vec(&rustgis_data::io::to_geojson(&l.dataset.in_lonlat_leaving_out()?.0)).map_err(|e| e.to_string())?;
+    parts.make(format!("{src}.geojson"), |w| {
+        rustgis_data::io::write_geojson(&l.dataset.in_lonlat_leaving_out()?.0, w).map_err(|e| e.to_string())
+    })?;
     let mut m = s.map().clone();
     m.layers = vec![l.clone()];
     let e = l.extent();
@@ -947,15 +1035,9 @@ fn web_layer_zip(s: &Session, l: &Layer, unplaced: &mut Unplaced) -> Result<Vec<
         m.camera.res = ((b.x - a.x).abs() / 1000.0).max((b.y - a.y).abs() / 650.0).max(1.0) * 1.1;
         m.camera.clamp();
     }
-    // The page's features are the same, already counted by the collection below.
-    let html = web_map_html(&m, &l.name, &mut Unplaced::default())?;
-    let src = safe(&l.name);
-    ogc_zip(
-        &l.name,
-        &[&l.dataset],
-        &[("style.json".into(), style), (format!("{src}.geojson"), geojson), ("index.html".into(), html.into_bytes())],
-        unplaced,
-    )
+    // The page's features are the same, already counted by the collection.
+    parts.make("index.html".into(), |w| write_web_map(w, &m, &l.name, &mut Unplaced::default()))?;
+    parts.zip()
 }
 
 /// A locator: searchable place names and where they are.
@@ -967,7 +1049,7 @@ pub struct Locator {
     pub entries: Vec<(String, f64, f64)>,
 }
 
-fn locator(l: &Layer, fields: Option<&[String]>, unplaced: &mut Unplaced) -> Result<Locator, String> {
+fn locator(l: &Layer, fields: Option<&[String]>, unplaced: &mut Unplaced, out: Output<'_>) -> Result<Locator, String> {
     let ds = &l.dataset;
     let fis: Vec<usize> = match fields {
         Some(fs) => {
@@ -980,6 +1062,8 @@ fn locator(l: &Layer, fields: Option<&[String]>, unplaced: &mut Unplaced) -> Res
     }
     let lonlat = ds.lonlat_conversion()?;
     let mut entries = Vec::new();
+    // The entries' text so far, less than the file they make comes to.
+    let mut held = 0usize;
     for (row, ft) in ds.features.iter().enumerate().take(MAX_FEATURES) {
         let Some(g) = &ft.geometry else { continue };
         let e = g.extent();
@@ -1003,7 +1087,10 @@ fn locator(l: &Layer, fields: Option<&[String]>, unplaced: &mut Unplaced) -> Res
                 v => v.to_string(),
             };
             if !t.trim().is_empty() {
-                entries.push((t.trim().chars().take(500).collect(), c.x, c.y));
+                let entry: String = t.trim().chars().take(500).collect();
+                held = held.saturating_add(entry.len());
+                out.check(held)?;
+                entries.push((entry, c.x, c.y));
             }
         }
     }
@@ -1120,7 +1207,11 @@ impl SceneBytes {
 /// from: its bearing and pitch, as far off as MapLibre's camera would be. Also the number of
 /// polygon caps that are fans (the triangulator gave up, or fell back to one), and counted
 /// explanations of features or parts left out.
-fn gltf(m: &Map, view: (f64, f64)) -> Result<SceneBytes, String> {
+fn gltf(m: &Map, view: (f64, f64), out: Output<'_>) -> Result<SceneBytes, String> {
+    // A downloaded scene's geometry is written in base64, a third larger: held to what fits.
+    let most = MAX_SCENE_BYTES.min(out.most() / 4 * 3);
+    let too_large =
+        || if most < MAX_SCENE_BYTES { out.refusal() } else { "the scene would be too large; share fewer features".to_string() };
     let c = m.center_lonlat();
     let origin = rustgis_geom::lonlat_to_merc(c);
     let k = c.y.to_radians().cos().abs().max(0.01);
@@ -1197,8 +1288,8 @@ fn gltf(m: &Map, view: (f64, f64)) -> Result<SceneBytes, String> {
             budget -= 1;
             // The geometry built so far, with the buffer already written, stays under the cap
             // (checked as it grows, so a few huge polygons can't run away first).
-            if buffer.len() + built > MAX_SCENE_BYTES {
-                return Err("the scene would be too large; share fewer features".into());
+            if buffer.len() + built > most {
+                return Err(too_large());
             }
             let sym = styler.symbol(row);
             // A layer without an extrusion stands flat on the ground; the base and the height
@@ -1254,8 +1345,8 @@ fn gltf(m: &Map, view: (f64, f64)) -> Result<SceneBytes, String> {
                         // checked before it is built, so a fan over a huge ring can't run away.
                         let walls = if h > 0.0 { flat.len() * (4 * 12 + 6 * 4) } else { 0 };
                         let grown = size(&tri, &lines, &key).saturating_sub(last.map_or(0, |(_, before)| before));
-                        if buffer.len() + built + grown + cap * 12 + triangles * 12 + walls > MAX_SCENE_BYTES {
-                            return Err("the scene would be too large; share fewer features".into());
+                        if buffer.len() + built + grown + cap * 12 + triangles * 12 + walls > most {
+                            return Err(too_large());
                         }
                         // The fallback fan follows the ring, which may run either way: it is wound
                         // counter-clockwise (in x, z) like the triangulator's answer, so it faces up too.
@@ -1373,8 +1464,8 @@ fn gltf(m: &Map, view: (f64, f64)) -> Result<SceneBytes, String> {
             meshes.push(json!({"name": l.name, "primitives": primitives}));
             nodes.push(json!({"name": l.name, "mesh": meshes.len() - 1}));
         }
-        if buffer.len() > MAX_SCENE_BYTES {
-            return Err("the scene would be too large; share fewer features".into());
+        if buffer.len() > most {
+            return Err(too_large());
         }
     }
     if nodes.is_empty() {
@@ -1403,7 +1494,7 @@ fn gltf(m: &Map, view: (f64, f64)) -> Result<SceneBytes, String> {
         "extras": {"origin": [c.x, c.y], "units": "metres east, up and south of origin (longitude, latitude)",
             "bearing": at.bearing, "pitch": at.pitch},
     });
-    scene.bytes = serde_json::to_vec(&doc).map_err(|e| e.to_string())?;
+    scene.bytes = out.json(&doc)?;
     Ok(scene)
 }
 
@@ -1685,6 +1776,8 @@ fn update_links_inputs(input: &super::InputContext<'_>, p: &Value) -> Result<sup
 }
 /// Uses the same effective parameter reconstruction as the actual managed update.
 fn update_source_inputs(input: &impl super::InputSource, p: &Value, kind: &str, new_source: Option<&str>) -> Result<super::Inputs, String> {
+    // Before the item is looked for, so the browser's refusal is the one said.
+    refuse_update(&input.input_context(), kind)?;
     let q = update_params(input, p, kind, new_source)?;
     let mut inputs = share_kind_inputs(input, &q, kind)?;
     inputs.state = json!({"source":inputs.state,"effective":q});

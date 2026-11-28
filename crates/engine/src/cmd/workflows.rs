@@ -1367,24 +1367,31 @@ fn save_model(s: &mut Session, p: &Value) -> CmdResult {
 
 /// A model as a `*.model.json` file: written to `path`, or its text returned.
 fn export_model(s: &mut Session, p: &Value) -> CmdResult {
-    let written = s.notice_mark();
-    let (name, g, _) = model_graph(s, p)?;
-    let (text, report) =
-        crate::durable::output_owned(g, |g| serde_json::to_string_pretty(&crate::model::to_file(&name, g)).map_err(|e| e.to_string()))?;
-    crate::durable::notify(s, &report);
-    let file: String = name.chars().map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
-    match ps(p, "path") {
-        Some(path) => {
-            rustgis_data::io::write_atomic(std::path::Path::new(path), text.as_bytes()).map_err(|e| format!("{path}: {e}"))?;
-            note_passed_graph(s, p);
-            s.retain_written_notices(written);
-            Ok(json!({"model": name, "path": path}))
-        }
-        None => {
-            note_passed_graph(s, p);
-            Ok(json!({"model": name, "fileName": format!("{file}.model.json"), "text": text}))
-        }
+    if ps(p, "path").is_some() {
+        return super::exports::file_command(s, "model.export", p, |s, out| {
+            let (name, text) = model_file(s, p, out)?;
+            // What the graph passed left out is said once the file is out, and not at all of one
+            // that couldn't be written.
+            let (_, left_out) = s.holding_notices(|s| note_passed_graph(s, p));
+            let left_out = left_out.into_iter().map(|n| rustgis_data::loss::Note { loss: n.loss(), text: n.text, tally: None });
+            let answer = json!({"model": name, "path": out.path});
+            Ok(super::exports::Made { notes: left_out.collect(), ..super::exports::Made::new(text, answer) })
+        });
     }
+    let (name, text) = model_file(s, p, super::exports::Output::UNLIMITED)?;
+    let text = String::from_utf8(text).map_err(|e| e.to_string())?;
+    let file: String = name.chars().map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
+    note_passed_graph(s, p);
+    Ok(json!({"model": name, "fileName": format!("{file}.model.json"), "text": text}))
+}
+
+/// The model `p` names, and its `*.model.json` file for `out`, with what writing it leaves out
+/// said.
+fn model_file(s: &mut Session, p: &Value, out: super::exports::Output<'_>) -> Result<(String, Vec<u8>), String> {
+    let (name, g, _) = model_graph(s, p)?;
+    let (text, report) = crate::durable::output_owned(g, |g| out.json_pretty(&crate::model::to_file(&name, g)))?;
+    crate::durable::notify(s, &report);
+    Ok((name, text))
 }
 
 /// Runs a model saved as steps (no graph) in order, putting each step's output layer name in place

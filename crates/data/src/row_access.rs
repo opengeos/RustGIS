@@ -56,6 +56,11 @@ impl Features {
         self.rows.is_empty()
     }
 
+    /// The memory the rows hold, their geometry, attribute text and spare capacity included.
+    pub fn held_bytes(&self) -> usize {
+        crate::source::chunk_memory::features_bytes(&self.rows)
+    }
+
     /// Row `row`, if there is one.
     pub fn row(&self, row: usize) -> Option<RowRef<'_>> {
         self.rows.get(row).map(|row| RowRef { row })

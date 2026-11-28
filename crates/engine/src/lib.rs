@@ -940,6 +940,8 @@ pub struct Session {
     /// Notices given in this session, including ones no longer kept (see [`Session::notices_since`]),
     /// less those a failed command withdrew.
     notices_given: u64,
+    /// While a download's file is made, the notices that wait with it ([`Session::holding_notices`]).
+    held_notices: Option<Vec<Notice>>,
     /// Loss notices given in this session by code, including ones no longer kept, less those a
     /// failed command withdrew (see [`Session::losses_given`]).
     losses_given: Vec<(rustgis_data::loss::LossCode, u64)>,
@@ -1531,6 +1533,7 @@ impl Session {
             bundled_roots_said: false,
             diagnostics: rustgis_data::diagnostics::History::default(),
             notices_given: 0,
+            held_notices: None,
             losses_given: Vec::new(),
             beyond_said: None,
             crs_notes_said: Vec::new(),
@@ -1839,8 +1842,8 @@ impl Session {
     }
 
     /// Whether the files commands make reach the user as downloads: the browser has no filesystem
-    /// to write a path in, so a tool's file output and an export queue their bytes for the front
-    /// end ([`Session::take_gp_files`]).
+    /// to write a path in, so a tool's file output and a command's file (an export, a save, a
+    /// package, a share) queue their bytes for the front end ([`Session::take_gp_files`]).
     pub(crate) fn downloads_files(&self) -> bool {
         #[cfg(test)]
         if self.queue_gp_files {
@@ -1888,20 +1891,21 @@ impl Session {
         self.waiting_downloads().filter_map(|f| f.bytes.as_ref()).map(|bytes| bytes.capacity()).sum()
     }
 
-    /// Whether pending download `id` is an export's: no geoprocessing run records it.
+    /// Whether pending download `id` is a command's file, as an export's is: no geoprocessing run
+    /// records it.
     pub fn is_export_file(&self, id: u64) -> bool {
         self.file_outputs.iter().any(|file| file.id == id && file.is_export())
     }
 
-    /// Says which queued downloads among `files` are dropped, and `why`: the exports in one
-    /// notice (the desktop would have written their files by now), the tools' file outputs in
+    /// Says which queued downloads among `files` are dropped, and `why`: the commands' files in one
+    /// notice (the desktop would have written them by now), the tools' file outputs in
     /// another (a run is recorded only once its file is delivered, so these go unrecorded).
     fn say_dropped_downloads<'a>(&mut self, files: impl IntoIterator<Item = &'a cmd::gp::PendingFile>, why: &str) {
         let (exports, tools): (Vec<_>, Vec<_>) = files.into_iter().partition(|file| file.is_export());
         let names = |files: Vec<&cmd::gp::PendingFile>| files.iter().map(|file| file.file_name.clone()).collect::<Vec<_>>();
         let (exports, tools) = (names(exports), names(tools));
         if !exports.is_empty() {
-            self.notify(format!("{} export(s) not downloaded, {why}: {}", exports.len(), listed(&exports)), true);
+            self.notify(format!("{} file(s) not downloaded, {why}: {}", exports.len(), listed(&exports)), true);
         }
         if !tools.is_empty() {
             self.notify(
@@ -3757,6 +3761,18 @@ impl Session {
         self.publish_notice(text, severity, self.diagnostic_source, None, false, None);
     }
 
+    /// Runs `f`, keeping aside what it says instead of saying it: the caller says each later
+    /// ([`Session::relay_notice`]), or never. For a file whose notices wait for its download.
+    pub(crate) fn holding_notices<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> (T, Vec<Notice>) {
+        let outer = self.held_notices.replace(Vec::new());
+        let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self)));
+        let held = std::mem::replace(&mut self.held_notices, outer).unwrap_or_default();
+        match ran {
+            Ok(result) => (result, held),
+            Err(panic) => std::panic::resume_unwind(panic),
+        }
+    }
+
     /// Lands a worker's notice under the admitted command, preserving the notice's metadata.
     pub(crate) fn relay_notice(&mut self, notice: Notice) {
         self.publish_notice(
@@ -3782,22 +3798,22 @@ impl Session {
         if severity == rustgis_data::diagnostics::Severity::Error && self.rerun_said.iter().any(|said| said == text.as_str()) {
             return;
         }
+        let error = severity == rustgis_data::diagnostics::Severity::Error;
+        if let Some(held) = &mut self.held_notices {
+            held.push(Notice { text: text.into_string(), error, localized, severity, written, loss });
+            // As many as the queue keeps.
+            if held.len() > 200 {
+                held.remove(0);
+            }
+            return;
+        }
         let record = self.diagnostics.push_redacted(severity, source.unwrap_or("Application"), &text, loss, self.run.clone());
         // A bug's failure keeps its details (the panic's message and place) under it, for a report,
         // scrubbed as a message is, logins in use included.
-        if severity == rustgis_data::diagnostics::Severity::Error
-            && let Some(incident) = rustgis_data::incident::named(text.as_str())
-        {
+        if error && let Some(incident) = rustgis_data::incident::named(text.as_str()) {
             self.diagnostics.detail(record, Self::redacted(&incident.details()).as_str());
         }
-        self.notices.push(Notice {
-            text: text.into_string(),
-            error: severity == rustgis_data::diagnostics::Severity::Error,
-            localized,
-            severity,
-            written,
-            loss,
-        });
+        self.notices.push(Notice { text: text.into_string(), error, localized, severity, written, loss });
         self.notices_given += 1;
         if let Some(code) = loss {
             match self.losses_given.iter_mut().find(|(c, _)| *c == code) {

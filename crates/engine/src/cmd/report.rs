@@ -636,19 +636,25 @@ fn relationships(input: &impl super::InputSource) -> impl Iterator<Item = &rustg
     s.project.maps.iter().flat_map(|m| m.editing.relationships.iter())
 }
 
+/// `report.save`, or with `template` `report.saveTemplate`: the report's file at its path.
 fn save(s: &mut Session, p: &Value, template: bool) -> CmdResult {
-    let path = ps(p, "path").ok_or("path is required")?;
-    let i = index(s, p)?;
-    let bytes = report_file(s, i, template)?;
-    rustgis_data::io::write_atomic(Path::new(path), &bytes).map_err(|e| format!("{path}: {e}"))?;
-    Ok(json!({"path": path}))
+    let command = if template { "report.saveTemplate" } else { "report.save" };
+    super::exports::file_command(s, command, p, |s, out| {
+        let i = index(s, p)?;
+        Ok(super::exports::Made::new(report_within(s, i, template, out)?, json!({"path": out.path})))
+    })
 }
 
 /// A report file (the report as it is) or template (its design without the data source).
 pub fn report_file(s: &Session, i: usize, template: bool) -> Result<Vec<u8>, String> {
+    report_within(s, i, template, super::exports::Output::UNLIMITED)
+}
+
+/// [`report_file`] for the file `out` describes.
+pub(super) fn report_within(s: &Session, i: usize, template: bool, out: super::exports::Output<'_>) -> Result<Vec<u8>, String> {
     let r = s.project.reports.get(i).ok_or("no report")?;
     let r = if template { r.template() } else { r.clone() };
-    serde_json::to_vec_pretty(&r).map_err(|e| e.to_string())
+    out.json_pretty(&r)
 }
 
 fn open(s: &mut Session, p: &Value) -> CmdResult {

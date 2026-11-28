@@ -1,5 +1,6 @@
-//! Exports by command where files are downloaded: the browser has no filesystem to write a path
-//! in, so a script's, the Assistant's or a plugin's export is offered as a download instead.
+//! Exports, saves, packages and shares by command where files are downloaded: the browser has no
+//! filesystem to write a path in, so a script's, the Assistant's or a plugin's file is offered as
+//! a download instead, or the command says what to do.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -362,6 +363,7 @@ fn a_browser_export_of_a_large_streamed_layer_is_refused() {
         for (command, params, file) in [
             ("share.exportLayer", json!({"layer": layer}), "z.geojson"),
             ("data.convert", json!({"layer": layer, "format": "csv"}), "z.csv"),
+            ("share.webLayer", json!({"layer": layer}), "z.zip"),
         ] {
             let read = streamed(&mut s, layer, count, text, chunks);
             let e = s.run(command, &to(&params, file)).unwrap_err();
@@ -380,6 +382,22 @@ fn a_browser_export_of_a_large_streamed_layer_is_refused() {
         let (_, bytes, _) = deliver(&mut s, &pending, None);
         assert!(String::from_utf8_lossy(&bytes).contains("kept"));
         assert_eq!(said(&s, mark), ["Exported small.geojson"]);
+    }
+}
+
+/// A share of several layers read in place holds them to one limit together: two that fit one at
+/// a time are refused, naming the second, and nothing waits to be downloaded.
+#[test]
+fn a_browser_share_of_several_streamed_layers_is_held_to_one_limit() {
+    let files = Files::new();
+    let mut s = session(&files, true);
+    for layer in ["First", "Second"] {
+        streamed(&mut s, layer, None, 140 << 20, true);
+    }
+    for command in ["share.webMap", "share.geodataService"] {
+        let e = s.run(command, &json!({"path": "shared.zip"})).unwrap_err();
+        assert!(e.contains("with the layers read before it") && e.contains("more than the 256 MiB"), "{command}: {e}");
+        assert!(s.take_gp_files().is_empty(), "{command}");
     }
 }
 
@@ -428,7 +446,7 @@ fn a_browser_export_over_the_limit_is_stopped_as_it_is_made() {
     for (command, params, file, refusal) in cases {
         s.download_cap = Some(10);
         let e = s.run(command, &to(&params, file)).unwrap_err();
-        assert!(e.contains(file) && e.contains(refusal) && e.contains("export less"), "{command} {file}: {e}");
+        assert!(e.contains(file) && e.contains(refusal) && e.contains("make a smaller file"), "{command} {file}: {e}");
         assert!(e.contains("desktop app"), "{e}");
         assert!(s.take_gp_files().is_empty(), "{command} {file}");
         s.download_cap = Some(1 << 20);
@@ -490,7 +508,7 @@ fn a_failed_commands_export_from_a_project_it_opened_is_said_dropped() {
     let script = "project.new\nshare.exportMap {\"width\": 64, \"height\": 64, \"path\": \"later.png\"}\nno.suchCommand";
     s.run("script.run", &json!({"script": script})).unwrap_err();
     let dropped: Vec<String> = said(&s, mark).into_iter().filter(|n| n.contains("not downloaded")).collect();
-    assert_eq!(dropped, ["1 export(s) not downloaded, as the command that made them failed: later.png"]);
+    assert_eq!(dropped, ["1 file(s) not downloaded, as the command that made them failed: later.png"]);
     let waiting: Vec<String> = s.take_gp_files().into_iter().map(|f| f.1).collect();
     assert_eq!(waiting, ["totals.csv"]);
 }
@@ -521,7 +539,7 @@ fn a_browser_download_dropped_before_it_is_offered_is_said() {
     let expected = |queued: &[&str], why: &str| {
         let mut notices = Vec::new();
         if queued.contains(&export) {
-            notices.push(format!("1 export(s) not downloaded, {why}: totals.csv"));
+            notices.push(format!("1 file(s) not downloaded, {why}: totals.csv"));
         }
         if queued.contains(&tool) {
             notices.push(format!(
@@ -555,4 +573,351 @@ fn a_browser_download_dropped_before_it_is_offered_is_said() {
         s.run("project.new", &json!({})).unwrap();
         assert_eq!(dropped(&s, mark), expected(queued, "as another project replaced theirs first"), "{queued:?}");
     }
+}
+
+/// [`session`] with an item of every kind a command saves, and a field name long enough that a
+/// template and a package have something to leave out.
+fn items(files: &Files, browser: bool) -> Session {
+    let mut s = session(files, false);
+    s.run("layer.addDataBytes", &json!({"fileName": "scene.tif", "data": super::two_class_b64()})).unwrap();
+    let square = |class: &str, x: f64| {
+        json!({"type": "Feature", "properties": {"class": class}, "geometry": {"type": "Polygon",
+            "coordinates": [[[x, 45.002], [x + 0.013, 45.002], [x + 0.013, 45.035], [x, 45.035], [x, 45.002]]]}})
+    };
+    let training = json!({"type": "FeatureCollection", "features": [square("water", 10.002), square("field", 10.025)]});
+    s.run("layer.addDataText", &json!({"fileName": "training.geojson", "text": training.to_string()})).unwrap();
+    for (command, params) in [
+        (
+            "dl.train",
+            json!({"layer": "scene", "training": "training", "classField": "class", "bands": [1, 2], "epochs": 3, "model": "cover"}),
+        ),
+        ("task.new", json!({"name": "Steps", "steps": [{"title": "Zoom", "command": "map.zoomFull"}]})),
+        ("bookmark.add", json!({"name": "Home"})),
+        ("style.new", json!({"layer": "Places", "name": "Dots"})),
+        ("ramp.add", json!({"name": "Mine", "format": "clr", "text": "0 0 0 0\n1 255 255 255\n"})),
+        ("gp.run", json!({"tool": "buffer", "params": {"input": "Places", "distance": 100}})),
+        ("presentation.new", json!({"name": "Slides"})),
+        ("presentation.mapPage", json!({})),
+        ("notebook.new", json!({"name": "Notes"})),
+        ("model.new", json!({"name": "Ring", "steps": [{"tool": "buffer", "params": {"input": "Places", "distance": 5}}]})),
+    ] {
+        s.run(command, &params).unwrap_or_else(|e| panic!("{command}: {e}"));
+    }
+    // One layer in view for the commands that act on the active one.
+    s.active_layer = s.map().layer_by_name("Places").map(|l| l.id);
+    s.queue_gp_files = browser;
+    s
+}
+
+/// The line that says a file is out, which differs between the desktop and a download.
+fn says_it_is_out(notice: &str) -> bool {
+    ["Saved ", "Exported ", "Shared ", "Download offered: "].iter().any(|start| notice.starts_with(start))
+}
+
+/// The commands that save, package or share a file: command, other parameters, file name, and
+/// whether two writes of it give the same bytes.
+fn file_cases() -> Vec<(&'static str, Value, &'static str, bool)> {
+    vec![
+        ("map.save", json!({}), "m.rgismap", true),
+        ("map.package", json!({}), "m.rgismpk", true),
+        ("map.package", json!({"mobile": true}), "mobile.rgismpk", true),
+        ("layer.save", json!({"layer": "Places"}), "l.rgislyr", true),
+        ("style.save", json!({}), "s.rgisstyle", true),
+        ("ramp.save", json!({}), "r.rgisramp", true),
+        ("project.saveTemplate", json!({}), "t.rgistemplate", false),
+        ("project.newTemplate", json!({"name": "Mine"}), "n.rgistemplate", false),
+        ("project.package", json!({}), "p.rgispkg", false),
+        ("gp.package", json!({}), "g.rgisgpk", false),
+        ("task.save", json!({"task": "Steps"}), "k.rgistask", true),
+        ("bookmark.save", json!({}), "b.rgisbookmarks", true),
+        ("layout.save", json!({"layout": "Page"}), "l.rgislayout", true),
+        ("report.save", json!({"report": "List"}), "r.rgisreport", true),
+        ("report.saveTemplate", json!({"report": "List"}), "r.rgisrpttemplate", true),
+        ("presentation.save", json!({}), "s.rgispres", true),
+        ("presentation.export", json!({}), "s.html", true),
+        ("presentation.export", json!({"dpi": 48}), "s.pdf", false),
+        ("presentation.export", json!({"dpi": 48}), "s.png", true),
+        ("notebook.save", json!({}), "n.rgisnb", true),
+        ("notebook.save", json!({}), "n.ipynb", true),
+        ("model.export", json!({"name": "Ring"}), "ring.model.json", true),
+        ("dl.package", json!({"model": "cover"}), "c.rgisdlpk", false),
+        ("imagery.mesh", json!({"layer": "Dem"}), "dem.obj", true),
+        ("imagery.hostedImagery", json!({"layer": "scene", "maxZoom": 8}), "tiles.zip", false),
+        ("share.export3d", json!({"layer": "Places"}), "p.obj", true),
+        ("share.export3d", json!({"layer": "training"}), "t.stl", true),
+        ("share.webMap", json!({}), "map.html", false),
+        ("share.webLayer", json!({"layer": "Places"}), "layer.zip", false),
+        ("share.webStyle", json!({"layer": "Places"}), "style.json", true),
+        ("share.locator", json!({"layer": "Places"}), "find.rgisloc", true),
+        ("share.geodataService", json!({}), "data.zip", false),
+        ("share.webTool", json!({"model": "Ring"}), "tool.rgistool", true),
+        ("share.webScene", json!({}), "scene.gltf", false),
+    ]
+}
+
+/// Each command that saves, packages or shares a file downloads, under the path's name, the file
+/// the desktop writes, and says of it what the desktop says, once the download is taken.
+#[test]
+fn a_browser_file_command_downloads_the_desktops_file_and_says_the_same() {
+    let mut lossy = 0;
+    for (command, params, file, same_bytes) in file_cases() {
+        let files = Files::new();
+        let mut desktop = items(&files, false);
+        let path = files.path().join(file);
+        let path = path.to_str().unwrap();
+        let mark = desktop.notice_mark();
+        desktop.run(command, &to(&params, path)).unwrap_or_else(|e| panic!("{command} {file}: {e}"));
+        let written = std::fs::read(path).unwrap();
+        let folder = format!("{}{}", files.path().display(), std::path::MAIN_SEPARATOR);
+        let mut desktop_said: Vec<String> =
+            said(&desktop, mark).into_iter().map(|n| n.replace(&folder, "")).filter(|n| !says_it_is_out(n)).collect();
+        desktop_said.sort();
+        lossy += usize::from(!desktop_said.is_empty());
+
+        let mut browser = items(&files, true);
+        std::fs::remove_file(path).unwrap();
+        let (mark, steps) = (browser.notice_mark(), browser.undo_depth());
+        let pending = browser.run(command, &to(&params, file)).unwrap_or_else(|e| panic!("{command} {file}: {e}"));
+        assert_eq!(said(&browser, mark), Vec::<String>::new(), "{command} {file}: nothing is said before the download");
+        let messages: Vec<&str> = pending["messages"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+        for note in &desktop_said {
+            assert!(messages.contains(&note.as_str()), "{command} {file}: {note} not in {messages:?}");
+        }
+        let (name, bytes, answer) = deliver(&mut browser, &pending, None);
+        assert_eq!(name, file);
+        if same_bytes {
+            assert!(bytes == written, "{command} {file}: {} bytes downloaded, {} written", bytes.len(), written.len());
+        } else {
+            assert_eq!(bytes.get(..4), written.get(..4), "{command} {file}");
+        }
+        let (out, mut rest): (Vec<_>, Vec<_>) = said(&browser, mark).into_iter().partition(|n| says_it_is_out(n));
+        rest.sort();
+        assert_eq!(out.len(), 1, "{command} {file}: {out:?}");
+        assert!(out[0].contains(file), "{command} {file}: {out:?}");
+        assert_eq!(rest, desktop_said, "{command} {file}");
+        let answer = answer.unwrap();
+        assert_eq!((&answer["delivered"], &answer["file"]), (&json!(true), &json!(file)), "{answer}");
+        assert!(!std::path::Path::new(file).exists(), "{command} {file}: no file is written");
+        assert_eq!(browser.undo_depth(), steps, "{command} {file}");
+        assert!(browser.project.shared.is_empty(), "{command}: a download isn't a shared item");
+    }
+    // Some of these leave something out, so the comparison above has notices to compare.
+    assert!(lossy >= 3, "{lossy}");
+}
+
+/// Every command that saves, packages or shares a file, over the limit (a stand-in of ten
+/// bytes), is stopped as the file is made: nothing waits to be downloaded, and the refusal says
+/// what to do. A picture and a bookmarks file, each of a bounded size, are refused once made.
+/// Under the limit, each downloads.
+#[test]
+fn a_browser_file_command_over_the_limit_is_stopped_as_it_is_made() {
+    const STOPPED: &str = "stopped once the file passed";
+    const MADE: &str = "more than the 1 MiB a command can download";
+    let files = Files::new();
+    let mut s = items(&files, true);
+    let mut cases = file_cases();
+    cases.extend([
+        ("project.save", json!({}), "p.rgis", false),
+        ("project.saveAs", json!({}), "q.rgis", false),
+        ("project.exportLog", json!({}), "log.csv", false),
+    ]);
+    for (command, params, file, _) in cases {
+        let refusal = if file == "s.png" || command == "bookmark.save" { MADE } else { STOPPED };
+        s.download_cap = Some(10);
+        let e = s.run(command, &to(&params, file)).unwrap_err();
+        assert!(e.contains(file) && e.contains(refusal) && e.contains("make a smaller file"), "{command} {file}: {e}");
+        assert!(s.take_gp_files().is_empty(), "{command} {file}");
+        s.download_cap = Some(8 << 20);
+        let pending = s.run(command, &to(&params, file)).unwrap_or_else(|e| panic!("{command} {file}: {e}"));
+        let (_, bytes, answer) = deliver(&mut s, &pending, None);
+        assert!(!bytes.is_empty() && bytes.len() <= 8 << 20, "{command} {file}: {}", bytes.len());
+        answer.unwrap();
+    }
+}
+
+/// A full queue is refused before a file command makes anything: nothing of the file is said.
+#[test]
+fn a_browser_file_command_is_refused_before_it_is_made_when_no_more_can_wait() {
+    let files = Files::new();
+    let mut s = items(&files, true);
+    for i in 0..crate::cmd::exports::MAX_DOWNLOADS {
+        s.run("style.save", &json!({"path": format!("{i}.rgisstyle")})).unwrap();
+    }
+    let mark = s.notice_mark();
+    let e = s.run("project.saveTemplate", &json!({"path": "t.rgistemplate"})).unwrap_err();
+    assert!(e.contains("file export queue limit reached"), "{e}");
+    assert_eq!(said(&s, mark), [e]);
+    assert_eq!(s.take_gp_files().len(), crate::cmd::exports::MAX_DOWNLOADS);
+}
+
+/// The session log downloads as CSV or JSON Lines, in the format its name or `format` says.
+#[test]
+fn a_browser_session_log_downloads_in_its_format() {
+    let files = Files::new();
+    let mut s = session(&files, true);
+    for (params, file, first) in
+        [(json!({"path": "out/log.csv"}), "log.csv", "time_utc,"), (json!({"path": "log", "format": "jsonl"}), "log", "{")]
+    {
+        let mark = s.notice_mark();
+        let pending = s.run("project.exportLog", &params).unwrap();
+        assert_eq!(said(&s, mark), Vec::<String>::new());
+        let (name, bytes, answer) = deliver(&mut s, &pending, None);
+        assert_eq!(name, file);
+        assert!(bytes.starts_with(first.as_bytes()), "{file}: {}", String::from_utf8_lossy(&bytes));
+        let entries = answer.unwrap()["entries"].clone();
+        let notices = said(&s, mark);
+        let out = format!("Exported the session log ({entries} entries) to {file}");
+        assert!(notices.contains(&out), "{notices:?}");
+        assert_eq!(notices.iter().any(|n| n.contains("the folder in")), params["path"] == "out/log.csv", "{notices:?}");
+    }
+    let e = s.run("project.exportLog", &json!({"path": "log.rgis"})).unwrap_err();
+    assert!(e.contains("not a .rgis one"), "{e}");
+    assert!(s.take_gp_files().is_empty());
+}
+
+/// Save and Save As download the project. It stays unsaved and has no file; Save As names it
+/// after the download once the download is taken.
+#[test]
+fn a_browser_project_save_downloads_the_project() {
+    let files = Files::new();
+    for (command, path, file, named) in [
+        ("project.saveAs", "Atlas.rgis", "Atlas.rgis", "Atlas"),
+        ("project.saveAs", "/home/me/Atlas", "Atlas.rgis", "Atlas"),
+        ("project.save", "Copy.rgis", "Copy.rgis", "Untitled"),
+    ] {
+        let mut s = session(&files, true);
+        s.project.name = "Untitled".into();
+        s.mark_saved();
+        let (mark, steps) = (s.notice_mark(), s.undo_depth());
+        let pending = s.run(command, &json!({"path": path})).unwrap();
+        assert_eq!((s.project.name.as_str(), said(&s, mark)), ("Untitled", Vec::new()), "{command}");
+        let (name, bytes, answer) = deliver(&mut s, &pending, None);
+        assert_eq!(name, file);
+        let saved = Project::from_json(std::str::from_utf8(&bytes).unwrap()).unwrap();
+        assert_eq!(saved.name, named, "{command}");
+        assert_eq!(s.project.name, named, "{command}");
+        assert_eq!(answer.unwrap()["path"], file);
+        let notices = said(&s, mark);
+        let offered = format!("Download offered: {file}. The browser doesn't say whether it saved the file.");
+        assert!(notices.contains(&offered), "{notices:?}");
+        assert!(!notices.iter().any(|n| n.starts_with("Saved ") || n.contains("first 200")), "{notices:?}");
+        // A rename leaves it unsaved; a download under its own name changes nothing.
+        assert_eq!(s.dirty(), named != "Untitled", "{command}");
+        assert_eq!((s.path.is_none(), s.undo_depth()), (true, steps), "{command}");
+    }
+    // Not taken, or renamed meanwhile: the name stays.
+    let mut s = session(&files, true);
+    s.project.name = "Untitled".into();
+    let pending = s.run("project.saveAs", &json!({"path": "Atlas.rgis"})).unwrap();
+    let mark = s.notice_mark();
+    deliver(&mut s, &pending, Some("download blocked")).2.unwrap();
+    assert_eq!((s.project.name.as_str(), said(&s, mark)), ("Untitled", vec!["download blocked".to_string()]));
+    let pending = s.run("project.saveAs", &json!({"path": "Atlas.rgis"})).unwrap();
+    s.run("project.rename", &json!({"name": "Later"})).unwrap();
+    deliver(&mut s, &pending, None).2.unwrap();
+    assert_eq!(s.project.name, "Later");
+    // A name longer than a project's is cut, and that is said.
+    let long = "n".repeat(201);
+    let pending = s.run("project.saveAs", &json!({"path": format!("{long}.rgis")})).unwrap();
+    let mark = s.notice_mark();
+    deliver(&mut s, &pending, None).2.unwrap();
+    assert_eq!(s.project.name, "n".repeat(200));
+    assert!(said(&s, mark).iter().any(|n| n.contains("201 characters") && n.contains("first 200")));
+    // Refused as the desktop refuses it.
+    let e = s.run("project.saveAs", &json!({"path": "atlas.geojson"})).unwrap_err();
+    assert!(e.contains("not a .geojson one"), "{e}");
+    assert!(s.take_gp_files().is_empty());
+}
+
+/// A file command that fails, and a download not taken, say only why.
+#[test]
+fn a_browser_file_not_made_or_not_taken_says_only_why() {
+    let files = Files::new();
+    let mut s = items(&files, true);
+    let e = s.run("map.save", &json!({"path": "m.rgismap", "map": "nowhere"})).unwrap_err();
+    assert!(e.contains("nowhere"), "{e}");
+    assert!(s.take_gp_files().is_empty());
+    let pending = s.run("project.saveTemplate", &json!({"path": "t.rgistemplate"})).unwrap();
+    let mark = s.notice_mark();
+    let (_, _, answer) = deliver(&mut s, &pending, Some("download blocked"));
+    assert_eq!(answer.unwrap()["delivered"], false);
+    assert_eq!(said(&s, mark), ["download blocked"]);
+    // Dropped with a script that fails afterwards, and said.
+    let mark = s.notice_mark();
+    let script = "map.save {\"path\": \"m.rgismap\"}\nno.suchCommand";
+    s.run("script.run", &json!({"script": script})).unwrap_err();
+    let notices = said(&s, mark);
+    assert!(notices.iter().any(|n| n == "1 file(s) not downloaded, as the command that made them failed: m.rgismap"), "{notices:?}");
+    assert!(s.take_gp_files().is_empty());
+}
+
+/// A model exported from a graph that couldn't be read whole says so once its download is
+/// taken, and a whole graph's export doesn't.
+#[test]
+fn a_browser_model_export_says_what_its_graph_left_out() {
+    let files = Files::new();
+    let mut s = session(&files, true);
+    for (nodes, left_out) in [(json!([]), false), (json!(["not a node"]), true)] {
+        let mark = s.notice_mark();
+        let params = json!({"graph": {"nodes": nodes, "edges": []}, "path": "m.model.json"});
+        let pending = s.run("model.export", &params).unwrap();
+        assert_eq!(said(&s, mark), Vec::<String>::new());
+        assert_eq!(pending["messages"].to_string().contains("1 node(s) left out"), left_out, "{pending}");
+        deliver(&mut s, &pending, None).2.unwrap();
+        let notices = said(&s, mark);
+        assert_eq!(notices.iter().filter(|n| n.contains("1 node(s) left out")).count(), usize::from(left_out), "{notices:?}");
+    }
+}
+
+/// What needs a file to stay where it is, or a folder, is refused with what to do instead, before
+/// anything is made.
+#[test]
+fn what_a_download_cant_stand_in_for_is_refused() {
+    let files = Files::new();
+    let mut s = items(&files, true);
+    // A shared item a project opened in the browser lists.
+    for (id, kind) in ["webMap", "webLayer", "webScene", "linkChart"].into_iter().enumerate() {
+        s.project.shared.push(crate::cmd::sharing::SharedItem {
+            id: id as u32 + 1,
+            kind: kind.into(),
+            name: "Old".into(),
+            source: "Places".into(),
+            path: "/srv/old".into(),
+            created: 0.0,
+            updated: 0.0,
+            bytes: 1,
+            this_session: false,
+        });
+    }
+    let (layers, layouts, shared) = (s.map().layers.len(), s.project.layouts.len(), s.project.shared.clone());
+    let path = |command: &str| format!("the web app can't update a shared file in place; run {command} with a path");
+    for (command, params, why) in [
+        ("share.saveWebMap", json!({}), path("share.webMap")),
+        ("share.replaceWebLayer", json!({}), path("share.webLayer")),
+        ("share.saveWebScene", json!({}), path("share.webScene")),
+        ("share.saveWebLinkChart", json!({}), path("share.linkChart")),
+        ("share.webMap", json!({}), "pass a path".into()),
+        ("share.webStyle", json!({"layer": "Places"}), "pass a path".into()),
+        ("share.dataStore", json!({"path": "/srv/shares"}), "can't write to a folder".into()),
+        ("share.upload", json!({"path": "a.csv"}), "desktop app".into()),
+        ("animation.export", json!({"path": "a.zip"}), "exporting animations needs the desktop app".into()),
+        ("raster.project", json!({"layer": "Dem", "crs": "EPSG:3857", "path": "p.tif"}), "leave out path".into()),
+        ("raster.rasterize", json!({"layer": "training", "cellSize": 0.01, "path": "r.tif"}), "leave out path".into()),
+        ("raster.mosaic", json!({"inputs": ["Dem", "Dem"], "path": "m.tif"}), "leave out path".into()),
+        (
+            "raster.georeference",
+            json!({"layer": "Dem", "transform": "similarity", "points": [[0, 0, 0, 1], [1, 1, 1, 0]], "path": "g.tif"}),
+            "leave out path".into(),
+        ),
+        ("layout.publication", json!({"coverage": "c.png"}), "leave out coverage".into()),
+    ] {
+        let e = s.run(command, &params).unwrap_err();
+        assert!(e.contains(&why), "{command}: {e}");
+        assert!(s.take_gp_files().is_empty(), "{command}");
+    }
+    assert_eq!((s.map().layers.len(), s.project.layouts.len()), (layers, layouts));
+    assert_eq!(s.project.shared, shared);
+    // What the refusals leave to do still works: a result kept in the project, a store removed.
+    s.run("raster.mosaic", &json!({"inputs": ["Dem", "Dem"]})).unwrap();
+    s.run("share.dataStore", &json!({})).unwrap();
 }

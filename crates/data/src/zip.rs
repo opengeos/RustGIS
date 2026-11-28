@@ -1,5 +1,7 @@
 //! Zip archives (Deflate or stored): packages bundle a project or map with its data files.
 
+use crate::capped::Limit;
+
 /// Most entries read from an archive (plain zip holds at most 65,535; ZIP64 isn't read).
 const MAX_ENTRIES: usize = 65_535;
 /// Largest entry inflated (1 GiB).
@@ -41,9 +43,18 @@ pub fn write(entries: &[(String, Vec<u8>)]) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
+/// [`write`]'s archive of `entries` within `limit`: the entries, held already, stay counted
+/// against it while the archive is made, and the archive is written within what they leave, so
+/// the two together never pass it (besides one entry's compressed bytes at a time).
+pub fn write_within(entries: &[(String, Vec<u8>)], limit: &Limit) -> crate::Result<Vec<u8>> {
+    let parts: usize = entries.iter().map(|(_, bytes)| bytes.capacity()).sum();
+    let _parts = limit.hold(parts)?;
+    limit.file(|out| write_to(entries, out).map_err(crate::DataError::Format))
+}
+
 /// [`write`]'s archive, written to `out` as it is made (a buffer held to a limit stops it there).
 /// Besides `out`, it holds the central directory and one entry's compressed bytes at a time.
-pub(crate) fn write_to(entries: &[(String, Vec<u8>)], out: &mut impl std::io::Write) -> Result<(), String> {
+fn write_to(entries: &[(String, Vec<u8>)], out: &mut (impl std::io::Write + ?Sized)) -> Result<(), String> {
     let too_big = || "the archive is too large for a zip file".to_string();
     let failed = |e: std::io::Error| e.to_string();
     let count = u16::try_from(entries.len()).map_err(|_| too_big())?;

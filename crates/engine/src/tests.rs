@@ -39943,7 +39943,7 @@ fn keys_read_by_commands() -> Vec<(String, std::collections::BTreeSet<String>)> 
                             let call = if *m == module { name.as_str() } else { qualified.as_str() };
                             let key = format!("{m}::{name}");
                             // A dispatcher by kind: its arms read keys for other commands.
-                            if matches!(key.as_str(), "items::item_bytes" | "items::item_output") {
+                            if matches!(key.as_str(), "items::item_bytes" | "items::item_output" | "items::item_output_within") {
                                 continue;
                             }
                             if !seen.contains(&key) && args.iter().any(|a| calls(&body, call, a)) {

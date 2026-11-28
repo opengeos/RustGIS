@@ -122,11 +122,21 @@ fn export_log(s: &mut Session, p: &Value) -> CmdResult {
     // Written entry by entry, so a long log isn't held as text first; a failure part way leaves
     // an existing file as it was.
     let n = s.log.len();
-    rustgis_data::io::write_atomic_with(&path, |w| s.log.write(w, format == "csv")).map_err(|e| format!("{}: {e}", path.display()))?;
     // Entries dropped past the log's limits aren't in the file: said.
     let dropped = s.log.dropped_said().map(|d| format!("; not in it: {d}")).unwrap_or_default();
-    s.notify_written(format!("Exported the session log ({n} entries) to {}{dropped}", path.display()));
-    Ok(json!({"path": path.display().to_string(), "entries": n, "format": format}))
+    let said = |path: &str| format!("Exported the session log ({n} entries) to {path}{dropped}");
+    let answer = |path: &str| json!({"path": path, "entries": n, "format": format});
+    if s.downloads_files() {
+        return super::exports::download_command(s, "project.exportLog", p, |s, out| {
+            let bytes = out.file(|w| s.log.write(w, format == "csv").map_err(|e| format!("{}: {e}", out.path)))?;
+            let path = out.path;
+            Ok(super::exports::Made { done: Some(said(path)), ..super::exports::Made::new(bytes, answer(path)) })
+        });
+    }
+    rustgis_data::io::write_atomic_with(&path, |w| s.log.write(w, format == "csv")).map_err(|e| format!("{}: {e}", path.display()))?;
+    let path = path.display().to_string();
+    s.notify_written(said(&path));
+    Ok(answer(&path))
 }
 
 /// `project.clearLog`: empties the log, which then holds this command's own entry, so a cleared
@@ -813,19 +823,8 @@ fn open_text(s: &mut Session, p: &Value) -> CmdResult {
 /// never goes over a data file, a package or any other kind of file, including when the
 /// project was opened from a file with another extension.
 fn write(s: &mut Session, path: PathBuf) -> CmdResult {
-    let path = if path.extension().is_none() { path.with_extension(crate::project::EXTENSION) } else { path };
+    let path = project_path(path)?;
     let destination = std::path::absolute(&path).map_err(|error| format!("{}: {error}", path.display()))?;
-    if !crate::project::is_project_file(&path.to_string_lossy()) {
-        let ext = path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
-        return Err(if ext == crate::project::PACKAGE_EXTENSION {
-            "a project saves to a .rgis file; Package Project (project.package) writes a .rgispkg package".into()
-        } else if ext.is_empty() || ext == crate::project::EXTENSION {
-            // `foo.` and `a.rgis.` end in a bare dot; `atlas.rgis/` names a folder.
-            "a project saves to a .rgis file".into()
-        } else {
-            format!("a project saves to a .rgis file, not a .{ext} one")
-        });
-    }
     let construction_notes = s.construction_output_notes()?;
     let report = s.project.save(&destination)?;
     let stripped = report.layer_addresses();
@@ -842,6 +841,72 @@ fn write(s: &mut Session, path: PathBuf) -> CmdResult {
     Ok(json!({"path": path.display().to_string(), "stripped": stripped}))
 }
 
+/// `path` as the project file a save writes (`.rgis` added when it has no extension), refused
+/// when it names another kind of file.
+fn project_path(path: PathBuf) -> Result<PathBuf, String> {
+    let path = if path.extension().is_none() { path.with_extension(crate::project::EXTENSION) } else { path };
+    if !crate::project::is_project_file(&path.to_string_lossy()) {
+        let ext = path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+        return Err(if ext == crate::project::PACKAGE_EXTENSION {
+            "a project saves to a .rgis file; Package Project (project.package) writes a .rgispkg package".into()
+        } else if ext.is_empty() || ext == crate::project::EXTENSION {
+            // `foo.` and `a.rgis.` end in a bare dot; `atlas.rgis/` names a folder.
+            "a project saves to a .rgis file".into()
+        } else {
+            format!("a project saves to a .rgis file, not a .{ext} one")
+        });
+    }
+    Ok(path)
+}
+
+/// [`write`] where files are downloaded: the project downloads as the file `path` names, and with
+/// `rename` (Save As) takes that file's name once the download is taken, unless it was renamed
+/// meanwhile. It isn't marked saved, and no file becomes the project's: the browser doesn't say
+/// whether it saved the download.
+fn download(s: &mut Session, command: &str, path: PathBuf, rename: bool) -> CmdResult {
+    let path = project_path(path)?.to_string_lossy().into_owned();
+    super::exports::download_command(s, command, &json!({"path": path}), |s, out| {
+        let file = out.path;
+        let construction_notes = s.construction_output_notes()?;
+        let old = s.project.name.clone();
+        let stem = std::path::Path::new(file).file_stem().and_then(|x| x.to_str()).map(str::trim).filter(|x| !x.is_empty());
+        let name = match stem {
+            Some(stem) if rename => stem.chars().take(200).collect(),
+            _ => old.clone(),
+        };
+        // The file holds the name Save As gives the project; the project takes it with the download.
+        s.project.name.clone_from(&name);
+        let saved = s.project.saved_with(None, |p| {
+            let max = crate::project::max_bytes();
+            let most = usize::try_from(max).unwrap_or(usize::MAX);
+            let too_large = || crate::project::too_large_to_save(max);
+            let text = out.file_up_to(most, too_large, |w| serde_json::to_writer(w, p).map_err(|e| e.to_string()))?;
+            String::from_utf8(text).map_err(|e| e.to_string())
+        });
+        s.project.name.clone_from(&old);
+        let (text, report) = saved?;
+        if let Some(n) = stem.map(|stem| stem.chars().count()).filter(|n| rename && *n > 200) {
+            s.notify(
+                format!("Save Project As: the file's name is {n} characters, so the project's name is its first 200 characters"),
+                false,
+            );
+        }
+        crate::durable::notify(s, &report);
+        for note in construction_notes {
+            s.say(note);
+        }
+        let answer = json!({"path": file, "stripped": report.layer_addresses()});
+        let done = format!("Download offered: {file}. The browser doesn't say whether it saved the file.");
+        let taken: Box<dyn FnOnce(&mut Session) + Send> = Box::new(move |s: &mut Session| {
+            if name != old && s.project.name == old {
+                s.project.name = name;
+                s.mark_unsaved();
+            }
+        });
+        Ok(super::exports::Made { done: Some(done), taken: Some(taken), ..super::exports::Made::new(text.into_bytes(), answer) })
+    })
+}
+
 /// Names the project after its file, as Save As does, so a renamed or copied file opens under
 /// its own name. A file name over 200 characters is cut to 200, and that is said.
 fn name_from_file(s: &mut Session, file: &std::path::Path) {
@@ -854,14 +919,21 @@ fn name_from_file(s: &mut Session, file: &std::path::Path) {
     }
 }
 
+/// Saves the project to the path given, else to its own file.
 fn save(s: &mut Session, p: &Value) -> CmdResult {
     let path = save_path(s, p)?;
+    if s.downloads_files() {
+        return download(s, "project.save", path, false);
+    }
     write(s, path)
 }
 
 /// Saves with the destination's name, restoring the current name if writing fails.
 fn save_as(s: &mut Session, p: &Value) -> CmdResult {
     let path = PathBuf::from(super::ps(p, "path").ok_or("path is required")?);
+    if s.downloads_files() {
+        return download(s, "project.saveAs", path, true);
+    }
     let previous_name = path.file_stem().and_then(|x| x.to_str()).map(|stem| std::mem::replace(&mut s.project.name, stem.to_string()));
     let result = write(s, path);
     // Only undoable commands get a Session snapshot; restore this view command's name by hand.

@@ -167,6 +167,11 @@ pub fn commands() -> Vec<C> {
         .params(r#"{"index"?: number (the last one when omitted), "all"?: bool}"#),
         C::new("animation.export", "Export Animation", "View › Animation", |s, p| {
             let written = s.notice_mark();
+            // As the Export Animation button says: its frames are drawn on the one thread the
+            // browser has.
+            if s.downloads_files() {
+                return Err("exporting animations needs the desktop app".into());
+            }
             let path = ps(p, "path").ok_or("path is required (a .zip of PNG frames)")?.to_string();
             let bytes = animation_zip(s, p)?;
             rustgis_data::io::write_atomic(std::path::Path::new(&path), &bytes).map_err(|e| format!("{path}: {e}"))?;

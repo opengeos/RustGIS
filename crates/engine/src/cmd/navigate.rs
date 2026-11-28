@@ -179,7 +179,7 @@ pub fn commands() -> Vec<C> {
             Ok(Value::Null)
         }).inputs(bookmark_inputs).roles(&[]).effects(crate::policy::Effects::NONE)
         .params(r#"{"name": string, "to": index (0: first; past the end: last), "map"?: name}"#),
-        C::new("bookmark.save", "Export Bookmarks", "Home › Navigate › Bookmarks", |s, p| super::items::save_item(s, "bookmarks", p)).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files))
+        C::new("bookmark.save", "Export Bookmarks", "Home › Navigate › Bookmarks", |s, p| super::items::save_item(s, "bookmark.save", "bookmarks", p)).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files))
             .view()
             .params(r#"{"path": "*.rgisbookmarks"}"#),
         C::new("bookmark.import", "Import Bookmarks", "Home › Navigate › Bookmarks", import_bookmarks).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files))

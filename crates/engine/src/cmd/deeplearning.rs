@@ -3,7 +3,6 @@
 //! in the project and shared as packages, and rasters cut into web map tiles.
 
 use std::collections::HashMap;
-use std::path::Path;
 
 use rustgis_analysis::neural::{self, MAX_SAMPLES_PER_CLASS, Mlp};
 use rustgis_analysis::rasterops;
@@ -76,10 +75,11 @@ pub fn commands() -> Vec<C> {
             r#"{"layer": raster, "model"?: a trained model's name, "training"?: polygon layer, "classField"?: field, "bands"?: [1-based], "hidden"?: [units], "epochs"?: 1..500 (without a model: train one first, as dl.train), "name"?: output, "ran"?: (internal: classes the app has worked out)}"#,
         ),
         C::new("dl.package", "Deep Learning Package", "Publish › Package", |s, p| {
-            let path = ps(p, "path").ok_or("path is required")?;
-            let bytes = package(s, p)?;
-            rustgis_data::io::write_atomic(Path::new(path), &bytes).map_err(|e| format!("{path}: {e}"))?;
-            Ok(json!({"path": path, "bytes": bytes.len()}))
+            super::exports::file_command(s, "dl.package", p, |s, out| {
+                let bytes = package_within(s, p, out)?;
+                let answer = json!({"path": out.path, "bytes": bytes.len()});
+                Ok(super::exports::Made::new(bytes, answer))
+            })
         }).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files))
         .view()
         .when(need_model)
@@ -385,9 +385,14 @@ pub(crate) fn classify_work(s: &Session, p: &Value) -> Result<super::workflows::
 
 /// A deep learning package: the model and a description of its inputs and classes.
 pub fn package(s: &Session, p: &Value) -> Result<Vec<u8>, String> {
+    package_within(s, p, super::exports::Output::UNLIMITED)
+}
+
+/// [`package`] for the file `out` describes.
+pub(super) fn package_within(s: &Session, p: &Value, out: super::exports::Output<'_>) -> Result<Vec<u8>, String> {
     let i = model_index(s, p)?;
     let m = s.project.dl_models.get(i).ok_or("no model")?;
-    let model = serde_json::to_vec_pretty(m).map_err(|e| e.to_string())?;
+    let model = out.json_pretty(m)?;
     let about = json!({
         "format": "RustGIS deep learning package",
         "version": 1,
@@ -399,7 +404,10 @@ pub fn package(s: &Session, p: &Value) -> Result<Vec<u8>, String> {
         "accuracy": m.accuracy,
     });
     let about = serde_json::to_vec_pretty(&about).map_err(|e| e.to_string())?;
-    rustgis_data::zip::write(&[("model.json".into(), model), ("package.json".into(), about)])
+    let mut parts = out.parts();
+    parts.push("model.json".into(), model)?;
+    parts.push("package.json".into(), about)?;
+    parts.zip()
 }
 
 /// Web Mercator tile bounds (metres) of tile (z, x, y).
@@ -413,15 +421,21 @@ fn tile_bounds(z: u32, x: u32, y: u32) -> (f64, f64, f64, f64) {
 
 /// Cuts a raster into XYZ web map tiles (PNG, transparent outside the raster).
 fn hosted(s: &mut Session, p: &Value) -> CmdResult {
-    let path = ps(p, "path").ok_or("path is required")?.to_string();
-    let (bytes, mut info) = hosted_bytes(s, p)?;
-    rustgis_data::io::write_atomic(Path::new(&path), &bytes).map_err(|e| format!("{path}: {e}"))?;
-    info["path"] = json!(path);
-    Ok(info)
+    super::exports::file_command(s, "imagery.hostedImagery", p, |s, out| {
+        let (bytes, mut info) = hosted_within(s, p, out)?;
+        info["path"] = json!(out.path);
+        Ok(super::exports::Made::new(bytes, info))
+    })
 }
 
 /// The tiles of a raster as a zip, and what's in it.
 pub fn hosted_bytes(s: &mut Session, p: &Value) -> Result<(Vec<u8>, Value), String> {
+    hosted_within(s, p, super::exports::Output::UNLIMITED)
+}
+
+/// [`hosted_bytes`] for the file `out` describes: a downloaded one stops at the tile that passes
+/// its room.
+pub(super) fn hosted_within(s: &mut Session, p: &Value, out: super::exports::Output<'_>) -> Result<(Vec<u8>, Value), String> {
     let r = raster(s, p)?;
     let lname = ps(p, "layer").unwrap_or_default().to_string();
     let mut layer = s.map().layer_by_name(&lname).cloned().ok_or("no such layer")?;
@@ -477,8 +491,8 @@ pub fn hosted_bytes(s: &mut Session, p: &Value) -> Result<(Vec<u8>, Value), Stri
     map.basemap = rustgis_map::Basemap::Blank;
     map.graticule = false;
     map.layers = vec![layer];
-    let mut entries = Vec::new();
-    let mut held = 0usize;
+    let mut parts = out.parts();
+    let (mut held, mut n) = (0usize, 0usize);
     for (z, x, y) in &jobs {
         let (min_x, min_y, max_x, max_y) = tile_bounds(*z, *x, *y);
         let camera = rustgis_map::Camera {
@@ -508,7 +522,8 @@ pub fn hosted_bytes(s: &mut Session, p: &Value) -> Result<(Vec<u8>, Value), Stri
             if held > MAX_TILE_BYTES {
                 return Err(format!("the tiles passed {} MB at zoom {z}; lower maxZoom", MAX_TILE_BYTES >> 20));
             }
-            entries.push((format!("tiles/{z}/{x}/{y}.png"), png));
+            parts.push(format!("tiles/{z}/{x}/{y}.png"), png)?;
+            n += 1;
         }
     }
     let c = e.center();
@@ -521,10 +536,9 @@ pub fn hosted_bytes(s: &mut Session, p: &Value) -> Result<(Vec<u8>, Value), Stri
         "bounds": [e.min_x, e.min_y, e.max_x, e.max_y],
         "center": [c.x, c.y, min_z],
     });
-    let n = entries.len();
-    entries.push(("tiles.json".into(), serde_json::to_vec_pretty(&tilejson).map_err(|e| e.to_string())?));
-    entries.push(("index.html".into(), viewer(&lname, min_z, max_z, c).into_bytes()));
-    let bytes = rustgis_data::zip::write(&entries)?;
+    parts.push("tiles.json".into(), serde_json::to_vec_pretty(&tilejson).map_err(|e| e.to_string())?)?;
+    parts.push("index.html".into(), viewer(&lname, min_z, max_z, c).into_bytes())?;
+    let bytes = parts.zip()?;
     Ok((bytes, json!({"tiles": n, "minZoom": min_z, "maxZoom": max_z})))
 }
 
