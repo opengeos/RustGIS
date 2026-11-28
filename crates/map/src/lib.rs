@@ -586,6 +586,7 @@ impl Layer {
     pub fn refresh_replaced_source(&mut self) -> Result<(), String> {
         let Some(source) = &mut self.source else { return Ok(()) };
         if let Err(error) = source.reopen() {
+            self.touch_replacement();
             self.install(Vec::new());
             return Err(error);
         }
@@ -620,6 +621,7 @@ impl Layer {
                 source.saw_read_notes(&[format!("the replaced source no longer has {count} saved {columns}: {names}{more}").into()]);
             }
         }
+        self.touch_replacement();
         self.install(Vec::new());
         Ok(())
     }
@@ -4283,7 +4285,9 @@ mod tests {
         // names saved columns that disappeared; old window rows cannot survive the change.
         layer.dataset.fields[0].alias = Some("Rank".into());
         layer.dataset.fields.push(Field::new("gone", FieldType::Integer));
+        let previous = layer.replacement_revision();
         layer.refresh_replaced_source().unwrap();
+        assert_ne!(layer.replacement_revision(), previous, "the prior contents no longer own selected vertices");
         assert!(layer.dataset.features.is_empty());
         assert_eq!(layer.dataset.fields.len(), 1);
         assert_eq!(layer.dataset.fields[0].alias.as_deref(), Some("Rank"));
@@ -4292,7 +4296,9 @@ mod tests {
         layer.sync_source(&view, true);
         assert_eq!(layer.dataset.features.len(), 1);
         std::fs::remove_file(&path).unwrap();
+        let previous = layer.replacement_revision();
         assert!(layer.refresh_replaced_source().is_err());
+        assert_ne!(layer.replacement_revision(), previous, "a failed replacement also invalidates ownership of the old contents");
         assert!(layer.dataset.features.is_empty(), "a failed replacement cannot leave rows from the previous file drawn");
         assert_eq!(layer.dataset.fields[0].alias.as_deref(), Some("Rank"));
         drop(layer);
