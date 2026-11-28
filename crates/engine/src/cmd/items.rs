@@ -1418,12 +1418,15 @@ fn layer_mesh(s: &Session, p: &Value, keep_lines: bool, out: Output<'_>) -> Resu
         let m = rustgis_geom::lonlat_to_merc(c);
         ((m.x - origin.x) * k, (m.y - origin.y) * k)
     };
-    // The mesh's own limit bounds memory; the writer holds the file to its room. STL's estimate
-    // counts triangles its writer may leave out as zero-area, so the room doesn't stop it here.
-    // OBJ's is rough, and is let run to twice the room.
+    // The mesh is held to twice the file's room, and at least 16 MiB, so a download far
+    // past it is refused before much is built; the writer then holds the file to the room itself.
+    // Both estimates run over: STL's counts triangles its writer leaves out as zero-area, so a
+    // file that fits can be estimated at any multiple of its size; the floor keeps such a small
+    // one from being refused.
+    const FLOOR: usize = 16 << 20;
     let own = if keep_lines { MAX_MESH } else { MAX_OBJ };
-    let room = out.most().saturating_mul(2);
-    let most = if keep_lines && room < own { (room, out.refusal()) } else { (own, TOO_LARGE_3D.to_string()) };
+    let room = out.most().saturating_mul(2).max(FLOOR);
+    let most = if room < own { (room, out.refusal()) } else { (own, TOO_LARGE_3D.to_string()) };
     let mut mesh = Mesh { keep_lines, most, layer: l.name.clone(), ..Mesh::default() };
     let rows = l.visible_rows();
     for (row, ft) in l.dataset.features.iter().enumerate() {
