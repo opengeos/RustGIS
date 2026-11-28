@@ -412,8 +412,9 @@ pub(crate) const MAX_TILE_VERTICES: usize = 1 << 20;
 /// million (240 MB: the browser, a phone, a computer whose memory isn't known) to 16 million
 /// (640 MB). Highlights, extrusions, the basemap and the graticule aren't counted: they are
 /// bounded by their own data. A share of the memory (`memory::scaled`), not of what is free now
-/// (`memory::planned`): it is asked once a scene, too often to ask the system what is free, as
-/// [`rustgis_data::memory::thread_scratch`] isn't; and so on a phone it is the floor, as that is.
+/// (`memory::planned`): it is asked once a scene, too often to ask the system what is free.
+/// [`rustgis_data::memory::thread_scratch`], asked while drawing too, makes the same choice, and a
+/// phone takes the floor, as it does there.
 pub(crate) fn scene_vertices() -> usize {
     const FLOOR: usize = 6_000_000;
     const CEILING: usize = 16_000_000;
@@ -530,11 +531,11 @@ pub(crate) fn collect_layer(
     let mut estimate = 0usize;
     let mut features = Vec::new();
     let mut markers = Vec::new();
+    // One mesh is one buffer: it keeps to a layer's own limit, whatever room the scene leaves.
+    let one = limit.min(MAX_LAYER_VERTICES);
     // Tiled, a tile's mesh takes every feature reaching it, wherever the cull's edge lies, so a
     // kept tile is the one meshing it again makes: lines and polygons are kept by the tiles' area
     // (a tile past them all round), markers by the cull.
-    // One mesh is one buffer: it keeps to a layer's own limit, whatever room the scene leaves.
-    let one = limit.min(MAX_LAYER_VERTICES);
     let side = crate::mesh_tiles::tile_side(map_per_px);
     let near = tiling.as_ref().and_then(|t| crate::mesh_tiles::feature_area(t.area, map_per_px));
     let mut farthest = 0f64;
