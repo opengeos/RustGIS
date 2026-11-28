@@ -7871,7 +7871,9 @@ fn terrain_follows_removal(s: &mut Session, names: &[String]) {
     let top = s.map().view.terrain.as_ref().and_then(|t| t.block.as_ref()).and_then(|b| b.walls_top.as_ref()).map(|t| t.layer.clone());
     if let Some(l) = top.filter(|l| dem.is_none() && names.iter().any(|n| n.eq_ignore_ascii_case(l)) && named_layers(s, l) == 0) {
         s.notify(
-            format!("Terrain: the block's walls' top layer '{l}' was removed, so the walls have no top band until a layer of that name comes back"),
+            format!(
+                "Terrain: the block's walls' top layer '{l}' was removed, so the walls have no top band until a polygon layer of that name comes back, the only layer so named and not one read a view at a time"
+            ),
             false,
         );
     }

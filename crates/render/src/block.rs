@@ -772,13 +772,16 @@ pub(crate) fn runs(map: &Map, b: &Block, scale: f64, env: &rustgis_data::query::
 
 /// A stretch of a side under one polygon of the walls' top layer (#2607): from `lo` to `hi`
 /// along it ([`Block::along`]), in `color`, `thickness` metres (exaggerated, as
-/// [`Ground::height`]'s are) down from the ground.
+/// [`Ground::height`]'s are) down from the ground, and the polygon's class among the layer's
+/// Unique Values (none for `<all other values>` and the other renderers), so that two classes
+/// filled alike still meet at a contact.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct BandRun {
     pub lo: f64,
     pub hi: f64,
     pub color: Rgba,
     pub thickness: f64,
+    pub class: Option<usize>,
 }
 
 /// The top band's stretches along each side of a block's outline, in [`Block::side`]'s order
@@ -829,6 +832,7 @@ pub(crate) fn band_runs(map: &Map, b: &Block, ground: &Ground, scale: f64, env: 
     crate::note_held_read(layer);
     let cut = layer_cut(layer, b, false, None, env);
     let styler = layer.styler_with(env.at_scale(Some(scale)));
+    let classer = layer.renderer.classer_with(&layer.dataset, env.at_scale(Some(scale)));
     let (mut plain, mut thin) = (std::collections::BTreeSet::new(), std::collections::BTreeSet::new());
     let mut side_bands = |side: &Vec<(f64, f64, Option<usize>)>| {
         let mut out: Vec<BandRun> = Vec::new();
@@ -843,12 +847,15 @@ pub(crate) fn band_runs(map: &Map, b: &Block, ground: &Ground, scale: f64, env: 
             let thickness = d * x;
             let (sym, _, fills) = styler.style_and_fills(r);
             let (color, patterns) = unit_paint(sym.fill, fills, b.walls);
-            if !patterns.is_empty() || left_off(sym.fill, fills) {
+            if !patterns.is_empty() || band_leaves_off(sym.fill, fills) {
                 plain.insert(r);
             }
+            let class = layer.renderer.unique_class(&layer.dataset, r, &classer);
             match out.last_mut() {
-                Some(last) if last.color == color && last.thickness == thickness && (lo - last.hi).abs() < SEAM => last.hi = hi,
-                _ => out.push(BandRun { lo, hi, color, thickness }),
+                Some(last) if (last.color, last.thickness, last.class) == (color, thickness, class) && (lo - last.hi).abs() < SEAM => {
+                    last.hi = hi
+                }
+                _ => out.push(BandRun { lo, hi, color, thickness, class }),
             }
         }
         out
@@ -861,6 +868,15 @@ pub(crate) fn band_runs(map: &Map, b: &Block, ground: &Ground, scale: f64, env: 
         crate::approximations::band_unmeasured(&layer.name, f, thin.len());
     }
     bands
+}
+
+/// Whether the top band, solid fills only (#2607), leaves off part of how a polygon whose symbol
+/// fills with `fill`, or with the stacked `fills` in its place, looks: any hatch, marker,
+/// gradient or shapeburst that draws over its topmost opaque solid fill (over everything,
+/// without one), a hatch under a translucent solid among them, as it shows through it.
+fn band_leaves_off(fill: Rgba, fills: &[FillLayer]) -> bool {
+    let top = fills.iter().rposition(|f| matches!(f.pattern, FillPattern::Solid) && f.color.unwrap_or(fill).a() == 255);
+    fills.iter().skip(top.map_or(0, |i| i + 1)).any(|f| !matches!(f.pattern, FillPattern::Solid) && f.draws(fill))
 }
 
 /// Whether walls leave off part of how a polygon whose symbol fills with `fill`, or with the
@@ -1837,14 +1853,14 @@ pub(crate) fn draw_walls(
         // its foot, and across it at its ends: a contact with another class or the bare rock. At
         // the ends of a side, where the walls' outline goes down the corner (a box's corners, a
         // polygon block's sharp ones), always: the band's fill would hide that line,
-        // drawn before it; elsewhere only where the neighbour's band isn't there in its colour and
-        // thickness.
+        // drawn before it; elsewhere only where the neighbour's band isn't there in its colour,
+        // thickness and class.
         let ((lo_end, hi_end), (prev, next)) = (side_ends(s), b.neighbours(s));
         let (before_band, after_band) = (bands.get(prev).and_then(|r| r.last()), bands.get(next).and_then(|r| r.first()));
         let goes_on = |o: Option<&BandRun>, run: &BandRun, at_end: bool| {
             o.is_some_and(|p| {
                 let (lo, hi) = side_ends(if at_end { next } else { prev });
-                (p.color, p.thickness) == (run.color, run.thickness)
+                (p.color, p.thickness, p.class) == (run.color, run.thickness, run.class)
                     && if at_end { (p.lo - lo).abs() < SEAM } else { (p.hi - hi).abs() < SEAM }
             })
         };
@@ -4094,6 +4110,59 @@ mod tests {
                 assert!((up_through(&camera, gp, 80.0, top, (w, h, k)) - 80.0).abs() < 1e-6);
             }
         }
+    }
+
+    #[test]
+    fn a_band_says_a_hatch_seen_through_a_translucent_solid_is_left_off() {
+        // #2607: a blue hatch under a red solid at half opacity shows through it on the map, so
+        // the band, solid only, says it leaves it off; under an opaque solid it can't be seen, and
+        // nothing is said.
+        let red = Rgba::rgb(220, 30, 30);
+        let hatch = FillPattern::Hatch { angle: 0.0, spacing: 6.0, width: 2.0, offset: 0.0 };
+        let said_with = |solid: Rgba| {
+            let (mut m, b, g, _) = block_under_soils(&[([-3000.0, -1500.0, 3000.0, 0.0], "argissolo", red)], 30.0);
+            if let Some(l) = m.layers.iter_mut().find(|l| l.name == "solos") {
+                l.fill_layers = vec![
+                    FillLayer { color: Some(Rgba::rgb(0, 0, 255)), pattern: hatch },
+                    FillLayer { color: Some(solid), pattern: FillPattern::Solid },
+                ];
+            }
+            let before = crate::approximations::keep();
+            band_runs(&m, &b, &g, 1.0, &Default::default());
+            let said = crate::approximations::take();
+            crate::approximations::restore(before);
+            said.iter().filter(|t| t.contains("shows solid fills only")).count()
+        };
+        assert_eq!(said_with(Rgba::new(220, 30, 30, 128)), 1, "seen through half a solid");
+        assert_eq!(said_with(red), 0, "hidden under an opaque one");
+    }
+
+    #[test]
+    fn a_band_keeps_the_contact_between_two_classes_filled_alike() {
+        // #2607: "argissolo" west of x 0 and "latossolo" from 0 to 500, two classes of the soils'
+        // Unique Values in the same red, 30 m deep: two runs, and the contact between them shows
+        // across the band at x 0, as at 500 where the rock comes up; none in the middle of one.
+        let red = Rgba::rgb(220, 30, 30);
+        let soils = [([-3000.0, -1500.0, 0.0, 0.0], "argissolo", red), ([0.0, -1500.0, 500.0, 0.0], "latossolo", red)];
+        let (m, b, g, res) = block_under_soils(&soils, 30.0);
+        let bands = band_runs(&m, &b, &g, 1.0, &Default::default());
+        assert_eq!(bands[0].len(), 2, "a run a class: {:?}", bands[0]);
+        let dry: WaterRuns = (0..b.sides()).map(|_| Vec::new()).collect();
+        let (pm, at) = south_wall(&m, &b, &g, res, &dry);
+        let line = b.walls.shade(0.45);
+        let near_line = |x: f64| {
+            let (px, py) = at(x, 970.0);
+            let apart = |c: tiny_skia::ColorU8| {
+                c.red().abs_diff(line.r()) as u16 + c.green().abs_diff(line.g()) as u16 + c.blue().abs_diff(line.b()) as u16
+            };
+            (px - 1..=px + 1).filter_map(|x| pm.pixel(x, py)).map(|c| apart(c.demultiply())).min()
+        };
+        // Between the two reds, well nearer the line's colour than the red fill is (without the
+        // contact, about as far); where the rock comes up, the line beside the rock's own colour.
+        let fill = near_line(-500.0).expect("in the picture");
+        assert!(fill > 100, "{fill}");
+        assert!(near_line(0.0).is_some_and(|d| d + 40 < fill), "{:?} vs {fill}", near_line(0.0));
+        assert!(near_line(500.0).is_some_and(|d| d < 40), "{:?}", near_line(500.0));
     }
 
     /// The band's thickness reads and saves as a number, or as `{"field": name}` (#2607).

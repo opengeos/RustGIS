@@ -18487,7 +18487,10 @@ fn terrain_block_walls_top_band_follows_its_layer() {
     let mark = s.notice_mark();
     s.run("layer.remove", &json!({"layer": id})).unwrap();
     let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
-    assert!(said.iter().any(|t| t.contains("walls' top layer 'pedologia' was removed")), "{said:?}");
+    let removed = said.iter().find(|t| t.contains("walls' top layer 'pedologia' was removed"));
+    // With what brings the band back: a layer of that name that the band can be drawn from.
+    let back = "until a polygon layer of that name comes back, the only layer so named and not one read a view at a time";
+    assert!(removed.is_some_and(|t| t.contains(back)), "{said:?}");
     assert_eq!(top(&s).as_deref(), Some("pedologia"));
     // False takes it off, as a plain colour does.
     s.run("map.terrain", &json!({"block": {"walls": {"top": false}}})).unwrap();
