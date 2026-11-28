@@ -471,9 +471,12 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
     layer drawn in one symbol, ends in the number of features it stands for, such as
     `Highway (12)`: those the layer's definition query, display filters and time window keep (the
     page's in a map series), wherever the frame looks. A class with none shows `(0)` where every
-    class is listed. Rasters, web layers, size and diagram rows, streamed layers (read in place, a
-    view at a time), and Unique Values by an expression over too many features and classes show no
-    number.
+    class is listed. A layer read in place from a Shapefile, GeoPackage, FlatGeobuf or GeoParquet
+    file on this computer is counted by reading the whole file each time the page is drawn; with
+    the classes limited to what the frame draws, it then lists those of the whole file. Rasters,
+    web layers, size and diagram rows, layers read from a database, over the web or a view at a
+    time from other files, and Unique Values by an expression over too many features and classes
+    show no number.
     A project with such a legend can't be opened by an older RustGIS.
   - **In scripts and files**: scripts set `"fit": "adjustSize"` and `"showLayerNames": false` on
     `layout.addElement` and `layout.update` (a scale bar's `fit` takes its own values); an unknown

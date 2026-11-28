@@ -1309,6 +1309,13 @@ impl SourceLayer {
         self.handle.as_ref().filter(|h| h.visits_chunks()).cloned()
     }
 
+    /// [`SourceLayer::visit_source`] for a legend's counts, which every drawing of the page reads
+    /// again: not a live service's, which a tool or an export may page through whole, and never
+    /// past the refusal of an incompatible schema.
+    pub fn count_source(&self) -> Option<Arc<dyn FeatureSource>> {
+        self.visit_source().filter(|h| !self.schema_refused && h.info().format != rustgis_data::source::arcgis::FORMAT)
+    }
+
     /// A source that can provide all features in an extent a chunk at a time.
     pub(super) fn visit_extent_source(&self) -> Option<Arc<dyn FeatureSource>> {
         self.handle.as_ref().filter(|h| h.visits_extent_chunks()).cloned()
