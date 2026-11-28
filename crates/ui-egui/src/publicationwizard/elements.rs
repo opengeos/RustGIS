@@ -66,9 +66,9 @@ pub(super) enum Control {
     Veil,
 }
 
-/// What `layout.publication` may put over or beside the map, as it decides it before reading what
-/// the map draws: the one account of it that the step, what Create sends, the placement and the
-/// review share.
+/// What `layout.publication` may put over or beside the map, as far as the wizard can tell
+/// without placing it: the one account of it that the step, what Create sends, the placement and
+/// the review share.
 impl Draft {
     /// Whether the style keeps the locator and legend beside the map; a figure takes no style.
     pub(super) fn column(&self) -> bool {
@@ -188,26 +188,27 @@ pub(super) fn elements_value(s: &Session, d: &Draft) -> String {
         let which = match e.locator {
             LocatorChoice::Globe => tl_raw!("Globe"),
             LocatorChoice::Inset => tl_raw!("Inset"),
-            _ => tl_raw!("Default"),
+            _ => tl_raw!("Default (globe)"),
         };
         on.push(i18n::fmt("{surround}: {choice}", &[("surround", surround_labels()[LOCATOR]), ("choice", which)]));
     }
     if d.draws_arrow(s) {
-        let when = if e.north == NorthChoice::Always { tl_raw!("Always") } else { tl_raw!("Auto") };
+        // Left to the extent, the command leaves it out from a span only Create measures.
+        let when = if e.north == NorthChoice::Always { tl_raw!("Always") } else { tl_raw!("Auto (none from 20°)") };
         on.push(i18n::fmt("{surround}: {choice}", &[("surround", surround_labels()[NORTH_ARROW]), ("choice", when)]));
     }
-    let mut said = |is: bool, line: &str| {
+    let mut push_if = |is: bool, line: &str| {
         if is {
             on.push(line.to_string());
         }
     };
-    said(e.legend, tl!("Legend"));
-    said(e.legend_box && d.usable(Control::LegendBox, s), tl!("Always on a box"));
-    said(e.context && d.usable(Control::Context, s), tl!("Context layers listed"));
-    said(d.draws_colorbar(s), tl!("Colorbar"));
-    said(d.draws_scale_bar(s), tl!("Scale bar"));
-    said(!e.veil && d.usable(Control::Veil, s), tl!("No veil"));
-    said(true, if e.comma { tl!("Decimal comma") } else { tl!("Decimal point") });
+    push_if(e.legend, tl!("Legend"));
+    push_if(e.legend_box && d.usable(Control::LegendBox, s), tl!("Always on a box"));
+    push_if(e.context && d.usable(Control::Context, s), tl!("Context layers listed"));
+    push_if(d.draws_colorbar(s), tl!("Colorbar"));
+    push_if(d.draws_scale_bar(s), tl!("Scale bar"));
+    push_if(!e.veil && d.usable(Control::Veil, s), tl!("No veil"));
+    push_if(true, if e.comma { tl!("Decimal comma") } else { tl!("Decimal point") });
     on.join("\n")
 }
 
@@ -510,8 +511,8 @@ mod tests {
     #[test]
     fn the_review_lists_the_elements() {
         for (size, want) in [
-            ("a4", "Locator: Default\nNorth arrow: Auto\nLegend\nScale bar\nDecimal point"),
-            ("figure-1col", "North arrow: Auto\nLegend\nScale bar\nDecimal point"),
+            ("a4", "Locator: Default (globe)\nNorth arrow: Auto (none from 20°)\nLegend\nScale bar\nDecimal point"),
+            ("figure-1col", "North arrow: Auto (none from 20°)\nLegend\nScale bar\nDecimal point"),
         ] {
             let h = step_of(|app| {
                 let d = app.dialogs.publication.as_mut().unwrap();
