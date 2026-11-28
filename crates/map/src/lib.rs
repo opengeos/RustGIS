@@ -1044,7 +1044,18 @@ impl Layer {
 
     /// [`Layer::load_all`], with what of the source couldn't be read.
     pub fn load_all_counted(&self) -> Result<(Dataset, Unreadable), String> {
-        let (ds, report) = self.load_all_with_notices()?;
+        self.counted(None)
+    }
+
+    /// [`Layer::load_all_counted`] for a caller that can hold only `budget` bytes of features: a
+    /// larger source is refused with `refusal` ([`rustgis_data::source::materialize_up_to`]).
+    pub fn load_all_counted_up_to(&self, budget: u64, refusal: &str) -> Result<(Dataset, Unreadable), String> {
+        self.counted(Some((budget, refusal)))
+    }
+
+    /// The whole read behind [`Layer::load_all_counted`], within `limit` when given.
+    fn counted(&self, limit: Option<(u64, &str)>) -> Result<(Dataset, Unreadable), String> {
+        let (ds, report) = self.load_all_with_notices(limit)?;
         // materialize also puts the typed date diagnostics in messages. Existing consumers
         // give them their own export wording, so preserve only the other messages here.
         let date_notes: Vec<_> = report.unread_dates.iter().chain(&report.rounded_dates).map(|n| format!(": {}", n.as_str())).collect();
@@ -1063,14 +1074,16 @@ impl Layer {
     /// A whole read with its complete reader report, including messages beyond rows and dates.
     /// Callers decide which opening notices were already shown and which the new read discovered.
     pub fn load_all_reported(&self) -> Result<(Dataset, rustgis_data::ReadReport), String> {
-        self.load_all_with_notices()
+        self.load_all_with_notices(None)
     }
 
-    fn load_all_with_notices(&self) -> Result<(Dataset, rustgis_data::ReadReport), String> {
+    /// Reads the source whole, within `limit` (bytes of features, and the error past them) when
+    /// given, and names and types what is read as the layer does.
+    fn load_all_with_notices(&self, limit: Option<(u64, &str)>) -> Result<(Dataset, rustgis_data::ReadReport), String> {
         let Some(copy) = self.open_source()? else { return Ok((self.dataset.clone(), rustgis_data::ReadReport::default())) };
         // Refuse an incompatible header before reading an arbitrarily large source's rows.
         let fields = copy.info().map(|info| self.fields_from_source(&info.fields, info.format)).transpose()?;
-        let (mut ds, mut report) = copy.read_all()?;
+        let (mut ds, mut report) = copy.read_all_within(limit)?;
         if let Some(info) = copy.info() {
             ds.zm_dropped |= info.zm_dropped;
             for note in &info.notes {
@@ -4223,6 +4236,7 @@ mod tests {
             let kept = layer.dataset.fields.clone();
             let error = layer.load_all().unwrap_err();
             assert!(error.contains("Reload Data"), "{error}");
+            assert!(layer.load_all_counted_up_to(1 << 20, "fixture budget").unwrap_err().contains("Reload Data"));
             assert!(layer.chunk_export().is_err());
             layer.sync_source(&Extent::new(-180.0, -80.0, 180.0, 80.0), true);
             assert!(layer.dataset.features.is_empty());
