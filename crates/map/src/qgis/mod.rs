@@ -91,8 +91,8 @@ pub struct SvgColours {
 /// marker the colours its layer sets, the image as base64, its height over its width and whether
 /// those colours were set in it (if not, it is the same image whatever they are), or why it isn't
 /// drawn, as the end of a note's "raster image markers …, drawn as circles" or "SVG markers …,
-/// drawn as circles" (such as [`IMAGE_UNOPENED`]).
-pub type ReadImage<'a> = dyn FnMut(&str, Option<&SvgColours>) -> Result<(String, f32, bool), &'static str> + 'a;
+/// drawn as circles" (such as [`IMAGE_UNOPENED`]), and whether that is so for these colours alone.
+pub type ReadImage<'a> = dyn FnMut(&str, Option<&SvgColours>) -> Result<(String, f32, bool), (&'static str, bool)> + 'a;
 
 /// One thing an import couldn't carry over as QGIS has it.
 #[derive(Clone, Debug, PartialEq, Serialize)]

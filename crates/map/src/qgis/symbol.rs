@@ -134,6 +134,15 @@ pub(super) fn read(sym: Node, reference: Option<f64>, turned: bool, layer: &str,
         report.skipped(layer, "data-defined colours and outline widths of a marker drawn as marks");
         (by.fill, by.stroke, by.stroke_width) = (None, None, None);
     }
+    // A picture draws none of the symbol's colours, so one painted in its layer's whose colours or
+    // outline width an expression sets stays a circle, which takes them.
+    if (by.fill.is_some() || by.stroke.is_some() || by.stroke_width.is_some())
+        && matches!(out.symbol.marker, Marker::Picture(_))
+        && layers.iter().any(|(l, _)| painted(*l, report))
+    {
+        out.symbol.marker = Marker::Circle;
+        report.approximated(layer, "SVG markers whose colours the style sets, coloured by a field or an expression, drawn as circles");
+    }
     // A line of stacked strokes draws each with its own colour and width.
     if sym.attribute("type") == Some("line") && out.stacked() && (by.stroke.is_some() || by.stroke_width.is_some()) {
         report.skipped(layer, "data-defined colours and widths of a line of several strokes");
@@ -981,12 +990,14 @@ pub(super) fn read_images(root: Node, dir: &str, read: &mut ReadImage, report: &
         let got = match &source {
             Ok(Some(path)) => read(path, colours.as_ref()),
             Ok(None) => read(file, colours.as_ref()),
-            Err(why) => Err(*why),
+            Err(why) => Err((*why, false)),
         };
         reads += usize::from(source.is_ok());
-        // An image no colour was set in, and why one isn't drawn, hold whatever the colours.
-        let paint = if got.as_ref().is_ok_and(|(_, _, painted)| *painted) { paints[0] } else { paints[1] };
-        let kept = got.map_err(str::to_string).and_then(|(b64, aspect, _)| {
+        // An image no colour was set in, and why one isn't drawn unless its colours are why, hold
+        // whatever the colours.
+        let (Ok((_, _, own)) | Err((_, own))) = &got;
+        let paint = if *own { paints[0] } else { paints[1] };
+        let kept = got.map_err(|(why, _)| why.to_string()).and_then(|(b64, aspect, _)| {
             // Past what a run keeps, it isn't (`Picture::new` gives the default then).
             let picture = Picture::new(&b64);
             if picture.is_default() || !(aspect.is_finite() && aspect > 0.0) {
@@ -1051,6 +1062,15 @@ fn svg_colours(l: Node) -> SvgColours {
         outline_width: length("outline_width").unwrap_or(0.0),
         size: length("size").unwrap_or(2.0 * 96.0 / 25.4),
     }
+}
+
+/// Whether layer `l` is an SVG marker whose image has its colours set in it.
+fn painted(l: Node, report: &Report) -> bool {
+    if l.attribute("class") != Some("SvgMarker") {
+        return false;
+    }
+    let file = prop(&props(l), "name").map(str::trim).unwrap_or_default().to_string();
+    report.images.contains_key(&(file, Paint::of(Some(&svg_colours(l)))[0]))
 }
 
 /// The setting naming a marker layer `class`'s image file; none for one that shows no file.
