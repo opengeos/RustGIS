@@ -53,6 +53,8 @@ pub(crate) struct Chat {
     /// The system's text field open for one of the sheet's fields: its id, the field, and the
     /// provider it was opened for (a provider's settings never take what was typed for another's).
     entering: Option<(String, Field, String)>,
+    /// What the system's text field open for the message last held.
+    entered: String,
     /// How many times the system's text field was opened: each opening's id is its own.
     entries: u64,
     /// The system's text field that was open as the extension was turned off: what it still sends
@@ -147,6 +149,16 @@ pub(crate) fn strip_shown(app: &RustGisApp, ctx: &egui::Context) -> bool {
     on(app) && sheet(ctx) != Sheet::Assistant && (app.assistant.busy() || app.assistant.waiting_to_send())
 }
 
+/// The message `input` with the system's text field's part of it, `was`, now `text`. The field
+/// sends all it holds and knows nothing of what was put in the box above it since (a message that
+/// couldn't be sent), which is kept.
+fn with_entered(input: &str, was: &str, text: &str) -> String {
+    // A draft of nothing but spaces is replaced by what is put in the box, not kept under it.
+    let above = input.strip_suffix(was).unwrap_or(if was.trim().is_empty() { input } else { "" });
+    let line = if above.is_empty() || above.ends_with('\n') { "" } else { "\n" };
+    format!("{above}{line}{text}")
+}
+
 /// Takes what the system's text field sent back for the sheet's fields, and gives back the rest.
 pub(crate) fn take_typed(app: &mut RustGisApp, ctx: &egui::Context, typed: Vec<Typed>) -> Vec<Typed> {
     let mut state = chat(ctx);
@@ -172,7 +184,8 @@ pub(crate) fn take_typed(app: &mut RustGisApp, ctx: &egui::Context, typed: Vec<T
         match typed {
             Typed::Text { id, text } if id == open => {
                 if field == Field::Message {
-                    app.assistant.input = text;
+                    app.assistant.input = with_entered(&app.assistant.input, &state.entered, &text);
+                    state.entered = text;
                     continue;
                 }
                 let Some(mut cfg) = app.assistant.config().cloned().filter(|c| c.provider == provider) else {
@@ -523,6 +536,7 @@ fn typing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, state: &mut Chat) {
                 match enter(&entry) {
                     Ok(()) => {
                         state.entering = Some((entry_id, Field::Message, String::new()));
+                        state.entered = app.assistant.input.clone();
                         // Typing wants room: the conversation above, the keyboard below.
                         state.height = Height::Full;
                     }
@@ -893,6 +907,50 @@ mod tests {
         assert!(out.lock().unwrap().is_empty(), "nothing more is sent by itself");
         assert_eq!(asked(&held), ["first"]);
         assert_eq!(held.app.assistant.input, "second\nthird");
+    }
+
+    /// A message put in the box while the system's text field is open on it stays, above what is
+    /// typed: the field sends all it holds and doesn't have it.
+    #[test]
+    fn a_message_put_in_the_box_while_the_systems_text_field_is_open_is_kept() {
+        for draft in ["", " ", "a draft"] {
+            let mut held = Held::new();
+            provider(&mut held, "custom", "test");
+            held.app.services.http = Some(Box::new(|_, _| {}));
+            let asked = native(&mut held);
+            raise(&held.ctx, Height::Half);
+            held.frame(Vec::new());
+            let bar = held.find("Ask, or say what to do…").unwrap().center();
+            held.touch(&[bar]);
+            let id = asked.borrow().last().cloned().expect("the system's text field").id;
+            held.app.typed.push(Typed::Text { id: id.clone(), text: draft.into() });
+            held.frame(Vec::new());
+            for ask in ["first", "second"] {
+                crate::run(&mut held.app, "ui.pane.assistant", json!({"ask": ask}));
+            }
+            held.frame(Vec::new());
+            held.frame(Vec::new());
+            for text in ["a draft, longer", "", "another"] {
+                held.app.typed.push(Typed::Text { id: id.clone(), text: text.into() });
+                held.frame(Vec::new());
+                assert_eq!(held.app.assistant.input, format!("second\n{text}"), "after the draft {draft:?}");
+            }
+        }
+    }
+
+    /// The Layers button isn't on a strip of map too short for it, and is back as the sheet lowers.
+    #[test]
+    fn layers_is_not_on_a_strip_of_map_too_short_for_it() {
+        let mut held = Held::new();
+        held.screen = Vec2::new(800.0, 360.0);
+        provider(&mut held, "custom", "test");
+        let layers = egui::pos2(800.0 - 8.0 - TARGET / 2.0, 16.0);
+        raise(&held.ctx, Height::Full);
+        held.frame(Vec::new());
+        held.touch(&[layers]);
+        assert_eq!(sheet(&held.ctx), Sheet::None, "a tap on the map above the sheet lowers it");
+        held.touch(&[layers]);
+        assert_eq!(sheet(&held.ctx), Sheet::Layers);
     }
 
     #[test]
