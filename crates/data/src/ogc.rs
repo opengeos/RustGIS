@@ -3747,7 +3747,7 @@ fn is_legacy_wfs_query(url: &str) -> bool {
 
 /// Replaces WFS presentation parameters, retaining the query, filters and authentication.
 /// Hits use the default XML format; feature pages retain the requested GeoJSON format.
-fn wfs_page_url(url: &str, offset: Option<usize>, size: usize) -> String {
+fn wfs_page_url(url: &str, offset: Option<usize>, size: usize, order: Option<&str>) -> String {
     let kept = url
         .split('#')
         .next()
@@ -3764,9 +3764,111 @@ fn wfs_page_url(url: &str, offset: Option<usize>, size: usize) -> String {
         .join("&");
     let url = with_query(base(url), &kept);
     match offset {
-        Some(offset) => with_query(&url, &format!("STARTINDEX={offset}&COUNT={size}")),
+        Some(offset) => {
+            let url = with_query(&url, &format!("STARTINDEX={offset}&COUNT={size}"));
+            match order {
+                Some(key) if query_value(&url, "SORTBY").is_none() => with_query(&url, &format!("SORTBY={}", encode(key))),
+                _ => url,
+            }
+        }
         None => with_query(&url, "RESULTTYPE=hits"),
     }
+}
+
+/// A description for the same feature type and service, without GetFeature selectors.
+fn wfs_schema_url(url: &str) -> Option<String> {
+    wfs_type_name(url)?;
+    let inner = crate::login_address::inner(url).split('#').next()?;
+    let (base, query) = inner.split_once('?')?;
+    let kept = query.split('&').filter(|kv| {
+        let key = kv.split('=').next().unwrap_or_default();
+        ![
+            "REQUEST",
+            "OUTPUTFORMAT",
+            "SRSNAME",
+            "COUNT",
+            "STARTINDEX",
+            "RESULTTYPE",
+            "BBOX",
+            "FILTER",
+            "CQL_FILTER",
+            "FEATUREID",
+            "RESOURCEID",
+            "PROPERTYNAME",
+            "SORTBY",
+        ]
+        .iter()
+        .any(|k| key.eq_ignore_ascii_case(k))
+    });
+    let schema = format!("{base}?REQUEST=DescribeFeatureType&{}", kept.collect::<Vec<_>>().join("&"));
+    Some(crate::login_address::inherit(url, &schema))
+}
+
+/// The local name of a single requested feature type; joins can have several schemas and keys.
+fn wfs_type_name(url: &str) -> Option<String> {
+    let name = query_value(url, "TYPENAMES").or_else(|| query_value(url, "TYPENAME"))?;
+    let name = name.replace("%3A", ":").replace("%3a", ":");
+    let local = name.rsplit(':').next()?;
+    (!local.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || b"_:-.".contains(&b))).then(|| local.to_string())
+}
+
+/// A DescribeFeatureType can expose a candidate without declaring a unique constraint.
+/// Use the sole required scalar property, and check its values at page boundaries.
+fn wfs_schema_order(url: &str, bytes: &[u8]) -> Option<String> {
+    const XSD: &str = "http://www.w3.org/2001/XMLSchema";
+    let name = wfs_type_name(url)?;
+    let doc =
+        crate::xml::parse(std::str::from_utf8(bytes).ok()?, ParsingOptions { nodes_limit: 4096, ..ParsingOptions::default() }).ok()?;
+    let root = doc.root_element();
+    if !root.has_tag_name((XSD, "schema")) {
+        return None;
+    }
+    let layer = children(&root, "element").find(|n| n.has_tag_name((XSD, "element")) && n.attribute("name") == Some(name.as_str()))?;
+    let ty = match layer.attribute("type") {
+        Some(ty) => {
+            let ty = ty.rsplit(':').next()?;
+            children(&root, "complexType").find(|n| n.has_tag_name((XSD, "complexType")) && n.attribute("name") == Some(ty))?
+        }
+        None => child(&layer, "complexType")?,
+    };
+    let seq = child(&ty, "sequence").or_else(|| child(&child(&child(&ty, "complexContent")?, "extension")?, "sequence"))?;
+    let mut keys = children(&seq, "element").filter(|n| {
+        n.has_tag_name((XSD, "element"))
+            && n.attribute("minOccurs").unwrap_or("1") == "1"
+            && n.attribute("maxOccurs").unwrap_or("1") == "1"
+            && matches!(n.attribute("nillable"), None | Some("false" | "0"))
+            && n.attribute("type").is_some_and(|ty| {
+                let (prefix, ty) = ty.split_once(':').map_or((None, ty), |(p, t)| (Some(p), t));
+                n.lookup_namespace_uri(prefix) == Some(XSD)
+                    && matches!(ty, "ID" | "string" | "integer" | "int" | "long" | "short" | "unsignedInt" | "unsignedLong")
+            })
+    });
+    let key = keys.next()?.attribute("name")?;
+    (keys.next().is_none() && !key.is_empty() && key.len() <= 128 && key.bytes().all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b)))
+        .then(|| key.to_string())
+}
+
+/// A tie cut by a page boundary can repeat or skip rows when the server sorts again.
+fn wfs_page_last_key(features: &[Box<RawValue>], key: &str, last: Option<&str>) -> Option<String> {
+    #[derive(serde::Deserialize)]
+    struct Properties<'a> {
+        #[serde(borrow)]
+        properties: std::collections::BTreeMap<String, &'a RawValue>,
+    }
+    let sort_value = |feature: &RawValue| {
+        let properties = serde_json::from_str::<Properties<'_>>(feature.get()).ok()?.properties;
+        let value = properties.get(key)?.get();
+        match value.as_bytes().first()? {
+            b'"' => serde_json::from_str::<String>(value).ok(),
+            b'-' | b'0'..=b'9' => Some(value.to_string()),
+            _ => None,
+        }
+    };
+    let first = sort_value(features.first()?)?;
+    if last == Some(first.as_str()) {
+        return None;
+    }
+    sort_value(features.last()?)
 }
 
 /// The total from a bounded WFS hits response; unknown counts and exception reports aren't totals.
@@ -3908,6 +4010,7 @@ enum Phase {
         unidentified: std::collections::HashSet<u64>,
         overlap: bool,
         duplicates: usize,
+        order: WfsOrder,
     },
     /// An OGC API or WFS page, retaining the largest reported legacy total across the chain.
     Linked { total: Option<u64> },
@@ -3925,6 +4028,19 @@ enum Phase {
         pbf: bool,
         smaller: usize,
         fallback_size: usize,
+    },
+}
+
+/// WFS offsets normally use the service's default order. On a rejection, try one schema
+/// and restart in its order while retaining the original first page until the new one lands.
+#[derive(Debug)]
+enum WfsOrder {
+    Original,
+    Describe,
+    /// No last value until the first sorted page replaces the original.
+    Sorted {
+        key: String,
+        last: Option<String>,
     },
 }
 
@@ -4013,7 +4129,8 @@ fn first_mark(page: &crate::esripbf::Page) -> Option<serde_json::Value> {
 ///
 /// Any other address is fetched as it is. An OGC API or WFS page leads to the next by its `next`
 /// link. A WFS request without a next link uses a hits count and STARTINDEX pages (WFS 2.0).
-/// Legacy WFS without links warns when its requested MAXFEATURES limit is reached.
+/// If the first unsorted offset is rejected, it can retry from the start, sorted by a field
+/// from the layer's schema. Legacy WFS without links warns when its requested MAXFEATURES limit is reached.
 ///
 /// The pages' features end up in one collection, with the first page's other members and
 /// without its paging ones. A first page that leads nowhere is done at once, unchanged (and
@@ -4085,7 +4202,7 @@ fn read_first(url: &str, first: Vec<u8>, max: usize, paging: Option<ArcgisPaging
             Phase::Offsets { size, order: paging.order, start: None, first: Some(first), pbf: false, smaller: 0, fallback_size: size },
         )
     } else if wfs {
-        (wfs_page_url(url, None, 0), Phase::WfsHits)
+        (wfs_page_url(url, None, 0, None), Phase::WfsHits)
     } else {
         let read = features.len();
         let note =
@@ -4126,20 +4243,18 @@ fn read_first(url: &str, first: Vec<u8>, max: usize, paging: Option<ArcgisPaging
     pages.advance()
 }
 
-/// Longest a reader of [`Pages`] waits for an ArcGIS layer's description, read before its
-/// features ([`Pages::describing`]): one that hangs is given up on, and the layer's query is
-/// fetched as it is.
+/// Longest a reader of [`Pages`] waits for a layer's description ([`Pages::describing`]).
+/// The reader proceeds without schema information if the description takes longer.
 pub const DESCRIPTION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
-/// Most bytes a reader of [`Pages`] takes for an ArcGIS layer's description, which doesn't count
-/// against the features' budget: a few kilobytes as a rule, so one larger than this is given up
-/// on, and the layer's query fetched as it is.
+/// Most bytes a reader of [`Pages`] takes for a layer's description. This metadata has a separate
+/// budget because feature pages can be much larger.
 pub const DESCRIPTION_MAX: usize = 4 << 20;
 
 impl Pages {
-    /// Whether the answer to fetch now is an ArcGIS layer's description, read before its features.
+    /// Whether the next request is a bounded layer description rather than a feature page.
     pub fn describing(&self) -> bool {
-        matches!(self.phase, Phase::Describe { .. })
+        matches!(self.phase, Phase::Describe { .. } | Phase::WfsOffsets { order: WfsOrder::Describe, .. })
     }
 
     /// Leaves time for smaller-page retries within a blocking reader's total deadline.
@@ -4260,7 +4375,7 @@ impl Pages {
             let mut ids = std::collections::HashSet::new();
             self.features.retain(|f| feature_id(f).is_none_or(|id| ids.insert(id)));
             let duplicates = offset.saturating_sub(self.features.len());
-            self.next = wfs_page_url(&self.url, Some(offset), offset.min(self.max));
+            self.next = wfs_page_url(&self.url, Some(offset), offset.min(self.max), None);
             self.phase = Phase::WfsOffsets {
                 matched,
                 offset,
@@ -4269,8 +4384,35 @@ impl Pages {
                 unidentified: self.features.iter().filter_map(|f| unidentified_hash(f)).collect(),
                 overlap: false,
                 duplicates,
+                order: WfsOrder::Original,
             };
             return self.advance();
+        }
+        if let Phase::WfsOffsets { size, offset, order, .. } = &mut self.phase {
+            if matches!(order, WfsOrder::Describe) {
+                let key = answer.ok().and_then(|bytes| wfs_schema_order(&self.url, &bytes));
+                let Some(key) = key else {
+                    return self.stop("the feature description gave no usable sort key; the rest aren't read".into());
+                };
+                *size = (*size).min(FEATURE_LIMIT);
+                let next = wfs_page_url(&self.url, Some(0), *size, Some(&key));
+                *order = WfsOrder::Sorted { key, last: None };
+                self.from = std::mem::replace(&mut self.next, next);
+                return self.advance();
+            }
+            // The first offset can be refused by a server without a natural order. User-provided
+            // sorting is never replaced, and later failures don't restart a partially read layer.
+            if matches!(order, WfsOrder::Original)
+                && *offset == *size
+                && query_value(&self.url, "SORTBY").is_none()
+                && let Err(error) = &answer
+                && page_error_status(error) == Some(400)
+                && let Some(next) = wfs_schema_url(&self.url)
+            {
+                *order = WfsOrder::Describe;
+                self.from = std::mem::replace(&mut self.next, next);
+                return self.advance();
+            }
         }
         if let Phase::Describe { pbf } = self.phase {
             // Read once, whatever its size: the service's error may be as long as a description.
@@ -4347,12 +4489,16 @@ impl Pages {
             };
         }
         let read = self.features.len();
-        let (page, mut more) = match answer.and_then(|b| split_page(&b)) {
+        let restart = matches!(self.phase, Phase::WfsOffsets { order: WfsOrder::Sorted { last: None, .. }, .. });
+        let (mut page, mut more) = match answer.and_then(|b| split_page(&b)) {
             Ok(Some(page)) => page,
+            Ok(None) if restart => return self.stop("the first sorted page isn't a feature collection; the rest aren't read".into()),
             Ok(None) => return self.stop(format!("the page after feature {read} isn't a feature collection; the rest aren't read")),
             Err(e) => {
                 let why = if arcgis {
                     self.page_failure(&e)
+                } else if restart {
+                    format!("the first sorted page couldn't be read ({e}); the rest aren't read")
                 } else {
                     format!("the page after feature {read} couldn't be read ({e}); the rest aren't read")
                 };
@@ -4360,11 +4506,30 @@ impl Pages {
             }
         };
         let following = match &mut self.phase {
-            Phase::WfsOffsets { matched, offset, size, ids, unidentified, overlap, duplicates } => {
+            Phase::WfsOffsets { matched, offset, size, ids, unidentified, overlap, duplicates, order } => {
                 let returned = more.len();
                 if returned == 0 {
                     return self.stop("the WFS sent an empty page before its reported total; the rest aren't read".into());
                 }
+                let key = match order {
+                    WfsOrder::Sorted { key, last } => {
+                        let Some(end) = wfs_page_last_key(&more, key, last.as_deref()) else {
+                            return self.stop("a sorted page boundary had a missing or repeated sort value; the rest aren't read".into());
+                        };
+                        if last.replace(end).is_none() {
+                            // Offsets must count one order from the start. Drop the old first
+                            // page only after a usable replacement has landed.
+                            self.features.clear();
+                            self.doc = std::mem::take(&mut page);
+                            ids.clear();
+                            unidentified.clear();
+                            *offset = 0;
+                            *duplicates = 0;
+                        }
+                        Some(key.as_str())
+                    }
+                    _ => None,
+                };
                 let hashes: Vec<_> = more.iter().filter_map(|f| unidentified_hash(f)).collect();
                 *overlap |= hashes.iter().any(|h| unidentified.contains(h));
                 unidentified.extend(hashes);
@@ -4397,7 +4562,7 @@ impl Pages {
                     }
                     return self.finish(None);
                 }
-                Some(wfs_page_url(&self.url, Some(*offset), *size))
+                Some(wfs_page_url(&self.url, Some(*offset), *size, key))
             }
             Phase::Offsets { size, order, start, first, .. } => {
                 // A server that doesn't honour `resultOffset` sends its first page again.
@@ -4433,7 +4598,7 @@ impl Pages {
             None if matches!(self.phase, Phase::Linked { .. }) && is_wfs_query(&self.url) => {
                 // A next-link chain can end at a server cap too; verify the accumulated total.
                 self.from = self.url.clone();
-                self.next = wfs_page_url(&self.url, None, 0);
+                self.next = wfs_page_url(&self.url, None, 0, None);
                 self.phase = Phase::WfsHits;
                 self.advance()
             }
@@ -4578,7 +4743,14 @@ impl Pages {
     /// query fetched as it is when none was.
     fn stop(mut self, note: String) -> Step {
         let note = match self.phase {
-            Phase::WfsOffsets { matched, .. } => format!("{} of {matched} WFS features read: {note}", self.features.len()),
+            Phase::WfsOffsets { matched, offset, ref order, .. } => {
+                let read = self.features.len();
+                if matches!(order, WfsOrder::Describe | WfsOrder::Sorted { last: None, .. }) {
+                    format!("{read} of {matched} WFS features read: the page after feature {offset} couldn't be read (HTTP 400); {note}")
+                } else {
+                    format!("{read} of {matched} WFS features read: {note}")
+                }
+            }
             Phase::WfsHits => format!("{} WFS features read: {note}", self.features.len()),
             _ => note,
         };
@@ -6572,6 +6744,94 @@ mod tests {
         let doc: serde_json::Value = serde_json::from_slice(&joined).unwrap();
         assert_eq!(doc["features"].as_array().unwrap().len(), 3);
         assert_eq!(note, None);
+    }
+
+    /// A server without a natural order needs the same explicit sort from offset zero onward.
+    #[test]
+    fn wfs_restarts_rejected_offset_pages_in_schema_order() {
+        let url = "https://wfs.example.org/wfs?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature&TYPENAMES=roads&COUNT=50000";
+        let first = br#"{"features":[{"id":"roads.tmp-9","properties":{"record_number":"9"}},{"id":"roads.tmp-2","properties":{"record_number":"2"}}]}"#;
+        for last in ["9", "2"] {
+            let mut requests = Vec::new();
+            let (bytes, note) = join_pages(url, first.to_vec(), 100, |next| {
+                let offset = query_value(next, "STARTINDEX");
+                let order = query_value(next, "SORTBY");
+                requests.push((query_value(next, "REQUEST").unwrap().to_string(), offset.map(str::to_owned), order.map(str::to_owned)));
+                match (query_value(next, "REQUEST"), offset, order) {
+                (Some("DescribeFeatureType"), None, None) => Ok(br#"<xsd:schema xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+                    <xsd:complexType name="roadsType"><xsd:sequence>
+                       <xsd:element name="record_number" type="xsd:string" nillable="false"/>
+                       <xsd:element name="label" type="xsd:string" minOccurs="0"/>
+                    </xsd:sequence></xsd:complexType>
+                    <xsd:element name="roads" type="roadsType"/>
+                </xsd:schema>"#.to_vec()),
+                (_, None, None) => Ok(br#"<FeatureCollection numberMatched="3"/>"#.to_vec()),
+                (_, Some("2"), None) => Err("http status: 400".into()),
+                (_, Some("0"), Some("record_number")) => Ok(br#"{"features":[{"id":"roads.tmp-1","properties":{"record_number":"1"}},{"id":"roads.tmp-2","properties":{"record_number":"2"}}]}"#.to_vec()),
+                (_, Some("2"), Some("record_number")) => Ok(serde_json::to_vec(&serde_json::json!({
+                    "features": [{"id": "roads.tmp-9", "properties": {"record_number": last}}]
+                })).unwrap()),
+                _ => panic!("unexpected request: {next}"),
+            }
+            });
+            let doc: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            let ids: Vec<_> = doc["features"].as_array().unwrap().iter().map(|f| f["id"].as_str().unwrap()).collect();
+            if last == "9" {
+                assert_eq!(ids, ["roads.tmp-1", "roads.tmp-2", "roads.tmp-9"], "{requests:?}");
+                assert_eq!(note, None);
+            } else {
+                assert_eq!(ids, ["roads.tmp-1", "roads.tmp-2"], "{requests:?}");
+                let note = note.unwrap();
+                assert!(note.contains("2 of 3 WFS features read") && note.contains("repeated sort value"), "{note}");
+            }
+        }
+    }
+
+    /// The caller's sort stays in the feature requests, and hits never add an inferred sort.
+    #[test]
+    fn wfs_page_url_preserves_the_callers_sort_and_selection() {
+        let url = "https://x.org/wfs?REQUEST=GetFeature&soRtBy=NAME%20D&COUNT=50000&OUTPUTFORMAT=json&BBOX=1,2,3,4&token=t";
+        let page = wfs_page_url(url, Some(42), 3, Some("record_number"));
+        assert_eq!(
+            page,
+            "https://x.org/wfs?REQUEST=GetFeature&soRtBy=NAME%20D&OUTPUTFORMAT=json&BBOX=1,2,3,4&token=t&STARTINDEX=42&COUNT=3"
+        );
+        let hit = wfs_page_url(url, None, 0, Some("record_number"));
+        assert_eq!(hit, "https://x.org/wfs?REQUEST=GetFeature&soRtBy=NAME%20D&BBOX=1,2,3,4&token=t&RESULTTYPE=hits");
+    }
+
+    /// A rejected offset with no unambiguous sort field returns the original first page.
+    #[test]
+    fn wfs_offset_sort_without_a_key_keeps_the_original_read() {
+        let url = "https://wfs.example.org/wfs?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature&TYPENAMES=ns:roads&COUNT=50000&OUTPUTFORMAT=json&BBOX=1,2,3,4&map=roads";
+        let first = br#"{"features":[{"id":"roads.1"},{"id":"roads.2"}]}"#;
+        let (bytes, note) = join_pages(url, first.to_vec(), 100, |next| {
+            if query_value(next, "REQUEST") == Some("DescribeFeatureType") {
+                assert_eq!(query_value(next, "TYPENAMES"), Some("ns:roads"));
+                assert_eq!(query_value(next, "map"), Some("roads"));
+                assert!(query_value(next, "BBOX").is_none());
+                assert!(query_value(next, "OUTPUTFORMAT").is_none());
+                return Ok(br#"<xsd:schema xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+                    <xsd:element name="roads"><xsd:complexType><xsd:sequence>
+                        <xsd:element name="road_name" type="xsd:string"/>
+                        <xsd:element name="road_type" type="xsd:string"/>
+                    </xsd:sequence></xsd:complexType></xsd:element>
+                </xsd:schema>"#
+                    .to_vec());
+            }
+            assert_eq!(query_value(next, "BBOX"), Some("1,2,3,4"));
+            assert!(query_value(next, "SORTBY").is_none());
+            if query_value(next, "RESULTTYPE") == Some("hits") {
+                Ok(br#"<FeatureCollection numberMatched="3"/>"#.to_vec())
+            } else {
+                assert_eq!(query_value(next, "STARTINDEX"), Some("2"));
+                Err("HTTP 400".into())
+            }
+        });
+        let doc: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(doc["features"], serde_json::from_slice::<serde_json::Value>(first).unwrap()["features"]);
+        let note = note.unwrap();
+        assert!(note.contains("2 of 3 WFS features read") && note.contains("HTTP 400") && note.contains("no usable sort key"), "{note}");
     }
 
     /// Explicit count windows, below and above the generated request size, do not fetch more.

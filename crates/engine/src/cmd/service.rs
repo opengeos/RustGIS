@@ -765,6 +765,7 @@ fn download_layer_with(
             Step::Fetch(pages) => pages,
         };
         let describing = pages.describing();
+        let before_features = describing && pages.read() == 0;
         let allowed = previous.as_ref().map_or_else(|| address::check(pages.next_url(), None), |origin| origin.check(pages.next_url()));
         let answer = allowed.and_then(|()| {
             let wait = until.saturating_duration_since(std::time::Instant::now());
@@ -792,8 +793,9 @@ fn download_layer_with(
             Ok(page)
         });
         step = (*pages).land(answer);
-        // Nor their time: the features have all of it from when the description is in.
-        if describing {
+        // A description before the features leaves their full budget. A WFS description
+        // fetched after a rejected offset shares the existing deadline.
+        if before_features {
             until = std::time::Instant::now() + cache::BLOCKING_TIMEOUT;
             if let Step::Fetch(pages) = &mut step {
                 drawing = pages.take_drawing_info();
