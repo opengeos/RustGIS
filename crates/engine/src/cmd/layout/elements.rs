@@ -51,6 +51,20 @@ pub(in crate::cmd::layout) fn given_num(p: &Value, k: &str, what: &str) -> Resul
     }
 }
 
+/// The fewest and the most rows a table shows.
+const TABLE_ROWS: (f64, f64) = (1.0, 500.0);
+
+/// A table's "rows", when it's given (and not null), held to [`TABLE_ROWS`]: an error when it's not
+/// a whole number of 0 or more.
+pub(in crate::cmd::layout) fn table_rows(p: &Value) -> Result<Option<usize>, String> {
+    let what = "a whole number of 0 or more";
+    match given_num(p, "rows", what)? {
+        Some(n) if n >= 0.0 && n.fract() == 0.0 => Ok(Some(n.clamp(TABLE_ROWS.0, TABLE_ROWS.1) as usize)),
+        Some(_) => Err(format!("rows is {what}")),
+        None => Ok(None),
+    }
+}
+
 /// A line's "dir": `default` when it's not given (or null), an error when it's not a direction's
 /// name.
 pub(in crate::cmd::layout) fn line_dir(p: &Value, default: LineDir) -> Result<LineDir, String> {
@@ -212,6 +226,15 @@ pub(in crate::cmd::layout) fn held_width(p: &Value, what: &str, range: (f64, f64
     (w != kept).then(|| format!("{what} {w} held to {kept} ({} to {} points)", range.0, range.1))
 }
 
+/// A table's "rows" in `p` held to [`TABLE_ROWS`], said as [`held_to_limits`] says it. Only for a
+/// table, and after [`table_rows`], which refuses a value that isn't a number of rows.
+pub(in crate::cmd::layout) fn held_rows(p: &Value) -> Option<String> {
+    let (least, most) = TABLE_ROWS;
+    let n = f(p, "rows")?;
+    let kept = n.clamp(least, most);
+    (n != kept).then(|| format!("rows {n} held to {kept} ({least} to {most})"))
+}
+
 /// Says what [`held_to_limits`] found, in one notice for the command `title`.
 pub(in crate::cmd::layout) fn say_held(s: &mut Session, title: &str, held: Vec<String>) {
     if !held.is_empty() {
@@ -266,6 +289,9 @@ pub(in crate::cmd::layout) fn add_element(s: &mut Session, p: &Value) -> CmdResu
         Some(v) if kind == "grid" && !v.is_boolean() => return Err("a grid's \"labels\" is true or false".into()),
         Some(_) if kind != "legend" && kind != "grid" => return Err(ONLY_LEGEND_LABELS.into()),
         _ => {}
+    }
+    if kind != "legend" && gives(p, "classLabels") {
+        return Err(ONLY_LEGEND_CLASS_LABELS.into());
     }
     // A family is a text's: refused elsewhere, as a legend's left-out layers are, so a script
     // doesn't take it as applied.
@@ -368,6 +394,10 @@ pub(in crate::cmd::layout) fn add_element(s: &mut Session, p: &Value) -> CmdResu
                 Some(given) => with_labels(&BTreeMap::new(), given)?,
                 None => BTreeMap::new(),
             };
+            let class_labels = match legend_class_labels(s, l, frame, p)? {
+                Some(given) => with_class_labels(&ClassLabels::default(), given)?,
+                None => ClassLabels::default(),
+            };
             let text_size =
                 text_size_param(p, "textSize", rustgis_map::layout::LEGEND_TEXT_PT)?.unwrap_or(rustgis_map::layout::LEGEND_TEXT_PT);
             let fit = legend_fit_param(p)?.unwrap_or_default();
@@ -388,6 +418,7 @@ pub(in crate::cmd::layout) fn add_element(s: &mut Session, p: &Value) -> CmdResu
                     text_size,
                     fit,
                     show_layer_names,
+                    class_labels,
                 },
             )
         }
@@ -453,7 +484,7 @@ pub(in crate::cmd::layout) fn add_element(s: &mut Session, p: &Value) -> CmdResu
         "table" => {
             let frame = frame_of(l, p)?;
             let layer = frame_layer_name(s, l, frame, p)?;
-            let rows = p.get("rows").and_then(Value::as_u64).unwrap_or(12).clamp(1, 500) as usize;
+            let rows = table_rows(p)?.unwrap_or(12);
             ("Table Frame", place(p, l, (15.0, ph * 0.6, pw * 0.5, ph * 0.35))?, ElementKind::Table { frame, layer, rows, color: ink })
         }
         "chart" => {
@@ -466,7 +497,7 @@ pub(in crate::cmd::layout) fn add_element(s: &mut Session, p: &Value) -> CmdResu
                 return Err(said);
             }
             // Not given: the first numeric field, or for a count the field it groups by.
-            let field = match ps(p, "field") {
+            let field = match given_name(p, "field", "a field's name")? {
                 Some(fl) => ds.field_index(fl).and_then(|i| ds.fields.get(i)).ok_or_else(|| format!("no field '{fl}'"))?,
                 None => ds
                     .fields
@@ -672,7 +703,11 @@ pub(in crate::cmd::layout) fn add_element(s: &mut Session, p: &Value) -> CmdResu
     if let Some(said) = empty_colorbar {
         s.warn(said);
     }
-    say_held(s, "Add Element", held_to_limits(p, Shape::of_name(kind)));
+    let mut held = held_to_limits(p, Shape::of_name(kind));
+    if kind == "table" {
+        held.extend(held_rows(p));
+    }
+    say_held(s, "Add Element", held);
     say_name_ignored(s, p, kind);
     let mut out = json!({"element": id});
     if let Some(w) = warning {
@@ -947,6 +982,7 @@ const ADD_LEGEND_KEYS: &[&str] = &[
     "exclude",
     "columns",
     "labels",
+    "classLabels",
     "textSize",
     "fit",
     "showLayerNames",

@@ -448,7 +448,7 @@ jobs:
         # does not strand us on an old version. When it bumps, re-read the
         # action's release notes for changes to the scrub, MCP wiring, or the
         # `execution_file` contract that the summary step below parses.
-        uses: anthropics/claude-code-action@469588f42e6b1e94cd14ad09dccfeaec772ce0fd # v1 (Claude Code 2.1.220)
+        uses: anthropics/claude-code-action@eb56b6666facdbd501035f4a0269d8caee2e7a8b # v1 (Claude Code 2.1.220)
         with:
           # Use the workflow's GITHUB_TOKEN for GitHub API calls instead of the
           # default OIDC -> Claude GitHub App token exchange. That exchange
@@ -468,6 +468,12 @@ jobs:
           # and posts comments with the minimal-scope GITHUB_TOKEN, never runs the
           # PR's code, and restricts tools via claude_args below.
           allowed_non_write_users: "*"
+          # Since claude-code-action 1.0.289 the action skips every pull request
+          # from a fork ("Skipped, because allow_fork_prs is not true") unless
+          # this is set, and the check still passes, so nothing shows the review
+          # is missing. Fork PRs are the ones this pull_request_target workflow
+          # exists for; the job's `if:` above decides which are eligible.
+          allow_fork_prs: "true"
           prompt: |
             Perform a thorough code review of pull request ${{ github.repository }}/pull/${{ steps.pr.outputs.number }}.
 

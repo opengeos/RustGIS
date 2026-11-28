@@ -226,6 +226,10 @@ pub struct SourceLayer {
     /// Why the source couldn't be opened or read.
     #[serde(skip)]
     pub error: Option<String>,
+    /// A header incompatible with the saved fields must not reach the direct renderer.
+    /// Unlike transient read/render errors, this needs schema reconciliation before retry.
+    #[serde(skip)]
+    pub(crate) schema_refused: bool,
     /// Last read failure reported by the session, independent of disposable render copies.
     #[serde(skip)]
     error_said: Option<String>,
@@ -911,6 +915,7 @@ impl SourceLayer {
             query: _,
             opening: _,
             error: _,
+            schema_refused: _,
             error_said: _,
             login: _,
             reconnect_required: _,
@@ -1106,6 +1111,7 @@ impl SourceLayer {
 
     /// Clears a recovered failure and its notice marker, even between notice passes.
     pub fn clear_error(&mut self) {
+        self.schema_refused = false;
         self.error = None;
         self.error_said = None;
     }
@@ -1308,9 +1314,10 @@ impl SourceLayer {
         self.handle.as_ref().filter(|h| h.visits_extent_chunks()).cloned()
     }
 
-    /// A source capable of a complete, ordered render traversal.
+    /// A source capable of a complete, ordered render traversal. An incompatible schema must
+    /// not bypass its refusal. Other read/render errors retain the handle for recovery/retry.
     pub fn chunk_source(&self) -> Option<Arc<dyn FeatureSource>> {
-        self.handle.as_ref().filter(|h| h.streams_chunks()).cloned()
+        self.handle.as_ref().filter(|h| !self.schema_refused && h.streams_chunks()).cloned()
     }
 
     /// Reuses a complete source's thinning decision for a projection and LOD level. Both
@@ -1694,8 +1701,10 @@ impl SourceLayer {
             let _progress = rustgis_data::progress::install(progress.map(|p| p as Arc<dyn rustgis_data::progress::Probe>));
             let result = rustgis_data::source::remote::with_optional_still(still, || {
                 rustgis_data::progress::check()?;
-                let source = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work))
-                    .unwrap_or_else(|_| Err(rustgis_data::DataError::Format("opening the layer failed unexpectedly".into())))?;
+                let source = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)).unwrap_or_else(|payload| {
+                    let incident = rustgis_data::incident::caught(payload.as_ref());
+                    Err(rustgis_data::DataError::Format(rustgis_data::incident::message("Opening the layer", false, &incident.id)))
+                })?;
                 rustgis_data::progress::check()?;
                 Ok(Arc::from(source))
             });
@@ -2139,7 +2148,10 @@ impl SourceLayer {
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     window::read_mode(h2.as_ref(), &req, budget, &projection, estimate, full_read, fields, query.as_ref())
                 }))
-                .unwrap_or_else(|_| Err(rustgis_data::DataError::Format("the read failed unexpectedly".into())))
+                .unwrap_or_else(|payload| {
+                    let incident = rustgis_data::incident::caught(payload.as_ref());
+                    Err(rustgis_data::DataError::Format(rustgis_data::incident::message("The read", false, &incident.id)))
+                })
             });
             rustgis_data::source::remote::drive(
                 file,
@@ -2162,7 +2174,10 @@ impl SourceLayer {
                         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                             window::read_mode(h.as_ref(), &req, budget, &projection, estimate, full_read, fields, query.as_ref())
                         }))
-                        .unwrap_or_else(|_| Err(rustgis_data::DataError::Format("the read failed unexpectedly".into())))
+                        .unwrap_or_else(|payload| {
+                            let incident = rustgis_data::incident::caught(payload.as_ref());
+                            Err(rustgis_data::DataError::Format(rustgis_data::incident::message("The read", false, &incident.id)))
+                        })
                         .map_err(|e| e.to_string())
                     })
                     .and_then(|r| rustgis_data::source::remote::check_still(&still).map(|()| r));
@@ -2375,6 +2390,7 @@ impl SourceLayer {
             query: _,
             opening: _,
             error: _,
+            schema_refused: _,
             error_said: _,
             login: _,
             reconnect_required: _,

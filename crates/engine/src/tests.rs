@@ -41,6 +41,9 @@ mod said_not_silent;
 mod cancellation;
 
 #[cfg(not(target_arch = "wasm32"))]
+#[path = "tests/cube_first.rs"]
+mod cube_first;
+#[cfg(not(target_arch = "wasm32"))]
 #[path = "tests/cube_mask.rs"]
 mod cube_mask;
 #[cfg(not(target_arch = "wasm32"))]
@@ -126,6 +129,12 @@ mod layout_publication_parts;
 #[path = "tests/layout_typed_values.rs"]
 mod layout_typed_values;
 
+#[path = "tests/layout_legend_class_labels.rs"]
+mod layout_legend_class_labels;
+
+#[path = "tests/layout_report_text.rs"]
+mod layout_report_text;
+
 #[path = "tests/sde_connections.rs"]
 mod sde_connections;
 
@@ -150,6 +159,8 @@ fn plugin_store_turn() -> std::sync::MutexGuard<'static, ()> {
     static TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
     TURN.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
+
+static NO_CLASS_LABELS: rustgis_map::layout::ClassLabels = rustgis_map::layout::ClassLabels::NONE;
 
 fn world() -> Session {
     isolate_plugins();
@@ -8465,6 +8476,9 @@ fn hostile_junk() -> Vec<Value> {
         json!({"kind": "legend", "element": 1, "fit": {}, "showLayerNames": [null], "columns": f64::MAX}),
         json!({"kind": "legend", "element": 1, "fit": "x".repeat(5000), "showLayerNames": "true", "columns": -1}),
         json!({"kind": "text", "element": 1, "fit": "adjustSize", "showLayerNames": false}),
+        json!({"kind": "legend", "element": 1, "classLabels": {"x".repeat(5000): {"": "y".repeat(5000)}}}),
+        json!({"kind": "legend", "element": 1, "classLabels": [{"Countries": [null]}]}),
+        json!({"kind": "legend", "element": 1, "classLabels": {"Countries": {"Africa": f64::MAX}}}),
         // A QGIS project and style whose web layer and scale range are junk.
         json!({"text": "<qgis><projectlayers><maplayer type=\"raster\" hasScaleBasedVisibilityFlag=\"1\" minScale=\"NaN\" maxScale=\"-1e308\"><datasource>type=xyz&amp;url=&amp;zmax=999</datasource><layername></layername><provider>wms</provider><pipe><rasterrenderer opacity=\"inf\"/></pipe></maplayer></projectlayers></qgis>"}),
         // A label class placed along lines, with junk the placement and style read after it.
@@ -13158,6 +13172,7 @@ fn a_manual_legend_that_overflows_still_warns_and_a_fitted_one_does_not() {
         text_size: pt,
         exclude: &[],
         labels: &labels,
+        class_labels: &NO_CLASS_LABELS,
     };
     // A box as wide as its rows at 9 points, and half-way between their heights at 9 and at 4.
     let (big, small) = (legend_sizes(&mut s, frame, &at(9.0))[0], legend_sizes(&mut s, frame, &at(4.0))[0]);
@@ -13208,6 +13223,7 @@ fn a_fit_that_cannot_make_a_legend_fit_says_so() {
         text_size: pt,
         exclude: &[],
         labels: &labels,
+        class_labels: &NO_CLASS_LABELS,
     };
     let (big, small) = (legend_sizes(&mut s, frame, &at(9.0)), legend_sizes(&mut s, frame, &at(4.0)));
     // A box less than half as tall as its rows in six columns at 4 points: no fit makes them fit.
@@ -13285,6 +13301,7 @@ fn a_report_says_the_fitted_legends_on_its_layouts_that_no_longer_fit() {
         text_size: pt,
         exclude: &[],
         labels: &labels,
+        class_labels: &NO_CLASS_LABELS,
     };
     let point = r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{},"geometry":{"type":"Point","coordinates":[2.35,48.85]}}]}"#;
     let added = json!({"fileName": "extra.geojson", "text": point, "name": "Extra"});
@@ -13348,6 +13365,7 @@ fn a_fitted_legend_that_no_longer_fits_says_so_at_export() {
         text_size: pt,
         exclude: &[],
         labels: &labels,
+        class_labels: &NO_CLASS_LABELS,
     };
     let point = r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{},"geometry":{"type":"Point","coordinates":[2.35,48.85]}}]}"#;
     let added = json!({"fileName": "extra.geojson", "text": point, "name": "Extra"});
@@ -31296,17 +31314,17 @@ fn csv_and_gpx_exports_say_what_they_leave_out() {
     assert!(n.iter().any(|t| t.contains("'height'")) && n.iter().any(|t| t.contains("tracks")), "{n:?}");
     let n = said(&mut s, "data.convert", json!({"layer": "Areas", "format": "csv"}));
     assert!(n.iter().any(|t| t.contains("wasn't written, only the attributes")), "{n:?}");
-    // Both formats count the row without geometry and name the omitted null field.
+    // Both formats count the row without geometry; KML also declares the all-null field.
     let mut rows = layer("Rows", GeometryType::Point, vec![(Geometry::Point(Coord::new(1.0, 2.0)), vec![V::Text("P".into()), V::Null])]);
     rows.push(None, vec![V::Text("no place".into()), V::Null]);
     s.map_mut().add_dataset(rows);
     for format in ["kml", "gpx"] {
         let n = said(&mut s, "data.convert", json!({"layer": "Rows", "format": format}));
         assert!(n.iter().any(|t| t.contains("1 features without drawable geometry were left out")), "{format}: {n:?}");
-        assert_eq!(n.len(), 2, "{format}: {n:?}");
         if format == "kml" {
-            assert!(n.iter().any(|t| t.contains("KML omitted 1 field with no values in the placemarks written ('height')")), "{n:?}");
+            assert_eq!(n.len(), 1, "{n:?}");
         } else {
+            assert_eq!(n.len(), 2, "{n:?}");
             assert!(n.iter().any(|t| t.contains("1 field wasn't written: 'height'")), "{n:?}");
         }
     }
@@ -31446,9 +31464,24 @@ fn exporting_features_adds_or_replaces_a_table_in_an_existing_geopackage() {
         l.sync_source(&rustgis_geom::Extent::new(-20.0, -20.0, 20.0, 20.0), true);
     });
     assert_eq!(kind(&s), Some(rustgis_data::GeometryType::Polygon));
+    let in_place = s.map_mut().layers.iter_mut().find(|layer| layer.name == "InPlace").unwrap();
+    let moved = rustgis_map::symbology::MovedLabel { id: in_place.dataset.features.row(0).unwrap().id(), at: [4.0, 5.0] };
+    in_place.labels.default.moved.push(moved);
+    let mut class = in_place.labels.default.clone();
+    class.name = "Subset".into();
+    in_place.labels.classes.push(class);
     let mark = s.notice_mark();
     s.run("share.exportLayer", &json!({"layer": "Cities", "path": path, "mode": "replaceTable", "tableName": "Countries"})).unwrap();
     assert_eq!(kind(&s), Some(rustgis_data::GeometryType::Point), "the new table's");
+    assert!(s.map().layer_by_name("InPlace").unwrap().labels.in_order().all(|class| class.moved.is_empty()));
+    assert_eq!(
+        s.notices_since(mark)
+            .iter()
+            .filter(|note| note.text == "InPlace: 2 saved label move(s) reset: replacement data may reuse feature ids")
+            .count(),
+        1,
+        "the replacement command says the reset without requiring a render frame"
+    );
     let read = s.map().layer_by_name("InPlace").map(|l| l.load_all().map(|ds| ds.features.len()));
     assert_eq!(read, Some(Ok(cities)), "its features are the new table's");
     assert!(s.notices_since(mark).iter().any(|n| n.text.ends_with("1 layer reads Countries in place, now the new table")));
@@ -57467,7 +57500,7 @@ fn reads_made_ahead_are_taken_by_the_command() {
         assert_eq!(unread(&s), before + 1, "{:?}", s.notices.iter().map(|n| &n.text).collect::<Vec<_>>());
     }
 
-    // A field added while the read ran: it is read again, with that field kept.
+    // A saved field absent from the source must not receive positional source values.
     let path = dir.join("fields.geojson");
     std::fs::write(&path, points).unwrap();
     let id = s.run("layer.addData", &json!({"path": path.display().to_string(), "stream": true})).unwrap()["layer"].as_u64().unwrap();
@@ -57477,7 +57510,8 @@ fn reads_made_ahead_are_taken_by_the_command() {
     extra.name = "added".into();
     s.map_mut().layer_mut(id as u32).unwrap().dataset.fields.push(extra);
     s.run("layer.rename", &json!({"layer": id, "name": "Renamed while reading"})).unwrap();
-    crate::cmd::reads::read_land(&mut s, read).unwrap();
+    let error = crate::cmd::reads::read_land(&mut s, read).unwrap_err();
+    assert!(error.contains("added") && error.contains("Reload Data"), "{error}");
     assert_eq!(s.map().layer(id as u32).unwrap().name, "Renamed while reading");
     assert!(s.map().layer(id as u32).unwrap().dataset.fields.iter().any(|f| f.name == "added"));
 
