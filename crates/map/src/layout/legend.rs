@@ -279,6 +279,7 @@ impl FeatureCounts {
         !self.shown()
     }
 
+    /// The setting a `"showCounts"` of `shown` gives: on, or off, which a save leaves out.
     pub fn from_shown(shown: bool) -> FeatureCounts {
         if shown { FeatureCounts::Shown } else { FeatureCounts::Hidden }
     }

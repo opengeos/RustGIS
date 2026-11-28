@@ -1789,15 +1789,7 @@ impl Renderer {
         else {
             return self.legend();
         };
-        // A fallback that draws nothing has nothing to stand for in a legend: its own symbol as
-        // `Symbol::draws` has it (as a web style does), else its stacked strokes (on lines and
-        // points) or stacked fills (on areas); a point of size 0 draws none of them.
-        let polygon = ds.geometry_type == GeometryType::Polygon;
-        let strokes = !polygon
-            && other_strokes.iter().any(|s| s.color.unwrap_or(other.stroke).a() > 0 && s.width.unwrap_or(other.stroke_width) > 0.0);
-        let fills = polygon && other_fills.iter().any(|f| f.draws(other.fill));
-        let sized = ds.geometry_type != GeometryType::Point || other.size > 0.0;
-        let visible = other.draws(ds.geometry_type) || (sized && (strokes || fills));
+        let visible = self.fallback_draws(ds);
         if expression.is_some() && ds.features.len().saturating_mul(classes.len().max(1)) > MAX_LEGEND_STEPS {
             let mut all = self.legend();
             all.retain(|e| visible || !e.fallback);
@@ -1835,6 +1827,20 @@ impl Renderer {
             });
         }
         v
+    }
+
+    /// Whether Unique Values' fallback draws something on `ds`; false for the other renderers.
+    /// One that draws nothing has nothing to stand for in a legend: its own symbol as
+    /// `Symbol::draws` has it (as a web style does), else its stacked strokes (on lines and
+    /// points) or stacked fills (on areas); a point of size 0 draws none of them.
+    fn fallback_draws(&self, ds: &Dataset) -> bool {
+        let Renderer::Unique { other, other_strokes, other_fills, .. } = self else { return false };
+        let polygon = ds.geometry_type == GeometryType::Polygon;
+        let strokes = !polygon
+            && other_strokes.iter().any(|s| s.color.unwrap_or(other.stroke).a() > 0 && s.width.unwrap_or(other.stroke_width) > 0.0);
+        let fills = polygon && other_fills.iter().any(|f| f.draws(other.fill));
+        let sized = ds.geometry_type != GeometryType::Point || other.size > 0.0;
+        other.draws(ds.geometry_type) || (sized && (strokes || fills))
     }
 
     /// Gives `visit` the class of each kept row of Unique Values, as an index into `classes`
@@ -1884,7 +1890,7 @@ impl Renderer {
                 }
                 let mut counts = vec![0u64; classes.len()];
                 let mut other = 0u64;
-                self.visit_unique(ds, rows, env.clone(), |class| {
+                self.visit_unique(ds, rows, env, |class| {
                     match class.and_then(|i| counts.get_mut(i)) {
                         Some(n) => *n += 1,
                         None => other += 1,
@@ -1900,8 +1906,8 @@ impl Renderer {
                 if !all {
                     // As `legend_with` lists them: the classes with a feature, and the fallback
                     // when it has one and draws something.
-                    let shown = self.legend_with(ds, rows, env);
-                    entries.retain(|e| e.count != Some(0) && (!e.fallback || shown.iter().any(|s| s.fallback)));
+                    let visible = self.fallback_draws(ds);
+                    entries.retain(|e| e.count != Some(0) && (!e.fallback || visible));
                 }
                 entries
             }

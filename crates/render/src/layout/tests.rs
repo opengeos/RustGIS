@@ -1464,10 +1464,10 @@ fn a_web_layers_legend_is_its_services_picture() {
     let red_rows =
         (0..pm.height()).filter(|&y| (0..pm.width()).any(|x| pm.pixel(x, y).is_some_and(|p| p.red() > 200 && p.green() < 60))).count();
     assert!(red_rows >= 2 * 63, "both pictures, {red_rows} rows");
-    let names: Vec<&str> = legend_rows(&map, None, &opts)
+    let names: Vec<String> = legend_rows(&map, None, &opts)
         .iter()
         .filter_map(|r| match r {
-            LegendRow::Head(n) => Some(*n),
+            LegendRow::Head(n) => Some(n.to_string()),
             _ => None,
         })
         .collect();
@@ -1795,7 +1795,13 @@ fn a_legends_rows_go_into_columns() {
     let (starts, fits) = flow_at(&rows, 3, 5.0 * LEGEND_ROW, (1e6, 1.0));
     assert_eq!((starts, fits), (vec![0, 5, 10], false));
     // A layer's name isn't left at the foot of a column; the last, with none under it, can be.
-    let heads = [LegendRow::Head("a"), LegendRow::Head("b"), LegendRow::Head("c"), LegendRow::Head("d"), LegendRow::Head("e")];
+    let heads = [
+        LegendRow::Head("a".into()),
+        LegendRow::Head("b".into()),
+        LegendRow::Head("c".into()),
+        LegendRow::Head("d".into()),
+        LegendRow::Head("e".into()),
+    ];
     assert_eq!(flow_at(&heads, 3, 3.0 * LEGEND_ROW, (1e6, 1.0)), (vec![0, 2], true));
 
     let sizes = legend_sizes_mm(&mut map, 1e6, true, false, (&[], &NO_LABELS)).unwrap();
@@ -8422,6 +8428,21 @@ fn a_legend_counts_the_features_of_each_row() {
     assert_eq!(rows(&mut map, false, true, &own), ["Cities (2)", "pts", "First (3)", "c99 (1)"]);
     // Every class listed: one with no feature says so.
     assert_eq!(rows(&mut map, true, true, &ClassLabels::NONE), ["Cities (2)", "pts", "c0 (3)", "c1 (0)", "c99 (1)"]);
+    // Over its diagram's rows a one-symbol layer's name is a heading, which still counts; those
+    // rows don't, and a classed layer's heading doesn't either.
+    for l in &mut map.layers {
+        l.diagram = Some(rustgis_map::DiagramSettings {
+            kind: rustgis_map::DiagramKind::Pie,
+            categories: vec![rustgis_map::DiagramCategory { field: "n".into(), colour: Rgba::rgb(255, 0, 0) }],
+            size: rustgis_map::DiagramSize::Fixed(12.0),
+            start_angle: 0.0,
+            background: None,
+            stroke: rustgis_map::DiagramSettings::default_stroke(),
+            stroke_width: 0.75,
+            labels: rustgis_map::DiagramLabel::None,
+        });
+    }
+    assert_eq!(rows(&mut map, false, true, &ClassLabels::NONE), ["Cities (2)", "n", "pts", "c0 (3)", "c99 (1)", "n"]);
 }
 
 /// Graduated Colors counts each range and its missing values.

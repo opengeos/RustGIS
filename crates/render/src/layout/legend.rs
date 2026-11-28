@@ -200,7 +200,7 @@ impl<'a> LegendOptions<'a> {
 /// the one the legend shows: the layer's label, if the legend gives it one.
 pub(super) enum LegendRow<'a> {
     Plain(&'a rustgis_map::Layer, std::borrow::Cow<'a, str>),
-    Head(&'a str),
+    Head(std::borrow::Cow<'a, str>),
     Class(&'a rustgis_map::Layer, LegendEntry),
     Picture(std::sync::Arc<rustgis_tiles::cache::Payload>),
 }
@@ -246,7 +246,7 @@ impl LegendRow<'_> {
     pub(super) fn text_width(&self, size: f32) -> f32 {
         let (shown, pt, bold) = match self {
             LegendRow::Plain(_, name) => (name.as_ref(), LEGEND_NAME_PT * size, false),
-            LegendRow::Head(name) => (*name, LEGEND_NAME_PT * size, true),
+            LegendRow::Head(name) => (name.as_ref(), LEGEND_NAME_PT * size, true),
             LegendRow::Class(_, en) => (en.label.as_str(), LEGEND_LABEL_PT * size, false),
             LegendRow::Picture(_) => return 0.0,
         };
@@ -957,7 +957,7 @@ pub(super) fn legend_rows_missing<'a>(
                     && let Some(p) = tile_legend(t, opts.scale, &mut missing)
                 {
                     if opts.names {
-                        rows.push(LegendRow::Head(opts.shown(&t.name)));
+                        rows.push(LegendRow::Head(opts.shown(&t.name).into()));
                     }
                     rows.push(LegendRow::Picture(p));
                 }
@@ -1006,13 +1006,15 @@ pub(super) fn legend_rows_missing<'a>(
             // A Unique Values layer that lists nothing draws nothing visible (#207); a raster has
             // no symbol of its own to show.
             if !l.is_raster() && !matches!(l.renderer, rustgis_map::Renderer::Unique { .. }) {
-                let name = opts.shown(&l.name);
-                rows.push(LegendRow::Plain(l, total.map_or_else(|| name.into(), |n| format!("{name} ({n})").into())));
+                rows.push(LegendRow::Plain(l, counted_name(opts.shown(&l.name), total)));
             }
             continue;
         }
         if opts.names {
-            rows.push(LegendRow::Head(opts.shown(&l.name)));
+            // A one-symbol layer counts beside its name over its diagram's rows too; a classed
+            // layer's numbers are on its rows.
+            let single = matches!(l.renderer, rustgis_map::Renderer::Single(_));
+            rows.push(LegendRow::Head(counted_name(opts.shown(&l.name), total.filter(|_| single))));
         }
         // The legend's own text for a class, by the label the layer gives it (#3187).
         let own = opts.class_labels.of(&l.name);
@@ -1028,6 +1030,11 @@ pub(super) fn legend_rows_missing<'a>(
         }));
     }
     (rows, missing)
+}
+
+/// A layer's name as its row shows it, ending in its number of features when the row counts them.
+fn counted_name(name: &str, count: Option<u64>) -> std::borrow::Cow<'_, str> {
+    count.map_or_else(|| name.into(), |n| format!("{name} ({n})").into())
 }
 
 /// The legend of a frame's map: its title, and its rows ([`legend_rows`]) under it in `columns`
