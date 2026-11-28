@@ -1603,11 +1603,67 @@ pub fn find_field_case_insensitive(ds: &Dataset, name: &str) -> Result<usize, St
     }
 }
 
-/// Union of polygons; rings are oriented first because the overlay infers its fill rule from
-/// the first ring's winding, and input files mix orientations.
-fn union_all<'a>(polys: impl IntoIterator<Item = &'a geo::Polygon<f64>>) -> MultiPolygon<f64> {
+/// Geo's polygon union, with consistent ring orientation so the fill rule follows the first ring.
+fn geo_union_all<'a>(polys: impl IntoIterator<Item = &'a geo::Polygon<f64>>) -> MultiPolygon<f64> {
     let oriented: Vec<geo::Polygon<f64>> = polys.into_iter().map(|p| p.orient(Direction::Default)).collect();
     geo::unary_union(oriented.iter())
+}
+
+/// Union a Dissolve group using consistently oriented rings and OGC extraction.
+/// Overlay masks use Geo's union to keep its rounding on shared boundaries.
+fn union_all<'a, P>(polys: P) -> MultiPolygon<f64>
+where
+    P: IntoIterator<Item = &'a geo::Polygon<f64>>,
+    P::IntoIter: Clone,
+{
+    use geo::{Winding, winding_order::WindingOrder};
+    use i_overlay9::core::{fill_rule::FillRule, overlay_rule::OverlayRule};
+    use i_overlay9::float::overlay::{FloatOverlay, OverlayOptions};
+    use i_overlay9::i_float::float::compatible::FloatPointCompatible;
+
+    // i_overlay 4.5 can loop forever during contour extraction. Restore geo::unary_union
+    // and remove the direct dependency once geo ships with i_overlay 9.
+    let polys = polys.into_iter();
+    let mut winding = None;
+    let mut supported = true;
+    let mut subject = Vec::new();
+    for poly in polys.clone() {
+        let (exterior, interiors) = poly.orient(Direction::Default).into_inner();
+        for ring in std::iter::once(exterior).chain(interiors) {
+            if winding.is_none() {
+                winding = ring.winding_order();
+            }
+            // Overlay closes paths implicitly. Polygon::new closes them again on output.
+            if let Some((_, open)) = ring.0.split_last() {
+                subject.push(
+                    open.iter()
+                        .map(|c| {
+                            let point = [c.x, c.y];
+                            supported &= point.is_in_safe_range();
+                            point
+                        })
+                        .collect::<Vec<_>>(),
+                );
+            }
+        }
+    }
+    // The new adapter panics outside its coordinate range. Keep geo's existing behavior there.
+    if !supported {
+        drop(subject);
+        return geo_union_all(polys);
+    }
+    let fill = if winding == Some(WindingOrder::CounterClockwise) { FillRule::Positive } else { FillRule::Negative };
+    let shapes =
+        FloatOverlay::with_subj_custom(&subject, OverlayOptions::<f64, i32>::ogc(), Default::default()).overlay(OverlayRule::Subject, fill);
+    MultiPolygon::new(
+        shapes
+            .into_iter()
+            .map(|shape| {
+                let mut rings = shape.into_iter().map(|path| path.into_iter().map(|[x, y]| (x, y)).collect());
+                geo::Polygon::new(rings.next().unwrap_or_else(geo::LineString::empty), rings.collect())
+            })
+            .collect(),
+    )
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1778,7 +1834,7 @@ fn buffer_with_limits(inp: &dyn Inputs, p: &Json, limit: usize, bytes: usize) ->
             crate::control::check()?;
             // The union isn't counted: the buffers' count ends here rather than stand at its end.
             crate::control::begin(0);
-            let u = union_all(all.iter().flat_map(|m| m.0.iter()));
+            let u = geo_union_all(all.iter().flat_map(|m| m.0.iter()));
             if u.coords_count() > limit {
                 return Err(VERTEX_BUDGET_ERROR.into());
             }
@@ -1818,7 +1874,7 @@ fn buffer_with_limits(inp: &dyn Inputs, p: &Json, limit: usize, bytes: usize) ->
 fn dissolved(g: &Geometry) -> std::borrow::Cow<'_, Geometry> {
     match g {
         Geometry::Polygon(polys) if polys.len() > 1 => to_multipolygon(g)
-            .and_then(|m| from_multipolygon(&union_all(m.0.iter())))
+            .and_then(|m| from_multipolygon(&geo_union_all(m.0.iter())))
             .map_or(std::borrow::Cow::Borrowed(g), std::borrow::Cow::Owned),
         _ => std::borrow::Cow::Borrowed(g),
     }
@@ -2151,7 +2207,7 @@ impl MaskCache {
 
     /// The union of the masks `near` names, from the cache, or made and kept there.
     fn union_of(&mut self, near: &[usize], masks: &[(MultiPolygon<f64>, Extent)]) -> Cow<'_, MultiPolygon<f64>> {
-        let make = || union_all(near.iter().filter_map(|i| masks.get(*i)).flat_map(|(m, _)| m.0.iter()));
+        let make = || geo_union_all(near.iter().filter_map(|i| masks.get(*i)).flat_map(|(m, _)| m.0.iter()));
         if self.big.as_ref().is_some_and(|(ids, _)| ids.as_slice() == near) {
             return match &self.big {
                 Some((_, mask)) => Cow::Borrowed(mask),
@@ -2231,7 +2287,7 @@ fn clip_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>, cache_bytes: Opti
             let ext = merc_extent(&m);
             // Union even one polygon: collapsed rings have no filled area. Keep the original
             // bounds too: rounding an edge must not hide a line the boolean overlay clips to it.
-            let mask = union_all(m.0.iter());
+            let mask = geo_union_all(m.0.iter());
             let ext = ext.union(&merc_extent(&mask));
             Ok(if mask.0.is_empty() { ClipMask::NoArea } else { ClipMask::Mask(mask, ext) })
         },
@@ -2462,7 +2518,7 @@ struct Zone {
 /// overlay can't take as they are, so several are unioned; one polygon is only oriented, so its
 /// edges stay exactly where they are.
 fn mask_of(poly: MultiPolygon<f64>) -> MultiPolygon<f64> {
-    if poly.0.len() > 1 { union_all(poly.0.iter()) } else { poly.orient(Direction::Default) }
+    if poly.0.len() > 1 { geo_union_all(poly.0.iter()) } else { poly.orient(Direction::Default) }
 }
 
 /// How an overlay tool uses its overlay polygons, for [`overlay_zones_on`].
@@ -2655,7 +2711,7 @@ fn rest_outside(g: &Geometry, whole: &Geometry, hit: &[&Zone]) -> Option<Geometr
     match hit {
         [] => Some(g.clone()),
         [only] => part(whole, &only.poly, false),
-        _ => part(whole, &union_all(hit.iter().flat_map(|z| z.poly.0.iter())), false),
+        _ => part(whole, &geo_union_all(hit.iter().flat_map(|z| z.poly.0.iter())), false),
     }
 }
 
@@ -3274,7 +3330,7 @@ fn split_on(inp: &dyn Inputs, p: &Json, threads: Option<usize>) -> Result<ToolRe
             |_, _, (_, polys, ..)| {
                 Ok::<_, String>(match polys.as_slice() {
                     [only] => std::borrow::Cow::Borrowed(&only.poly),
-                    _ => std::borrow::Cow::Owned(union_all(polys.iter().flat_map(|z| z.poly.0.iter()))),
+                    _ => std::borrow::Cow::Owned(geo_union_all(polys.iter().flat_map(|z| z.poly.0.iter()))),
                 })
             },
         )?;
@@ -7229,7 +7285,7 @@ fn tabulate_intersection(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, Strin
                             if near_unions.len() == MAX_CACHED_UNIONS {
                                 near_unions.pop_front();
                             }
-                            let union = union_all(near.iter().filter_map(|&zi| zone_list.get(zi)).flat_map(|z| z.mask.0.iter()));
+                            let union = geo_union_all(near.iter().filter_map(|&zi| zone_list.get(zi)).flat_map(|z| z.mask.0.iter()));
                             near_unions.push_back((near.clone(), union));
                         }
                         near_unions.back().and_then(|(_, union)| part(&whole, union, false))
@@ -7292,7 +7348,7 @@ fn tabulate_intersection(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, Strin
                 [one] => one,
                 parts => {
                     let polys: Vec<MultiPolygon<f64>> = parts.iter().filter_map(to_multipolygon).collect();
-                    let Some(g) = from_multipolygon(&union_all(polys.iter().flat_map(|m| m.0.iter()))) else {
+                    let Some(g) = from_multipolygon(&geo_union_all(polys.iter().flat_map(|m| m.0.iter()))) else {
                         let key: Vec<String> = zone.key.iter().map(ToString::to_string).collect();
                         return Err(format!(
                             "Tabulate Intersection: the parts of a class in the zone '{}' could not be combined",
@@ -9798,6 +9854,41 @@ mod tests {
             let Some(Geometry::Line(parts)) = &f.geometry else { panic!("a line") };
             let len: f64 = parts.iter().map(|p| Geodesic.length(&lonlat_line(p))).sum();
             assert_eq!(bits(&out.attrs[1]), bits(&Value::Float(len / 1e3)));
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn dissolve_union_finishes_extracting_contours() {
+        use geo::Validation;
+
+        let paths: Vec<Vec<(f64, f64)>> = serde_json::from_str(include_str!("../testdata/dissolve-contours.json")).unwrap();
+        let mut polys: Vec<_> = paths.into_iter().map(|path| geo::Polygon::new(path.into(), vec![])).collect();
+
+        // The old overlay only hits this dead end with enough segments for its fragmented
+        // solver. A disjoint rectangle covers the grid, so the small squares add no union area.
+        let (x, y, width, height) = (-123.796, 42.736, 0.013, 0.004);
+        let rectangle = |x, y, w, h| geo::Polygon::new(vec![(x, y), (x + w, y), (x + w, y + h), (x, y + h)].into(), vec![]);
+        let (dx, dy) = (width / 64.0, height / 64.0);
+        for row in 0..64 {
+            for col in 0..64 {
+                polys.push(rectangle(x + f64::from(col) * dx + dx / 4.0, y + f64::from(row) * dy + dy / 4.0, dx / 2.0, dy / 2.0));
+            }
+        }
+        polys.push(rectangle(x, y, width, height));
+
+        let (done, result) = std::sync::mpsc::channel();
+        let worker = std::thread::Builder::new().spawn(move || done.send(union_all(&polys)).unwrap()).unwrap();
+        // test-wait: bound the wait so a contour loop fails the test instead of hanging CI.
+        let union = result.recv_timeout(std::time::Duration::from_secs(15)).expect("polygon union did not finish");
+        worker.join().unwrap();
+        assert!(union.is_valid());
+        let mut areas: Vec<_> = union.0.iter().map(geo::Area::unsigned_area).collect();
+        areas.sort_by(f64::total_cmp);
+        assert_eq!(areas.len(), 2);
+        // Areas of the merged Census polygons and the separate rectangle, computed with GEOS.
+        for (area, expected) in areas.into_iter().zip([1.575_209_1e-5, 5.2e-5]) {
+            assert!((area - expected).abs() < 1e-10, "area {area}, expected {expected}");
         }
     }
 
@@ -13815,7 +13906,7 @@ mod tests {
                 .iter()
                 .filter_map(|r| masks.features[*r].geometry.as_ref().and_then(to_multipolygon))
                 .collect();
-            let whole = union_all(polys.iter().flat_map(|m| m.0.iter()));
+            let whole = geo_union_all(polys.iter().flat_map(|m| m.0.iter()));
             let features = &inp.0.0["features"];
             let expected: Vec<_> = rows(&inp, &p, "input", features)
                 .into_iter()
@@ -13962,7 +14053,7 @@ mod tests {
     /// no area or a coordinate that isn't finite, whatever the mask.
     #[test]
     fn a_feature_is_placed_without_an_overlay_only_clear_of_the_mask_edges() {
-        let mask = union_all(to_multipolygon(&sq(0.0, 0.0, 1.0)).unwrap().0.iter());
+        let mask = geo_union_all(to_multipolygon(&sq(0.0, 0.0, 1.0)).unwrap().0.iter());
         let edges = MaskEdges::new(&mask);
         let place = |g: &Geometry| {
             let whole = to_multipolygon(g).unwrap();
@@ -14124,7 +14215,7 @@ mod tests {
         for y in [-1e-12, -0.01] {
             lines.push(Some(Geometry::Line(vec![vec![Coord::new(0.1, y), Coord::new(0.9, y)]])), vec![]);
         }
-        let whole = union_all(to_multipolygon(masks.features[0].geometry.as_ref().unwrap()).unwrap().0.iter());
+        let whole = geo_union_all(to_multipolygon(masks.features[0].geometry.as_ref().unwrap()).unwrap().0.iter());
         let expected: Vec<_> = lines.features.iter().filter_map(|f| part(f.geometry.as_ref().unwrap(), &whole, true)).collect();
         // The integer overlay snaps the near line onto the edge, but leaves the far line out.
         assert_eq!(expected.len(), 1);
@@ -15323,7 +15414,7 @@ mod tests {
         let (x, y, d) = (-89.7, 35.05, 0.01);
         let tract = poly(&[(x, y), (x + d, y + d), (x - d, y + d), (x, y)]);
         let town = poly(&[(x, y), (x + d, y + d), (x + 6.0 * d, y - 0.3 * d), (x, y)]);
-        let mask = union_all(to_multipolygon(&town).unwrap().0.iter());
+        let mask = geo_union_all(to_multipolygon(&town).unwrap().0.iter());
         // The old part path keeps this sliver: exactly-zero checks miss it. Keep its coordinates
         // bit for bit, and count the two output features rather than dropped boundary contacts.
         let expected = part(&tract, &mask, true).unwrap();
