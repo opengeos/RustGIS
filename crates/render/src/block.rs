@@ -706,8 +706,8 @@ fn layer_cut(
 /// symbology gives the polygon under each stretch of the box's edge (the topmost where polygons
 /// overlap, among the rows its definition query keeps), and the walls' own colour off every
 /// polygon, with the patterns over it grown or shrunk as the layer's reference scale asks at the
-/// map scale 1:`scale` (`Layer::size_factor`), as the ground's are. Else the walls' colour all
-/// along.
+/// map scale 1:`scale` (`Layer::size_factor`), as the ground's are, and styled at that scale (its
+/// fill's `@map_scale`). Else the walls' colour all along.
 ///
 /// Runs on the thread drawing the frame. The pieces the polygons cut the sides into
 /// ([`units`]) are kept in [`LAST`], so they are read again only after an edit of the layer, a
@@ -731,7 +731,8 @@ pub(crate) fn runs(map: &Map, b: &Block, scale: f64, env: &rustgis_data::query::
     let Some(layer) = layer else { return (0..b.sides()).map(whole).collect() };
     crate::note_held_read(layer);
     let cut = layer_cut(layer, b, false, None, env);
-    let styler = layer.styler_with(env.clone());
+    // Styled at the drawing scale, as the layer is on the ground and the top band is.
+    let styler = layer.styler_with(env.at_scale(Some(scale)));
     let grow = layer.size_factor(scale);
     // The rows along the walls whose gradients or shapebursts the walls leave off, said once
     // with their number (see `crate::approximations`).
