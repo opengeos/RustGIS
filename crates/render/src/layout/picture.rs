@@ -20,10 +20,10 @@ pub fn picture_draws(image: &str) -> bool {
     crate::picture::decoded(image).is_some()
 }
 
-/// What a picture's grey box says: the name of its file when it has one it keeps (never its
-/// folders), else "Picture".
-fn picture_label(source: Option<&str>) -> &str {
-    source.filter(|s| picture_source_kept(s)).and_then(picture_file_name).unwrap_or("Picture")
+/// The file name a picture's grey box says, when it has a file it keeps (never its folders);
+/// none, and the box says "Picture", otherwise.
+fn picture_label(source: Option<&str>) -> Option<&str> {
+    source.filter(|s| picture_source_kept(s)).and_then(picture_file_name)
 }
 
 /// `name` as it fits in `room`, measured by [`text::measure`] at `size`: whole when it fits, else
@@ -45,17 +45,17 @@ fn fitted_name(name: &str, room: f32, size: f32) -> String {
 }
 
 /// A picture's grey box with no image to draw: "Picture" in it as [`placeholder`] draws it for a
-/// picture with no file, else its file's name ([`picture_label`]) cut to the box, 2 pt in from
-/// each side.
+/// picture with no file name ([`picture_label`]), else its file's name cut to the box, 2 pt in
+/// from each side, whatever the name.
 pub(super) fn draw_picture_box(pm: &mut Canvas, r: Rect, source: Option<&str>, ppp: f64) {
-    let label = picture_label(source);
-    if label == "Picture" {
-        placeholder(pm, r, "Picture", ppp);
-    } else {
-        // `placeholder` draws its label 10 × 1.33 × `ppp` pixels tall, which text::measure
-        // measures at 10 × `ppp`.
-        let room = r.width() - 4.0 * ppp as f32;
-        placeholder(pm, r, &fitted_name(label, room, 10.0 * ppp as f32), ppp);
+    match picture_label(source) {
+        None => placeholder(pm, r, "Picture", ppp),
+        Some(name) => {
+            // `placeholder` draws its label 10 × 1.33 × `ppp` pixels tall, which text::measure
+            // measures at 10 × `ppp`.
+            let room = r.width() - 4.0 * ppp as f32;
+            placeholder(pm, r, &fitted_name(name, room, 10.0 * ppp as f32), ppp);
+        }
     }
 }
 
@@ -170,11 +170,11 @@ mod tests {
     /// the word Picture, as before.
     #[test]
     fn a_picture_without_an_image_is_labelled_with_its_file_name() {
-        assert_eq!(picture_label(None), "Picture");
-        assert_eq!(picture_label(Some("")), "Picture");
-        assert_eq!(picture_label(Some("/data/logos/north.png")), "north.png");
-        assert_eq!(picture_label(Some(r"\\server\share\logo.jpg")), "logo.jpg");
-        assert_eq!(picture_label(Some("https://example.invalid/north.png")), "Picture");
+        assert_eq!(picture_label(None), None);
+        assert_eq!(picture_label(Some("")), None);
+        assert_eq!(picture_label(Some("/data/logos/north.png")), Some("north.png"));
+        assert_eq!(picture_label(Some(r"\\server\share\logo.jpg")), Some("logo.jpg"));
+        assert_eq!(picture_label(Some("https://example.invalid/north.png")), None);
         // Drawn: a named box differs from the plain one, and from one named otherwise.
         let page = |source: Option<&str>| one_picture_page("", source);
         let draw = |l: Layout| render(&l, &mut Vec::new(), 96.0, &PageInfo::default()).unwrap();
@@ -184,6 +184,16 @@ mod tests {
         assert_ne!(north.data(), south.data());
         // A source the rule doesn't keep draws as none.
         assert_eq!(draw(page(Some("https://example.invalid/north.png"))).data(), plain.data());
+        // A file named Picture is fitted to its box as any name is: in a box too narrow for the
+        // word, it is cut, where a picture with no file draws the word whole.
+        let narrow = |source: Option<&str>| {
+            let mut l = Layout::new("Pictures", 100.0, 80.0);
+            let kind = ElementKind::Picture { image: String::new(), source: source.map(String::from) };
+            l.add("Picture", (10.0, 10.0, 6.0, 4.0), kind);
+            draw(l)
+        };
+        assert_eq!(picture_label(Some("/data/logos/Picture")), Some("Picture"));
+        assert_ne!(narrow(Some("/data/logos/Picture")).data(), narrow(None).data());
     }
 
     /// Only the file's name reaches the page, the SVG and the PDF: two folders, the same drawing.
