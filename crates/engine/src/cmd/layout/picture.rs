@@ -105,14 +105,12 @@ pub(in crate::cmd::layout) fn picture_given(p: &Value) -> Result<Option<GivenPic
         return Err(PICTURE_BOTH.into());
     }
     let picture = match (given("image"), picture_path_param(p)?) {
-        (Some(Value::String(image)), _) => {
-            GivenPicture {
-                image: crate::cmd::graphics::checked_picture(image.trim().to_string())?,
-                source: None,
-                unremembered: false,
-                given_image: true,
-            }
-        }
+        (Some(Value::String(image)), _) => GivenPicture {
+            image: crate::cmd::graphics::checked_picture(image.trim().to_string())?,
+            source: None,
+            unremembered: false,
+            given_image: true,
+        },
         (Some(_), _) => return Err(PICTURE_IMAGE.into()),
         (None, Some(path)) => {
             let image = crate::cmd::graphics::picture_file(path)?;
