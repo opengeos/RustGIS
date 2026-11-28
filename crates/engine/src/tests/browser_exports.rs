@@ -600,6 +600,10 @@ fn items(files: &Files, browser: bool) -> Session {
         ("presentation.mapPage", json!({})),
         ("notebook.new", json!({"name": "Notes"})),
         ("model.new", json!({"name": "Ring", "steps": [{"tool": "buffer", "params": {"input": "Places", "distance": 5}}]})),
+        (
+            "data.relate",
+            json!({"name": "Kin", "origin": "training", "originKey": "class", "destination": "training", "destinationKey": "class"}),
+        ),
     ] {
         s.run(command, &params).unwrap_or_else(|e| panic!("{command}: {e}"));
     }
@@ -652,6 +656,7 @@ fn file_cases() -> Vec<(&'static str, Value, &'static str, bool)> {
         ("share.geodataService", json!({}), "data.zip", false),
         ("share.webTool", json!({"model": "Ring"}), "tool.rgistool", true),
         ("share.webScene", json!({}), "scene.gltf", false),
+        ("share.linkChart", json!({}), "chart.html", true),
     ]
 }
 

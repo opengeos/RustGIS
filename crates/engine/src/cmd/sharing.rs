@@ -340,7 +340,7 @@ fn share_bytes_inner(s: &mut Session, kind: &str, p: &Value, out: Output<'_>) ->
             Ok((m.name.clone(), scene.bytes, m.name.clone()))
         }
         "linkChart" => {
-            let (item, note) = link_chart_item(s, p)?;
+            let (item, note) = link_chart_item(s, p, out)?;
             if let Some(note) = note {
                 s.notify(note, false);
             }
@@ -350,16 +350,21 @@ fn share_bytes_inner(s: &mut Session, kind: &str, p: &Value, out: Output<'_>) ->
     }
 }
 
-/// A link chart's shared item, and what its limits leave out when they do (#1947), for whoever
-/// shares it to say: `share` says it last, after "Shared …", so the status bar keeps it.
-fn link_chart_item(s: &Session, p: &Value) -> Result<((String, Vec<u8>, String), Option<String>), String> {
+/// A link chart's shared item for the file `out` describes (a downloaded one is stopped as it
+/// passes its room), and what its limits leave out when they do (#1947), for whoever shares it to
+/// say: `share` says it last, after "Shared …", so the status bar keeps it.
+fn link_chart_item(s: &Session, p: &Value, out: Output<'_>) -> Result<((String, Vec<u8>, String), Option<String>), String> {
     let rel = ps(p, "relationship").map(str::to_string);
-    let (html, left) = link_chart(s, rel.as_deref())?;
+    let mut left = None;
+    let html = out.file(|page| {
+        left = link_chart(s, rel.as_deref(), page)?;
+        Ok(())
+    })?;
     // Every relationship is recorded with an empty source (a relationship may be called
     // "Relationships").
     let name = rel.clone().unwrap_or_else(|| "Relationships".into());
     let note = left.map(|left| format!("{name}: {left}"));
-    Ok(((name, html.into_bytes(), rel.unwrap_or_default()), note))
+    Ok(((name, html, rel.unwrap_or_default()), note))
 }
 
 /// A map to share, its layer groups folded into their layers (the shared formats have none).
@@ -420,7 +425,8 @@ fn share(s: &mut Session, p: &Value, kind: &str) -> CmdResult {
         return download_share(s, p, kind);
     }
     let written = s.notice_mark();
-    let ((name, bytes, source), chart_note) = if kind == "linkChart" { link_chart_item(s, p)? } else { (share_bytes(s, kind, p)?, None) };
+    let ((name, bytes, source), chart_note) =
+        if kind == "linkChart" { link_chart_item(s, p, Output::UNLIMITED)? } else { (share_bytes(s, kind, p)?, None) };
     let ext = KINDS.iter().find(|k| k.0 == kind).map_or("bin", |k| k.1);
     let path = target(s, p, &name, ext)?;
     // A share of another kind (or an uploaded file) at that path isn't replaced.
@@ -476,7 +482,7 @@ fn download_share(s: &mut Session, p: &Value, kind: &str) -> CmdResult {
     super::exports::download_command(s, &format!("share.{kind}"), p, |s, out| {
         let path = out.path;
         let ((name, bytes, _), chart_note) =
-            if kind == "linkChart" { link_chart_item(s, p)? } else { (share_bytes_within(s, kind, p, out)?, None) };
+            if kind == "linkChart" { link_chart_item(s, p, out)? } else { (share_bytes_within(s, kind, p, out)?, None) };
         note_label_classes(s, kind, p);
         note_export(s, kind, p, path);
         if let Some(note) = chart_note {
@@ -606,6 +612,19 @@ fn html_escape(t: &str) -> String {
 /// JSON for embedding in a `<script>`: `</` can't close the script.
 fn script_json(v: &Value) -> String {
     serde_json::to_string(v).unwrap_or_default().replace("</", "<\\/").replace("<!--", "<\\!--")
+}
+
+/// `values` written to `page` as a script's array, as [`script_json`] writes one, a value at a
+/// time, so a page held to a limit stops there.
+fn write_script_array(page: &mut dyn std::io::Write, values: impl Iterator<Item = Value>) -> std::io::Result<()> {
+    page.write_all(b"[")?;
+    for (i, value) in values.enumerate() {
+        if i > 0 {
+            page.write_all(b",")?;
+        }
+        page.write_all(script_json(&value).as_bytes())?;
+    }
+    page.write_all(b"]")
 }
 
 fn css(c: Rgba) -> String {
@@ -1525,17 +1544,45 @@ fn viewpoint(m: &Map, at: &rustgis_map::Camera, view: (f64, f64)) -> (Value, Val
     (camera, node)
 }
 
+/// A link chart's node: a feature's layer and row, and the relationship it came into the chart
+/// by.
+type ChartNode<'a> = (&'a Layer, usize, usize);
+
+/// A feature's node, made while the chart has room for one. `index` holds the nodes by map, layer
+/// id and row.
+fn chart_node<'a>(
+    index: &mut HashMap<(usize, u32, usize), usize>,
+    nodes: &mut Vec<ChartNode<'a>>,
+    mi: usize,
+    l: &'a Layer,
+    row: usize,
+    gi: usize,
+) -> Option<usize> {
+    if let Some(&i) = index.get(&(mi, l.id, row)) {
+        return Some(i);
+    }
+    if nodes.len() >= MAX_NODES {
+        return None;
+    }
+    nodes.push((l, row, gi));
+    index.insert((mi, l.id, row), nodes.len() - 1);
+    Some(nodes.len() - 1)
+}
+
 /// A link chart: the features joined by the map's relationships, as a node-link diagram (a
 /// self-contained page with a force layout; drag nodes, hover for names).
-/// The page, and what the chart's limits leave out of it when they do: said by whoever shares
-/// it, and on the page (#1947).
-fn link_chart(s: &Session, rel: Option<&str>) -> Result<(String, Option<String>), String> {
+/// The page is written to `page` as it is made, a feature or a link at a time. Gives what the
+/// chart's limits leave out of it when they do: said by whoever shares it, and on the page
+/// (#1947).
+fn link_chart(s: &Session, rel: Option<&str>, page: &mut dyn std::io::Write) -> Result<Option<String>, String> {
     let rels = link_relationships(s, rel)?;
     let find = |name: &str| link_layer(s, name).and_then(|(m, l)| s.project.maps.iter().position(|p| std::ptr::eq(p, m)).map(|i| (i, l)));
-    let mut nodes: Vec<Value> = Vec::new();
+    // Each node's layer, row and relationship; its name is read as the page is written.
+    let mut nodes: Vec<ChartNode> = Vec::new();
     // Nodes by map, layer id and row (same-named layers in different maps stay apart).
     let mut index: HashMap<(usize, u32, usize), usize> = HashMap::new();
-    let mut links: Vec<Value> = Vec::new();
+    // Each link's two nodes and its relationship's name.
+    let mut links: Vec<(usize, usize, &str)> = Vec::new();
     let label = |l: &Layer, row: usize| -> String {
         let ds = &l.dataset;
         let fi = ds
@@ -1544,18 +1591,6 @@ fn link_chart(s: &Session, rel: Option<&str>) -> Result<(String, Option<String>)
             .position(|f| f.name.eq_ignore_ascii_case("name"))
             .or_else(|| ds.fields.iter().position(|f| !f.ty.is_numeric()));
         fi.map(|i| ds.value(row, i).to_string()).unwrap_or_else(|| format!("{} {}", l.name, row + 1))
-    };
-    // A feature's node, made while the chart has room for one.
-    let node = |index: &mut HashMap<(usize, u32, usize), usize>, nodes: &mut Vec<Value>, mi: usize, l: &Layer, row: usize, gi: usize| {
-        if let Some(&i) = index.get(&(mi, l.id, row)) {
-            return Some(i);
-        }
-        if nodes.len() >= MAX_NODES {
-            return None;
-        }
-        nodes.push(json!({"name": label(l, row), "layer": l.name, "group": gi}));
-        index.insert((mi, l.id, row), nodes.len() - 1);
-        Some(nodes.len() - 1)
     };
     // What the chart would show without its limits, to say what they leave out: each related
     // feature once, and each relation.
@@ -1634,14 +1669,15 @@ fn link_chart(s: &Session, rel: Option<&str>) -> Result<(String, Option<String>)
                     }
                     continue;
                 }
-                let (Some(from), Some(to)) =
-                    (a.or_else(|| node(&mut index, &mut nodes, om, o, orow, gi)), node(&mut index, &mut nodes, dm, d, drow, gi))
-                else {
+                let (Some(from), Some(to)) = (
+                    a.or_else(|| chart_node(&mut index, &mut nodes, om, o, orow, gi)),
+                    chart_node(&mut index, &mut nodes, dm, d, drow, gi),
+                ) else {
                     i += 1;
                     continue;
                 };
                 a = Some(from);
-                links.push(json!({"source": from, "target": to, "relationship": r.name}));
+                links.push((from, to, r.name.as_str()));
                 drawn_here += 1;
                 i += 1;
             }
@@ -1655,7 +1691,7 @@ fn link_chart(s: &Session, rel: Option<&str>) -> Result<(String, Option<String>)
     let title = rel.unwrap_or("Relationships");
     let mut legend = String::new();
     let layers: Vec<String> = {
-        let mut v: Vec<String> = nodes.iter().filter_map(|n| n["layer"].as_str().map(str::to_string)).collect();
+        let mut v: Vec<String> = nodes.iter().map(|(l, ..)| l.name.clone()).collect();
         v.sort();
         v.dedup();
         v
@@ -1667,12 +1703,26 @@ fn link_chart(s: &Session, rel: Option<&str>) -> Result<(String, Option<String>)
     if let Some(left) = &left {
         let _ = write!(legend, "<br><small>Shows {}.</small>", html_escape(left));
     }
-    let html = format!(
+    let failed = |e: std::io::Error| e.to_string();
+    write!(
+        page,
         r#"<!doctype html><html><head><meta charset="utf-8"><title>{title}</title>
 <style>html,body{{margin:0;height:100%;font-family:system-ui,sans-serif;background:#fafbfc}}svg{{width:100%;height:100%}}line{{stroke:#9aa5b1;stroke-opacity:.6}}circle{{stroke:#fff;stroke-width:1.5;cursor:grab}}
 #k{{position:fixed;left:8px;top:8px;background:#fffe;padding:6px 10px;border-radius:6px;font-size:13px;box-shadow:0 1px 4px #0002}}#k span{{margin-right:10px}}#k i{{display:inline-block;width:10px;height:10px;border-radius:5px;margin-right:4px}}</style></head>
 <body><div id="k"><b>{title}</b><br>{legend}</div><svg id="s"></svg><script>
-const N={nodes},E={links},LY={layers};const s=document.getElementById('s'),ns='http://www.w3.org/2000/svg';
+const N="#,
+        title = html_escape(title),
+        legend = legend,
+    )
+    .map_err(failed)?;
+    let nodes = nodes.iter().map(|&(l, row, gi)| json!({"name": label(l, row), "layer": l.name, "group": gi}));
+    write_script_array(page, nodes).map_err(failed)?;
+    page.write_all(b",E=").map_err(failed)?;
+    let links = links.iter().map(|&(from, to, name)| json!({"source": from, "target": to, "relationship": name}));
+    write_script_array(page, links).map_err(failed)?;
+    write!(
+        page,
+        r#",LY={layers};const s=document.getElementById('s'),ns='http://www.w3.org/2000/svg';
 N.forEach((n,i)=>{{const r=30+Math.sqrt(i)*12;n.x=innerWidth/2+Math.cos(i*2.4)*r;n.y=innerHeight/2+Math.sin(i*2.4)*r;n.vx=0;n.vy=0}});
 const ln=E.map(e=>{{const l=document.createElementNS(ns,'line');s.appendChild(l);return l}});
 const deg=N.map(()=>0);E.forEach(e=>{{deg[e.source]++;deg[e.target]++}});
@@ -1689,18 +1739,15 @@ cs.forEach((c,i)=>{{c.setAttribute('cx',N[i].x);c.setAttribute('cy',N[i].y)}});
 const moving=N.reduce((m,a)=>Math.max(m,Math.abs(a.vx),Math.abs(a.vy)),0);if(moving>0.05||drag!==null)requestAnimationFrame(tick);else running=false}}wake();
 </script></body></html>
 "#,
-        title = html_escape(title),
-        legend = legend,
-        nodes = script_json(&Value::Array(nodes)),
-        links = script_json(&Value::Array(links)),
         layers = script_json(&json!(layers)),
-    );
+    )
+    .map_err(failed)?;
     let said = left.map(|left| {
         format!(
             "the link chart shows {left}; a link chart takes at most {MAX_NODES} features, {MAX_LINKS} links and {MAX_FEATURE_LINKS} links from one feature in each relationship"
         )
     });
-    Ok((html, said))
+    Ok(said)
 }
 
 /// Resolves saved/default and literal locator paths without reading their contents.
