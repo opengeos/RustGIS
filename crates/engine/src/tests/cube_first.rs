@@ -136,6 +136,60 @@ fn first_reads_only_the_dates_that_fill_a_cell() {
     assert_eq!(read.len(), 4, "{read:?}");
 }
 
+/// A later date first leaves out whole still counts the pixels its item's mask file doesn't
+/// cover and says them, as a read would: date A, clear everywhere, fills every cell; B's mask
+/// covers only the west half, so B is read for its east half's 32 pixels, and C, wholly masked,
+/// isn't. The raster is A's.
+#[test]
+fn first_leaving_a_date_out_still_says_its_pixels_outside_their_mask() {
+    use crate::cmd::stac::READERS;
+    use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster};
+    READERS.with(|r| r.set(Some(1)));
+    let west = {
+        let t = GeoTransform { origin_x: 10.0, origin_y: 46.0, pixel_width: 0.125, pixel_height: -0.125 };
+        let r = Raster::new("m", 4, 8, vec![vec![4.0; 32]], t, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
+        rustgis_data::raster::cogwrite::write(&r, 0).unwrap()
+    };
+    let mut files: Vec<(String, Vec<u8>)> =
+        (0..3).map(|k| (format!("/b{k}.tif"), cog((0..64).map(|c| red(k, c % 8, c / 8)).collect(), 8))).collect();
+    files.push(("/m0.tif".into(), cog(vec![4.0; 64], 8)));
+    files.push(("/m1.tif".into(), west));
+    files.push(("/m2.tif".into(), cog(vec![4.0; 64], 8)));
+    let (files, _) = serve_ranged_files(files);
+    let features: Vec<String> = DATES[..3]
+        .iter()
+        .enumerate()
+        .map(|(k, d)| {
+            format!(
+                r#"{{"type": "Feature", "id": "s{k}", "collection": "s2", "bbox": [10, 45, 11, 46], "geometry": null,
+                   "properties": {{"datetime": "{d}T00:00:00Z", "bdc:tiles": ["t1"]}},
+                   "assets": {{"B04": {{"href": "{files}/b{k}.tif"}}, "SCL": {{"href": "{files}/m{k}.tif"}}}}}}"#
+            )
+        })
+        .collect();
+    let search = format!(r#"{{"type": "FeatureCollection", "features": [{}]}}"#, features.join(","));
+    let api = format!("{}/v1", serve_routes(vec![("/v1/search", search)], 16));
+    let mut s = Session::new(Project::default());
+    for stat in ["first", "firstDate"] {
+        let mark = s.notice_mark();
+        let p = json!({"url": api, "collection": "s2", "asset": "B04", "bbox": [10, 45, 11, 46], "start": "2024-01-01", "end": "2024-02-29",
+            "mask": {"asset": "SCL", "keep": [4]}, "stat": stat, "order": "date"});
+        let (r, read) = bands_read(&files, || reduce(&mut s, &p));
+        for (c, v) in r.bands[0].data.iter().enumerate() {
+            let want = if stat == "first" { red(0, c % 8, c / 8) } else { day(0) };
+            assert_eq!(*v, want, "{stat} cell {c}");
+        }
+        assert_eq!(read, ["b0.tif", "b1.tif"], "{stat}");
+        let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+        assert_eq!(
+            said.iter().filter(|t| t.contains("32 band pixel(s) with a value lie outside") && t.contains("/m1.tif")).count(),
+            1,
+            "{stat}: {said:?}"
+        );
+    }
+    READERS.with(|r| r.set(None));
+}
+
 /// FirstDate over a stack: the date of the value first takes, by year one layer each with an
 /// empty cell where no date has a value, a legend of the dates, and what it can't be asked.
 #[test]

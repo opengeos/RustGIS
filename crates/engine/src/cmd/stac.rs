@@ -1107,6 +1107,11 @@ const SHARE_PIXELS: f64 = 1_000_000.0;
 #[cfg(not(target_arch = "wasm32"))]
 type Mask = (String, Vec<f32>);
 
+/// A mask file's header, its level read for a band window, and the window's columns' and rows'
+/// pixels in it (`None` off the file): [`StacCube::mask_place`].
+#[cfg(not(target_arch = "wasm32"))]
+type MaskPlace = (std::sync::Arc<crate::render::rustgis_tiles::cog::Info>, usize, Vec<Option<u32>>, Vec<Option<u32>>);
+
 /// A window of a mask's values (band 1), as [`read_values_counted_blocking`] reads them: refused
 /// when `f32` rounded any (whole numbers past 2^24, in a 32- or 64-bit band), whose classes or
 /// bits can't then be told; `stop` heard within the read.
@@ -1143,6 +1148,29 @@ fn level_near(layout: &rustgis_data::raster::cog::Layout, size: f64) -> usize {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl StacCube {
+    /// Where a band window's pixels (as [`mask_window`](Self::mask_window) takes them) fall in
+    /// the mask file `href`: its header, the level read, and each column's and row's pixel of it
+    /// (`None` off the file). Only the header is read, cached per address.
+    fn mask_place(
+        &self,
+        href: &str,
+        lt: &rustgis_data::raster::GeoTransform,
+        cols: (u32, u32),
+        rows: (u32, u32),
+    ) -> Result<MaskPlace, String> {
+        use super::cube_mask::nearest;
+        use crate::render::rustgis_tiles::cog;
+        let info = cog::info_blocking(href)?;
+        if info.layout.crs != self.crs {
+            return Err(crate::sources::message_with_address(href, "a mask in another coordinate system than its band"));
+        }
+        let level = level_near(&info.layout, lt.pixel_width.abs());
+        let lv = info.layout.levels.get(level).ok_or_else(|| crate::sources::message_with_address(href, "a mask with no image"))?;
+        let mt = info.layout.transform_of(lv);
+        let xs = nearest(lt.origin_x, lt.pixel_width, cols, mt.origin_x, mt.pixel_width, lv.width);
+        let ys = nearest(lt.origin_y, lt.pixel_height, rows, mt.origin_y, mt.pixel_height, lv.height);
+        Ok((info, level, xs, ys))
+    }
     /// The mask's say over a window of a band file's level (`lt` its grid; columns `cols`, rows
     /// `rows`), pixel by pixel in the window's order: the mask file `href` read at its level
     /// nearest the band's pixels, each band pixel taking the mask pixel holding its centre;
@@ -1155,17 +1183,8 @@ impl StacCube {
         cols: (u32, u32),
         rows: (u32, u32),
     ) -> Result<Vec<Option<bool>>, String> {
-        use super::cube_mask::{nearest, span};
-        use crate::render::rustgis_tiles::cog;
-        let info = cog::info_blocking(href)?;
-        if info.layout.crs != self.crs {
-            return Err(crate::sources::message_with_address(href, "a mask in another coordinate system than its band"));
-        }
-        let level = level_near(&info.layout, lt.pixel_width.abs());
-        let lv = info.layout.levels.get(level).ok_or_else(|| crate::sources::message_with_address(href, "a mask with no image"))?;
-        let mt = info.layout.transform_of(lv);
-        let xs = nearest(lt.origin_x, lt.pixel_width, cols, mt.origin_x, mt.pixel_width, lv.width);
-        let ys = nearest(lt.origin_y, lt.pixel_height, rows, mt.origin_y, mt.pixel_height, lv.height);
+        use super::cube_mask::span;
+        let (info, level, xs, ys) = self.mask_place(href, lt, cols, rows)?;
         let (Some(mc), Some(mr)) = (span(&xs), span(&ys)) else { return Ok(vec![None; xs.len() * ys.len()]) };
         let m = mask_values(&info, href, level, mc, mr, &std::sync::atomic::AtomicBool::new(false))?;
         let across = (mc.1 - mc.0) as usize;
@@ -1400,6 +1419,29 @@ impl StacCube {
             self.met.store(true, std::sync::atomic::Ordering::Relaxed);
             let cols = (fc0 as u32, fc1 as u32);
             let rows = (fr0 as u32, fr1 as u32);
+            let across = (fc1 - fc0) as usize;
+            let pixels = across * (fr1 - fr0) as usize;
+            // The piece's cell of the window's pixel `i`.
+            let cell_of = |i: usize| {
+                let row = ((fr0 - dy - top_f) as usize + i / across) / f as usize;
+                let col = ((fc0 - dx) as usize + i % across) / f as usize;
+                row * w as usize + col
+            };
+            // First: an item whose window's cells all hold a better date's value, its mask file
+            // covering the window (its header says), could fill none and has no pixel to say
+            // outside its mask, so neither its mask nor its bands are read.
+            if let Some(decided) = decided
+                && (0..pixels).all(|i| decided(cell_of(i)))
+                && match (&self.mask, mask) {
+                    (Some(_), Some((m, _))) => {
+                        let (_, _, xs, ys) = self.mask_place(m, &lt, cols, rows)?;
+                        xs.iter().chain(&ys).all(Option::is_some)
+                    }
+                    _ => self.mask.is_none(),
+                }
+            {
+                continue;
+            }
             // A masked cube's pixels go in only where the same item's mask lets them through.
             let keep = match (&self.mask, mask) {
                 (Some(test), Some(m)) => Some(self.mask_window(m, test, &lt, cols, rows)?),
@@ -1408,20 +1450,12 @@ impl StacCube {
                 (Some(_), None) => return Err(crate::sources::message_with_address(href, "has no quality band to mask its cells by")),
                 _ => None,
             };
-            let across = (fc1 - fc0) as usize;
-            // The piece's cell of the window's pixel `i`.
-            let cell_of = |i: usize| {
-                let row = ((fr0 - dy - top_f) as usize + i / across) / f as usize;
-                let col = ((fc0 - dx) as usize + i % across) / f as usize;
-                row * w as usize + col
-            };
             // First: an item that could fill no cell (each pixel the mask lets through falls in one
             // holding a better date's value) isn't read; one with pixels its mask doesn't cover
             // is, so they are counted and said as they would be.
             if let Some(decided) = decided
                 && !keep.as_ref().is_some_and(|k| k.iter().any(Option::is_none))
             {
-                let pixels = across * (fr1 - fr0) as usize;
                 let lets = |i: usize| keep.as_ref().is_none_or(|k| k.get(i).copied().flatten() == Some(true));
                 if !(0..pixels).any(|i| lets(i) && !decided(cell_of(i))) {
                     continue;

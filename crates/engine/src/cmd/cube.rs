@@ -1237,12 +1237,19 @@ pub fn add_outputs(s: &mut Session, rasters: Vec<Raster>, dates: usize) -> CmdRe
 }
 
 /// The values held by a raster's first band when it names its classes (firstDate's dates), in
-/// order, named or not; none when it names none.
+/// order, named or not; none when it names none. Only distinct values are kept, and no more than
+/// one past what a Unique Values renderer draws, so a large layer of few dates takes no copy of
+/// its cells.
 fn class_values(r: &Raster) -> Vec<f64> {
     let Some(b) = r.bands.first().filter(|b| b.classes.iter().any(|n| !n.is_empty())) else { return Vec::new() };
-    let mut held: Vec<f64> = b.data.iter().filter(|v| v.is_finite()).map(|v| f64::from(*v)).collect();
+    let mut held = std::collections::HashSet::new();
+    for v in b.data.iter().filter(|v| v.is_finite()) {
+        if held.insert(v.to_bits()) && held.len() > rustgis_map::raster::MAX_UNIQUE_VALUES {
+            break;
+        }
+    }
+    let mut held: Vec<f64> = held.into_iter().map(|v| f64::from(f32::from_bits(v))).collect();
     held.sort_by(f64::total_cmp);
-    held.dedup();
     held
 }
 
@@ -2006,16 +2013,18 @@ impl ReduceRun {
             };
             let cube = self.cube.as_ref();
             // Step `k`'s piece. First's leaves out a date none of whose cells it could fill: once
-            // each of its group's cells holds a better-ranked date's value, it reads nothing, and
-            // until then the cube leaves out what it can tell can't fill a cell. The ranks
-            // compared, not whether a cell is filled, so a worse date read first never makes a
-            // better one look idle: the outputs are the same whatever order the dates come in.
+            // each of its group's cells holds a better-ranked date's value, an unmasked cube's
+            // date reads nothing (a masked one's is still asked, so that its items' pixels outside
+            // their mask files are counted and said as a read would), and until then the cube
+            // leaves out what it can tell can't fill a cell. The ranks compared, not whether a cell
+            // is filled, so a worse date read first never makes a better one look idle: the
+            // outputs are the same whatever order the dates come in.
             let read = |k: usize| -> Result<Option<(Arc<Raster>, usize)>, String> {
                 let i = self.steps.get(k).copied().unwrap_or(0);
                 let ranks = if skips { self.group_of.get(k).and_then(|g| ranks_of(*g)) } else { None };
                 let Some(ranks) = ranks else { return cube.slice_of(i, piece) };
                 let at = rank.get(k).copied().unwrap_or(0);
-                if !ranks.0.is_empty() && ranks.0.iter().all(|r| r.load(Ordering::Relaxed) < at) {
+                if !cube.masked() && !ranks.0.is_empty() && ranks.0.iter().all(|r| r.load(Ordering::Relaxed) < at) {
                     return Ok(None);
                 }
                 cube.first_slice_of(i, piece, &|c| ranks.0.get(c).is_some_and(|r| r.load(Ordering::Relaxed) < at))
@@ -2555,6 +2564,27 @@ mod tests {
                 assert_eq!(read, [2, 3]);
             }
         }
+    }
+
+    /// A named band's values come back distinct and in order, however many cells hold them, and
+    /// no more than one past what a Unique Values renderer draws.
+    #[test]
+    fn class_values_are_the_distinct_values_up_to_the_renderers_limit() {
+        use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster};
+        let t = GeoTransform { origin_x: 0.0, origin_y: 1.0, pixel_width: 1.0, pixel_height: -1.0 };
+        let named = |cells: Vec<f32>| {
+            let mut r = Raster::new("d", cells.len() as u32, 1, vec![cells], t, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
+            r.bands[0].classes = vec!["a".into()];
+            r
+        };
+        let few: Vec<f32> = (0..3000).map(|c| [20.0, -1.0, 5.0, f32::NAN][c % 4]).collect();
+        assert_eq!(super::class_values(&named(few)), [-1.0, 5.0, 20.0]);
+        let max = rustgis_map::raster::MAX_UNIQUE_VALUES;
+        let many: Vec<f32> = (0..max * 4).map(|c| c as f32).collect();
+        assert_eq!(super::class_values(&named(many)).len(), max + 1);
+        let mut unnamed = named(vec![1.0, 2.0]);
+        unnamed.bands[0].classes.clear();
+        assert!(super::class_values(&unnamed).is_empty());
     }
 
     /// First by year holds one year's totals at a time, as the other statistics do, whether its
