@@ -1427,6 +1427,19 @@ pub(crate) struct Totals {
     at: u32,
 }
 
+#[cfg(test)]
+thread_local! {
+    /// For tests: the totals open on this thread, and the most open at once.
+    pub(crate) static OPEN_TOTALS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+#[cfg(test)]
+impl Drop for Totals {
+    fn drop(&mut self) {
+        OPEN_TOTALS.with(|o| o.set((o.get().0.saturating_sub(1), o.get().1)));
+    }
+}
+
 impl Totals {
     /// Totals for `cells` cells over up to `dates` dates (the median holds them all), their memory
     /// reserved first: totals the machine can't hold are an error, not a crash (#1291).
@@ -1477,6 +1490,10 @@ impl Totals {
             per: dates,
             rank,
             at: 0,
+        })
+        .inspect(|_| {
+            #[cfg(test)]
+            OPEN_TOTALS.with(|o| o.set((o.get().0 + 1, o.get().1.max(o.get().0 + 1))));
         })
     }
 
@@ -1827,8 +1844,9 @@ impl ReduceRun {
     /// Reads the slices piece by piece ([`TimeCube::pieces`]), each folded into its group's
     /// running totals, and puts the pieces' outputs together row by row: a raster for each group
     /// (for frequency, one for each class of each group). `done` counts the slices read; `cancel`
-    /// stops it between slices. First and firstDate read the dates in rank order (each group's
-    /// best first, alone) and leave out what can't change a cell ([`ReduceRun::skips`]).
+    /// stops it between slices. First and firstDate read one group after another, its dates in
+    /// rank order (its best first, alone), and leave out what can't change a cell
+    /// ([`ReduceRun::skips`]).
     pub fn run(&self, cancel: &AtomicBool, done: &AtomicUsize) -> Result<Vec<Raster>, String> {
         let outputs = self.groups.len();
         // A slot for each band of each group (one band but for "assets"; firstDate's one date for
@@ -1870,8 +1888,10 @@ impl ReduceRun {
             // last. Dates are asked for in order: read one at a time they come in order, so a
             // summary by year holds one year's totals at a time; with several readers (a STAC
             // cube's) they come as read, and the groups open are those of the dates in flight, a
-            // couple of years' for 16-day composites. Totals are f64 and the outputs f32, so the
-            // order of arrival can move an output's last bit at most, and only then.
+            // couple of years' for 16-day composites. First and firstDate read a group at a time,
+            // so they hold one group's totals however their ranks order the dates. Totals are f64
+            // and the outputs f32, so the order of arrival can move an output's last bit at most,
+            // and only then.
             let mut totals: Vec<Option<Totals>> = (0..slots).map(|_| None).collect();
             let mut seen = vec![0usize; outputs];
             let mut finished: Vec<Option<(Columns, Vec<f32>)>> = vec![None; slots];
@@ -1981,14 +2001,23 @@ impl ReduceRun {
                 }
                 cube.first_slice_of(i, piece, &|c| ranks.get(c).is_some_and(|r| r.load(Ordering::Relaxed) < at))
             };
-            // Leaving dates out, each group's best-ranked date is read before the rest (the groups'
-            // together), so they can be left out against it rather than read alongside it: over a
-            // dry season, the clearest date often fills every cell.
-            let mut lead = vec![false; outputs];
-            let (leads, rest): (Vec<usize>, Vec<usize>) = asked
-                .iter()
-                .partition(|k| skips && self.group_of.get(**k).and_then(|g| lead.get_mut(*g)).is_some_and(|l| !std::mem::replace(l, true)));
-            for wave in [&leads, &rest].into_iter().filter(|w| !w.is_empty()) {
+            // First's groups are read one after another, each's dates in rank order, so one
+            // group's totals are open at a time however the ranks interleave them. Leaving dates
+            // out, a group's best-ranked date is read before the rest, so they can be left out
+            // against it rather than read alongside it: over a dry season, the clearest date often
+            // fills every cell. The others' dates are read as asked, all at once.
+            let mut waves: Vec<Vec<usize>> = Vec::new();
+            if self.stat.picks_first() {
+                for g in 0..outputs {
+                    let dates: Vec<usize> = asked.iter().copied().filter(|k| self.group_of.get(*k) == Some(&g)).collect();
+                    let lead = usize::from(skips).min(dates.len());
+                    waves.push(dates[..lead].to_vec());
+                    waves.push(dates[lead..].to_vec());
+                }
+            } else {
+                waves.push(asked.clone());
+            }
+            for wave in waves.iter().filter(|w| !w.is_empty()) {
                 // Changes and the longest run compare each date with the one before: read in date order.
                 read_each(
                     cube,
@@ -2470,6 +2499,69 @@ mod tests {
                 assert_eq!(dates, [2.0, 2.0, 3.0]);
                 assert_eq!(read, [2, 3]);
             }
+        }
+    }
+
+    /// First by year holds one year's totals at a time, as the other statistics do, whether its
+    /// dates are ranked by date or by a clear share that interleaves the years.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn first_by_year_holds_one_years_totals_at_a_time() {
+        use super::{OPEN_TOTALS, Order, Stat};
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, AtomicUsize};
+        const DATES: [f64; 6] = [0.0, super::DAY, 400.0 * super::DAY, 401.0 * super::DAY, 800.0 * super::DAY, 801.0 * super::DAY];
+        /// Six dates, two a year, each with a value in one of two cells; clear shares that rank
+        /// them 1, 3, 5, 4, 2, 0, across the years.
+        struct Cube;
+        impl super::TimeCube for Cube {
+            fn dates(&self) -> &[f64] {
+                &DATES
+            }
+            fn label(&self) -> String {
+                "stub".into()
+            }
+            fn masked(&self) -> bool {
+                true
+            }
+            fn clear_share(&self, i: usize, _: &AtomicBool) -> Result<Option<f64>, String> {
+                Ok([0.1, 0.9, 0.2, 0.8, 0.3, 0.7].get(i).copied())
+            }
+            fn slice(&self, i: usize) -> Result<Option<(Arc<super::Raster>, usize)>, String> {
+                let v = i as f32;
+                let cells = if i.is_multiple_of(2) { vec![v, f32::NAN] } else { vec![f32::NAN, v] };
+                let t = rustgis_data::raster::GeoTransform { origin_x: 0.0, origin_y: 1.0, pixel_width: 1.0, pixel_height: -1.0 };
+                let r = super::Raster::new(
+                    "s",
+                    2,
+                    1,
+                    vec![cells],
+                    t,
+                    rustgis_data::raster::Crs::LonLat,
+                    None,
+                    super::raster::ColorHint::Gray,
+                    "Float32",
+                )
+                .map_err(|e| e.to_string())?;
+                Ok(Some((Arc::new(r), 0)))
+            }
+        }
+        for (stat, order) in
+            [(Stat::Mean, Order::Date), (Stat::First, Order::Date), (Stat::First, Order::Clear), (Stat::FirstDate, Order::Clear)]
+        {
+            let run = super::ReduceRun {
+                cube: Box::new(Cube),
+                steps: (0..6).collect(),
+                stat,
+                min_share: 0.0,
+                group_of: vec![0, 0, 1, 1, 2, 2],
+                groups: (0..3).map(|y| (format!("y{y}"), 2)).collect(),
+                order,
+            };
+            OPEN_TOTALS.with(|o| o.set((0, 0)));
+            let out = run.run(&AtomicBool::new(false), &AtomicUsize::new(0)).unwrap();
+            assert_eq!(out.len(), 3);
+            assert_eq!(OPEN_TOTALS.with(|o| o.get().1), 1, "{stat:?} by {order:?}: the most years' totals open at once");
         }
     }
 
