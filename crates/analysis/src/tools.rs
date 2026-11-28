@@ -5151,17 +5151,42 @@ fn idw_interpolation(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     let field = s(p, "field");
     let fi = find_field_case_insensitive(ds, field)?;
     let mut pts: Vec<(Coord, f64)> = Vec::new();
-    for r in rows(inp, p, "input", ds) {
-        let Some(g) = ds.features.get(r).and_then(|f| f.geometry.as_ref()) else { continue };
-        let Some(v) = ds.value(r, fi).as_f64().filter(|v| v.is_finite()) else { continue };
+    let mut left_out = PointsLeftOut::default();
+    let picked = rows(inp, p, "input", ds);
+    // Cancel is looked at between features; one feature with millions of vertices is read through
+    // `for_each_coord` without a look inside it.
+    for (n, r) in picked.iter().copied().enumerate() {
+        if n % LOOK_EVERY == 0 {
+            crate::control::check()?;
+        }
+        let Some(g) = ds.features.geometry(r) else {
+            left_out.no_geometry += 1;
+            continue;
+        };
+        let Some(v) = ds.value(r, fi).as_f64().filter(|v| v.is_finite()) else {
+            left_out.no_value += 1;
+            continue;
+        };
+        let (kept, skipped) = (pts.len(), left_out.no_place);
         g.for_each_coord(|c| {
             if c.is_finite() {
                 pts.push((c, v));
+            } else {
+                left_out.no_place += 1;
             }
         });
+        // A geometry with no coordinate at all (an empty multipoint) is an empty one.
+        if pts.len() == kept && left_out.no_place == skipped {
+            left_out.no_geometry += 1;
+        }
     }
+    let why = left_out.why();
     let (crs, crs_note) = raster_crs_in(ds, inp.work_crs(), inp.project_crs(), p, "IDW Interpolation")?;
     let (pts, beyond_note) = points_from(inp.work_crs(), crs, pts)?;
+    // Too few points to go on: the error says what was left out of them.
+    if pts.len() < 2 {
+        return Err(with_note(with_note("interpolation needs at least two points with values".into(), &beyond_note), &why));
+    }
     let extent = match s(p, "extent").trim() {
         "" => {
             let mut e = Extent::EMPTY;
@@ -5197,7 +5222,7 @@ fn idw_interpolation(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     let bytes = rustgis_data::raster::geotiff::write(&r, 0).map_err(|e| e.to_string())?;
     let msg = format!("IDW Interpolation: {} × {} cells from {} points", r.width, r.height, pts.len());
     Ok(ToolResult {
-        losses: Vec::new(),
+        losses: left_out.losses("IDW Interpolation", picked.len(), field, "a coordinate is not a finite number"),
         output: Output::Layers(vec![OutputLayer::Raster { file_name: format!("{name}.tif"), name, bytes }]),
         messages: std::iter::once(msg).chain(beyond_note).chain(crs_note).collect(),
     })
@@ -5223,42 +5248,69 @@ fn kriging_interpolation(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, Strin
     let field = s(p, "field");
     let fi = find_field_case_insensitive(ds, field)?;
     let mut raw_pts: Vec<(Coord, f64)> = Vec::new();
-    for (n, r) in rows(inp, p, "input", ds).into_iter().enumerate() {
+    let mut left_out = PointsLeftOut::default();
+    let picked = rows(inp, p, "input", ds);
+    for (n, r) in picked.iter().copied().enumerate() {
         if n % LOOK_EVERY == 0 {
             crate::control::check()?;
         }
-        let Some(g) = ds.features.get(r).and_then(|f| f.geometry.as_ref()) else { continue };
-        let Some(v) = ds.value(r, fi).as_f64().filter(|v| v.is_finite()) else { continue };
+        let Some(g) = ds.features.geometry(r) else {
+            left_out.no_geometry += 1;
+            continue;
+        };
+        let Some(v) = ds.value(r, fi).as_f64().filter(|v| v.is_finite()) else {
+            left_out.no_value += 1;
+            continue;
+        };
+        let (kept, skipped) = (raw_pts.len(), left_out.no_place);
         match g {
             Geometry::Point(c) => {
                 if c.is_finite() {
                     raw_pts.push((*c, v));
+                } else {
+                    left_out.no_place += 1;
                 }
             }
             Geometry::MultiPoint(cs) => {
                 for c in cs {
                     if c.is_finite() {
                         raw_pts.push((*c, v));
+                    } else {
+                        left_out.no_place += 1;
                     }
                 }
             }
             Geometry::Line(_) | Geometry::Polygon(_) => {
                 let ext = g.extent();
-                if !ext.is_empty() {
+                if ext.is_empty() {
+                    // The extent skips coordinates that aren't numbers: empty with coordinates, all were rejected.
+                    left_out.no_place += g.coord_count();
+                } else {
+                    // Coordinates that aren't numbers, which the extent skipped, are left out too.
+                    let mut finite = 0;
+                    g.for_each_coord(|c| finite += usize::from(c.is_finite()));
+                    left_out.no_place += g.coord_count() - finite;
                     let center = Coord::new((ext.min_x + ext.max_x) * 0.5, (ext.min_y + ext.max_y) * 0.5);
                     if center.is_finite() {
                         raw_pts.push((center, v));
+                    } else {
+                        left_out.no_place += 1;
                     }
                 }
             }
         }
+        // A geometry that gave no point and no coordinate that isn't a number is an empty one.
+        if raw_pts.len() == kept && left_out.no_place == skipped {
+            left_out.no_geometry += 1;
+        }
     }
+    let why = left_out.why();
     let (crs, crs_note) = raster_crs_in(ds, inp.work_crs(), inp.project_crs(), p, "Ordinary Kriging")?;
     let (raw_pts, beyond_note) = points_from(inp.work_crs(), crs, raw_pts)?;
     // Points at the same place as one, so the kriging matrix isn't singular.
     let pts = merge_coincident(raw_pts)?;
     if pts.len() < 2 {
-        return Err(with_note("kriging needs at least two points with values".into(), &beyond_note));
+        return Err(with_note(with_note("kriging needs at least two points with values".into(), &beyond_note), &why));
     }
 
     let extent = match s(p, "extent").trim() {
@@ -5320,7 +5372,12 @@ fn kriging_interpolation(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, Strin
     let var_name = format!("{name}_variance");
     let msg = format!("Ordinary Kriging ({}): {} × {} cells from {} points", model.as_str(), r.width, r.height, pts.len());
     Ok(ToolResult {
-        losses: Vec::new(),
+        losses: left_out.losses(
+            "Ordinary Kriging",
+            picked.len(),
+            field,
+            "a coordinate (or, for a line or polygon, its centre) is not a finite number",
+        ),
         output: Output::Layers(vec![
             OutputLayer::Raster { file_name: format!("{name}.tif"), name, bytes: pred_bytes },
             OutputLayer::Raster { file_name: format!("{var_name}.tif"), name: var_name, bytes: var_bytes },
@@ -5331,6 +5388,61 @@ fn kriging_interpolation(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, Strin
 
 /// How many points or rows Kriging's preparation goes through between two looks at Cancel.
 const LOOK_EVERY: usize = 4096;
+
+/// What an interpolation leaves out of its input, by kind, each counted.
+#[derive(Default)]
+struct PointsLeftOut {
+    /// Features with no geometry, or an empty one.
+    no_geometry: usize,
+    /// Features whose value is empty or not a finite number.
+    no_value: usize,
+    /// Points whose coordinate is not a finite number.
+    no_place: usize,
+}
+
+impl PointsLeftOut {
+    /// One loss per kind that happened, each with its count: `total` features were read, from `field`.
+    fn losses(&self, tool: &str, total: usize, field: &str, place: &str) -> Vec<rustgis_data::loss::LossMessage> {
+        use rustgis_data::loss::{LossCode, LossMessage};
+        let mut losses = Vec::new();
+        if self.no_geometry > 0 {
+            losses.push(LossMessage {
+                code: LossCode::DroppedFeature,
+                text: format!("{tool}: {} of {total} feature(s) left out: they have no geometry, or an empty one", self.no_geometry),
+            });
+        }
+        if self.no_value > 0 {
+            losses.push(LossMessage {
+                code: LossCode::DroppedFeature,
+                text: format!(
+                    "{tool}: {} of {total} feature(s) left out: their {field} value is empty or not a finite number",
+                    self.no_value
+                ),
+            });
+        }
+        if self.no_place > 0 {
+            losses.push(LossMessage {
+                code: LossCode::DroppedGeometry,
+                text: format!("{tool}: {} coordinate(s) left out: {place}", self.no_place),
+            });
+        }
+        losses
+    }
+
+    /// What was left out, for the error of a run with too few points to go on.
+    fn why(&self) -> Option<String> {
+        let parts: Vec<String> = [
+            (self.no_geometry, "with no geometry"),
+            (self.no_value, "whose value isn't a number"),
+            (self.no_place, "coordinate(s) that aren't numbers"),
+        ]
+        .into_iter()
+        .filter(|(n, _)| *n > 0)
+        .map(|(n, what)| format!("{n} {what}"))
+        .collect();
+        (!parts.is_empty()).then(|| format!("{} left out", parts.join(", ")))
+    }
+}
 
 /// Kriging's sample points with those at the same place (within 1e-9 in x and in y) as one, their
 /// values averaged: in x then y order, each point joins the latest point kept before it that is
@@ -12237,6 +12349,138 @@ mod tests {
         let near = serde_json::json!({"input": "pts", "select": "pts", "distance": 10.0});
         crate::run_with("selectByLocation", &m, &near, &control).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(control.progress(), Some((40, 40)));
+    }
+
+    /// A layer of three good points and three that interpolation can't use: no geometry, a null value,
+    /// a coordinate that isn't a number.
+    fn lossy_points() -> Map {
+        let mut pts = Dataset::new("lossy", GeometryType::Point, vec![Field::new("v", FieldType::Double)]);
+        for (x, y, v) in [(0.5, 0.5, 1.0), (1.5, 0.5, 2.0), (1.0, 1.5, 3.0)] {
+            pts.push(Some(Geometry::Point(Coord::new(x, y))), vec![Value::Float(v)]);
+        }
+        pts.push(None, vec![Value::Float(4.0)]);
+        pts.push(Some(Geometry::Point(Coord::new(1.0, 1.0))), vec![Value::Null]);
+        pts.push(Some(Geometry::Point(Coord::new(f64::NAN, 1.0))), vec![Value::Float(5.0)]);
+        Map(HashMap::from([("lossy".to_string(), pts)]))
+    }
+
+    /// Features interpolation leaves out are said, one notice per kind with a count; a layer that loses
+    /// none says nothing.
+    #[test]
+    fn interpolation_says_the_features_it_leaves_out() {
+        use rustgis_data::loss::LossCode::{DroppedFeature, DroppedGeometry};
+        let m = lossy_points();
+        for (tool, name, place) in [
+            ("idwInterpolation", "IDW Interpolation", "a coordinate is not a finite number"),
+            ("kriging", "Ordinary Kriging", "a coordinate (or, for a line or polygon, its centre) is not a finite number"),
+        ] {
+            let p = serde_json::json!({"input": "lossy", "field": "v", "extent": "0,0,2,2", "pixelSize": 0.5});
+            let r = crate::run(tool, &m, &p).unwrap_or_else(|e| panic!("{tool}: {e}"));
+            let got: Vec<(rustgis_data::loss::LossCode, String)> = r.losses.iter().map(|l| (l.code, l.text.clone())).collect();
+            let want = vec![
+                (DroppedFeature, format!("{name}: 1 of 6 feature(s) left out: they have no geometry, or an empty one")),
+                (DroppedFeature, format!("{name}: 1 of 6 feature(s) left out: their v value is empty or not a finite number")),
+                (DroppedGeometry, format!("{name}: 1 coordinate(s) left out: {place}")),
+            ];
+            assert_eq!(got, want, "{tool}");
+        }
+        // Clean input: no loss.
+        let clean = inputs();
+        for tool in ["idwInterpolation", "kriging"] {
+            let p = serde_json::json!({"input": "pts", "field": "v", "extent": "0,0,2,2", "pixelSize": 0.5});
+            let r = crate::run(tool, &clean, &p).unwrap_or_else(|e| panic!("{tool}: {e}"));
+            assert!(r.losses.is_empty(), "{tool}: {:?}", r.losses);
+        }
+    }
+
+    /// Kriging counts the coordinates of a line or polygon it rejects as such, not as a feature with
+    /// no geometry; an empty line is the geometry-less one.
+    #[test]
+    fn kriging_counts_rejected_line_coordinates_as_coordinates() {
+        use rustgis_data::loss::LossCode::{DroppedFeature, DroppedGeometry};
+        let mut ds = Dataset::new("lines", GeometryType::Polyline, vec![Field::new("v", FieldType::Double)]);
+        for (x, y, v) in [(0.5, 0.5, 1.0), (1.5, 0.5, 2.0), (1.0, 1.5, 3.0)] {
+            ds.push(Some(Geometry::Point(Coord::new(x, y))), vec![Value::Float(v)]);
+        }
+        let bad = vec![Coord::new(f64::NAN, 1.0), Coord::new(1.0, f64::INFINITY), Coord::new(f64::NAN, f64::NAN)];
+        ds.push(Some(Geometry::Line(vec![bad])), vec![Value::Float(4.0)]);
+        ds.push(Some(Geometry::Line(vec![])), vec![Value::Float(5.0)]);
+        let m = Map(HashMap::from([("lines".to_string(), ds)]));
+        let p = serde_json::json!({"input": "lines", "field": "v", "extent": "0,0,2,2", "pixelSize": 0.5});
+        let r = crate::run("kriging", &m, &p).unwrap_or_else(|e| panic!("{e}"));
+        let got: Vec<(rustgis_data::loss::LossCode, String)> = r.losses.iter().map(|l| (l.code, l.text.clone())).collect();
+        let place = "a coordinate (or, for a line or polygon, its centre) is not a finite number";
+        let want = vec![
+            (DroppedFeature, "Ordinary Kriging: 1 of 5 feature(s) left out: they have no geometry, or an empty one".to_string()),
+            (DroppedGeometry, format!("Ordinary Kriging: 3 coordinate(s) left out: {place}")),
+        ];
+        assert_eq!(got, want);
+    }
+
+    /// A line or polygon with some coordinates that aren't numbers still gets its centre from the
+    /// rest, and the ones its extent skipped are counted as coordinates left out.
+    #[test]
+    fn kriging_counts_skipped_coordinates_of_a_partly_finite_line_and_polygon() {
+        use rustgis_data::loss::LossCode::DroppedGeometry;
+        let mut ds = Dataset::new("lines", GeometryType::Polyline, vec![Field::new("v", FieldType::Double)]);
+        for (x, y, v) in [(0.5, 0.5, 1.0), (1.5, 0.5, 2.0)] {
+            ds.push(Some(Geometry::Point(Coord::new(x, y))), vec![Value::Float(v)]);
+        }
+        let line = vec![Coord::new(0.5, 1.0), Coord::new(f64::NAN, 1.0), Coord::new(1.5, 1.5), Coord::new(1.0, f64::INFINITY)];
+        ds.push(Some(Geometry::Line(vec![line])), vec![Value::Float(3.0)]);
+        let ring =
+            vec![Coord::new(0.0, 0.0), Coord::new(f64::NAN, f64::NAN), Coord::new(1.0, 0.0), Coord::new(1.0, 1.0), Coord::new(0.0, 0.0)];
+        ds.push(Some(Geometry::Polygon(vec![vec![ring]])), vec![Value::Float(4.0)]);
+        let m = Map(HashMap::from([("lines".to_string(), ds)]));
+        let p = serde_json::json!({"input": "lines", "field": "v", "extent": "0,0,2,2", "pixelSize": 0.5});
+        let r = crate::run("kriging", &m, &p).unwrap_or_else(|e| panic!("{e}"));
+        let got: Vec<(rustgis_data::loss::LossCode, String)> = r.losses.iter().map(|l| (l.code, l.text.clone())).collect();
+        let place = "a coordinate (or, for a line or polygon, its centre) is not a finite number";
+        assert_eq!(got, vec![(DroppedGeometry, format!("Ordinary Kriging: 3 coordinate(s) left out: {place}"))]);
+    }
+
+    /// With too few points left, the error says what was left out.
+    #[test]
+    fn interpolation_with_too_few_points_says_why() {
+        let mut pts = Dataset::new("few", GeometryType::Point, vec![Field::new("v", FieldType::Double)]);
+        pts.push(Some(Geometry::Point(Coord::new(0.5, 0.5))), vec![Value::Float(1.0)]);
+        pts.push(Some(Geometry::Point(Coord::new(1.5, 1.5))), vec![Value::Null]);
+        pts.push(Some(Geometry::Point(Coord::new(1.0, 1.0))), vec![Value::Null]);
+        let m = Map(HashMap::from([("few".to_string(), pts)]));
+        for tool in ["idwInterpolation", "kriging"] {
+            let e = crate::run(tool, &m, &serde_json::json!({"input": "few", "field": "v"})).err().unwrap_or_default();
+            assert!(e.contains("at least two points"), "{tool}: {e}");
+            assert!(e.ends_with("(2 whose value isn't a number left out)"), "{tool}: {e}");
+        }
+        // Nothing usable at all: the error still says what was left out.
+        let mut none = Dataset::new("none", GeometryType::Point, vec![Field::new("v", FieldType::Double)]);
+        none.push(None, vec![Value::Float(1.0)]);
+        let m = Map(HashMap::from([("none".to_string(), none)]));
+        for tool in ["idwInterpolation", "kriging"] {
+            let e = crate::run(tool, &m, &serde_json::json!({"input": "none", "field": "v"})).err().unwrap_or_default();
+            assert!(e.ends_with("(1 with no geometry left out)"), "{tool}: {e}");
+        }
+    }
+
+    /// IDW looks at Cancel while it reads its points, as Kriging does, not only once its grid is
+    /// being made: the same run over more features looks once more for each 4096 of them.
+    #[test]
+    fn idw_interpolation_looks_at_cancel_while_it_reads_its_points() {
+        let looks = |features: usize| {
+            let mut pts = Dataset::new("many", GeometryType::Point, vec![Field::new("v", FieldType::Double)]);
+            for i in 0..features {
+                let (x, y) = ((i % 100) as f64 / 100.0, (i / 100 % 100) as f64 / 100.0);
+                pts.push(Some(Geometry::Point(Coord::new(x, y))), vec![Value::Float(i as f64)]);
+            }
+            let m = Map(HashMap::from([("many".to_string(), pts)]));
+            let control = crate::control::Control::cancelled_at_look(u64::MAX);
+            let p = serde_json::json!({"input": "many", "field": "v", "extent": "0,0,1,1", "pixelSize": 1});
+            crate::run_with("idwInterpolation", &m, &p, &control).unwrap_or_else(|e| panic!("{e}"));
+            control.looked()
+        };
+        // Features 0, 4096 and 8192 are looked at, against feature 0 alone.
+        let (few, many) = (looks(2), looks(2 * LOOK_EVERY + 1));
+        assert!(many >= few + 2, "{few} looks over 2 features, {many} over {}", 2 * LOOK_EVERY + 1);
     }
 
     #[test]

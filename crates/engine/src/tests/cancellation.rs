@@ -370,6 +370,7 @@ pub(super) fn long_commands(boundaries: bool) {
         ("convexHull", json!({"input": "Countries", "group": "None", "output": "Hulls_each"})),
         ("convexHull", json!({"input": "Countries", "group": "All", "output": "Hulls_all"})),
         ("kernelDensity", json!({"input": "Cities", "crs": "EPSG:3857", "pixelSize": if boundaries { 2000 } else { 1000000 }})),
+        ("idwInterpolation", json!({"input": "Cities", "field": "pop_max", "pixelSize": if boundaries { 0.01 } else { 1.0 }})),
         ("kriging", json!({"input": "Cities", "field": "pop_max", "pixelSize": if boundaries { 0.01 } else { 1.0 }})),
         ("tabulateArea", json!({"raster": dem, "zones": "Countries"})),
         ("tabulateIntersection", json!({"zones": "Countries", "classes": "Squares", "includeEmptyZones": true})),
