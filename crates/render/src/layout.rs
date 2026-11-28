@@ -378,8 +378,7 @@ fn draw_page(
     let mut counted = Vec::new();
     for e in layout.elements.iter().filter(visible) {
         if let ElementKind::Legend { frame: f, all_classes, show_no_data, show_counts, exclude, .. } = &e.kind
-            && let classes = !*all_classes
-            && !shown.iter().any(|(id, no_data, _)| id == f && no_data == show_no_data)
+            && let classes = (!*all_classes && !shown.iter().any(|(id, no_data, _)| id == f && no_data == show_no_data))
             && (classes || show_counts.shown())
             && let Some(&(_, mi, cam, fw, fh)) = frame(*f)
             && let Some(map) = maps.get_mut(mi)

@@ -305,54 +305,57 @@ fn a_streamed_legend_is_measured_with_its_numbers() {
     }
 }
 
+/// A map frame of the map `"m"` and a legend of it that counts features.
+fn counts_page(all_classes: bool) -> rustgis_map::layout::Layout {
+    use rustgis_map::layout::{ElementKind, Layout};
+    let mut page = Layout::new("Counts", 120.0, 90.0);
+    let frame = page.add(
+        "Frame",
+        (5.0, 5.0, 50.0, 50.0),
+        ElementKind::MapFrame {
+            map: "m".into(),
+            center: Coord::new(0.0, 0.0),
+            scale: 1e6,
+            bearing: 0.0,
+            pitch: 0.0,
+            shape: Default::default(),
+            grid: None,
+            sections: Vec::new(),
+            extent_of: None,
+            extent_color: rustgis_map::layout::INDICATOR_COLOR,
+            extent_width: rustgis_map::layout::INDICATOR_WIDTH,
+            border_color: rustgis_map::layout::FRAME_BORDER_COLOR,
+            border_width: rustgis_map::layout::FRAME_BORDER_WIDTH,
+        },
+    );
+    page.add(
+        "Legend",
+        (60.0, 5.0, 55.0, 80.0),
+        ElementKind::Legend {
+            frame,
+            title: String::new(),
+            all_classes,
+            hide_other: false,
+            show_no_data: false,
+            exclude: Vec::new(),
+            columns: 1,
+            labels: BTreeMap::new(),
+            color: None,
+            text_size: rustgis_map::layout::LEGEND_TEXT_PT,
+            fit: rustgis_map::layout::LegendFit::Manual,
+            show_layer_names: rustgis_map::layout::LayerNames::Shown,
+            class_labels: Default::default(),
+            show_counts: rustgis_map::layout::FeatureCounts::from_shown(true),
+        },
+    );
+    page
+}
+
 /// The page draws a streamed layer's numbers as it does a loaded one's, whether the legend lists
 /// every class or what its frame draws; a count that fails stops the page, naming the source.
 #[test]
 fn a_page_counts_a_streamed_layer() {
-    use rustgis_map::layout::{ElementKind, Layout};
-    let page = |all_classes| {
-        let mut page = Layout::new("Counts", 120.0, 90.0);
-        let frame = page.add(
-            "Frame",
-            (5.0, 5.0, 50.0, 50.0),
-            ElementKind::MapFrame {
-                map: "m".into(),
-                center: Coord::new(0.0, 0.0),
-                scale: 1e6,
-                bearing: 0.0,
-                pitch: 0.0,
-                shape: Default::default(),
-                grid: None,
-                sections: Vec::new(),
-                extent_of: None,
-                extent_color: rustgis_map::layout::INDICATOR_COLOR,
-                extent_width: rustgis_map::layout::INDICATOR_WIDTH,
-                border_color: rustgis_map::layout::FRAME_BORDER_COLOR,
-                border_width: rustgis_map::layout::FRAME_BORDER_WIDTH,
-            },
-        );
-        page.add(
-            "Legend",
-            (60.0, 5.0, 55.0, 80.0),
-            ElementKind::Legend {
-                frame,
-                title: String::new(),
-                all_classes,
-                hide_other: false,
-                show_no_data: false,
-                exclude: Vec::new(),
-                columns: 1,
-                labels: BTreeMap::new(),
-                color: None,
-                text_size: rustgis_map::layout::LEGEND_TEXT_PT,
-                fit: rustgis_map::layout::LegendFit::Manual,
-                show_layer_names: rustgis_map::layout::LayerNames::Shown,
-                class_labels: Default::default(),
-                show_counts: rustgis_map::layout::FeatureCounts::from_shown(true),
-            },
-        );
-        page
-    };
+    let page = counts_page;
     // The legend element alone: the frame's own drawing reads a GeoPackage by view.
     let draw = |page: &Layout, map: &Map| {
         let legend = page.elements[1].id;
@@ -368,5 +371,25 @@ fn a_page_counts_a_streamed_layer() {
         in_place(&mut map.layers[0], Reads { fails: true, ..FILE });
         let error = crate::layout::render(&page, &mut [map], 96.0, &Default::default()).unwrap_err();
         assert!(error.contains("pts") && error.contains("the file broke off"), "{error}");
+    }
+}
+
+/// Legends sharing a frame share its classes' read; each still counts its own numbers.
+#[test]
+fn every_legend_of_a_frame_counts_a_streamed_layer() {
+    use rustgis_map::layout::ElementKind;
+    for kinds in [[false, false], [false, true], [true, false]] {
+        let mut page = counts_page(kinds[0]);
+        // The legends alone are drawn: the frame's own drawing reads a GeoPackage by view.
+        page.elements[0].visible = false;
+        let mut second = page.elements[1].kind.clone();
+        if let ElementKind::Legend { all_classes, .. } = &mut second {
+            *all_classes = kinds[1];
+        }
+        page.add("Second", (5.0, 5.0, 50.0, 80.0), second);
+        let draw = |map: Map| crate::layout::render(&page, &mut [map], 96.0, &Default::default()).unwrap().data().to_vec();
+        let mut map = classed(&VALUES);
+        in_place(&mut map.layers[0], FILE);
+        assert!(draw(map) == draw(classed(&VALUES)), "all classes {kinds:?}");
     }
 }

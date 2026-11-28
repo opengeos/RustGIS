@@ -183,7 +183,8 @@ pub(super) type StreamedCount = (u32, Option<(Vec<LegendEntry>, u64)>);
 /// Counts the features of a legend's streamed layers (#3238), whose own features are the view's:
 /// one whole read of each source that offers one (a local file). A layer read from a database or
 /// over the web has no entry here, and shows no numbers. With `all`, every visible layer and class;
-/// without, what the frame draws at 1:`scale`. A layer named in `exclude` isn't read.
+/// without, what the frame draws at 1:`scale`. A layer named in `exclude` isn't read. It reads on
+/// the caller's thread, as [`complete_shown_legends`] does: the layout view's is the UI's (#3253).
 pub(super) fn complete_counted_legends(
     map: &mut Map,
     scale: f64,
