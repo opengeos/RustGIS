@@ -89,6 +89,13 @@ fn a_layout_file_requiring_legend_fit_opens() {
 }
 
 #[test]
+fn a_layout_file_requiring_picture_source_opens() {
+    let (mut s, bare) = with_layout();
+    s.run("layout.import", &json!({"text": headed(&bare, 2, json!(["layout-picture-source"]))})).unwrap();
+    assert_eq!(s.project.layouts.len(), 2);
+}
+
+#[test]
 fn a_layout_file_requiring_text_block_opens() {
     let (mut s, bare) = with_layout();
     s.run("layout.import", &json!({"text": headed(&bare, 2, json!(["layout-text-block"]))})).unwrap();
@@ -129,6 +136,7 @@ fn a_saved_layout_file_requires_what_its_elements_use_and_reads_back_the_same() 
         ("legend-fit", include_str!("../../../../schema/fixtures/layout_legend_fit.rgis")),
         ("legend-class-labels", include_str!("../../../../schema/fixtures/layout_legend_class_labels.rgis")),
         ("legend-counts", include_str!("../../../../schema/fixtures/layout_legend_counts.rgis")),
+        ("picture-source", include_str!("../../../../schema/fixtures/layout_picture_source.rgis")),
         ("scale-grid-text", include_str!("../../../../schema/fixtures/layout_scale_grid_text.rgis")),
         ("page-color", include_str!("../../../../schema/fixtures/layout_page_color.rgis")),
         ("plain", include_str!("../../../../schema/fixtures/layout_no_data.rgis")),
@@ -205,6 +213,31 @@ fn a_layout_file_with_a_fitted_legend_says_so_in_its_header() {
     // This RustGIS reads it back.
     s.run("layout.import", &json!({"text": text})).unwrap();
     assert!(s.project.layouts[1].elements.iter().any(|e| e.kind.legend_uses_fit()));
+}
+
+/// A layout file with a picture that remembers its file requires `layout-picture-source`, so an
+/// older RustGIS refuses it instead of saving the picture again without its file; one whose
+/// pictures have no file requires nothing.
+#[test]
+fn a_layout_file_with_a_remembered_picture_says_so_in_its_header() {
+    let (mut s, _) = with_layout();
+    let image = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    s.run("layout.addElement", &json!({"kind": "picture", "image": image})).unwrap();
+    let (_, plain) = saved_file(&mut s, 0, "plain-picture");
+    assert_eq!(plain["format"], json!(crate::project::FORMAT));
+    assert!(plain.get("requires").is_none(), "{plain}");
+    // A picture an older file holds with no image, only its file, and one with both.
+    let remembered = json!({"name": "Logos", "width": 200, "height": 100, "elements": [
+        {"id": 1, "name": "North", "x": 5, "y": 5, "w": 40, "h": 20, "kind": {"Picture": {"image": "", "source": "/data/logos/north.png"}}},
+        {"id": 2, "name": "Inset", "x": 50, "y": 5, "w": 20, "h": 20, "kind": {"Picture": {"image": image, "source": "/data/logos/inset.png"}}}
+    ]});
+    s.run("layout.import", &json!({"text": remembered.to_string()})).unwrap();
+    let (text, kept) = saved_file(&mut s, 1, "remembered-picture");
+    assert_eq!(kept["requires"], json!(["layout-picture-source"]));
+    // This RustGIS reads it back.
+    s.run("layout.import", &json!({"text": text})).unwrap();
+    let sources: Vec<Option<&str>> = s.project.layouts[2].elements.iter().map(|e| e.kind.picture_source()).collect();
+    assert_eq!(sources, [Some("/data/logos/north.png"), Some("/data/logos/inset.png")]);
 }
 
 /// A layout file with a text placed down its box, spaced or cased requires `layout-text-block`, so

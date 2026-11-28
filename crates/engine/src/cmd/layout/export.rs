@@ -61,7 +61,7 @@ fn layout_bytes_for(
 /// millimetres from the page's top left), drawn at that `dpi` rather than cut out of the whole
 /// page: what the assistant's `view_map` shows of a layout. It says what exporting the page says
 /// of it: texts cut off, named fonts still being read, frames drawn without their cast shadows,
-/// charts' notices.
+/// pictures drawn as a grey box, charts' notices.
 pub fn layout_png(s: &mut Session, li: usize, dpi: f64, region: Option<[f64; 4]>) -> Result<Vec<u8>, String> {
     let layout = s.project.layouts.get(li).ok_or("no layout")?.clone();
     if let Some(note) = named_fonts_unread(&layout) {
@@ -82,6 +82,10 @@ pub fn layout_png(s: &mut Session, li: usize, dpi: f64, region: Option<[f64; 4]>
     let mut gaps: SectionGaps = rustgis_render::layout::sections_not_drawn(&layout, &s.project.maps).into_iter().map(|g| (g, 1)).collect();
     if let Some(r) = region {
         gaps.retain(|g, _| layout.element(g.frame).is_some_and(|e| rustgis_render::layout::meets(e, r, 0.0)));
+    }
+    let mut grey = rustgis_render::layout::pictures_not_drawn(&layout);
+    if let Some(r) = region {
+        grey.retain(|g| layout.element(g.id).is_some_and(|e| rustgis_render::layout::meets(e, r, 0.0)));
     }
     let ((img, mut unfitted), mut charts) = rustgis_render::layout::drawn_charts(|| {
         rustgis_render::layout::unfitted_legends(|| {
@@ -106,6 +110,7 @@ pub fn layout_png(s: &mut Session, li: usize, dpi: f64, region: Option<[f64; 4]>
     if let Some(note) = rustgis_render::layout::sections_notice(&gaps, 1) {
         s.warn(note);
     }
+    say_pictures_not_drawn(s, &grey, "");
     img.encode_png().map_err(|e| e.to_string())
 }
 
@@ -303,6 +308,8 @@ pub(in crate::cmd::layout) fn layout_bytes_inner(
     if let Some(note) = rustgis_render::layout::sections_notice(&gaps, pages.len()) {
         s.warn(note);
     }
+    // A series' pages move its frame only: its pictures are the same on every page.
+    say_pictures_not_drawn(s, &rustgis_render::layout::pictures_not_drawn(&saved), "");
     say_unfitted_legends(s, &unfitted);
     for note in chart_notice_lines(&saved, &charts) {
         s.warn(note);
@@ -535,6 +542,7 @@ pub(in crate::cmd::layout) fn layout_svg(s: &mut Session, li: usize, dpi: f64) -
     let clipped = rustgis_render::layout::clipped_text(layout, &s.project.maps, dpi, &info);
     let note = rustgis_render::layout::clipped_text_notice(layout, &clipped);
     let gaps = rustgis_render::layout::sections_not_drawn(layout, &s.project.maps).into_iter().map(|g| (g, 1)).collect();
+    let grey = rustgis_render::layout::pictures_not_drawn(layout);
     let ((drawn, unfitted), charts) = rustgis_render::layout::drawn_charts(|| {
         rustgis_render::layout::unfitted_legends(|| rustgis_render::svg::layout_svg(layout, &mut s.project.maps, dpi, &info))
     });
@@ -543,6 +551,7 @@ pub(in crate::cmd::layout) fn layout_svg(s: &mut Session, li: usize, dpi: f64) -
     for note in [note, rustgis_render::layout::sections_notice(&gaps, 1)].into_iter().flatten() {
         s.warn(note);
     }
+    say_pictures_not_drawn(s, &grey, "");
     say_unfitted_legends(s, &unfitted);
     for note in chart_notes {
         s.warn(note);

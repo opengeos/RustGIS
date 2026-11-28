@@ -5,6 +5,7 @@ mod colorbar;
 mod frame;
 mod legend;
 mod north;
+mod picture;
 mod scalebar;
 mod shapes;
 mod table;
@@ -20,6 +21,7 @@ use egui::{Color32, Ui, vec2};
 use frame::*;
 use legend::*;
 use north::*;
+use picture::*;
 use rustgis_engine::map::layout::{
     Element, ElementKind, FrameShape, INK, LAYOUT_TEXT_SIZE, Layout, MAX_BACKGROUND_PADDING, MAX_BACKGROUND_RADIUS, MAX_BACKGROUND_WIDTH,
     Orientation,
@@ -235,12 +237,12 @@ pub(super) fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li:
                     ElementKind::Colorbar { .. } => colorbar_rows(app, ui, layout, li, &e, &update),
                     ElementKind::MapFrame { .. } => frame_rows(app, ui, li, &e, &update),
                     ElementKind::NorthArrow { .. } => north_arrow_rows(app, ui, &e, &update),
+                    ElementKind::Picture { .. } => picture_rows(app, ui, &e, &update),
                     ElementKind::ScaleBar { .. } => scale_bar_rows(app, ui, layout, li, &e, &update),
                     ElementKind::Chart { .. } => chart_rows(app, ui, layout, li, &e, &update),
                     ElementKind::Table { .. } => table_rows(app, ui, li, &e, &update),
                     ElementKind::Rectangle { .. } | ElementKind::Ellipse { .. } => shape_rows(app, ui, li, &e, &update),
                     ElementKind::Line { .. } => line_rows(app, ui, li, &e, &update),
-                    _ => {}
                 }
                 // A legend's, colorbar's, table's or chart's ink (#2257), on and off as a background
                 // is: off is the default dark grey, which isn't the same as a dark grey ink (a table
@@ -412,7 +414,7 @@ fn hides(e: &Element, (x, y): (f64, f64)) -> bool {
     let (dx, dy) = (x - e.x - e.w / 2.0, y - e.y - e.h / 2.0);
     let in_box = (0.0..=1.0).contains(&u) && (0.0..=1.0).contains(&v);
     match &e.kind {
-        ElementKind::Picture { image } => {
+        ElementKind::Picture { image, .. } => {
             in_box
                 && rustgis_engine::render::picture_drawn_size(image).is_none_or(|(iw, ih)| {
                     let s = (e.w / f64::from(iw)).min(e.h / f64::from(ih));

@@ -42,6 +42,10 @@ mod legend;
 pub(in crate::cmd) use legend::say_unfitted_legends_in;
 use legend::*;
 pub(crate) use legend::{legend_columns_param, legend_counts_param, legend_fit_param, legend_names_param};
+mod picture;
+pub(crate) use picture::gives_picture;
+pub(in crate::cmd) use picture::say_pictures_not_drawn;
+use picture::*;
 mod page;
 use page::*;
 mod publication;
@@ -223,7 +227,7 @@ pub fn commands() -> Vec<C> {
                 r##""angle"?: degrees anticlockwise from pointing right, centred on the page unless x or y is given (line, arrow; it sets the box and the direction, so w, h and dir are not used with it), "##,
                 r##""length"?: mm (line, arrow), "##,
                 r##""image"?: base64, "##,
-                r##""path"?: picture file, "##,
+                r##""path"?: picture file (picture: read, and remembered as its file, so a picture whose image goes missing names it and layout.update can read it again; an address is refused, and image and path together; refused in the browser, which has no file paths: give its image; refused for other kinds), "##,
                 r##""layer"?: (table, chart; colorbar: a raster layer, default the top visible raster with a colour scale, not drawn by classes, which a legend lists), "##,
                 r##""field"?: (chart: a numeric field, default the layer's first; any field when it groups and counts, default then the field it groups by), "##,
                 r##""label"?: a field (chart: each bar's label when not grouped), "##,
@@ -362,6 +366,8 @@ pub fn commands() -> Vec<C> {
                 r##""barOutline"?: {"color"?, "width"?: points, 0 to 5, a wider one held to 5, the keys not given keeping the outline's}|null (null or a width of 0 for none), "##,
                 r##""hideLabels"?: bool (chart, as in layout.addElement: null leaves each other one as it is; refused for other elements unless null), "##,
                 r##""rows"?, "##,
+                r##""image"?: base64 (picture: its new image, its file no longer remembered, which is said when it had one), "##,
+                r##""path"?: a PNG or JPEG file (picture: read again, its image replacing the one it has, and remembered as its file; a file missing, over 16 MB, not a PNG or JPEG, or one that can't be drawn is refused and the picture left as it was; image and path together are refused; refused in the browser, which has no file paths: give its image; null leaves each as it is; refused for other elements), "##,
                 r##""background"?: {"fill"?, "outline"?, "width"?, "radius"?, "padding"?, as in layout.addElement, the keys not given keeping theirs} | null (removes it); a map frame takes none}"##,
             ),
 

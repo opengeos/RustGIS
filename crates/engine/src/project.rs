@@ -120,6 +120,7 @@ pub const CAPABILITIES: &[&str] = &[
     "layout-legend-fit",
     "layout-legend-class-labels",
     "layout-legend-counts",
+    "layout-picture-source",
     "layout-scale-bar-details",
     "label-guide",
     "label-weight",

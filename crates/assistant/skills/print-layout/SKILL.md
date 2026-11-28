@@ -29,11 +29,12 @@ description: Make a printable page layout — map frame, title, legend, north ar
    text or add columns to fit its box), `"showCounts": true` (each class row ends in its number of features),
    `"showLayerNames": false` and `"classLabels"` (`{"<layer>": {"<class label>": "<text>"}}`: its own text for a
    class, the layer keeping its label).
-   A `"text"` or `"dynamicText"` can take
+   A `"picture"` takes a `"path"` (a PNG or JPEG file; it remembers the file) or an `"image"` (base64);
+   `layout.update` with `"path"` reads it again. A `"text"` or `"dynamicText"` can take
    `"valign"` (`"top"`, `"middle"`, `"bottom"`), `"lineSpacing"` (0.5–3, default 1) and `"case"`
    (`"none"`, `"upper"`, `"lower"`; applied when drawn, the text kept as typed). `"grid"` adds a graticule to the frame
    (`"style": "ticks"` for neatline ticks, `"format": "dms"`, `"edges"`).
-5. Adjust with `layout.update` (`{"element": id, "x", "y", "w", "h", "text", "size", "bold", "valign", "lineSpacing", "case"}`). The ids come from the
+5. Adjust with `layout.update` (`{"element": id, "x", "y", "w", "h", "text", "size", "bold", "valign", "lineSpacing", "case", "path", "image"}`). The ids come from the
    results of the earlier calls.
 6. `layout.export` `{"path": "map.pdf"}`, or `.png` with a `dpi` (300 for print). Exporting writes a file, so the
    user is asked first. `layout.close` goes back to the map.

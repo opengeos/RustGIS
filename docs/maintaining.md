@@ -326,6 +326,16 @@ commands with `"showCounts": true` require it too; `false` and `null` need nothi
 `layout.import` or `report.existingTemplate` carrying such a legend requires it as well, and a
 layout file (`.rgislayout`) with one lists it in its header.
 
+Projects with a layout picture that remembers the file it was read from (`source` on a picture
+element) require `layout-picture-source`, so an older reader refuses them instead of drawing the
+word Picture for a picture with no image and saving it again without its file. A saved
+`layout.update` that gives a picture an `image` or a `path` requires it too, since an older reader
+ignores both; `layout.addElement` with a `path` needs nothing (an older reader adds the same
+picture), and `null` needs nothing. A saved `layout.import` or `report.existingTemplate` whose
+`text` has such a picture requires it as well, and a layout file (`.rgislayout`) with one lists it
+in its header. A source that is blank, an address, over 4096 bytes, without a file name, or holding
+control or direction characters isn't kept, so it needs nothing.
+
 Projects with a scale bar that has subdivisions, divisions before zero, labels below, a unit
 label of its own or placed elsewhere, decimals or a fit other than the defaults
 (`subdivisions`, `divisions_before_zero`, `label_position`, `unit_label`, `unit_label_position`,
