@@ -308,6 +308,8 @@ pub struct MapView {
     sketch: Vec<Coord>,
     selection_gesture: Option<SelectionGesture>,
     radius_preview: Option<(Coord, f64, Vec<Option<Pos2>>)>,
+    radius_text: String,
+    radius_imperial: bool,
     /// A finished measurement stays on screen until the next click.
     sketch_done: bool,
     /// The next click splits the selected lines there (Editing pane › Split).
@@ -461,6 +463,8 @@ impl Default for MapView {
             sketch: Vec::new(),
             selection_gesture: None,
             radius_preview: None,
+            radius_text: String::new(),
+            radius_imperial: false,
             sketch_done: false,
             split_mode: false,
             vertex: None,
@@ -1022,6 +1026,7 @@ fn split_view(app: &mut RustGisApp, ui: &mut Ui, other: usize, rect: Rect, t: &T
     }
 }
 
+/// Draws the interactive map and its active tool controls before dispatching pointer gestures.
 fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     let t = *t;
     let rect = ui.available_rect_before_wrap();
@@ -1040,6 +1045,9 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     let time = now(ui);
     app.map.record_frame(time);
 
+    if app.session.tool == Tool::SelectRadius {
+        radius_panel(app, ui, rect);
+    }
     interact(app, ui, &resp, rect);
 
     // Render when the map changed and we're not in the middle of a pan/zoom: meanwhile the flat
@@ -2733,6 +2741,43 @@ fn finish_area_selection(app: &mut RustGisApp, ui: &Ui, rect: Rect) {
     }
 }
 
+/// Keeps radius entry clear of the map's navigation controls and below dialogs.
+/// Explicit suffixes preserve a valid entry when the measurement setting changes.
+fn radius_panel(app: &mut RustGisApp, ui: &Ui, rect: Rect) {
+    let imperial = app.ui.measurement_imperial;
+    if imperial != app.map.radius_imperial {
+        if app.map.radius_text.trim().parse::<f64>().is_ok()
+            && let Ok(Some(m)) = crate::measure_units::parse_distance(&app.map.radius_text, app.map.radius_imperial)
+        {
+            app.map.radius_text = format!("{m} m");
+        }
+        app.map.radius_imperial = imperial;
+    }
+    egui::Area::new(egui::Id::unique("select_radius_entry"))
+        .fixed_pos(pos2((rect.max.x - 260.0).max(rect.min.x + 70.0), rect.min.y + 12.0))
+        .constrain_to(rect)
+        .order(egui::Order::Middle)
+        .show(ui.ctx(), |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    let label = ui.label(tl!("Radius"));
+                    ui.add(egui::TextEdit::singleline(&mut app.map.radius_text).desired_width(120.0).hint_text(if imperial {
+                        tl!("ft / mi")
+                    } else {
+                        tl!("m / km")
+                    }))
+                    .labelled_by(label.id);
+                });
+                ui.small(tl!("Approximate · click centre or drag"));
+                if let Err(error) = crate::measure_units::parse_distance(&app.map.radius_text, imperial) {
+                    ui.colored_label(crate::theme::Tokens::get(ui.ctx()).red, error);
+                }
+            });
+        });
+}
+
+/// Dispatches map-only gestures; typed radii use the command's projection validation.
+/// Clicks on the radius entry belong to its own area.
 fn selection_interact(app: &mut RustGisApp, ui: &Ui, resp: &egui::Response, rect: Rect) {
     let tool = app.session.tool;
     // While a shortcut is being captured, Escape cancels the capture, not the sketch.
@@ -2754,6 +2799,26 @@ fn selection_interact(app: &mut RustGisApp, ui: &Ui, resp: &egui::Response, rect
             } else if resp.double_clicked() {
                 finish_area_selection(app, ui, rect);
             }
+        }
+        return;
+    }
+    if tool == Tool::SelectRadius && resp.clicked() && !app.map.radius_text.trim().is_empty() {
+        let result = (|| {
+            let radius = crate::measure_units::parse_distance(&app.map.radius_text, app.ui.measurement_imperial)?;
+            let Some(radius) = radius else {
+                return Ok(());
+            };
+            if radius > 5_000_000.0 {
+                return Err(tl!("Radius must be at most 5,000 km (approximate).").to_string());
+            }
+            let point = resp.interact_pointer_pos().ok_or_else(invalid_selection)?;
+            let center = selection_coord(app, rect, point, &Flat::of(&app.session.map().projection))?;
+            validate_radius(app, center, radius)?;
+            app.run("select.byRadius", json!({"lon":center.x,"lat":center.y,"radius":radius,"mode":selection_mode(ui)})).map(|_| ())
+        })();
+        app.map.cancel_sketch();
+        if let Err(error) = result {
+            app.session.notify(error, true);
         }
         return;
     }
@@ -2806,6 +2871,11 @@ fn selection_interact(app: &mut RustGisApp, ui: &Ui, resp: &egui::Response, rect
                     _ => radius_outline(app, rect, center, radius).is_ok(),
                 };
                 if valid {
+                    app.map.radius_text = if app.ui.measurement_imperial {
+                        format!("{} ft", radius / rustgis_engine::geom::METRES_PER_FOOT)
+                    } else {
+                        format!("{radius} m")
+                    };
                     let _ =
                         app.run("select.byRadius", json!({"lon": center.x, "lat": center.y, "radius": radius, "mode": selection_mode(ui)}));
                 } else {
@@ -4044,7 +4114,7 @@ fn overlays(app: &mut RustGisApp, ui: &mut Ui, p: &egui::Painter, rect: Rect, t:
             Some("Click vertices · click the start or double-click to select · Shift adds · Ctrl/Cmd removes · Esc cancels")
         }
         Tool::SelectLasso => Some("Drag an area · release to select · Shift adds · Ctrl/Cmd removes · Esc cancels"),
-        Tool::SelectRadius => Some("Drag from the centre · release to select · Shift adds · Ctrl/Cmd removes · Esc cancels"),
+        Tool::SelectRadius => Some("Type a radius and click the centre, or drag · Shift adds · Ctrl/Cmd removes · Esc cancels"),
         Tool::EditVertices if app.map.vertex.is_some() => {
             Some("Drag a vertex to move it · click an edge to add one · Delete removes the chosen vertex")
         }
@@ -6558,6 +6628,41 @@ mod tests {
         }
     }
 
+    /// Typed distances reach the real map handler in metres, preserve fractional values,
+    /// and obey the same add/remove modifiers as dragged radii.
+    #[test]
+    fn selection_tools_typed_radius_clicks_and_validation() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = selection_harness();
+        h.state_mut().run("tool.set", json!({"tool":"selectRadius"})).unwrap();
+        h.run();
+        h.get_by_label("Radius").click();
+        h.run();
+        h.event(egui::Event::Text("120.125 km".into()));
+        h.step();
+        selection_click(&mut h, [0.5, 0.5]);
+        assert_eq!(selection_rows(&h), vec![0]);
+        assert_eq!(crate::measure_units::parse_distance(&h.state().map.radius_text, false).unwrap(), Some(120125.0));
+        let at = selection_screen(&h, [2.5, 0.5]);
+        let add = egui::Modifiers { shift: true, ..egui::Modifiers::NONE };
+        selection_pointer(&mut h, at, Some(true), add);
+        selection_pointer(&mut h, at, Some(false), add);
+        assert_eq!(selection_rows(&h), vec![0, 2]);
+        let remove = egui::Modifiers { ctrl: true, command: true, ..egui::Modifiers::NONE };
+        selection_pointer(&mut h, at, Some(true), remove);
+        selection_pointer(&mut h, at, Some(false), remove);
+        assert_eq!(selection_rows(&h), vec![0]);
+        h.state_mut().map.radius_text = "NaN".into();
+        let mark = h.state().session.notice_mark();
+        selection_click(&mut h, [2., 2.]);
+        assert_eq!(selection_rows(&h), vec![0]);
+        assert_eq!(h.state().session.notices_since(mark).iter().filter(|n| n.error && n.text.contains("positive distance")).count(), 1);
+        h.state_mut().map.radius_text = "1000".into();
+        h.state_mut().ui.measurement_imperial = true;
+        h.step();
+        assert_eq!(crate::measure_units::parse_distance(&h.state().map.radius_text, true).unwrap(), Some(1000.0));
+    }
+
     #[test]
     fn selection_tools_radius_release_metric_and_plain_clicks() {
         let mut h = selection_harness();
@@ -6578,7 +6683,9 @@ mod tests {
             assert_eq!(selection_rows(&h), vec![0]);
             assert_eq!(h.state().session.tool, Tool::SelectRadius);
             assert!(h.state().map.radius_preview.is_none());
+            assert!(crate::measure_units::parse_distance(&h.state().map.radius_text, false).unwrap().is_some());
         }
+        h.state_mut().map.radius_text.clear();
         for tool in ["selectLasso", "selectRadius"] {
             h.state_mut().run("tool.set", json!({"tool": tool})).unwrap();
             selection_click(&mut h, [2., 2.]);

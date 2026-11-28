@@ -31,6 +31,26 @@ pub fn distance(m: f64, imperial: bool) -> String {
     }
 }
 
+/// Parse an optional positive distance. Bare numbers use metres or feet; suffixes let the
+/// user enter kilometres or miles too. Command distances remain metres in both settings.
+pub fn parse_distance(text: &str, imperial: bool) -> Result<Option<f64>, String> {
+    let text = text.trim().to_ascii_lowercase();
+    if text.is_empty() {
+        return Ok(None);
+    }
+    let (number, factor) = [("km", 1000.0), ("mi", geom::METRES_PER_MILE), ("ft", geom::METRES_PER_FOOT), ("m", 1.0)]
+        .into_iter()
+        .find_map(|(suffix, factor)| text.strip_suffix(suffix).map(|n| (n.trim(), factor)))
+        .unwrap_or((&text, if imperial { geom::METRES_PER_FOOT } else { 1.0 }));
+    let value = number
+        .parse::<f64>()
+        .ok()
+        .map(|n| n * factor)
+        .filter(|n| n.is_finite() && *n > 0.0)
+        .ok_or_else(|| tl!("Enter a positive distance in m, km, ft or mi.").to_string())?;
+    Ok(Some(value))
+}
+
 /// Format an elevation supplied in metres; imperial vertical measurements always use feet.
 pub fn elevation(m: f64, imperial: bool) -> String {
     if imperial {
@@ -70,6 +90,19 @@ pub fn scale_distance(max_m: f64, imperial: bool) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn distance_entry_accepts_units_and_rejects_invalid_values() {
+        assert_eq!(parse_distance("", false).unwrap(), None);
+        assert_eq!(parse_distance("500", false).unwrap(), Some(500.0));
+        assert_eq!(parse_distance("2 km", false).unwrap(), Some(2000.0));
+        assert_eq!(parse_distance(" 1.25 MI ", true).unwrap(), Some(1.25 * geom::METRES_PER_MILE));
+        assert_eq!(parse_distance("3", true).unwrap(), Some(3.0 * geom::METRES_PER_FOOT));
+        assert_eq!(parse_distance("500 m", true).unwrap(), Some(500.0));
+        for invalid in ["0", "-1", "NaN", "inf", "1e999", "3 yards"] {
+            assert!(parse_distance(invalid, false).is_err(), "{invalid}");
+        }
+    }
 
     #[test]
     fn nonfinite_measurements_are_unavailable_in_both_unit_systems() {
