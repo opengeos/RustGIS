@@ -1242,7 +1242,8 @@ fn say_sections_not_drawn(s: &mut Session, pages: &[rustgis_render::report::Page
     }
 }
 
-/// `f`, then the legends it drew under a fit still cut, and the charts it drew.
+/// Runs `f`, and returns its result with the legends it drew under a fit still cut and the charts
+/// it drew.
 fn listing<T>(f: impl FnOnce() -> T) -> (T, Vec<rustgis_render::layout::UnfittedLegend>, Vec<rustgis_render::layout::DrawnChart>) {
     let ((drawn, legends), charts) = rustgis_render::layout::drawn_charts(|| rustgis_render::layout::unfitted_legends(f));
     (drawn, legends, charts)

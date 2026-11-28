@@ -188,13 +188,22 @@ fn report(s: &mut Session, layouts: &[&str]) {
     }
 }
 
+/// Removed however the test ends.
+struct Dir(std::path::PathBuf);
+
+impl Drop for Dir {
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(&self.0).ok();
+    }
+}
+
 /// What exporting the report "R" to a file of `ext` says of charts.
 fn reported(s: &mut Session, ext: &str) -> Vec<String> {
     let dir = std::env::temp_dir().join(format!("rustgis-3166-{}-{:?}", std::process::id(), std::thread::current().id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join(format!("report.{ext}"));
+    let dir = Dir(dir);
+    let path = dir.0.join(format!("report.{ext}"));
     let mut all = said(s, "report.export", json!({"report": "R", "path": path, "dpi": 36}));
-    std::fs::remove_dir_all(&dir).unwrap();
     all.retain(|t| t.contains("chart"));
     all
 }
