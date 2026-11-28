@@ -1077,36 +1077,7 @@ fn symbology(s: &mut Session, p: &Value) -> CmdResult {
             rl.style.stretch = Stretch::default();
         }
         Ok(())
-    })?;
-    relief_notice(s, id, &r);
-    Ok(Value::Null)
-}
-
-/// Says when a Shaded Relief is drawn from a band holding values no elevation has (#3151): below
-/// or above [`rustgis_analysis::PLAUSIBLE_ELEVATION`], such as a no-data of -32768 the file
-/// doesn't declare, which the relief draws as cliffs. A look at the band's statistics; Check DEM
-/// says where the values are.
-fn relief_notice(s: &mut Session, id: u32, r: &Raster) {
-    let (lowest, highest) = rustgis_analysis::PLAUSIBLE_ELEVATION;
-    let Some(l) = s.map().layer(id) else { return };
-    let Some(RasterRenderer::ShadedRelief { band, .. }) = l.raster.as_ref().map(|rl| &rl.style.renderer) else { return };
-    let Some(stats) = r.bands.get(*band).map(|b| &b.stats).filter(|st| st.count > 0) else { return };
-    let mut odd = Vec::new();
-    if stats.min < lowest {
-        odd.push(format!("as low as {}", stats.min));
-    }
-    if stats.max > highest {
-        odd.push(format!("as high as {}", stats.max));
-    }
-    if odd.is_empty() {
-        return;
-    }
-    let text = format!(
-        "'{}' holds values no elevation has ({}, outside {lowest} to {highest}): its relief draws them as cliffs. Check DEM (checkDem) finds where they are; declare them as no-data, or hide them with raster.mask",
-        l.name,
-        odd.join(" and ")
-    );
-    s.notify(text, false);
+    })
 }
 
 /// A Shaded Relief's `"shadowSoftness"` (see `raster.symbology`), `v` being the number given, if

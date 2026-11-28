@@ -1733,11 +1733,6 @@ stretch, and an opaque black cell still counts. The alpha band's own statistics 
 alpha with a value, see-through ones included.
 **Change Detection** gives no-data where either image is see-through.
 
-**Shaded Relief** names the values its band holds that no elevation has, below −500 or above
-9,000 (from the band's statistics), such as a no-data of −32768 the file doesn't declare, which the
-relief draws as cliffs. Check DEM (`checkDem`, see
-[Checking an elevation model](analysis.md#checking-an-elevation-model)) finds where they are.
-
 **Cast shadows**, on a Shaded Relief layer (`raster.symbology` `"shadow"`, 0 to 1), darkens the
 slopes the terrain hides from the sun as well as those facing away from it: a valley behind a ridge
 is in shadow, with a soft edge. Only the direct light is darkened: a slope in full shadow keeps the
