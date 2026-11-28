@@ -1842,11 +1842,13 @@ pub struct ReduceRun {
 }
 
 impl ReduceRun {
-    /// About the bytes its outputs hold once made, with their GeoTIFFs: the most a run can make
-    /// ([`MAX_REDUCED`] values) when the cube doesn't know its size, or for frequency, whose
-    /// classes aren't known before it is read.
+    /// About the bytes its outputs hold once made, with their GeoTIFFs: a band for each group and
+    /// asset (firstDate's one date for all the assets, as [`ReduceRun::run`] makes them); the most
+    /// a run can make ([`MAX_REDUCED`] values) when the cube doesn't know its size, or for
+    /// frequency, whose classes aren't known before it is read.
     pub fn output_bytes(&self) -> u64 {
-        let slots = (self.groups.len() * self.cube.assets().len().max(1)) as u64;
+        let per = if self.stat == Stat::FirstDate { 1 } else { self.cube.assets().len().max(1) };
+        let slots = (self.groups.len() * per) as u64;
         let cells = self.cube.size().filter(|_| self.stat != Stat::Frequency).map(|(w, h)| (w as u64).saturating_mul(h as u64));
         output_bytes(cells.map_or(MAX_REDUCED, |c| c.saturating_mul(slots).min(MAX_REDUCED)))
     }

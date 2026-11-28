@@ -9,7 +9,8 @@ fn collection(dates: usize) -> String {
 }
 
 /// A collection "s2" of `dates` dates of a 4 × 4 band of `pixel`° cells from (10, 46), date k's
-/// cells all 10 (k + 1), its items over [10, 11] × [45, 46]: its STAC API's address.
+/// cells all 10 (k + 1), its items over [10, 11] × [45, 46]: its STAC API's address. The band is
+/// each item's B04, and its B08 and B11 too.
 fn collection_of(dates: usize, pixel: f64) -> String {
     use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster};
     let band = |k: usize| {
@@ -24,7 +25,8 @@ fn collection_of(dates: usize, pixel: f64) -> String {
             format!(
                 r#"{{"type": "Feature", "id": "s{k}", "collection": "s2", "bbox": [10, 45, 11, 46], "geometry": null,
                    "properties": {{"datetime": "{d}T00:00:00Z", "bdc:tiles": ["t1"]}},
-                   "assets": {{"B04": {{"href": "{files}/b{k}.tif"}}}}}}"#
+                   "assets": {{"B04": {{"href": "{files}/b{k}.tif"}}, "B08": {{"href": "{files}/b{k}.tif"}},
+                              "B11": {{"href": "{files}/b{k}.tif"}}}}}}"#
             )
         })
         .collect();
@@ -355,4 +357,23 @@ fn a_failed_command_stops_the_summaries_it_started() {
     assert_eq!(ran.len(), 1, "the next read lands: {ran:?}");
     assert!(ran[0].1.is_ok(), "{ran:?}");
     rustgis_plugins::unload("eng-summary-failed");
+}
+
+/// A summary of several bands plans an output band for each, but firstDate one for all of them:
+/// one date a cell, the same for its bands.
+#[test]
+fn a_first_date_of_several_bands_plans_one_output() {
+    let mut s = world();
+    fetch_mode(true, true);
+    let api = collection(3);
+    let planned = |s: &mut Session, stat: &str| {
+        let mut p = reduce(&api, stat);
+        let o = p.as_object_mut().unwrap();
+        o.remove("asset");
+        o.insert("assets".into(), json!(["B04", "B08", "B11"]));
+        crate::cmd::cube::reduce_start(s, &p).unwrap().output_bytes()
+    };
+    // 4 × 4 cells, 8 bytes each for the raster and its GeoTIFF.
+    assert_eq!(planned(&mut s, "mean"), 16 * 3 * 8, "a band each");
+    assert_eq!(planned(&mut s, "firstDate"), 16 * 8, "one for all three");
 }
