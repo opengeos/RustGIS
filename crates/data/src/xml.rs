@@ -45,6 +45,10 @@ const MIN_ENTITY_EXPANSION: u64 = 1 << 20;
 /// How deep the parser follows an entity's references to others.
 const ENTITY_DEPTH: usize = 10;
 
+/// The bytes of an entity's name that count as one step of that cost: comparing or skipping a name
+/// is far quicker than expanding text.
+const NAME_BYTES_PER_STEP: u64 = 16;
+
 /// [`check_limits`]'s refusal for entities that expand to too much text.
 pub const TOO_MUCH_ENTITY_TEXT: &str = "the document's entities would expand to more than its size allows";
 
@@ -300,16 +304,18 @@ fn references(text: &[u8]) -> impl Iterator<Item = &[u8]> {
 }
 
 /// What the references of `body` to `entities` cost the parser: the bytes each expands to, and
-/// for each reference, those within values too, one step a declaration, as it searches them one by
-/// one. Each entity's own references are followed [`ENTITY_DEPTH`] deep; of an entity declared
+/// for each reference, those within values too, the search it makes among the declarations, one by
+/// one, and the name it reads (a step each declaration, and each [`NAME_BYTES_PER_STEP`] of a
+/// name). Each entity's own references are followed [`ENTITY_DEPTH`] deep; of an entity declared
 /// twice, the longer.
 fn expansion(entities: &[(&[u8], &[u8])], body: &[u8]) -> u64 {
     let mut costs: HashMap<&[u8], u64> = HashMap::new();
-    let search = entities.len() as u64;
+    let steps = |name: &[u8]| name.len() as u64 / NAME_BYTES_PER_STEP;
+    let search = entities.iter().fold(0u64, |sum, &(name, _)| sum.saturating_add(1 + steps(name)));
     // What `text` comes to: its own bytes, a known reference's `&name;` giving way to its cost.
     let cost = |costs: &HashMap<&[u8], u64>, text: &[u8]| {
         references(text).filter_map(|name| Some((name, costs.get(name)?))).fold((0u64, 0u64), |(written, sum), (name, &n)| {
-            (written + name.len() as u64 + 2, sum.saturating_add(n).saturating_add(search))
+            (written + name.len() as u64 + 2, sum.saturating_add(n).saturating_add(search).saturating_add(steps(name)))
         })
     };
     // One pass a level: what each value came to with its references at the level before.
@@ -486,6 +492,10 @@ mod tests {
         let name = "n".repeat(100);
         let named = format!(r#"<!ENTITY {name} "x"><!ENTITY b "&{name};">"#);
         assert!(check_limits(&declaring(&named, &"&b;".repeat(12_000)), true).is_ok());
+        // And a long name is read again each time a value that holds its reference is expanded.
+        let long_name = "n".repeat(100_000);
+        let reread = format!(r#"<!ENTITY {long_name} "x"><!ENTITY b "&{long_name};">"#);
+        assert_eq!(check_limits(&declaring(&reread, &"&b;".repeat(20_000)), true).unwrap_err(), TOO_MUCH_ENTITY_TEXT);
         // Counted in time that grows with the document's length, however it is broken.
         let started = std::time::Instant::now();
         for doc in [format!("<!DOCTYPE r [{} ]><r/>", "<!ENTITY".repeat(50_000)), "<!x [<!ENTITY a ''>]>".repeat(50_000)] {
