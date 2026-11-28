@@ -30,6 +30,12 @@ pub const NAMESPACE_WORK: u64 = 64;
 /// namespaces is no threat.
 const MIN_NAMESPACE_WORK: u64 = 1 << 20;
 
+/// [`check_limits`]'s refusal for namespaces that take too much to resolve.
+pub const TOO_MANY_NAMESPACES: &str = "the document's namespace declarations would take more to resolve than its size allows";
+
+/// How [`check_limits`]'s refusal for elements nested past [`MAX_DEPTH`] starts.
+pub const TOO_DEEP: &str = "the document nests elements more than";
+
 /// Parses `text` (a leading byte-order mark dropped) with `opts`, once [`check_limits`] passes.
 pub fn parse<'a>(text: &'a str, opts: ParsingOptions<'a>) -> Result<Document<'a>, String> {
     let mut unbounded = u64::MAX;
@@ -55,7 +61,7 @@ pub fn namespace_budget(len: usize) -> u64 {
 }
 
 fn too_much() -> String {
-    "the document's namespace declarations would take more to resolve than its size allows".to_string()
+    TOO_MANY_NAMESPACES.to_string()
 }
 
 /// Refuses XML nested deeper than [`MAX_DEPTH`], or whose namespaces would take more than
@@ -148,7 +154,7 @@ pub fn check_limits(text: &str, allow_dtd: bool) -> Result<u64, String> {
             // An element's start tag: to its `>` (quoted values skipped); `/>` closes it at once.
             depth += 1;
             if depth > MAX_DEPTH {
-                return Err(format!("the document nests elements more than {MAX_DEPTH} deep"));
+                return Err(format!("{TOO_DEEP} {MAX_DEPTH} deep"));
             }
             let mut j = i + 1;
             let mut quote = None::<u8>;

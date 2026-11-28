@@ -34,7 +34,8 @@ pub(super) enum Refusal {
     /// It has more to draw than the cap given, or more elements than [`ELEMENTS`].
     TooMuch,
     /// Its style sheets and `style` attributes come to more than [`STYLE_UNITS`], the attributes
-    /// of its elements to more than [`ATTRIBUTE_PAIRS`], or an entity of it holds a tag, whose
+    /// of its elements to more than [`ATTRIBUTE_PAIRS`], its namespaces to more than
+    /// [`rustgis_data::xml::check_limits`] allows, or an entity of it holds a tag, whose
     /// expansion no count sees: more to read than the readers do in time.
     TooMuchToRead,
     /// It has more XML nodes than [`XML_NODES`], or nests deeper than [`DEPTH`].
@@ -101,7 +102,8 @@ const NODE: u64 = 100;
 const STOPS_PER_UNIT: u64 = 16;
 
 /// SVG text `text` as XML with an `<svg>` root, within what reading its tags may cost:
-/// [`XML_NODES`], [`ATTRIBUTE_PAIRS`], no entity holding a tag.
+/// [`XML_NODES`], [`ATTRIBUTE_PAIRS`], the namespace work every XML reader allows
+/// ([`rustgis_data::xml::check_limits`]), no entity holding a tag.
 fn parse(text: &str) -> Result<roxmltree::Document<'_>, Refusal> {
     // An entity of a tag expands to tags `attribute_pairs` doesn't see, once for each use (a text
     // entity, as in an Illustrator file's `xmlns` values, is no way round it).
@@ -112,6 +114,13 @@ fn parse(text: &str) -> Result<roxmltree::Document<'_>, Refusal> {
     if attribute_pairs(text) > ATTRIBUTE_PAIRS {
         return Err(Refusal::TooMuchToRead);
     }
+    // Before roxmltree resolves each name among the namespaces around it (#3220).
+    rustgis_data::xml::check_limits(text, true).map_err(|why| match why.as_str() {
+        rustgis_data::xml::TOO_MANY_NAMESPACES => Refusal::TooMuchToRead,
+        why if why.starts_with(rustgis_data::xml::TOO_DEEP) => Refusal::TooNested,
+        // A DOCTYPE that never ends, which roxmltree refuses too.
+        _ => Refusal::NotSvg,
+    })?;
     let xml = roxmltree::ParsingOptions { allow_dtd: true, nodes_limit: XML_NODES, ..Default::default() };
     let doc = roxmltree::Document::parse_with_options(text, xml).map_err(|e| match e {
         roxmltree::Error::NodesLimitReached => Refusal::TooNested,
@@ -1138,6 +1147,24 @@ mod tests {
             let got = with_params(&text, &SvgColours { size, ..COLOURS }).unwrap().unwrap();
             assert!(got.len() <= text.len(), "{got}");
         }
+    }
+
+    /// Namespaces that take more to resolve than the SVG's size allows are refused before the
+    /// parser meets them (#3220: 74 KB took 7 s), searched for params too; a few dozen on the
+    /// root with text entities for them, as an Illustrator file has, are read.
+    #[test]
+    fn an_svg_of_namespaces_too_costly_to_resolve_isnt_parsed() {
+        let declarations: String = (0..3000).map(|i| format!(r#" xmlns:n{i}="u{i}""#)).collect();
+        let flood = sized(&declarations, &r#"<g xmlns:a="v"/>"#.repeat(1000));
+        let started = std::time::Instant::now();
+        assert_eq!(read(&flood).err(), Some(Refusal::TooMuchToRead));
+        assert_eq!(with_params(&flood, &COLOURS), Err(Refusal::TooMuchToRead));
+        assert!(started.elapsed() < std::time::Duration::from_secs(1), "{:?}", started.elapsed());
+        let entities: String = (0..40).map(|i| format!(r#"<!ENTITY ns{i} "http://ns.example/{i}/">"#)).collect();
+        let used: String = (0..40).map(|i| format!(r#" xmlns:n{i}="&ns{i};""#)).collect();
+        let drawn = r#"<rect width="1" height="1"/>"#.repeat(1000);
+        let real = format!("<!DOCTYPE svg [{entities}]>{}", sized(&used, &drawn));
+        assert!(read(&real).is_ok());
     }
 
     /// Before its values are set, an SVG is held to what [`super::read`] holds one to.
