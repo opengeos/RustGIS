@@ -489,6 +489,9 @@ pub(in crate::cmd::layout) fn update(s: &mut Session, p: &Value) -> CmdResult {
         _ => None,
     };
     let unremembered = new_picture.as_ref().is_some_and(|g| g.unremembered);
+    // Given an image, a picture that remembered its file forgets it, which is said.
+    let forgotten = matches!(kind_now, Some(ElementKind::Picture { source: Some(_), .. }))
+        && new_picture.as_ref().is_some_and(|g| g.given_image);
     let l = active(s, p)?;
     let e = l.element_mut(id).ok_or_else(|| format!("no element {id}"))?;
     // A text or scale bar with no ink isn't measured: given a colour that shows it, it is told
@@ -763,6 +766,9 @@ pub(in crate::cmd::layout) fn update(s: &mut Session, p: &Value) -> CmdResult {
     let fit = tells_legend_fit(&e.kind, p);
     if unremembered {
         s.notify(picture_unremembered(), false);
+    }
+    if forgotten {
+        s.notify(PICTURE_FORGOTTEN, false);
     }
     if fit {
         say_legend_fit(s, li, id);

@@ -708,3 +708,41 @@ fn a_picture_drawn_as_a_grey_box_is_said_by_every_export() {
         assert!(said.is_empty(), "{route}: {said:?}");
     }
 }
+
+/// Given an image, a picture that remembered its file forgets it and says so once, naming neither
+/// the file nor its folders; Undo brings the file back. A picture with no file, or one read from a
+/// file again, says nothing of it.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn an_image_given_to_a_picture_with_a_file_says_the_file_is_forgotten() {
+    let (dir, mut s) = picture_world("an-image-given-to-a-picture-with-a-file-says-the-file-is-forgotten");
+    let (first, first_b64) = png_file(&dir, "first.png", (40, 20), [0x1F, 0x5C, 0x84]);
+    let (second, second_b64) = png_file(&dir, "second.png", (30, 30), [0xE8, 0xB0, 0x4A]);
+    let third_b64 = png_b64(10, 20, |_, _| [0x22, 0x88, 0x22]);
+    let forgotten = "the picture's file is no longer remembered: its image was given directly";
+    let said = |s: &Session, mark| s.notices_since(mark).iter().map(|n| n.text.clone()).collect::<Vec<_>>();
+    let id = s.run("layout.addElement", &json!({"kind": "picture", "path": first})).unwrap()["element"].clone();
+    let mark = s.notice_mark();
+    s.run("layout.update", &json!({"element": id, "image": third_b64})).unwrap();
+    let notes = said(&s, mark);
+    assert_eq!(notes.iter().filter(|n| n.as_str() == forgotten).count(), 1, "{notes:?}");
+    let folder = dir.0.display().to_string();
+    assert!(notes.iter().all(|n| !n.contains("first") && !n.contains(&folder)), "{notes:?}");
+    assert_eq!(picture_in(&s, "L", &id), (third_b64.clone(), None));
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert_eq!(picture_in(&s, "L", &id), (first_b64, Some(first)));
+    // Read from a file again: the new file is remembered, and nothing is said of the old one.
+    let mark = s.notice_mark();
+    s.run("layout.update", &json!({"element": id, "path": second})).unwrap();
+    assert!(!said(&s, mark).iter().any(|n| n.contains("no longer remembered")), "{:?}", said(&s, mark));
+    assert_eq!(picture_in(&s, "L", &id), (second_b64.clone(), Some(second)));
+    // With no file to forget: nothing said, whether it never had one or has just forgotten it.
+    s.run("layout.update", &json!({"element": id, "image": third_b64})).unwrap();
+    let bare = s.run("layout.addElement", &json!({"kind": "picture", "image": second_b64})).unwrap()["element"].clone();
+    for target in [id, bare] {
+        let mark = s.notice_mark();
+        s.run("layout.update", &json!({"element": target, "image": third_b64})).unwrap();
+        assert!(!said(&s, mark).iter().any(|n| n.contains("no longer remembered")), "{target}: {:?}", said(&s, mark));
+        assert_eq!(picture_in(&s, "L", &target), (third_b64.clone(), None));
+    }
+}

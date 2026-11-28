@@ -37,6 +37,9 @@ pub(in crate::cmd::layout) fn picture_unremembered() -> String {
     )
 }
 
+/// A picture that remembered its file given an image by `layout.update`: the file is forgotten.
+pub(in crate::cmd::layout) const PICTURE_FORGOTTEN: &str = "the picture's file is no longer remembered: its image was given directly";
+
 /// Says each of [`rustgis_render::layout::pictures_notices`] of `gaps`, the pictures an export
 /// draws as a grey box, with `prefix` before it.
 pub(in crate::cmd) fn say_pictures_not_drawn(s: &mut Session, gaps: &[rustgis_render::layout::PictureGap], prefix: &str) {
@@ -53,6 +56,8 @@ pub(crate) struct GivenPicture {
     pub source: Option<String>,
     /// Read from a file whose path isn't kept: said once by the command.
     pub unremembered: bool,
+    /// Given as an image, not read from a file: a picture that remembered its file forgets it.
+    pub given_image: bool,
 }
 
 /// A command's `path`: none when absent or null, as given when it is text that isn't blank and
@@ -101,13 +106,18 @@ pub(in crate::cmd::layout) fn picture_given(p: &Value) -> Result<Option<GivenPic
     }
     let picture = match (given("image"), picture_path_param(p)?) {
         (Some(Value::String(image)), _) => {
-            GivenPicture { image: crate::cmd::graphics::checked_picture(image.trim().to_string())?, source: None, unremembered: false }
+            GivenPicture {
+                image: crate::cmd::graphics::checked_picture(image.trim().to_string())?,
+                source: None,
+                unremembered: false,
+                given_image: true,
+            }
         }
         (Some(_), _) => return Err(PICTURE_IMAGE.into()),
         (None, Some(path)) => {
             let image = crate::cmd::graphics::picture_file(path)?;
             let kept = rustgis_map::layout::picture_source_kept(path);
-            GivenPicture { image, source: kept.then(|| path.to_string()), unremembered: !kept }
+            GivenPicture { image, source: kept.then(|| path.to_string()), unremembered: !kept, given_image: false }
         }
         (None, None) => return Ok(None),
     };

@@ -364,7 +364,7 @@ pub fn commands() -> Vec<C> {
                 r##""barOutline"?: {"color"?, "width"?: points, 0 to 5, a wider one held to 5, the keys not given keeping the outline's}|null (null or a width of 0 for none), "##,
                 r##""hideLabels"?: bool (chart, as in layout.addElement: null leaves each other one as it is; refused for other elements unless null), "##,
                 r##""rows"?, "##,
-                r##""image"?: base64 (picture: its new image, its file no longer remembered), "##,
+                r##""image"?: base64 (picture: its new image, its file no longer remembered, which is said when it had one), "##,
                 r##""path"?: a PNG or JPEG file (picture: read again, its image replacing the one it has, and remembered as its file; a file missing, over 16 MB, not a PNG or JPEG, or one that can't be drawn is refused and the picture left as it was; image and path together are refused; refused in the browser, which has no file paths: give its image; null leaves each as it is; refused for other elements), "##,
                 r##""background"?: {"fill"?, "outline"?, "width"?, "radius"?, "padding"?, as in layout.addElement, the keys not given keeping theirs} | null (removes it); a map frame takes none}"##,
             ),

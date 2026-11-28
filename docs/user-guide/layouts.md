@@ -701,7 +701,7 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
   naming it. A picture is never read from its file by itself: not when a project or layout opens,
   nor when it is exported. Scripts give `layout.update` a picture's `"path"` to read it again (a
   missing file, one over 16 MiB, not a PNG or JPEG, or one that can't be drawn is refused and the
-  picture left as it was) or its `"image"` (its file is then no longer remembered); `null` leaves
+  picture left as it was) or its `"image"` (its file is then no longer remembered, which is said); `null` leaves
   each as it is. Each change is one undo step. A project with a picture that remembers its file
   can't be opened by an older RustGIS, and a layout file with one lists it in its header. In the
   browser, which has no file paths, a picture is added from the file's contents and doesn't remember
