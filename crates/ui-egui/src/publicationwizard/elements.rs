@@ -31,7 +31,7 @@ pub enum NorthChoice {
 /// A layer ticked out of the legend: a map layer by its instance, as it may be renamed while the
 /// wizard is open; a web layer, which has none, by its name.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum LeftOut {
+pub enum ExcludedLayer {
     Layer(u64),
     Web(String),
 }
@@ -60,7 +60,7 @@ pub struct Elements {
     /// The legend's columns, or `None` for the placement's pick.
     pub legend_columns: Option<usize>,
     /// The layers ticked out of the legend.
-    pub legend_exclude: Vec<LeftOut>,
+    pub legend_exclude: Vec<ExcludedLayer>,
 }
 
 impl Default for Elements {
@@ -276,7 +276,7 @@ fn object<const N: usize>(options: [(&str, Option<Value>); N]) -> Option<Value> 
 /// A name the legend lists, and every layer under it, any case: the command leaves out by name.
 struct Listed<'a> {
     name: &'a str,
-    layers: Vec<LeftOut>,
+    layers: Vec<ExcludedLayer>,
 }
 
 impl Listed<'_> {
@@ -294,10 +294,12 @@ fn listed(s: &Session) -> Vec<Listed<'_>> {
     let mut at = std::collections::HashMap::new();
     for item in map.stack() {
         let found = match item {
-            Drawn::Layer(i) => {
-                map.layers.get(i).filter(|l| map.shows(l) && legend_lists(l)).map(|l| (l.name.as_str(), LeftOut::Layer(l.instance_id())))
-            }
-            Drawn::Tile(i) => map.tiles.get(i).filter(|t| tile_listed(t)).map(|t| (t.name.as_str(), LeftOut::Web(t.name.clone()))),
+            Drawn::Layer(i) => map
+                .layers
+                .get(i)
+                .filter(|l| map.shows(l) && legend_lists(l))
+                .map(|l| (l.name.as_str(), ExcludedLayer::Layer(l.instance_id()))),
+            Drawn::Tile(i) => map.tiles.get(i).filter(|t| tile_listed(t)).map(|t| (t.name.as_str(), ExcludedLayer::Web(t.name.clone()))),
         };
         let Some((name, layer)) = found else { continue };
         let i = *at.entry(name.to_ascii_lowercase()).or_insert_with(|| {
@@ -947,11 +949,11 @@ mod tests {
         app.session.map_mut().tiles.push(tile);
     }
 
-    fn out_of(app: &RustGisApp, names: &[&str]) -> Vec<LeftOut> {
+    fn out_of(app: &RustGisApp, names: &[&str]) -> Vec<ExcludedLayer> {
         let map = app.session.map();
         let key = |name: &&str| match map.layers.iter().find(|l| l.name == *name) {
-            Some(l) => LeftOut::Layer(l.instance_id()),
-            None => LeftOut::Web(name.to_string()),
+            Some(l) => ExcludedLayer::Layer(l.instance_id()),
+            None => ExcludedLayer::Web(name.to_string()),
         };
         names.iter().map(key).collect()
     }
