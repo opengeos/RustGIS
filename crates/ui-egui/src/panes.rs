@@ -2749,7 +2749,7 @@ fn catalog(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                         // A large toolbox (the GeoLibre suite) opens one level at a time:
                         // `GeoLibre › Raster › General`.
                         if in_box.len() > 40 {
-                            toolbox_levels(app, ui, &in_box, 1, &link);
+                            toolbox_levels(app, ui, &in_box, 1, false, &link);
                         } else {
                             for tool in in_box {
                                 link(app, ui, tool);
@@ -3020,27 +3020,41 @@ fn folder_browser(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     }
 }
 
+/// The deepest toolbox level drawn as a group: a toolbox may hold up to 2,000 bytes of ` › `, and
+/// every level filters its tools again. Tools below it are listed in their last group.
+const MAX_TOOLBOX_LEVELS: usize = 8;
+
+/// The parts of a tool's toolbox (`Plugins › 1. Grid › Variograms`), trimmed and without empty
+/// ones, down to [`MAX_TOOLBOX_LEVELS`].
+fn toolbox_parts(toolbox: &str) -> impl Iterator<Item = &str> {
+    toolbox.split(" › ").map(str::trim).filter(|s| !s.is_empty()).take(MAX_TOOLBOX_LEVELS)
+}
+
 /// `tools` grouped by the `depth`-th part of their toolbox (`GeoLibre › Raster › General`), one
-/// closed header per group and nested again below it; tools whose toolbox stops here are listed.
+/// header per group (open at first when `open`) and nested again below it; tools whose toolbox
+/// stops here are listed. `open` is in the headers' identity, so the groups drawn while browsing
+/// (closed) and while searching (open) keep their own state: a header only reads `default_open`
+/// the first time it is drawn.
 fn toolbox_levels(
     app: &mut RustGisApp,
     ui: &mut Ui,
     tools: &[&'static rustgis_engine::analysis::ToolSpec],
     depth: usize,
-    link: &dyn Fn(&mut RustGisApp, &mut Ui, &rustgis_engine::analysis::ToolSpec),
+    open: bool,
+    link: &dyn Fn(&mut RustGisApp, &mut Ui, &'static rustgis_engine::analysis::ToolSpec),
 ) {
-    let part = |x: &rustgis_engine::analysis::ToolSpec| x.toolbox.split(" › ").nth(depth);
+    let part = |x: &rustgis_engine::analysis::ToolSpec| toolbox_parts(x.toolbox).nth(depth);
     let mut groups: Vec<&str> = tools.iter().filter_map(|x| part(x)).collect();
     groups.sort();
     groups.dedup();
     for g in groups {
         let inside: Vec<_> = tools.iter().copied().filter(|x| part(x) == Some(g)).collect();
-        let path: Vec<&str> = inside.first().map(|x| x.toolbox.split(" › ").take(depth + 1).collect()).unwrap_or_default();
-        egui::CollapsingHeader::new(crate::i18n::location(g)).id_salt(("toolbox", path)).default_open(false).show(ui, |ui| {
-            toolbox_levels(app, ui, &inside, depth + 1, link);
+        let path: Vec<&str> = inside.first().map(|x| toolbox_parts(x.toolbox).take(depth + 1).collect()).unwrap_or_default();
+        egui::CollapsingHeader::new(crate::i18n::location(g)).id_salt(("toolbox", path, open)).default_open(open).show(ui, |ui| {
+            toolbox_levels(app, ui, &inside, depth + 1, open, link);
         });
     }
-    for tool in tools.iter().filter(|x| part(x).is_none()) {
+    for tool in tools.iter().copied().filter(|x| part(x).is_none()) {
         link(app, ui, tool);
     }
 }
@@ -4046,24 +4060,28 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 }
             }
         };
-        // Plugin tools, by toolbox ("Plugins › Vector Toolkit"): first when browsing (a user
-        // who just installed a plugin looks for it), with the matches when searching.
+        // Plugin tools, by toolbox ("Plugins › 1. Grid › Variograms"): first when browsing (a user
+        // who just installed a plugin looks for it), with the matches when searching. One group
+        // per toolbox name below "Plugins", nested by the ` › ` in it; the groups below the first
+        // open when searching, so the matches show.
         let plugin_tools: Vec<&'static rustgis_engine::analysis::ToolSpec> =
             rustgis_engine::analysis::external_tools_of(rustgis_engine::plugins::tools::SOURCE).iter().filter(|x| matches(x)).collect();
         if !plugin_tools.is_empty() {
             ui.label(egui::RichText::new(tl!("Plugins")).size(11.0).color(t.text_dim));
-            let mut boxes: Vec<&str> = plugin_tools.iter().map(|t| t.toolbox).collect();
-            boxes.dedup();
-            for b in boxes {
-                let in_box: Vec<_> = plugin_tools.iter().filter(|x| x.toolbox == b).collect();
-                egui::CollapsingHeader::new(format!("{} ({})", b.rsplit(" › ").next().unwrap_or(b), in_box.len()))
+            let top = |x: &rustgis_engine::analysis::ToolSpec| toolbox_parts(x.toolbox).nth(1);
+            let mut tops: Vec<&str> = plugin_tools.iter().filter_map(|x| top(x)).collect();
+            tops.sort();
+            tops.dedup();
+            for b in tops {
+                let in_box: Vec<_> = plugin_tools.iter().copied().filter(|x| top(x) == Some(b)).collect();
+                egui::CollapsingHeader::new(format!("{} ({})", crate::i18n::location(b), in_box.len()))
                     .id_salt(("gp-plugin", b))
                     .default_open(true)
-                    .show(ui, |ui| {
-                        for tool in in_box {
-                            row(app, ui, tool);
-                        }
-                    });
+                    .show(ui, |ui| toolbox_levels(app, ui, &in_box, 2, !q.is_empty(), &row));
+            }
+            // A toolbox of only separators names no group: its tools sit under "Plugins".
+            for tool in plugin_tools.iter().copied().filter(|x| top(x).is_none()) {
+                row(app, ui, tool);
             }
             ui.add_space(6.0);
         }
@@ -7994,6 +8012,22 @@ pub(crate) fn layout_menu(app: &mut RustGisApp, ui: &mut Ui, n: &str) {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    /// A toolbox's parts skip the empty ones and stop at the deepest level drawn, so a hostile
+    /// manifest's `toolbox` neither adds blank groups nor nests a thousand deep (#3022).
+    #[test]
+    fn toolbox_parts_skip_empty_ones_and_stop_at_the_deepest_level() {
+        fn parts(t: &str) -> Vec<&str> {
+            toolbox_parts(t).collect()
+        }
+        assert_eq!(parts("Plugins › 1. Grid › Variograms"), ["Plugins", "1. Grid", "Variograms"]);
+        assert_eq!(parts("Plugins ›  › Grid ›  › Examples › "), ["Plugins", "Grid", "Examples"]);
+        assert_eq!(parts("Plugins › A › B"), parts("Plugins › A  ›  B "), "a part's own spaces are not part of its name");
+        assert!(parts("").is_empty() && parts(" ›  › ").is_empty());
+        let deep = vec!["a"; 300].join(" › ");
+        assert!(deep.len() < 2_000);
+        assert_eq!(toolbox_parts(&deep).count(), MAX_TOOLBOX_LEVELS);
+    }
 
     /// A layer linked to its file says so after its name, with the file and what linking means
     /// (#2350); a copy, and the same layer once Load All Features copies it, don't. Another note

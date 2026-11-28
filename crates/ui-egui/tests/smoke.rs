@@ -2209,6 +2209,84 @@ fn plugins_can_have_a_tab_of_their_own() {
     rp::unload("ui-tab");
 }
 
+/// A plugin's toolbox path (`A. Grid › Variograms`) nests in the Tools pane, whatever the order of
+/// its tools: one group per path, not one per run of neighbours (#3022).
+#[test]
+fn plugin_tools_nest_by_their_toolbox_path() {
+    let _turn = PLUGINS.lock().unwrap_or_else(|e| e.into_inner());
+    use egui::accesskit::Role;
+    use rustgis_ui_egui::rustgis_engine::plugins as rp;
+    let mut m: serde_json::Value = serde_json::from_str(&rp::testing::manifest("ui-nest", &[])).unwrap();
+    let tool = |id: &str, name: &str, toolbox: &str| json!({"id": id, "name": name, "toolbox": toolbox, "params": []});
+    // Tools of one toolbox are not next to each other; one has none, one only separators.
+    m["tools"] = json!([
+        tool("v1", "Nest Variogram One", "A. Grid › Variograms"),
+        tool("c1", "Nest Contours", "B. Topography"),
+        tool("e1", "Nest Example", "A. Grid › Examples"),
+        tool("v2", "Nest Variogram Two", "A. Grid › Variograms"),
+        tool("n1", "Nest Unplaced", ""),
+        tool("s1", "Nest Loose", " ›  › "),
+    ]);
+    let pkg = rp::testing::zip_of(&[("plugin.json", m.to_string().as_bytes()), ("plugin.wasm", &rp::testing::wasm())]);
+    rp::load(rp::Package::from_zip(&pkg).unwrap(), "test").unwrap();
+    let mut h = harness_with_size(egui::vec2(1400.0, 2000.0));
+    h.state_mut().run("ui.pane.geoprocessing", json!(null)).unwrap();
+    for _ in 0..4 {
+        h.step();
+    }
+    let headers =
+        |h: &egui_kittest::Harness<'_, RustGisApp>, label: &str| h.query_all_by_role_and_label(Role::DisclosureTriangle, label).count();
+    // The parent of both nested groups, once; the groups under it, once each.
+    assert_eq!(headers(&h, "A. Grid (3)"), 1);
+    assert_eq!(headers(&h, "B. Topography (1)"), 1);
+    assert_eq!(headers(&h, "Test ui-nest (1)"), 1, "no toolbox: named after the plugin");
+    assert_eq!(headers(&h, "Variograms"), 1);
+    assert_eq!(headers(&h, "Examples"), 1);
+    assert_eq!(h.query_all_by_label("Nest Variogram One").count(), 0, "a nested group opens when asked");
+    h.get_by_role_and_label(Role::DisclosureTriangle, "Variograms").click();
+    h.run();
+    assert_eq!(h.query_all_by_label("Nest Variogram One").count(), 1);
+    assert_eq!(h.query_all_by_label("Nest Variogram Two").count(), 1);
+    assert_eq!(h.query_all_by_label("Nest Contours").count(), 1);
+    assert_eq!(h.query_all_by_label("Nest Loose").count(), 1);
+    rp::unload("ui-nest");
+}
+
+/// A nested group drawn closed while browsing opens when the user then searches, so the matches
+/// show; clearing the search brings back the closed group (#3022).
+#[test]
+fn plugin_tool_groups_open_when_searching() {
+    let _turn = PLUGINS.lock().unwrap_or_else(|e| e.into_inner());
+    use egui::accesskit::Role;
+    use rustgis_ui_egui::rustgis_engine::plugins as rp;
+    let mut m: serde_json::Value = serde_json::from_str(&rp::testing::manifest("ui-find", &[])).unwrap();
+    m["tools"] = json!([
+        {"id": "v1", "name": "Find Variogram One", "toolbox": "A. Grid › Variograms", "params": []},
+        {"id": "e1", "name": "Find Example", "toolbox": "A. Grid › Examples", "params": []},
+    ]);
+    let pkg = rp::testing::zip_of(&[("plugin.json", m.to_string().as_bytes()), ("plugin.wasm", &rp::testing::wasm())]);
+    rp::load(rp::Package::from_zip(&pkg).unwrap(), "test").unwrap();
+    let mut h = harness_with_size(egui::vec2(1400.0, 2000.0));
+    h.state_mut().run("ui.pane.geoprocessing", json!(null)).unwrap();
+    for _ in 0..4 {
+        h.step();
+    }
+    assert_eq!(h.query_all_by_role_and_label(Role::DisclosureTriangle, "Variograms").count(), 1);
+    assert_eq!(h.query_all_by_label("Find Variogram One").count(), 0, "closed while browsing");
+    h.state_mut().gp.search = "Variogram One".into();
+    for _ in 0..4 {
+        h.step();
+    }
+    assert_eq!(h.query_all_by_label("Find Variogram One").count(), 1, "open while searching");
+    assert_eq!(h.query_all_by_label("Find Example").count(), 0, "not a match");
+    h.state_mut().gp.search.clear();
+    for _ in 0..4 {
+        h.step();
+    }
+    assert_eq!(h.query_all_by_label("Find Variogram One").count(), 0, "closed again after the search");
+    rp::unload("ui-find");
+}
+
 #[test]
 fn plugin_small_ribbon_columns_and_nested_menus_preserve_actions() {
     if in_own_process("plugin_small_ribbon_columns_and_nested_menus_preserve_actions") {
