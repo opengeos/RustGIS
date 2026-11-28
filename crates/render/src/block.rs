@@ -1596,8 +1596,9 @@ pub(crate) fn draw_walls(
     // outlines are, once all its sides are filled ([`draw_bands`]); and whether it stopped at the
     // base anywhere.
     let (mut band_fills, mut band_lines): (Vec<(tiny_skia::Path, Rgba)>, Vec<(tiny_skia::Path, Rgba)>) = (Vec::new(), Vec::new());
-    // How many of the band's stretches stop at the base, said once with the layer.
-    let mut band_at_base = 0usize;
+    // The band's stretches that stop at the base, by side and stretch (two runs, two classes,
+    // meeting inside one count it once), said once with the layer and how many.
+    let mut band_at_base = std::collections::BTreeSet::new();
     // Where a side's band meets its neighbour's in its own colour: no contact there.
     let side_ends = |i: usize| {
         let (key, a, z) = b.side(i);
@@ -1873,7 +1874,7 @@ pub(crate) fn draw_walls(
                 (run.hi, (run.hi - hi_end).abs() >= SEAM || down_hi || !goes_on(after_band, run, true)),
             ];
             let mut fill = PathBuilder::new();
-            for (ends, _, [ta, tz]) in &quads {
+            for (q, (ends, _, [ta, tz])) in quads.iter().enumerate() {
                 let (ca, cz) = (b.along(side, ends[0]), b.along(side, ends[1]));
                 let span = cz - ca;
                 if span.abs() < 1e-12 {
@@ -1946,7 +1947,9 @@ pub(crate) fn draw_walls(
                     .then(|| t0 + (t1 - t0) * over_a / (over_a - over_z))
                     .and_then(&mut under)
                     .map(|(p, _)| p);
-                band_at_base += usize::from(at_base);
+                if at_base {
+                    band_at_base.insert((s, q));
+                }
                 let (ta2, tz2) = (top_at(t0), top_at(t1));
                 let foot = match bend {
                     Some(c) => vec![grow(bz, c), pt(c), grow(ba, c)],
@@ -2135,8 +2138,8 @@ pub(crate) fn draw_walls(
     }
     stroke_outlines(pm, &mut outlines, k);
     draw_bands(pm, &mut band_fills, &mut band_lines, k);
-    if band_at_base > 0 {
-        crate::approximations::band_at_base(&bands.layer, band_at_base);
+    if !band_at_base.is_empty() {
+        crate::approximations::band_at_base(&bands.layer, band_at_base.len());
     }
     draw_water(pm, &mut waters, k);
 }
@@ -4163,6 +4166,23 @@ mod tests {
         assert!(fill > 100, "{fill}");
         assert!(near_line(0.0).is_some_and(|d| d + 40 < fill), "{:?} vs {fill}", near_line(0.0));
         assert!(near_line(500.0).is_some_and(|d| d < 40), "{:?}", near_line(500.0));
+    }
+
+    #[test]
+    fn a_stretch_two_classes_share_at_the_base_counts_once() {
+        // #2607: 150 m (300 doubled) of red soil west of x 50 and green east of it, over a wall
+        // 200 m (doubled) high: the band stops at the base in each of the south wall's 20
+        // stretches, and the one from 0 to 100, which both classes share, is one of them, not two.
+        let (red, green) = (Rgba::rgb(220, 30, 30), Rgba::rgb(30, 170, 60));
+        let soils = [([-3000.0, -1500.0, 50.0, 0.0], "argissolo", red), ([50.0, -1500.0, 3000.0, 0.0], "latossolo", green)];
+        let (m, b, g, res) = block_under_soils(&soils, 150.0);
+        let dry: WaterRuns = (0..b.sides()).map(|_| Vec::new()).collect();
+        let before = crate::approximations::keep();
+        let _ = south_wall(&m, &b, &g, res, &dry);
+        let said = crate::approximations::take();
+        crate::approximations::restore(before);
+        let at_base: Vec<_> = said.iter().filter(|t| t.contains("stops at the base")).collect();
+        assert!(at_base.len() == 1 && at_base[0].contains(" 20 stretches "), "{said:?}");
     }
 
     /// The band's thickness reads and saves as a number, or as `{"field": name}` (#2607).
