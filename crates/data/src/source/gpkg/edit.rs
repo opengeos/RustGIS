@@ -346,9 +346,8 @@ impl EditTable {
             saved.updated += 1;
         }
         // What the updated rows held before the save, to tell a value the save changed from one the
-        // load already said. Only a value a read can say something of is kept: any value of a date
-        // column, text or a blob (a number that isn't one, text that isn't UTF-8) or a whole number
-        // in a decimal field; the deleted rows and the rest of each row aren't.
+        // load already said. Only a value a read can say something of is kept (see `said`); the
+        // deleted rows and the rest of each row aren't.
         let updated: std::collections::HashSet<i64> = edits.updates.iter().map(|(f, _)| f.id.cast_signed()).collect();
         let decimal: std::collections::HashSet<usize> = snapshot_columns
             .iter()
@@ -360,9 +359,20 @@ impl EditTable {
             .filter(|(i, _)| fields.get(*i).is_some_and(|f| matches!(f.ty, crate::FieldType::Date | crate::FieldType::DateTime)))
             .map(|&(_, c)| c)
             .collect();
-        // A date column's every cell, as before (a number there isn't a date either).
+        let text: std::collections::HashSet<usize> = snapshot_columns
+            .iter()
+            .filter(|(i, _)| fields.get(*i).is_some_and(|f| f.ty == crate::FieldType::Text))
+            .map(|&(_, c)| c)
+            .collect();
+        // A date column's every cell, as before (a number there isn't a date either); text in a
+        // number or yes/no column; a blob anywhere (in a text column, its bytes may not be UTF-8);
+        // a whole number in a decimal column. Text in a text column was read as UTF-8 here
+        // already, so nothing is said of it and it isn't kept.
         let said = |c: usize, v: &Sql| {
-            dated.contains(&c) || matches!(v, Sql::Text(_) | Sql::Blob(_)) || matches!(v, Sql::Integer(_)) && decimal.contains(&c)
+            dated.contains(&c)
+                || matches!(v, Sql::Blob(_))
+                || matches!(v, Sql::Text(_)) && !text.contains(&c)
+                || matches!(v, Sql::Integer(_)) && decimal.contains(&c)
         };
         let columns_kept: std::collections::HashSet<usize> = snapshot_columns.iter().map(|&(_, c)| c).collect();
         // Moved out of the rows read, which aren't needed past here: no second copy.
