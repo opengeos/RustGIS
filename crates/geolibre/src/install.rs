@@ -139,6 +139,7 @@ pub fn install_cancellable(progress: &dyn Fn(u64, Option<u64>), cancel: &AtomicB
 }
 
 /// Cancellation never promotes a partial or staged runner to the installed path.
+/// The stable error text identifies cancellation to callers of this string-error API.
 fn check_cancel(cancel: &AtomicBool) -> Result<(), String> {
     if cancel.load(Ordering::Relaxed) { Err("GeoLibre installation cancelled".into()) } else { Ok(()) }
 }
@@ -269,7 +270,7 @@ mod tests {
             assert_eq!(crate::runner::version_of(&dest).as_deref(), Some("geolibre-cli 1.8.0"), "the installed runner is kept");
         }
         fake(&staged, Some("geolibre-cli 1.8.1")).unwrap();
-        assert!(put_in_place(&staged, &dest, "v1.8.1", &AtomicBool::new(true)).unwrap_err().contains("cancelled"));
+        assert_eq!(put_in_place(&staged, &dest, "v1.8.1", &AtomicBool::new(true)).unwrap_err(), "GeoLibre installation cancelled");
         assert_eq!(crate::runner::version_of(&dest).as_deref(), Some("geolibre-cli 1.8.0"));
         assert!(staged.exists());
         assert_eq!(put_in_place(&staged, &dest, "v1.8.1", &AtomicBool::new(false)).unwrap(), dest);

@@ -2981,8 +2981,8 @@ impl Session {
             if let crate::grids::News::Finished { grids, bytes } = n {
                 self.notify_text(
                     crate::notice_text::NoticeText::format(
-                        if *grids == 1 { "Downloaded {count} datum grid, {mb} MB" } else { "Downloaded {count} datum grids, {mb} MB" },
-                        [("count", grids.to_string().into()), ("mb", format!("{:.1}", *bytes as f64 / 1_000_000.0).into())],
+                        if *grids == 1 { "Downloaded {count} datum grid, {size}" } else { "Downloaded {count} datum grids, {size}" },
+                        [("count", grids.to_string().into()), ("size", crate::grids::size_text(*bytes).into())],
                     ),
                     false,
                 );

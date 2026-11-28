@@ -3490,12 +3490,12 @@ pub(crate) fn poll_geolibre_install(app: &mut RustGisApp, ctx: &egui::Context) {
     // An install that just finished: use the runner, and remember it.
     let finished = app.gp.install.as_ref().and_then(|st| {
         let mut st = st.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let cancelled = st.cancel.load(std::sync::atomic::Ordering::Relaxed);
-        st.result.take().map(|result| (result, cancelled))
+        st.result.take()
     });
-    if let Some((result, cancelled)) = finished {
+    if let Some(result) = finished {
         app.gp.install = None;
-        if cancelled && result.is_err() {
+        // The worker's cancellation result is distinct from a failure followed by a late click.
+        if result.as_ref().is_err_and(|error| error == "GeoLibre installation cancelled") {
             app.session.notify(tl!("GeoLibre installation cancelled"), false);
             app.gp.last = None;
             return;
@@ -3525,31 +3525,71 @@ pub(crate) fn poll_geolibre_install(app: &mut RustGisApp, ctx: &egui::Context) {
 mod install_completion_tests {
     use super::*;
 
-    /// The normal frame, with Tools closed, collects and notices an install failure once.
+    /// The card's real progress control acknowledges a click before the worker finishes a read.
+    #[test]
+    fn install_cancel_shows_pending_state() {
+        use egui_kittest::kittest::{NodeT, Queryable};
+        let install = std::sync::Arc::new(std::sync::Mutex::new(Install { done: 13_442, total: Some(20_000_000), ..Default::default() }));
+        let mut h = egui_kittest::Harness::builder()
+            .build_ui_state(|ui, st: &mut std::sync::Arc<std::sync::Mutex<Install>>| geolibre_install_progress(ui, st), install);
+        h.run();
+        assert!(h.query_by_label("Downloading… 14 KB").is_some());
+        h.get_by_label("Cancel").click();
+        h.run();
+        assert!(h.state().lock().unwrap().cancel.load(std::sync::atomic::Ordering::Relaxed));
+        assert!(h.query_by_label("Cancelling… 14 KB").is_some());
+        assert!(h.get_by_label("Cancel").accesskit_node().is_disabled());
+    }
+
+    /// The normal frame, with Tools closed, preserves a worker failure after a late Cancel
+    /// request and reports genuine cancellation as information, each exactly once.
     #[test]
     fn closed_tools_pane_still_reports_install_failure() {
-        let mut app = RustGisApp::new(Session::new(rustgis_engine::Project::default()));
-        app.ui.right = None;
-        app.gp.install = Some(std::sync::Arc::new(std::sync::Mutex::new(Install {
-            result: Some(Err("fixture: truncated runner".into())),
-            ..Default::default()
-        })));
-        let mark = app.session.notice_mark();
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(1000.0, 800.0)).build_ui_state(
-            |ui, app: &mut RustGisApp| {
-                app.logic(ui.ctx());
-                app.ui(ui);
-            },
-            app,
-        );
-        h.step();
-        assert!(h.state().gp.install.is_none());
-        assert_eq!(h.state().ui.right, None);
-        let notices = h.state().session.notices_since(mark);
-        assert_eq!(notices.iter().filter(|n| n.error && n.text == "fixture: truncated runner").count(), 1);
-        h.step();
-        assert_eq!(h.state().session.notices_since(mark).iter().filter(|n| n.text == "fixture: truncated runner").count(), 1);
+        for (text, error) in [("fixture: truncated runner", true), ("GeoLibre installation cancelled", false)] {
+            let mut app = RustGisApp::new(Session::new(rustgis_engine::Project::default()));
+            app.ui.right = None;
+            app.gp.install = Some(std::sync::Arc::new(std::sync::Mutex::new(Install {
+                result: Some(Err(text.into())),
+                cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+                ..Default::default()
+            })));
+            let mark = app.session.notice_mark();
+            let mut h = egui_kittest::Harness::builder().with_size(vec2(1000.0, 800.0)).build_ui_state(
+                |ui, app: &mut RustGisApp| {
+                    app.logic(ui.ctx());
+                    app.ui(ui);
+                },
+                app,
+            );
+            h.step();
+            assert!(h.state().gp.install.is_none());
+            assert_eq!(h.state().ui.right, None);
+            assert_eq!(h.state().gp.last.is_some(), error, "the worker result determines whether a failure is retained");
+            let notices = h.state().session.notices_since(mark);
+            assert_eq!(notices.iter().map(|n| (n.text.as_str(), n.error)).collect::<Vec<_>>(), [(text, error)]);
+            h.step();
+            assert_eq!(h.state().session.notices_since(mark).len(), 1);
+        }
     }
+}
+
+/// Draws the running install's received bytes and acknowledges Cancel while a read unwinds.
+fn geolibre_install_progress(ui: &mut Ui, install: &std::sync::Mutex<Install>) {
+    let (done, total, cancel) = {
+        let st = install.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        (st.done, st.total, st.cancel.clone())
+    };
+    let cancelled = cancel.load(std::sync::atomic::Ordering::Relaxed);
+    let text = crate::i18n::fmt(
+        if cancelled { "Cancelling… {size}" } else { "Downloading… {size}" },
+        &[("size", &rustgis_engine::grids::size_text(done))],
+    );
+    let bar = egui::ProgressBar::new(total.map(|t| done as f32 / t.max(1) as f32).unwrap_or(0.0)).text(text);
+    ui.add(if total.is_some() { bar } else { bar.animate(true) });
+    if ui.add_enabled(!cancelled, egui::Button::new(tl!("Cancel"))).clicked() {
+        cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
 }
 
 /// Where to get the GeoLibre tools when the runner isn't installed (desktop and CLI builds only).
@@ -3598,25 +3638,8 @@ fn geolibre_card(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             );
             geolibre_passed_over(app, ui, t, true);
             ui.add_space(6.0);
-            let progress = app.gp.install.as_ref().and_then(|st| st.lock().ok().map(|s| (s.done, s.total)));
-            match progress {
-                Some((done, total)) => {
-                    let mb = |b: u64| format!("{:.1}", b as f64 / 1_048_576.0);
-                    let text = crate::i18n::fmt("Downloading… {mb} MB", &[("mb", &mb(done))]);
-                    let bar = egui::ProgressBar::new(total.map(|t| done as f32 / t.max(1) as f32).unwrap_or(0.0)).text(text);
-                    ui.add(if total.is_some() { bar } else { bar.animate(true) });
-                    if ui.button(tl!("Cancel")).clicked()
-                        && let Some(install) = &app.gp.install
-                    {
-                        install
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner)
-                            .cancel
-                            .store(true, std::sync::atomic::Ordering::Relaxed);
-                    }
-                    // Keep drawing while the download runs on its thread.
-                    ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
-                }
+            match &app.gp.install {
+                Some(install) => geolibre_install_progress(ui, install),
                 None => {
                     #[cfg(not(target_arch = "wasm32"))]
                     if crate::widgets::primary_button(ui, tl!("Install Whitebox and GeoLibre tools"), true, vec2(0.0, 28.0)).clicked() {
@@ -3642,8 +3665,9 @@ fn geolibre_card(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                         });
                         if let Err(e) = spawned {
                             app.gp.install = None;
-                            app.session.notify(e.to_string(), true);
-                            app.gp.last = Some((false, vec![e.to_string()]));
+                            let error = Session::redacted(&e.to_string());
+                            app.gp.last = Some((false, vec![error.as_str().to_string()]));
+                            app.session.notify_redacted(error, true);
                         }
                     }
                     ui.add_space(2.0);

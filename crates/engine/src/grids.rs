@@ -683,7 +683,7 @@ pub fn news_texts(news: &[News]) -> Vec<(String, bool)> {
     for n in news {
         match n {
             News::Missed(_) | News::Finished { .. } => {}
-            News::Got { name, bytes } => got.push(format!("{name} ({})", size_text(*bytes))),
+            News::Got { name, bytes } => got.push(format!("{name} ({})", size_text(*bytes as u64))),
             News::Failed { name, error } => {
                 count += 1;
                 match why.iter_mut().find(|(e, _)| e == error) {
@@ -731,7 +731,9 @@ pub fn news_texts(news: &[News]) -> Vec<(String, bool)> {
     out
 }
 
-fn size_text(bytes: usize) -> String {
+/// Download sizes in decimal units; rounding small amounts up keeps received bytes visible.
+/// Batch totals stay wide on 32-bit front ends as well as native builds.
+pub fn size_text(bytes: u64) -> String {
     let mb = bytes as f64 / 1_000_000.0;
     if mb >= 1.0 { format!("{mb:.1} MB") } else { format!("{} KB", bytes.div_ceil(1000)) }
 }
@@ -762,6 +764,9 @@ mod tests {
         assert!(!s.batch_active);
         assert!(matches!(s.claim("c.tif", true), Claim::Mine));
         assert_eq!((s.batch_total, s.batch_done, s.batch_got, s.batch_bytes), (1, 0, 0, 0));
+        let mut seen = s.told;
+        s.finish("c.tif", Err("HTTP 404".into()));
+        assert_eq!(s.news_since(&mut seen), [News::Failed { name: "c.tif".into(), error: "HTTP 404".into() }]);
     }
 
     #[test]
@@ -900,5 +905,9 @@ mod tests {
         );
         assert_eq!(said[0].0.matches("at most 16").count(), 1, "{said:?}");
         assert_eq!(size_text(12_345_678), "12.3 MB");
+        assert_eq!(size_text(13_442), "14 KB");
+        assert_eq!(size_text(1), "1 KB");
+        assert_eq!(size_text(0), "0 KB");
+        assert_eq!(size_text(5_000_000_000), "5000.0 MB");
     }
 }

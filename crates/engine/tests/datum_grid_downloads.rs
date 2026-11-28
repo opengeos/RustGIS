@@ -67,6 +67,7 @@ fn a_read_waits_for_the_grids_its_system_needs() {
     assert_eq!(ASKED.load(Ordering::SeqCst), 0);
 
     // On: the read gets both grids first, keeps them, and its features land where they put them.
+    let mut download_notices = Session::new(Project::default());
     grids::set_enabled(true);
     let t = crs::waiting_for_grids(|| texas.transformer()).unwrap();
     assert!(close(t.to_lonlat(at).unwrap(), (-99.00031395482138, 29.208749002954207)), "{:?}", t.to_lonlat(at));
@@ -87,6 +88,16 @@ fn a_read_waits_for_the_grids_its_system_needs() {
         ]
     );
     assert!(crs::missing_grids(texas).is_empty());
+    download_notices.notice_landed_rasters();
+    assert_eq!(
+        download_notices
+            .notices
+            .iter()
+            .filter(|n| n.text.starts_with("Downloaded 2 datum grids"))
+            .map(|n| (n.text.as_str(), n.error))
+            .collect::<Vec<_>>(),
+        [("Downloaded 2 datum grids, 187 KB", false)]
+    );
     // Read again, nothing more is asked for.
     let _ = crs::waiting_for_grids(|| texas.transformer()).unwrap();
     assert_eq!(ASKED.load(Ordering::SeqCst), 2);
@@ -242,4 +253,19 @@ fn a_read_waits_for_the_grids_its_system_needs() {
     }
     grids::set_enabled(false);
     MODE.store(GRIDS, Ordering::SeqCst);
+    // This binary owns the process-wide grid news: exercise a small singular completion through
+    // the real session landing, once despite repeated frames, without another network request.
+    let mut summary = Session::new(Project::default());
+    grids::tell(News::Finished { grids: 1, bytes: 13_442 });
+    summary.notice_landed_rasters();
+    summary.notice_landed_rasters();
+    assert_eq!(
+        summary
+            .notices
+            .iter()
+            .filter(|n| n.text.starts_with("Downloaded 1 datum grid"))
+            .map(|n| (n.text.as_str(), n.error))
+            .collect::<Vec<_>>(),
+        [("Downloaded 1 datum grid, 14 KB", false)]
+    );
 }

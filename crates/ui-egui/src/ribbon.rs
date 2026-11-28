@@ -4100,8 +4100,8 @@ fn settings_tab(app: &mut RustGisApp, ui: &mut Ui) {
             let (done, total, bytes, active) = rustgis_engine::grids::progress();
             if active {
                 ui.small(crate::i18n::fmt(
-                    "{done} of {total} · {mb} MB",
-                    &[("done", &done.to_string()), ("total", &total.to_string()), ("mb", &format!("{:.1}", bytes as f64 / 1_000_000.0))],
+                    "{done} of {total} · {size}",
+                    &[("done", &done.to_string()), ("total", &total.to_string()), ("size", &rustgis_engine::grids::size_text(bytes))],
                 ));
                 ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
             }

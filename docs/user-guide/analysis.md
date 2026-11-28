@@ -1523,7 +1523,8 @@ version RustGIS works with, and only then installs it in its data folder
 (by default `~/.local/share/rustgis/geolibre` on Linux, `~/Library/Application Support/RustGIS/geolibre`
 on macOS, `%LOCALAPPDATA%\RustGIS\geolibre` on Windows). `RUSTGIS_APP_DATA_DIR` overrides the
 data folder; Linux also honours `XDG_DATA_HOME`. From the command line, `gp.installGeolibre`
-does the same. The install card shows download progress and **Cancel**. Cancellation is checked
+installs the same runner synchronously. The desktop install card shows download progress and
+**Cancel**, then **Cancelling…** while a cancelled read unwinds. Cancellation is checked
 between network reads and before the runner replaces an installed copy; a blocked read must end
 or time out first. A notice reports success with the tool count, or failure, even if the Tools
 pane was closed while the installation ran.
