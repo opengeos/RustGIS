@@ -5282,7 +5282,10 @@ fn kriging_interpolation(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, Strin
             }
             Geometry::Line(_) | Geometry::Polygon(_) => {
                 let ext = g.extent();
-                if !ext.is_empty() {
+                if ext.is_empty() {
+                    // The extent skips coordinates that aren't numbers: empty with coordinates, all were rejected.
+                    left_out.no_place += g.coord_count();
+                } else {
                     let center = Coord::new((ext.min_x + ext.max_x) * 0.5, (ext.min_y + ext.max_y) * 0.5);
                     if center.is_finite() {
                         raw_pts.push((center, v));
@@ -12384,6 +12387,30 @@ mod tests {
             let r = crate::run(tool, &clean, &p).unwrap_or_else(|e| panic!("{tool}: {e}"));
             assert!(r.losses.is_empty(), "{tool}: {:?}", r.losses);
         }
+    }
+
+    /// Kriging counts the coordinates of a line or polygon it rejects as such, not as a feature with
+    /// no geometry; an empty line is the geometry-less one.
+    #[test]
+    fn kriging_counts_rejected_line_coordinates_as_coordinates() {
+        use rustgis_data::loss::LossCode::{DroppedFeature, DroppedGeometry};
+        let mut ds = Dataset::new("lines", GeometryType::Polyline, vec![Field::new("v", FieldType::Double)]);
+        for (x, y, v) in [(0.5, 0.5, 1.0), (1.5, 0.5, 2.0), (1.0, 1.5, 3.0)] {
+            ds.push(Some(Geometry::Point(Coord::new(x, y))), vec![Value::Float(v)]);
+        }
+        let bad = vec![Coord::new(f64::NAN, 1.0), Coord::new(1.0, f64::INFINITY), Coord::new(f64::NAN, f64::NAN)];
+        ds.push(Some(Geometry::Line(vec![bad])), vec![Value::Float(4.0)]);
+        ds.push(Some(Geometry::Line(vec![])), vec![Value::Float(5.0)]);
+        let m = Map(HashMap::from([("lines".to_string(), ds)]));
+        let p = serde_json::json!({"input": "lines", "field": "v", "extent": "0,0,2,2", "pixelSize": 0.5});
+        let r = crate::run("kriging", &m, &p).unwrap_or_else(|e| panic!("{e}"));
+        let got: Vec<(rustgis_data::loss::LossCode, String)> = r.losses.iter().map(|l| (l.code, l.text.clone())).collect();
+        let place = "a coordinate (or, for a line or polygon, its centre) is not a finite number";
+        let want = vec![
+            (DroppedFeature, "Ordinary Kriging: 1 of 5 feature(s) left out: they have no geometry, or an empty one".to_string()),
+            (DroppedGeometry, format!("Ordinary Kriging: 3 coordinate(s) left out: {place}")),
+        ];
+        assert_eq!(got, want);
     }
 
     /// With too few points left, the error says what was left out.
