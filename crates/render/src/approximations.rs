@@ -1,5 +1,6 @@
 //! What frames drew otherwise than their layers ask (Never silent): a dashed line drawn solid,
-//! a fill left off a block diagram's walls, ground with no height taken as 0 under a block.
+//! a fill left off a block diagram's walls, ground with no height taken as 0 under a block, and,
+//! in an export's drawing, a tile layer that couldn't be drawn (the map view says its own).
 //!
 //! The drawing code has no session to tell, and a frame comes many times a second, so a frame
 //! keeps what it approximated on the thread drawing it, one notice per layer and kind (its key),

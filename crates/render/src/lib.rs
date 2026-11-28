@@ -8908,8 +8908,24 @@ fn complete(map: &mut Map, view: &View, record: bool, failed_source: &mut Option
     let before = (SHADOWS_TO_COME.with(|c| c.replace(false)), take_shadow_notices());
     let r = complete_passes(map, view, record, failed_source, env);
     SHADOWS_TO_COME.with(|c| c.set(before.0 || c.get()));
+    let drawn = take_shadow_notices();
+    // A tile layer that couldn't be drawn leaves its part empty, which in a finished picture
+    // passes for the map: said by whoever this draws for (see `shadows_said`), as the frames the
+    // map view shows say theirs. Once a layer, as its error's counts change from one drawing of a
+    // page to the next. Cast shadows left out are said as such, and a raster read in place drawn
+    // from less than it needs (`partial`) is an export's to refuse (`render_exported`).
+    let in_place: Vec<String> = r
+        .iter()
+        .flat_map(|r| &r.partial)
+        .filter_map(|id| map.layers.iter().find(|l| l.id == *id))
+        .map(|l| format!("{}: ", l.name))
+        .collect();
+    for e in r.iter().flat_map(|r| &r.tile_errors).filter(|e| !drawn.contains(e) && !in_place.iter().any(|p| e.starts_with(p.as_str()))) {
+        let layer = e.split_once(": ").map_or(e.as_str(), |(l, _)| l);
+        approximations::note(format!("\0undrawn\0{layer}"), format!("a tile layer couldn't be drawn, so its part is empty: {e}"));
+    }
     let mut notices = before.1;
-    for e in take_shadow_notices() {
+    for e in drawn {
         if !notices.contains(&e) {
             notices.push(e);
         }
@@ -9065,7 +9081,7 @@ pub fn render_placed(map: &mut Map, view: &View) -> Result<Placed, String> {
     let approximated = approximations::take();
     approximations::restore(approximated_before);
     let r = r?;
-    let tile_errors: Vec<&String> = r.tile_errors.iter().filter(|e| !shadows.contains(e)).collect();
+    // Tile layers that couldn't be drawn are among what it approximated (see `complete`).
     let mut gaps = shadows;
     gaps.extend(approximated);
     if to_come {
@@ -9082,14 +9098,6 @@ pub fn render_placed(map: &mut Map, view: &View) -> Result<Placed, String> {
             "streamed layers were still reading the view, so some features are missing: export again once the map has drawn them"
                 .to_string(),
         );
-    }
-    if let Some(first) = tile_errors.first() {
-        let n = tile_errors.len();
-        gaps.push(if n == 1 {
-            format!("a tile layer couldn't be drawn, so its part is empty: {first}")
-        } else {
-            format!("{n} tile layers couldn't be drawn, so their parts are empty; the first: {first}")
-        });
     }
     revisions.finish(map, None, Some(Placed { pixmap: r.pixmap, credits: r.attribution, gaps }), "could not draw the map")
 }

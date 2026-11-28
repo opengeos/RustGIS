@@ -1737,16 +1737,16 @@ pub(crate) mod tests {
     #[test]
     fn a_tile_layer_without_a_tile_in_view_says_so() {
         serve();
-        let camera = Camera { center: lonlat_to_merc(Coord::new(10.0, 50.0)), res: 2000.0, bearing: 0.0, pitch: 0.0 };
+        // Centred where columns 33 and 34 of zoom 6 meet (67 and 68 of zoom 7): an odd and an
+        // even column in view at either.
+        let camera = Camera { center: lonlat_to_merc(Coord::new(11.25, 50.0)), res: 2000.0, bearing: 0.0, pitch: 0.0 };
         let view = View { width: 200.0, height: 100.0, pixels_per_point: 1.0, camera, sky: false };
         let mut map = Map::new("Map");
         map.basemap = rustgis_map::Basemap::Blank;
         map.tiles.push(TileLayer::new("Retired", TileKind::Raster, "https://tiles.test/gone/{z}/{x}/{y}.png"));
         let r = crate::render_complete(&mut map, &view).unwrap();
         let [error] = &r.tile_errors[..] else { panic!("{:?}", r.tile_errors) };
-        let n = error.strip_prefix("Retired: all ").and_then(|e| e.split(' ').next()?.parse::<usize>().ok());
-        assert!(n.is_some_and(|n| n > 1), "{error}");
-        assert!(error.contains(" tiles in view are missing on the server (HTTP 404): "), "{error}");
+        assert!(error.starts_with("Retired: none of the tiles in view are on the server (HTTP 404): "), "{error}");
         let (png, said) = crate::shadows_said(|| crate::render_png(&mut map, &view));
         assert!(png.is_ok());
         assert_eq!(said.notices, [format!("a tile layer couldn't be drawn, so its part is empty: {error}")]);

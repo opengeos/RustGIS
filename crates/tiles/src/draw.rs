@@ -630,7 +630,10 @@ fn raster_zoom(frame: &Frame, view: &Extent, tile_size: u32, min_zoom: u8, max_z
 /// The tiles of a source in view and out to `reach` (those in the cache only), with stand-ins
 /// for those not here yet. Expanded destinations retain the supplying document's reach;
 /// refused tiles are counted in `error` and network history without requesting or reusing bytes. Valid
-/// tiles still draw, even when another shard of the same source is refused.
+/// tiles still draw, even when another shard of the same source is refused. A picture tile the
+/// server hasn't (404, 410) is routine past a source's coverage and left clear unsaid, but when
+/// the server has none of those in view, which is how a moved or retired service looks, that
+/// goes in `error` ([`none_on_the_server`]).
 pub(crate) fn tiles_in(
     src: &Source,
     view: &Extent,
@@ -686,6 +689,8 @@ pub(crate) fn tiles_in(
     let mut retry = false;
     let mut partial = 0;
     let mut first_partial = None;
+    // Tiles in view asked for, and those of them the server hasn't (404, 410).
+    let (mut asked, mut not_there, mut first_status) = (0, 0, None);
     // A missing tile is stood in for by its nearest ancestor in the cache and, for raster tiles,
     // by its children in the cache, the ancestor only in the quarters they leave: zooming in, the
     // tiles of the zoom being passed through are often missing while those of the zoom it ends
@@ -714,6 +719,7 @@ pub(crate) fn tiles_in(
         let area = p.extent();
         // A tile merely touching the view's edge has no visible pixels.
         let visible = area.min_x < view.max_x && area.max_x > view.min_x && area.min_y < view.max_y && area.max_y > view.min_y;
+        asked += usize::from(visible);
         let u = match url(p.id) {
             Ok(Some(u)) => u,
             Ok(None) => continue,
@@ -756,6 +762,9 @@ pub(crate) fn tiles_in(
                 if !cache::routine_tile_failure(&e) {
                     omitted += 1;
                     first_error.get_or_insert(e);
+                } else if let Some(status) = cache::http_status(&e).filter(|_| visible) {
+                    not_there += 1;
+                    first_status.get_or_insert(status);
                 }
             }
             State::Pending => {
@@ -775,7 +784,19 @@ pub(crate) fn tiles_in(
     if let Some(reason) = first_partial {
         add_error(error, format!("{partial} tiles are partial (first: {reason})"));
     }
+    if let Some(status) = first_status.filter(|_| want == Want::Image && not_there == asked) {
+        add_error(error, none_on_the_server(status));
+    }
     TileSelection { items: stand_ins, mesh_gaps, retry }
+}
+
+/// What to say of a picture source whose server has none of the tiles in view, answering
+/// `status` (404 or 410): a moved or retired service draws nothing, as does a view wholly past a
+/// source's coverage, and both look like an empty map. Without their count, which changes with
+/// every pan: the map view says each kind of a layer's error once. A vector source isn't said:
+/// servers of sparse vector tiles answer 404 for every tile with nothing in it, as over the sea.
+pub(crate) fn none_on_the_server(status: u16) -> String {
+    format!("none of the tiles in view are on the server (HTTP {status}): the service may have moved or been retired, or have nothing here")
 }
 
 /// The nearest ancestor of a missing tile already in the cache, clipped to the missing tile.
