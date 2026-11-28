@@ -2397,7 +2397,8 @@ and firstDate is the data cube summary's only.
   month keeps every month's totals while it reads, up to five times the outputs' memory for
   **std** (three for mean, min, max, sum and countAbove), so a large area by month may need a
   coarser cell size or a smaller area. First and firstDate read one group after another, so they
-  hold one group's totals at a time (16 bytes a cell, and 4 more for the best date's rank).
+  hold the totals of the groups of the dates being read, one at a time read in turn (16 bytes a
+  cell, and 4 more for the best date's rank).
   `rustgis-cli run` takes a STAC collection's search up to
   10,000 items, as for a trend (the app and Python 2,000), and prints a summary's progress
   (`cube.reduce: 42%`). The layers

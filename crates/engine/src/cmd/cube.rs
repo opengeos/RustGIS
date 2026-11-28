@@ -1852,8 +1852,8 @@ impl ReduceRun {
     /// Reads the slices piece by piece ([`TimeCube::pieces`]), each folded into its group's
     /// running totals, and puts the pieces' outputs together row by row: a raster for each group
     /// (for frequency, one for each class of each group). `done` counts the slices read; `cancel`
-    /// stops it between slices. First and firstDate read one group after another, its dates in
-    /// rank order (its best first, alone), and leave out what can't change a cell
+    /// stops it between slices. First and firstDate ask for one group after another, its dates in
+    /// rank order (with one group, its best first, alone), and leave out what can't change a cell
     /// ([`ReduceRun::skips`]).
     pub fn run(&self, cancel: &AtomicBool, done: &AtomicUsize) -> Result<Vec<Raster>, String> {
         let outputs = self.groups.len();
@@ -1896,10 +1896,10 @@ impl ReduceRun {
             // last. Dates are asked for in order: read one at a time they come in order, so a
             // summary by year holds one year's totals at a time; with several readers (a STAC
             // cube's) they come as read, and the groups open are those of the dates in flight, a
-            // couple of years' for 16-day composites. First and firstDate read a group at a time,
-            // so they hold one group's totals however their ranks order the dates. Totals are f64
-            // and the outputs f32, so the order of arrival can move an output's last bit at most,
-            // and only then.
+            // couple of years' for 16-day composites. First and firstDate ask for a group after
+            // another, so they hold those of the dates in flight however their ranks order them.
+            // Totals are f64 and the outputs f32, so the order of arrival can move an output's
+            // last bit at most, and only then.
             let mut totals: Vec<Option<Totals>> = (0..slots).map(|_| None).collect();
             let mut seen = vec![0usize; outputs];
             let mut finished: Vec<Option<(Columns, Vec<f32>)>> = vec![None; slots];
@@ -2020,22 +2020,18 @@ impl ReduceRun {
                 }
                 cube.first_slice_of(i, piece, &|c| ranks.0.get(c).is_some_and(|r| r.load(Ordering::Relaxed) < at))
             };
-            // First's groups are read one after another, each's dates in rank order, so one
-            // group's totals are open at a time however the ranks interleave them. Leaving dates
-            // out, a group's best-ranked date is read before the rest, so they can be left out
-            // against it rather than read alongside it: over a dry season, the clearest date often
-            // fills every cell. The others' dates are read as asked, all at once.
-            let mut waves: Vec<Vec<usize>> = Vec::new();
+            // First's dates are asked for a group after another, each's in rank order, so the
+            // groups open are those of the dates in flight however the ranks interleave them (one
+            // at a time, read in turn), with no wait between groups. Leaving dates out with one
+            // group, its best-ranked date is read before the rest, so they can be left out against
+            // it rather than read alongside it: over a dry season, the clearest date often fills
+            // every cell. The others' dates are read as asked.
+            let mut order: Vec<usize> = asked.clone();
             if self.stat.picks_first() {
-                for g in 0..outputs {
-                    let dates: Vec<usize> = asked.iter().copied().filter(|k| self.group_of.get(*k) == Some(&g)).collect();
-                    let lead = usize::from(skips).min(dates.len());
-                    waves.push(dates[..lead].to_vec());
-                    waves.push(dates[lead..].to_vec());
-                }
-            } else {
-                waves.push(asked.clone());
+                order.sort_by_key(|k| self.group_of.get(*k).copied().unwrap_or(usize::MAX));
             }
+            let lead = usize::from(skips && outputs == 1).min(order.len());
+            let waves = [&order[..lead], &order[lead..]];
             for wave in waves.iter().filter(|w| !w.is_empty()) {
                 // Changes and the longest run compare each date with the one before: read in date order.
                 read_each(
