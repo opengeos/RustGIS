@@ -5099,6 +5099,8 @@ fn render_frame(
             cmds = g.cmds();
             gpu_alone = g.alone;
             runs = g.runs;
+            // The layers below took their share of the scene's budget.
+            scene_meshed = g.meshed;
             cpu_dirty = c.pixels.is_some();
             kept_pictures.extend(c.pixels.iter().map(|p| (cmds.len(), std::sync::Arc::clone(p))));
         }
@@ -5182,7 +5184,7 @@ fn render_frame(
             && complete(&tile_out)
             && let Some(gpu_part) = if gpu {
                 share_kept_pictures(&mut cmds, &mut kept_pictures);
-                frame_cache::GpuPart::of(&cmds, gpu_alone, runs).map(Some)
+                frame_cache::GpuPart::of(&cmds, gpu_alone, runs, scene_meshed).map(Some)
             } else {
                 Some(None)
             }
@@ -5601,7 +5603,8 @@ fn render_frame(
                 && layer.renderer.expression().is_none()
                 && !upright.contains(&layer.id);
             // Lyon refuses degenerate geometry tiny-skia draws fine, a layer too dense to mesh
-            // (past the room `mesh::layer_room` gives it, or a tile past `MAX_TILE_VERTICES`) is quicker splatted, and zoomed in far, markers reaching too
+            // (past the room `mesh::layer_room` gives it, or past its own limit with a tile past
+            // `MAX_TILE_VERTICES`) is quicker splatted, and zoomed in far, markers reaching too
             // far for f32 are drawn where they are by the CPU (#902; lines and polygons are meshed
             // in tiles, each from its own corner, `mesh_tiles`): collect_layer reports all three,
             // and the layer runs the CPU branch below like any ineligible one. It meshes the
@@ -5635,14 +5638,8 @@ fn render_frame(
                 });
                 let before = cmds.len();
                 // A kept mesh past the layer's room now (the layers before it took more of the
-                // scene's budget) is given back and the layer made again within it.
-                let taken = match keeping.as_ref().and_then(|(look, made)| layer_meshes::take(&mut cmds, look, made, &rows)) {
-                    Some(used) if used > mesh_room => {
-                        cmds.truncate(before);
-                        None
-                    }
-                    taken => taken,
-                };
+                // scene's budget) isn't taken: the layer is made again within it.
+                let taken = keeping.as_ref().and_then(|(look, made)| layer_meshes::take(&mut cmds, look, made, &rows, mesh_room));
                 let collected = match taken {
                     Some(used) => Ok(used),
                     None => {

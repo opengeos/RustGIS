@@ -162,13 +162,16 @@ pub(crate) struct GpuPart {
     pub alone: usize,
     /// The pictures flushed so far, as the CPU fallback counts them.
     pub runs: crate::Runs,
+    /// The vertices its layers' meshes took of the scene's budget (`mesh::layer_room`).
+    pub meshed: usize,
 }
 
 impl GpuPart {
-    /// `cmds` shared, with `alone` layers drawn as pictures of their own and `runs`; `None` when
-    /// one can't be shared (an extrusion, which only a tilted view's scenes have).
-    pub(crate) fn of(cmds: &[DrawCmd], alone: usize, runs: crate::Runs) -> Option<GpuPart> {
-        Some(GpuPart { cmds: cmds.iter().map(DrawCmd::share).collect::<Option<_>>()?, alone, runs })
+    /// `cmds` shared, with `alone` layers drawn as pictures of their own, `runs`, and `meshed`
+    /// vertices of the layers' meshes; `None` when one can't be shared (an extrusion, which only
+    /// a tilted view's scenes have).
+    pub(crate) fn of(cmds: &[DrawCmd], alone: usize, runs: crate::Runs, meshed: usize) -> Option<GpuPart> {
+        Some(GpuPart { cmds: cmds.iter().map(DrawCmd::share).collect::<Option<_>>()?, alone, runs, meshed })
     }
 
     /// Its commands, shared again for a scene starting from it.

@@ -396,22 +396,24 @@ pub(crate) fn append_geometry(
 /// `max_buffer_size` devices and WebGL offer). A layer of a million tiny polygons (3D buildings
 /// as faces) would tessellate to tens of millions — seconds per frame, for a mesh the device
 /// then refuses — while the CPU path splats its sub-pixel features in milliseconds. A layer cut
-/// into tiles may take more, from what the scene has left ([`layer_room`]), each tile keeping to
-/// [`MAX_TILE_VERTICES`].
+/// into tiles may take more, from what the scene has left ([`layer_room`]), when each of its
+/// tiles keeps to [`MAX_TILE_VERTICES`].
 pub(crate) const MAX_LAYER_VERTICES: usize = 2_000_000;
 
-/// The most vertices one tile's mesh may take: four a pixel of a tile [`crate::mesh_tiles::TILE_PX`]
-/// on a side, from two to eight a pixel as tiles go (a power of two map units, 362 to 724 pixels on
-/// a side). Denser, its features are mostly smaller than a
-/// pixel, which the CPU splats quicker than lyon tessellates them: the layer draws on the CPU.
+/// The most vertices a tile's mesh may take for its layer to take more than
+/// [`MAX_LAYER_VERTICES`]: 2^20, from two to eight a pixel of the tile (a power of two map units,
+/// 362 to 724 pixels on a side). Denser, its features are mostly smaller than a pixel, which the
+/// CPU splats quicker than lyon tessellates them: such a layer draws on the CPU. Within its own
+/// limit, a layer's tiles may be as dense as one mesh of it.
 pub(crate) const MAX_TILE_VERTICES: usize = 1 << 20;
 
 /// The vertices a GPU scene's layer meshes may take together past what each layer may always take
 /// ([`MAX_LAYER_VERTICES`]): a sixteenth of the computer's memory at 40 bytes a vertex, from 6
 /// million (240 MB: the browser, a phone, a computer whose memory isn't known) to 16 million
 /// (640 MB). Highlights, extrusions, the basemap and the graticule aren't counted: they are
-/// bounded by their own data. Asked once a scene, so on a phone it is the floor, as
-/// [`rustgis_data::memory::thread_scratch`] is.
+/// bounded by their own data. A share of the memory (`memory::scaled`), not of what is free now
+/// (`memory::planned`): it is asked once a scene, too often to ask the system what is free, as
+/// [`rustgis_data::memory::thread_scratch`] isn't; and so on a phone it is the floor, as that is.
 pub(crate) fn scene_vertices() -> usize {
     const FLOOR: usize = 6_000_000;
     const CEILING: usize = 16_000_000;
@@ -500,12 +502,13 @@ fn stroke_reach(g: &Geometry, s: &Symbol, wireframe: bool, ppp: f32, map_per_px:
 /// the rest meshed on several threads, or made one mesh when `tiling` is `None` (a tilted view,
 /// whose far strokes are wider than a tile's reach); its markers follow them as one command.
 /// Tiled, its lines and polygons are those within a tile of the cull's tiles
-/// ([`crate::mesh_tiles::feature_area`]), which may be more than `visible` keeps, out of view. `limit` is what is left of the layer's
-/// room ([`layer_room`]; its earlier batches took the rest); one mesh keeps to [`MAX_LAYER_VERTICES`] of it and a tile to
-/// [`MAX_TILE_VERTICES`]. `Ok` with the mesh vertices pushed; `Err(Refused)` when lyon refused a
-/// feature, `Err(TooDense)` when the meshes would pass `limit`, or a tile or one mesh its own, `Err(Imprecise)` when the
-/// features reach too far for f32 at this zoom — the caller then draws the layer (or batch)
-/// with tiny-skia instead (nothing is pushed part-way).
+/// ([`crate::mesh_tiles::feature_area`]), which may be more than `visible` keeps, out of view.
+/// `limit` is what is left of the layer's room ([`layer_room`]; its earlier batches took the
+/// rest). One mesh, and each tile, keeps to [`MAX_LAYER_VERTICES`] of it; for the tiles to take
+/// more than that together, each keeps to [`MAX_TILE_VERTICES`]. `Ok` with the mesh vertices pushed; `Err(Refused)`
+/// when lyon refused a feature, `Err(TooDense)` when the meshes would pass those limits,
+/// `Err(Imprecise)` when the features reach too far for f32 at this zoom — the caller then
+/// draws the layer (or batch) with tiny-skia instead (nothing is pushed part-way).
 pub(crate) fn collect_layer(
     cmds: &mut Vec<DrawCmd>,
     layer: &Layer,
