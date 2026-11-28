@@ -423,8 +423,8 @@ fn legends_fitting(e: &rustgis_map::layout::Element) -> bool {
 /// fewer and `null` keep a legend as an older reader draws it; a scale bar's fit names aren't a
 /// legend's, and a value the command refuses changes nothing, so neither needs it. A key given to
 /// another kind counts too, though its command refuses it: an over-count that asks for the
-/// capability sooner, never a missing one. A `layout.import` requires it for such a legend once
-/// its layout is read into range, so a fit or layer-names value that isn't one, read as the
+/// capability sooner, never a missing one. An imported layout file requires it for such a legend
+/// once its layout is read into range, so a fit or layer-names value that isn't one, read as the
 /// default, needs nothing.
 fn command_uses_legend_fit(id: &str, params: &Value) -> bool {
     use crate::cmd::layout::{legend_columns_param, legend_fit_param, legend_names_param};
