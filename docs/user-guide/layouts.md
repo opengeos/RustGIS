@@ -57,9 +57,10 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
     `Publication`; the review says when a layout has that name, so the new one is numbered. The
     **elements** are what is drawn around the map: the locator (the default, named as what it will
     be, a globe, an inset or none), the north arrow (auto, always or none), the legend or not, which
-    can be set always on a box and to list the context layers, the colorbar and the scale bar or
-    not, whether the map may be veiled for the legend's room, and the decimal mark; a choice the
-    sheet can't use is off and isn't sent. Under them, the north arrow's style, the scale bar's
+    can be set always on a box and to list the context layers, the colorbar, the scale bar and the
+    graticule or not (without one the default reference names none), whether the map may be veiled
+    for the legend's room, and the decimal mark; a choice the sheet can't use is off and isn't
+    sent. Under them, the north arrow's style, the scale bar's
     units and style, and the legend's title and columns (Auto, or 1 to 6) can be picked, and
     layers ticked to be left out of the legend (every layer of that name). The
     **placement** is the arrangement (below): `best`, the favourite, one by name or one saved, or
