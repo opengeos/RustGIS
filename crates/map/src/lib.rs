@@ -582,10 +582,18 @@ impl Layer {
 
     /// Reopens a source whose contents a command deliberately replaced. Its new header is
     /// authoritative; retain aliases for unchanged columns, but discard the old window before
-    /// any new rows can be paired with it. External source changes still use strict validation.
+    /// any new rows can be paired with it. Obsolete label moves are reset with a counted note,
+    /// including on failed reopening. External source changes still use strict validation.
     pub fn refresh_replaced_source(&mut self) -> Result<(), String> {
         let Some(source) = &mut self.source else { return Ok(()) };
-        if let Err(error) = source.reopen() {
+        let moved: usize = std::iter::once(&self.labels.default).chain(&self.labels.classes).map(|class| class.moved.len()).sum();
+        self.labels.default.moved.clear();
+        self.labels.classes.iter_mut().for_each(|class| class.moved.clear());
+        let reopened = source.reopen();
+        if moved > 0 {
+            source.saw_read_notes(&[format!("{moved} saved label move(s) reset: replacement data may reuse feature ids").into()]);
+        }
+        if let Err(error) = reopened {
             self.touch_replacement();
             self.install(Vec::new());
             return Err(error);
@@ -796,11 +804,20 @@ impl Layer {
                     }
                 }
                 Err(error) => {
+                    // Hide a refused window without losing its feature-id selection. Taking
+                    // the parked vector avoids copying it again on each refused frame.
+                    let mut selected = Vec::new();
                     if let Some(source) = &mut self.source {
+                        selected = std::mem::take(&mut source.saved_selection);
                         source.schema_refused = true;
                         source.error = Some(error);
                     }
+                    selected.extend(self.selection.iter().filter_map(|row| self.dataset.features.get(*row)).map(|feature| feature.id));
+                    self.selection.clear();
                     self.install(Vec::new());
+                    if let Some(source) = &mut self.source {
+                        source.saved_selection = selected;
+                    }
                     return false;
                 }
             }
@@ -4285,19 +4302,31 @@ mod tests {
         // names saved columns that disappeared; old window rows cannot survive the change.
         layer.dataset.fields[0].alias = Some("Rank".into());
         layer.dataset.fields.push(Field::new("gone", FieldType::Integer));
+        let moved = symbology::MovedLabel { id: layer.dataset.features.get(0).unwrap().id, at: [4.0, 5.0] };
+        layer.labels.default.moved.push(moved);
+        let mut class = layer.labels.default.clone();
+        class.name = "Subset".into();
+        layer.labels.classes.push(class);
         let previous = layer.replacement_revision();
         layer.refresh_replaced_source().unwrap();
+        assert!(layer.labels.in_order().all(|class| class.moved.is_empty()));
         assert_ne!(layer.replacement_revision(), previous, "the prior contents no longer own selected vertices");
         assert!(layer.dataset.features.is_empty());
         assert_eq!(layer.dataset.fields.len(), 1);
         assert_eq!(layer.dataset.fields[0].alias.as_deref(), Some("Rank"));
         let notes = layer.source.as_mut().unwrap().take_read_notes();
         assert!(notes.iter().any(|n| n.contains("1 saved column") && n.contains("'gone'")), "{notes:?}");
+        assert_eq!(notes.iter().filter(|n| n.contains("2 saved label move(s) reset")).count(), 1);
         layer.sync_source(&view, true);
         assert_eq!(layer.dataset.features.len(), 1);
+        layer.labels.default.moved.push(moved);
+        layer.labels.classes[0].moved.push(moved);
         std::fs::remove_file(&path).unwrap();
         let previous = layer.replacement_revision();
         assert!(layer.refresh_replaced_source().is_err());
+        assert!(layer.labels.in_order().all(|class| class.moved.is_empty()));
+        let notes = layer.source.as_mut().unwrap().take_read_notes();
+        assert_eq!(notes.iter().filter(|n| n.contains("2 saved label move(s) reset")).count(), 1);
         assert_ne!(layer.replacement_revision(), previous, "a failed replacement also invalidates ownership of the old contents");
         assert!(layer.dataset.features.is_empty(), "a failed replacement cannot leave rows from the previous file drawn");
         assert_eq!(layer.dataset.fields[0].alias.as_deref(), Some("Rank"));
@@ -4305,6 +4334,30 @@ mod tests {
         for extension in ["shp", "shx", "dbf", "prj", "cpg"] {
             let _ = std::fs::remove_file(path.with_extension(extension));
         }
+    }
+
+    /// A schema refusal hides rows temporarily rather than discarding selected feature ids.
+    /// Repeated refusals retain parked ids, and the same view restores their selection on read.
+    #[test]
+    fn linked_source_schema_refusal_preserves_selection_until_recovery() {
+        let mut layer = linked_schema_layer(&["rank"], &["rank"]);
+        let view = Extent::new(-180.0, -80.0, 180.0, 80.0);
+        layer.sync_source(&view, true);
+        layer.selection = vec![0];
+        let selected = layer.selected_ids();
+        assert_eq!(selected.len(), 1);
+        layer.dataset.fields[0].name = "saved_old_name".into();
+        for _ in 0..2 {
+            layer.sync_source(&view, true);
+            assert!(layer.dataset.features.is_empty());
+            assert!(layer.selection.is_empty());
+            assert_eq!(layer.selected_ids(), selected, "a refused window must retain its selected ids");
+        }
+        layer.dataset.fields[0].name = "rank".into();
+        layer.sync_source(&view, true);
+        assert_eq!(layer.selection, [0]);
+        assert_eq!(layer.selected_ids(), selected);
+        assert!(layer.source.as_ref().unwrap().saved_selection.is_empty());
     }
 
     /// A saved native-date prefix can gain a trailing field before any view sync. Whole reads,
