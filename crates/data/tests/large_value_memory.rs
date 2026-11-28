@@ -1,0 +1,163 @@
+//! The memory a download's writers take for one large value or shape: it is neither copied nor
+//! built into a record before the limit refuses it. A test binary of its own, as the peak it
+//! reads is the whole process's.
+#![cfg(target_os = "linux")]
+
+use rustgis_data::capped::Limit;
+use rustgis_data::raster::Crs;
+use rustgis_data::{Coord, Dataset, Field, FieldType, Geometry, GeometryType, Value};
+
+/// The bytes of each large value or shape.
+const ITEM: usize = 32 << 20;
+/// The room its file is held to.
+const ROOM: usize = 1 << 20;
+/// The most the peak may grow while an item is written: a quarter of the item.
+const MOST: u64 = 8 << 20;
+
+/// The rows before the large shape that fills a `.dbf`, and the columns of 254 bytes in each.
+const ROWS: usize = 10_000;
+const COLUMNS: usize = 10;
+/// The bytes those rows take in the `.dbf`: each its columns and a deletion flag.
+const TABLE: usize = ROWS * (COLUMNS * 254 + 1);
+/// Room that holds the table or the large shape after them, not both.
+const SHARED_ROOM: usize = ITEM + TABLE / 2;
+
+/// The most memory this process has held since the peak was last reset, in bytes.
+fn peak_bytes() -> u64 {
+    let status = std::fs::read_to_string("/proc/self/status").unwrap();
+    let line = status.lines().find_map(|l| l.strip_prefix("VmHWM:")).unwrap();
+    line.trim().trim_end_matches("kB").trim().parse::<u64>().unwrap() * 1024
+}
+
+/// How far `run` takes the peak past what is held as it starts.
+fn growth(run: impl FnOnce()) -> u64 {
+    // Linux sets the peak back to what is held now.
+    std::fs::write("/proc/self/clear_refs", "5").unwrap();
+    let before = peak_bytes();
+    run();
+    peak_bytes().saturating_sub(before)
+}
+
+/// [`ROWS`] short lines with a wide table, then one line of `ITEM` bytes of points.
+fn large_shape_after_a_large_table(last: Vec<Coord>) -> Dataset {
+    let fields = (0..COLUMNS).map(|k| Field::new(format!("c{k}"), FieldType::Text)).collect();
+    let mut ds = Dataset::new("after", GeometryType::Polyline, fields);
+    let short = || Geometry::Line(vec![vec![Coord::new(1.0, 2.0), Coord::new(3.0, 4.0)]]);
+    // The first row's values give each column its width; the rest are padded to it.
+    for row in 0..ROWS {
+        let value = if row == 0 { "x".repeat(254) } else { String::new() };
+        ds.push(Some(short()), vec![Value::Text(value); COLUMNS]);
+    }
+    ds.push(Some(Geometry::Line(vec![last])), vec![Value::Null; COLUMNS]);
+    ds
+}
+
+/// A one-feature layer of `geometry` with the text `value` in a field.
+fn layer(geometry: Geometry, field: &str, value: String) -> Dataset {
+    let mut ds = Dataset::new("large", geometry.kind(), vec![Field::new(field, FieldType::Text)]);
+    ds.push(Some(geometry), vec![Value::Text(value)]);
+    ds
+}
+
+#[test]
+fn a_large_value_or_shape_is_not_copied_for_a_download() {
+    let point = || Geometry::Point(Coord::new(1.0, 2.0));
+    let plain = || "x".repeat(ITEM);
+    let formula = || format!("={}", "\"x".repeat(ITEM / 2));
+    // Text holding numbers, as a JSON document in a cell does.
+    let digits = || "{\"a\": 1.5} ".repeat(ITEM / 11);
+    // One enormous finite number, whose digits the guard and precision checks count.
+    let number = || format!("+0.{}1", "0".repeat(ITEM));
+    let vertices = || (0..ITEM / 16).map(|i| Coord::new((i % 360) as f64 - 180.0, 1.5)).collect::<Vec<_>>();
+    let mut over = Vec::new();
+    let mut check = |name: &str, grew: u64| {
+        if grew >= MOST {
+            over.push(format!("{name}: the peak grew {} MiB", grew >> 20));
+        }
+    };
+
+    // Each text format stops a file at the room without a copy of the value.
+    for (name, format, name_field, field, value) in [
+        ("KML description", "kml", None, "description", plain()),
+        ("KML attribute", "kml", None, "note", plain()),
+        ("GPX name", "gpx", Some(0), "note", plain()),
+        ("WKT cell", "wkt", None, "note", plain()),
+        ("WKT guarded cell", "wkt", None, "note", formula()),
+        ("CSV cell", "csv", None, "note", plain()),
+        ("CSV guarded cell", "csv", None, "note", formula()),
+        ("CSV number cell", "csv", None, "note", number()),
+    ] {
+        let ds = layer(point(), field, value);
+        let limit = Limit::new(ROOM);
+        let grew = growth(|| assert!(rustgis_data::io::text_bytes_within(&ds, format, name_field, &limit).is_err(), "{name}"));
+        assert!(limit.passed(), "{name}");
+        check(name, grew);
+    }
+
+    // The counting of what a file loses runs before it is written.
+    for (name, ext, value) in [
+        ("CSV notices", "csv", digits()),
+        ("CSV guarded notices", "csv", formula()),
+        ("CSV number notices", "csv", number()),
+        ("KML notices", "kml", digits()),
+    ] {
+        let ds = layer(point(), "note", value);
+        let grew = growth(|| {
+            rustgis_data::io::export_losses_notes_in(&ds, ext, None, "t", Crs::LonLat).unwrap();
+        });
+        check(name, grew);
+    }
+
+    // A dBase column keeps 254 bytes of a value, so the Shapefile fits.
+    let ds = layer(point(), "note", plain());
+    let grew = growth(|| {
+        rustgis_data::io::write_bytes_noted_within(&ds, "shp", Crs::LonLat, "t", &Limit::new(ROOM)).unwrap();
+    });
+    check("dBase value", grew);
+    let grew = growth(|| assert_eq!(rustgis_data::io::shapefile_values_notes(&ds, "t").len(), 1));
+    check("dBase notices", grew);
+
+    // A shape whose record can't fit is refused before its points are copied.
+    for (name, geometry) in [
+        ("Shapefile line", Geometry::Line(vec![vertices()])),
+        ("Shapefile polygon", Geometry::Polygon(vec![vec![vertices()]])),
+        ("Shapefile multipoint", Geometry::MultiPoint(vertices())),
+    ] {
+        let ds = layer(geometry, "note", String::new());
+        let limit = Limit::new(ROOM);
+        let grew = growth(|| {
+            assert!(rustgis_data::io::write_bytes_noted_within(&ds, "shp", Crs::LonLat, "t", &limit).is_err(), "{name}");
+        });
+        assert!(limit.passed(), "{name}");
+        check(name, grew);
+    }
+
+    // A shape with no vertex to write is left out without copying its points, though the layer's
+    // other shape makes the file.
+    let nowhere = || vec![Coord::new(f64::NAN, 1.5); ITEM / 16];
+    for (name, empty, drawn) in [
+        ("empty Shapefile line", Geometry::Line(vec![nowhere()]), Geometry::Line(vec![vec![Coord::new(1.0, 2.0), Coord::new(3.0, 4.0)]])),
+        ("empty Shapefile multipoint", Geometry::MultiPoint(nowhere()), Geometry::MultiPoint(vec![Coord::new(1.0, 2.0)])),
+    ] {
+        let mut ds = layer(empty, "note", String::new());
+        ds.push(Some(drawn), vec![Value::Text(String::new())]);
+        let grew = growth(|| {
+            rustgis_data::io::write_bytes_noted_within(&ds, "shp", Crs::LonLat, "t", &Limit::new(ROOM)).unwrap();
+        });
+        check(name, grew);
+    }
+
+    // A shape is also refused early that would fit only if what the `.dbf` holds weren't counted: the peak grows
+    // by little more than the table.
+    let ds = large_shape_after_a_large_table(vertices());
+    let limit = Limit::new(SHARED_ROOM);
+    let grew = growth(|| {
+        assert!(rustgis_data::io::write_bytes_noted_within(&ds, "shp", Crs::LonLat, "t", &limit).is_err());
+    });
+    assert!(limit.passed());
+    if grew >= TABLE as u64 + MOST {
+        over.push(format!("Shapefile line after a table: the peak grew {} MiB", grew >> 20));
+    }
+
+    assert!(over.is_empty(), "{over:#?}");
+}
