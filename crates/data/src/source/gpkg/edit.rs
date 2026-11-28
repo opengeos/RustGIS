@@ -364,13 +364,15 @@ impl EditTable {
         let said = |c: usize, v: &Sql| {
             dated.contains(&c) || matches!(v, Sql::Text(_) | Sql::Blob(_)) || matches!(v, Sql::Integer(_)) && decimal.contains(&c)
         };
-        let columns_kept: Vec<usize> = snapshot_columns.iter().map(|&(_, c)| c).collect();
+        let columns_kept: std::collections::HashSet<usize> = snapshot_columns.iter().map(|&(_, c)| c).collect();
+        // Moved out of the rows read, which aren't needed past here: no second copy.
         let before: std::collections::HashMap<(i64, usize), Sql> = current
-            .iter()
+            .into_iter()
             .filter(|(k, _)| updated.contains(k))
-            .flat_map(|(k, row)| columns_kept.iter().filter_map(move |&c| row.get(c).filter(|v| said(c, v)).map(|v| ((*k, c), v.clone()))))
+            .flat_map(|(k, row)| {
+                row.into_iter().enumerate().filter(|(c, v)| columns_kept.contains(c) && said(*c, v)).map(move |(c, v)| ((k, c), v))
+            })
             .collect();
-        drop(current);
         // Reserve the loaded baseline as well as live and historical keys. A deleted source row
         // can still be present in the layer, so SQLite's ordinary rowid allocation is not enough.
         let mut high_water = 0;

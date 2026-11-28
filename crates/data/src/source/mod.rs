@@ -312,7 +312,14 @@ pub(crate) fn number_text(
     rounded: Option<&mut Vec<usize>>,
     k: usize,
 ) -> crate::Value {
-    let v = crate::Value::parse_source(text, ty);
+    // `NaN` and `inf` written as words are kept as they are (a field holds them, and a save writes
+    // them back); a number in digits past a decimal's range (`1e400`) would be infinity, which it
+    // isn't: empty, and said as text that isn't a number.
+    let words = |t: &str| matches!(t.trim().trim_start_matches(['-', '+']).to_ascii_lowercase().as_str(), "nan" | "inf" | "infinity");
+    let v = match crate::Value::parse_source(text, ty) {
+        crate::Value::Float(f) if !f.is_finite() && !words(text) => crate::Value::Null,
+        v => v,
+    };
     if v.is_null() && !text.trim().is_empty() && !crate::Value::is_null_marker(text) {
         unread_date(counts, k);
     }

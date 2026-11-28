@@ -4189,12 +4189,23 @@ fn number_text_that_rounds_and_text_that_isnt_utf8_are_counted() {
         // A long fraction reads as the nearest decimal: no whole-number digit is lost.
         ("0.12345678901234567891", FieldType::Double),
         ("1.00000000000000001", FieldType::Double),
-        // Past a decimal's range: infinity, an overflow, not counted as rounded.
-        ("1e400", FieldType::Double),
     ] {
         super::number_text(text, ty, &mut unread, Some(&mut rounded), 0);
     }
     assert!(unread.is_empty() && rounded.is_empty(), "{unread:?} {rounded:?}");
+    // NaN and infinity written as words are kept, uncounted; a number in digits past a decimal's
+    // range is empty, and counted.
+    for text in ["nan", "inf", "-Infinity"] {
+        assert!(
+            matches!(super::number_text(text, FieldType::Double, &mut unread, Some(&mut rounded), 0), Value::Float(f) if !f.is_finite()),
+            "{text}"
+        );
+    }
+    assert!(unread.is_empty() && rounded.is_empty(), "{unread:?} {rounded:?}");
+    for text in ["1e400", "-1e400"] {
+        assert_eq!(super::number_text(text, FieldType::Double, &mut unread, Some(&mut rounded), 0), Value::Null, "{text}");
+    }
+    assert_eq!((unread.as_slice(), rounded.as_slice()), (&[2][..], &[][..]));
     let mut not_utf8 = Vec::new();
     assert_eq!(super::utf8_text(b"hi", &mut not_utf8, 0), Value::Text("hi".into()));
     assert!(not_utf8.is_empty());
