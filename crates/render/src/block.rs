@@ -1901,18 +1901,33 @@ pub(crate) fn draw_walls(
                     let edge = if len > 1e-18 { line + ((top.0 - p.0) * dx + (top.1 - p.1) * dy) / len } else { line };
                     let (foot, base) = (edge - run.thickness / per, b.base / per);
                     band_at_base |= foot < base;
-                    seen_up(foot.max(base))
+                    // With how far over the base the foot would stand (under 0: it stops there).
+                    seen_up(foot.max(base)).map(|p| (p, foot - base))
                 };
-                let (Some(ba), Some(bz)) = (under(t0), under(t1)) else { continue };
+                let (Some((ba, over_a)), Some((bz, over_z))) = (under(t0), under(t1)) else { continue };
+                // Where the foot meets the base inside the stretch, it bends there: along the base
+                // on one side, rising from it on the other, not straight across over the rock
+                // (round 6).
+                let bend = ((over_a < 0.0) != (over_z < 0.0))
+                    .then(|| t0 + (t1 - t0) * over_a / (over_a - over_z))
+                    .and_then(&mut under)
+                    .map(|(p, _)| p);
                 let (ta2, tz2) = (top_at(t0), top_at(t1));
-                for (i, p) in [grow(ta2, tz2), grow(tz2, ta2), grow(bz, ba), grow(ba, bz)].iter().enumerate() {
+                let foot = match bend {
+                    Some(c) => vec![grow(bz, c), pt(c), grow(ba, c)],
+                    None => vec![grow(bz, ba), grow(ba, bz)],
+                };
+                for (i, p) in [grow(ta2, tz2), grow(tz2, ta2)].into_iter().chain(foot).enumerate() {
                     if i == 0 { fill.move_to(p.0, p.1) } else { fill.line_to(p.0, p.1) }
                 }
                 fill.close();
-                for (p, q) in [(ta2, tz2), (ba, bz)] {
-                    lines.move_to(pt(p).0, pt(p).1);
-                    lines.line_to(pt(q).0, pt(q).1);
+                lines.move_to(pt(ta2).0, pt(ta2).1);
+                lines.line_to(pt(tz2).0, pt(tz2).1);
+                lines.move_to(pt(ba).0, pt(ba).1);
+                if let Some(c) = bend {
+                    lines.line_to(pt(c).0, pt(c).1);
                 }
+                lines.line_to(pt(bz).0, pt(bz).1);
                 for (t, top, foot) in [(t0, ta2, ba), (t1, tz2, bz)] {
                     let c = ca + span * t;
                     if ends_across.iter().any(|(e, across)| *across && (c - e).abs() < SEAM) {
@@ -3922,6 +3937,62 @@ mod tests {
         };
         assert!(band(pixel(970.0)), "the band under the top: {:?}", pixel(970.0));
         assert!(!band(pixel(900.0)), "the rock under its foot: {:?}", pixel(900.0));
+    }
+
+    #[test]
+    fn a_band_meeting_the_base_inside_a_stretch_stays_on_it() {
+        // #2607, round 6: one stretch along the south wall, its ground rising from 100 at x −1000
+        // to 300 at x 1000 (exaggerated), the base at 0, the band 200 deep. Its foot is on the
+        // base all along the west half, where the ground stands under 200 over it, and rises from
+        // x 0: no rock shows between the band and the base, as it would under a straight foot
+        // from the base at the west end to 100 at the east.
+        use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster};
+        let red = Rgba::rgb(220, 30, 30);
+        let (mut m, _, _, res) = block_under_soils(&[([-3000.0, -1500.0, 3000.0, 0.0], "argissolo", red)], 100.0);
+        let gt = GeoTransform { origin_x: -5000.0, origin_y: 5000.0, pixel_width: 20.0, pixel_height: -20.0 };
+        let rise = (0..500 * 500)
+            .map(|i| {
+                let x = -5000.0 + 20.0 * (f64::from(i % 500) + 0.5);
+                (100.0 + 0.05 * x).clamp(0.0, 1000.0) as f32
+            })
+            .collect();
+        let dem = Raster::new("dem", 500, 500, vec![rise], gt, Crs::WebMercator, None, ColorHint::Gray, "Float32").unwrap();
+        if let Some(l) = m.layers.iter_mut().find(|l| l.name == "dem") {
+            l.raster = Some(rustgis_map::RasterLayer::from_path(dem, "dem.tif"));
+        }
+        let camera = rustgis_map::Camera { center: Coord::new(0.0, 0.0), res, bearing: 0.0, pitch: 60.0 };
+        let g = Ground::of(&m, &camera).unwrap();
+        let mut b = g.block(&m).unwrap();
+        b.base = 0.0;
+        let dry: WaterRuns = (0..b.sides()).map(|_| Vec::new()).collect();
+        let (pm, at) = south_wall_seen(&m, &b, &g, res, &dry, 0.0, 1, None);
+        let red_at = |x: f64, metres: f64| {
+            let (px, py) = at(x, metres);
+            let c = pm.pixel(px, py).expect("in the picture").demultiply();
+            u16::from(c.red()) > 2 * u16::from(c.green())
+        };
+        // Each column of the west half, from 2 px under the ground to 2 px over the base: band.
+        let mut rock = Vec::new();
+        for i in 1..20 {
+            let x = -1000.0 + 50.0 * f64::from(i);
+            let ground = 200.0 + 0.1 * x;
+            let (_, top) = at(x, ground);
+            let (_, base) = at(x, 0.0);
+            let n = (top + 2..base.saturating_sub(1))
+                .filter(|&py| {
+                    let (px, _) = at(x, 0.0);
+                    pm.pixel(px, py).is_some_and(|c| {
+                        let c = c.demultiply();
+                        u16::from(c.red()) <= 2 * u16::from(c.green())
+                    })
+                })
+                .count();
+            if n > 0 {
+                rock.push((x, n));
+            }
+        }
+        assert!(rock.is_empty(), "rock under the band (x, px): {rock:?}");
+        assert!(red_at(-500.0, 100.0) && red_at(500.0, 150.0) && !red_at(500.0, 50.0));
     }
 
     /// The band's thickness reads and saves as a number, or as `{"field": name}` (#2607).
