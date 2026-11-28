@@ -119,9 +119,9 @@ pub(crate) fn kml_typed_string(field: &crate::Field) -> bool {
 /// [`to_kml`]'s document, written to `out` as it is made.
 pub(crate) fn write_kml(ds: &Dataset, name_field: Option<usize>, out: &mut impl Write) -> crate::Result<()> {
     out.write_all(b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<kml xmlns=\"http://www.opengis.net/kml/2.2\"")?;
-    write!(
+    writeln!(
         out,
-        " xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xmlns:xs=\"http://www.w3.org/2001/XMLSchema\"><Document><name>{}</name>\n",
+        " xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xmlns:xs=\"http://www.w3.org/2001/XMLSchema\"><Document><name>{}</name>",
         xml(&ds.name, "KML", || "layer name".to_string())?
     )?;
     // Declare columns independently of populated values, so all-null columns survive a read.
