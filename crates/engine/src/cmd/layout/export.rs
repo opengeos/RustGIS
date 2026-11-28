@@ -93,25 +93,32 @@ pub fn layout_png(s: &mut Session, li: usize, dpi: f64, region: Option<[f64; 4]>
     img.encode_png().map_err(|e| e.to_string())
 }
 
-/// [`chart_notices`] of the charts of `layout` a drawing of it drew, each with the chart's name
-/// and id before it and each once, whatever the pages: the first ten, and how many more.
+/// [`chart_notices`] of the charts of `layout` a drawing of it drew, one notice for each text,
+/// in the order first met, naming the charts it is true of by name and id, each once whatever the
+/// pages: the first ten, and how many more.
 fn chart_notice_lines(layout: &Layout, drawn: &[rustgis_render::layout::DrawnChart]) -> Vec<String> {
-    let mut said: Vec<String> = Vec::new();
+    let mut said: Vec<(String, Vec<(u32, String)>)> = Vec::new();
     for (id, data) in drawn {
         let Some(e) = layout.element(*id) else { continue };
+        let named = (*id, format!("\"{}\" ({id})", crate::project::short_name(&e.name)));
         for note in chart_notices(e, data, false) {
-            let note = format!("\"{}\" ({id}): {note}", crate::project::short_name(&e.name));
-            if !said.contains(&note) {
-                said.push(note);
+            match said.iter_mut().find(|(n, _)| *n == note) {
+                Some((_, charts)) if charts.iter().any(|(at, _)| at == id) => {}
+                Some((_, charts)) => charts.push(named.clone()),
+                None => said.push((note, vec![named.clone()])),
             }
         }
     }
-    let more = said.len().saturating_sub(10);
-    said.truncate(10);
-    if more > 0 {
-        said.push(format!("and {more} more chart notice{}", if more == 1 { "" } else { "s" }));
-    }
-    said
+    said.into_iter()
+        .map(|(note, charts)| {
+            let n = charts.len();
+            let mut names = charts.into_iter().take(10).map(|(_, named)| named).collect::<Vec<_>>().join(", ");
+            if n > 10 {
+                names.push_str(&format!(" and {} more", n - 10));
+            }
+            if n == 1 { format!("Chart {names}: {note}") } else { format!("{n} charts ({names}): {note}") }
+        })
+        .collect()
 }
 
 /// The section lines an export doesn't draw, each with the pages it is missing from.

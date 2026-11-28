@@ -55,7 +55,7 @@ fn exported(s: &mut Session, ext: &str) -> Vec<String> {
 /// What the export says of the chart `id`'s `note`.
 fn of(s: &Session, id: u64, note: &str) -> String {
     let name = &s.project.layouts[0].element(id as u32).unwrap().name;
-    format!("\"{name}\" ({id}): {note}")
+    format!("Chart \"{name}\" ({id}): {note}")
 }
 
 #[test]
@@ -105,14 +105,17 @@ fn a_map_series_export_says_a_pages_losses_once() {
 }
 
 #[test]
-fn an_export_lists_ten_chart_notices_and_counts_the_rest() {
+fn an_export_names_charts_with_the_same_notice_in_one() {
     let mut s = shops();
-    for _ in 0..12 {
-        chart(&mut s, json!({"bars": 2}));
-    }
+    let ids: Vec<_> = (0..12).map(|_| chart(&mut s, json!({"bars": 2}))).collect();
+    let other = chart(&mut s, json!({"bars": 1}));
     let said = exported(&mut s, "png");
-    assert_eq!(said.len(), 11, "{said:?}");
-    assert_eq!(said[10], "and 2 more chart notices");
+    assert_eq!(said.len(), 2, "{said:?}");
+    let named = |id: u64| format!("\"{}\" ({id})", s.project.layouts[0].element(id as u32).unwrap().name);
+    let listed: Vec<_> = ids[..10].iter().map(|id| named(*id)).collect();
+    let want = format!("12 charts ({} and 2 more): the chart draws 2 of 3 bars", listed.join(", "));
+    assert!(said[0].starts_with(&want), "{said:?}");
+    assert!(said[1].starts_with(&format!("Chart {}: the chart draws 1 of 3 bars", named(other))), "{said:?}");
 }
 
 #[test]

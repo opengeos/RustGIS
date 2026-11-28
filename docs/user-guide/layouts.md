@@ -772,8 +772,8 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
   whole bars again; `layout.addElement` takes it too.
 - **What a chart says**: exporting a layout (or the Assistant viewing it) says again what each chart it shows leaves out, and
   whether its box is too small for it, read as the exported page draws it, on every page of a map
-  series it exports: each notice once, with the chart's name and element number, the first ten
-  and how many more there are. A box is too small when columns are left no height by their labels
+  series it exports: charts with the same notice are named together in one, by name and element
+  number, the first ten and how many more there are. A box is too small when columns are left no height by their labels
   and values (the chart shows its placeholder), or when bars, or the room they run in, come under
   a point. The chart also says that when it is added, resized, retitled, turned, or given or
   denied values or labels.
