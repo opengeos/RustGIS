@@ -732,7 +732,7 @@ pub fn news_texts(news: &[News]) -> Vec<(String, bool)> {
 }
 
 /// Download sizes in decimal units; rounding small amounts up keeps received bytes visible.
-/// Batch totals stay wide on 32-bit front ends as well as native builds.
+/// Accepts the batch counters directly without narrowing them through `usize`.
 pub fn size_text(bytes: u64) -> String {
     let mb = bytes as f64 / 1_000_000.0;
     if mb >= 1.0 { format!("{mb:.1} MB") } else { format!("{} KB", bytes.div_ceil(1000)) }
