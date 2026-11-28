@@ -2728,7 +2728,8 @@ pub struct LabelClass {
     #[serde(default)]
     pub placement: LabelPlacement,
     /// A label taken by another tries nearby positions before it is left out (#1011):
-    /// round a point ([`LabelPlacement::alternatives`]), or along a non-repeated line.
+    /// round a point ([`LabelPlacement::alternatives`]), or along a non-repeated line. A polygon's
+    /// goes first where its shape fits best inside it (#3268).
     /// Off by default: placed
     /// elsewhere, a label may take the place another has today.
     #[serde(default, deserialize_with = "de_flag", skip_serializing_if = "std::ops::Not::not")]
@@ -3572,6 +3573,12 @@ impl LabelPlacement {
 }
 
 impl LabelClass {
+    /// Whether this class's polygon labels have a place inside to try before their own (#3268):
+    /// not those curved or along a guide, whose course is their place.
+    pub fn places_inside_polygons(&self) -> bool {
+        self.placement != LabelPlacement::Curved && self.guide.is_none()
+    }
+
     /// The Default class: on the first text field that looks like a name.
     pub fn default_for(ds: &Dataset) -> LabelClass {
         let field = ds

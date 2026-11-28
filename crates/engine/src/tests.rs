@@ -9564,8 +9564,8 @@ fn converting_labels_along_lines_says_what_they_lose() {
 
 /// A point label class tries the other places round its point when told to (#1011): alone it keeps
 /// the position, junk is refused (in it or in the position) and so is turning it on for lines at a
-/// position off them and for polygons, it undoes, the project keeps it, and turning it on or off
-/// while the labels are locked locks them again (the places they took no longer stand).
+/// position off them, it undoes, the project keeps it, and turning it on or off while the labels
+/// are locked locks them again (the places they took no longer stand).
 #[test]
 fn labels_take_other_positions_round_points() {
     use crate::render::View;
@@ -9591,12 +9591,11 @@ fn labels_take_other_positions_round_points() {
     assert!(!class(&s).0);
     s.run("labels.placement", &json!({"layer": "Cities", "position": null, "otherPositions": false})).unwrap();
     assert_eq!(class(&s), (false, placement), "null is no position");
-    // Only a point's label goes round it: on is refused for a line off its line (along it, see
-    // labels_take_other_positions_along_lines) and for polygons, off taken anywhere.
-    for layer in ["Rivers", "Countries"] {
-        assert!(s.run("labels.placement", &json!({"layer": layer, "otherPositions": true})).is_err(), "{layer}");
-        s.run("labels.placement", &json!({"layer": layer, "otherPositions": false})).unwrap();
-    }
+    // On is refused for a line off its line (along it, see
+    // labels_take_other_positions_along_lines; polygons, labels_take_other_positions_in_polygons),
+    // off taken anywhere.
+    assert!(s.run("labels.placement", &json!({"layer": "Rivers", "otherPositions": true})).is_err());
+    s.run("labels.placement", &json!({"layer": "Rivers", "otherPositions": false})).unwrap();
     s.run("labels.placement", &json!({"layer": "Cities", "otherPositions": true})).unwrap();
     let text = serde_json::to_string(&s.project).unwrap();
     assert!(Session::new(serde_json::from_str(&text).unwrap()).map().layer_by_name("Cities").unwrap().labels.default.other_positions);
@@ -9612,6 +9611,47 @@ fn labels_take_other_positions_round_points() {
     assert!(s.map().label_lock.is_some());
     s.run("labels.placement", &json!({"layer": "Cities", "otherPositions": true})).unwrap();
     assert!(s.map().label_lock.is_none(), "turned on: locked again");
+}
+
+/// A polygon label class tries its pole of inaccessibility when told to (#3268): at any position
+/// but curved, and without a guide. A refusal changes nothing, it undoes, the project keeps it, and
+/// turning it on or off locks the labels again.
+#[test]
+fn labels_take_other_positions_in_polygons() {
+    use crate::render::View;
+    let mut s = world();
+    let id = s.map().layer_by_name("Countries").unwrap().id;
+    let on = |s: &Session| s.map().layer(id).unwrap().labels.default.other_positions;
+    assert!(!on(&s));
+    s.run("labels.placement", &json!({"layer": id, "otherPositions": true})).unwrap();
+    assert!(on(&s));
+    s.run("edit.undo", &json!({})).unwrap();
+    assert!(!on(&s), "undoes");
+    for position in ["center", "above", "parallel"] {
+        s.run("labels.placement", &json!({"layer": id, "position": position, "otherPositions": true})).unwrap();
+        s.run("labels.placement", &json!({"layer": id, "otherPositions": false})).unwrap();
+    }
+    s.run("labels.placement", &json!({"layer": id, "position": "auto"})).unwrap();
+    assert!(s.run("labels.placement", &json!({"layer": id, "position": "curved", "otherPositions": true})).is_err());
+    let guide = json!({"layer": "Rivers"});
+    assert!(s.run("labels.placement", &json!({"layer": id, "guide": guide, "otherPositions": true})).is_err());
+    let class = &s.map().layer(id).unwrap().labels.default;
+    assert!(!class.other_positions && class.guide.is_none() && class.placement == rustgis_map::LabelPlacement::Auto, "nothing changes");
+    for position in ["curved", "auto"] {
+        s.run("labels.placement", &json!({"layer": id, "position": position, "otherPositions": false})).unwrap();
+    }
+    s.run("labels.placement", &json!({"layer": id, "otherPositions": true})).unwrap();
+    let text = serde_json::to_string(&s.project).unwrap();
+    assert!(on(&Session::new(serde_json::from_str(&text).unwrap())));
+    s.run("labels.enable", &json!({"layer": id, "on": true})).unwrap();
+    let v = View { width: 800.0, height: 600.0, pixels_per_point: 1.0, camera: s.map().camera, sky: false };
+    for turn in [false, true] {
+        s.run("labels.lock", &json!({"on": true})).unwrap();
+        crate::render::render(s.map_mut(), &v).unwrap();
+        assert!(s.map().label_lock.is_some());
+        s.run("labels.placement", &json!({"layer": id, "otherPositions": turn})).unwrap();
+        assert!(s.map().label_lock.is_none(), "turned {turn}: locked again");
+    }
 }
 
 /// A line label class tries other places along its line when told to (#1187): only placed parallel
@@ -9654,9 +9694,6 @@ fn labels_take_other_positions_along_lines() {
     for bad in [json!("yes"), json!(1), Value::Null] {
         assert!(s.run("labels.placement", &json!({"layer": "Rivers", "otherPositions": bad})).is_err(), "{bad}");
     }
-    // Polygons have no such places, even placed parallel.
-    assert!(s.run("labels.placement", &json!({"layer": "Countries", "position": "parallel", "otherPositions": true})).is_err());
-    s.run("labels.placement", &json!({"layer": "Countries", "otherPositions": false})).unwrap();
     // Judged in the class named, not in Default; a class that isn't there is refused.
     s.run("labels.placement", &json!({"layer": "Rivers", "position": "above", "otherPositions": false})).unwrap();
     s.run("labels.class.add", &json!({"layer": "Rivers", "name": "Big"})).unwrap();

@@ -337,6 +337,22 @@ pub(super) fn screen_rings(ctx: &super::Ctx<'_>, polys: &[Vec<Vec<Coord>>]) -> O
         .collect()
 }
 
+/// Where in `g`'s label part a label `aspect` times as wide as it is tall fits best on the screen
+/// (#3268), from its rings thinned as [`screen_rings`] thins them: the pole of inaccessibility with
+/// the rings narrowed `aspect` times, so the centre of the largest ellipse of that shape inside
+/// them. The largest circle's would put a wide name in a corner of a U or an L, out over its side.
+/// Searched in the narrowed rings, to about a point up and down and `aspect` points across (a
+/// two-hundredth of a large polygon where that is coarser). `None` for no polygon, one with no area
+/// near the view or one with a place behind the globe.
+pub(super) fn pole(ctx: &super::Ctx<'_>, g: &rustgis_data::Geometry, aspect: f32) -> Option<(f32, f32)> {
+    let mut rings = screen_rings(ctx, std::slice::from_ref(g.label_part()?))?;
+    // A text of no measurable shape counts as square; a very long or tall one as 20 to 1.
+    let aspect = if aspect.is_finite() && aspect > 0.0 { aspect.clamp(0.05, 20.0) } else { 1.0 };
+    rings.iter_mut().flatten().for_each(|p| p.0 /= aspect);
+    let (x, y) = rustgis_tiles::symbols::pole_of_inaccessibility(&rings, 1.0)?;
+    Some((x * aspect, y))
+}
+
 /// [`glyphs`]' characters `advances` wide and `height` tall, as [`Line::curved`] takes them.
 fn curved(
     ctx: &super::Ctx<'_>,

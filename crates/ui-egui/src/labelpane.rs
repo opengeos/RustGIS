@@ -881,6 +881,16 @@ fn position(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
         }
         square_to(app, ui, l, c);
     }
+    // Polygons: where the text fits best inside, tried before the label's own place (#3268). Not for
+    // a label curved or along a guide, whose course is its place.
+    if l.geometry_type() == rustgis_engine::data::GeometryType::Polygon && c.it.places_inside_polygons() {
+        ui.add_space(4.0);
+        let mut on = c.it.other_positions;
+        let help = tl!("The label goes where it fits best inside the polygon; if that is taken, where it goes without this.");
+        if ui.checkbox(&mut on, tl!("Try other places inside the polygon")).on_hover_text(help).changed() {
+            run(app, "labels.placement", c.params(json!({"otherPositions": on})));
+        }
+    }
     // Lines: the text along them, straight or bending with them.
     if l.geometry_type() == rustgis_engine::data::GeometryType::Polyline {
         ui.add_space(4.0);
@@ -1618,6 +1628,50 @@ mod tests {
         h.state_mut().session.run("layer.select", &json!({"layer": countries})).unwrap();
         h.run();
         assert!(h.query_by_role_and_label(Role::CheckBox, BOX).is_none(), "not for polygons");
+    }
+
+    /// A polygon layer's labels can try other places inside their polygons (#3268): the box is
+    /// there but for a curved label or one along a guide, it undoes, and hiding it keeps what it was
+    /// set to.
+    #[test]
+    fn other_positions_are_set_in_the_pane_for_polygons() {
+        use egui::accesskit::Role;
+        const BOX: &str = "Try other places inside the polygon";
+        let mut h = harness(with_cities());
+        h.run();
+        let countries = layer_id(h.state(), "Countries");
+        h.state_mut().session.run("layer.select", &json!({"layer": countries})).unwrap();
+        h.run();
+        open_tab(&mut h, "Position");
+        let on = |h: &egui_kittest::Harness<'_, RustGisApp>| {
+            h.state().session.map().layer_by_name("Countries").unwrap().labels.default.other_positions
+        };
+        assert!(!on(&h));
+        h.get_by_role_and_label(Role::CheckBox, BOX).click();
+        h.run();
+        assert!(on(&h));
+        h.state_mut().session.run("edit.undo", &json!({})).unwrap();
+        h.run();
+        assert!(!on(&h));
+        h.get_by_role_and_label(Role::CheckBox, BOX).click();
+        h.run();
+        for change in [json!({"position": "curved"}), json!({"position": "auto", "guide": {"layer": "Rivers"}})] {
+            let mut p = change.clone();
+            p["layer"] = json!(countries);
+            h.state_mut().session.run("labels.placement", &p).unwrap();
+            h.run();
+            assert!(h.query_by_role_and_label(Role::CheckBox, BOX).is_none(), "{change}");
+            assert!(on(&h), "hidden, it's kept");
+        }
+        h.state_mut().session.run("labels.placement", &json!({"layer": countries, "guide": null})).unwrap();
+        h.run();
+        h.get_by_role_and_label(Role::CheckBox, BOX).click();
+        h.run();
+        assert!(!on(&h));
+        let cities = layer_id(h.state(), "Cities");
+        h.state_mut().session.run("layer.select", &json!({"layer": cities})).unwrap();
+        h.run();
+        assert!(h.query_by_role_and_label(Role::CheckBox, BOX).is_none(), "not for points");
     }
 
     /// A point's label placed square to a line (#2263) is chosen in the pane, starting on a line
