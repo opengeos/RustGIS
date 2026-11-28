@@ -1,5 +1,6 @@
 //! The tools.
 
+mod check_dem;
 mod check_geometry;
 mod geometry;
 mod network_analysis;
@@ -1135,6 +1136,41 @@ pub static TOOLS: &[ToolSpec] = &[
             P { name: "output", label: "Output Name", kind: K::Text, required: false, default: "", help: "Output table name." },
         ],
         run: tabulate_area::run,
+    },
+    ToolSpec {
+        id: "checkDem",
+        name: "Check DEM",
+        toolbox: "Analysis › Terrain",
+        summary: "Finds steps in an elevation model (seams, voids filled at another level, reservoir edges), as points with a summary; it changes nothing.",
+        params: &[
+            P {
+                name: "input",
+                label: "Elevation Raster",
+                kind: K::RasterLayer,
+                required: true,
+                default: "",
+                help: "The elevation model to check. Heights are in its elevation unit (metres by default).",
+            },
+            P { name: "band", label: "Band", kind: K::Number, required: false, default: "1", help: "1-based band of elevations." },
+            P {
+                name: "stepRatio",
+                label: "Step Ratio",
+                kind: K::Number,
+                required: false,
+                default: "5",
+                help: "A step is a drop to a neighbour more than this many times the drops just before and after it on the same line, so a cliff whose face goes on dropping is not one.",
+            },
+            P {
+                name: "stepHeight",
+                label: "Step Height",
+                kind: K::Number,
+                required: false,
+                default: "20",
+                help: "The least drop that is a step.",
+            },
+            P { name: "output", label: "Output Name", kind: K::Text, required: false, default: "", help: "Output point layer name." },
+        ],
+        run: check_dem::run,
     },
     ToolSpec {
         id: "zonalStats",
@@ -11444,6 +11480,11 @@ mod tests {
         let mut ran = 0;
         for spec in TOOLS {
             if !spec.params.iter().any(|p| p.name.eq_ignore_ascii_case("output") && matches!(p.kind, K::Text)) {
+                continue;
+            }
+            // `inputs()` holds no raster, so a tool that reads one stops before it makes anything:
+            // it isn't counted among those expected to run here.
+            if spec.params.iter().any(|p| p.required && matches!(p.kind, K::RasterLayer)) {
                 continue;
             }
             tested += 1;

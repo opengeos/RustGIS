@@ -469,6 +469,7 @@ Use these ids in `gp.run`'s `tool` parameter (`gp.tools` lists the available too
 | Ordinary Kriging | `kriging` | Analysis › Interpolation |
 | Zonal Statistics | `zonalStats` | Analysis › Raster |
 | Tabulate Area | `tabulateArea` | Analysis › Raster |
+| Check DEM | `checkDem` | Analysis › Terrain |
 | Kernel Density | `kernelDensity` | Analysis › Density |
 
 **Raster to PMTiles** (`rasterToPmtiles`) writes Web Mercator PNG tiles using the raster's current
@@ -2475,6 +2476,23 @@ refuses more than 1,000 class columns or 10 million output values. On the deskto
 the background with progress and Cancel; independent zones use several threads within the
 mask memory budget. Each zone's mask is filled as one step before its cells are scanned, so
 Cancel can wait for that mask fill to finish.
+
+## Checking an elevation model
+
+**Check DEM** (`checkDem`) finds the steps a relief shading shows glaring and a stretched grey
+raster hides: seams between tiles, voids filled at another level, cliffs at a reservoir's edge in a
+surface model. It writes a point per step, with `kind`, `size` (the drop) and the `elevation`
+there, and a summary of the count and the share of the model affected. It reports and changes
+nothing.
+
+A **step** is a drop to a neighbour of more than `stepHeight` (default 20) and more than
+`stepRatio` (default 5) times the drops just before and after it on the same line. A cliff, whose
+face goes on dropping, is not one. Heights are in the model's elevation unit. Cells at the edge or
+next to no-data can't follow every line, and the summary says how many. The layer holds the first
+100,000 steps, from the top row down; the rest are counted. On a 1-second SRTM tile of the
+Quadrilátero Ferrífero, 82% of the steps lie within a cell of where SRTM and the Copernicus 30 m
+model differ by more than 10 m; the clean ANADEM terrain model of the Serra do Brigadeiro has 16 a
+million cells. On the desktop it runs in the background with progress and Cancel.
 
 ## Zonal statistics and polygon clipping
 
