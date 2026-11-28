@@ -179,6 +179,8 @@ pub fn resolve(spec: &Spec) -> Resolve {
         mbtiles::check(&spec.url)
     } else if local {
         pmtiles::check_local(&spec.url)
+    } else if spec.kind == Kind::Style && is_local_style(&spec.url) {
+        pmtiles::check_local_path(&spec.url, "a style file", &["json"])
     } else {
         address::check(&spec.url, None)
     };
@@ -221,6 +223,15 @@ fn resolve_anew(spec: &Spec, key: String, epoch: u64) -> Resolve {
         Kind::Vector => match vector_style(spec) {
             Some(d) => d,
             None => return Resolve::Failed("the built-in vector style could not be read".into()),
+        },
+        // A style document saved on this computer (#2388): read from the file, its tiles, sprites
+        // and glyphs fetched from the web addresses it names.
+        Kind::Style if is_local_style(&spec.url) => match read_local_style(&spec.url) {
+            Ok(d) => {
+                base = address::Origin { url: spec.url.clone(), reach: address::Reach::Local };
+                d
+            }
+            Err(e) => return Resolve::Failed(e),
         },
         Kind::Style => match fetch_json(&spec.url, None) {
             Ok(Some((d, reached))) => {
@@ -601,6 +612,50 @@ pub fn archive_holds_vectors(kind: Kind, url: &str) -> Result<Option<bool>, Stri
     }
 }
 
+/// The largest style document read from a file: far more than any published style.
+const MAX_LOCAL_STYLE: u64 = 32 << 20;
+
+/// Whether a style's address is a file on this computer rather than a web address (as
+/// `rustgis_map::tiles::is_local_style` decides it, which a layer's address went through).
+pub fn is_local_style(url: &str) -> bool {
+    if !pmtiles::is_local(url) {
+        return false;
+    }
+    let p = url.strip_prefix("file://").unwrap_or(url);
+    let drive = p.as_bytes().get(1) == Some(&b':') && p.as_bytes().first().is_some_and(u8::is_ascii_alphabetic);
+    url.starts_with("file://") || p.starts_with('/') || p.starts_with('\\') || drive
+}
+
+/// The style document in a `.json` file on this computer, given by its full path. Its own
+/// address may name this computer or the local network, as a layer's address the user gave may.
+#[cfg(not(target_arch = "wasm32"))]
+fn read_local_style(path: &str) -> Result<Value, String> {
+    pmtiles::check_local_path(path, "a style file", &["json"])?;
+    let p = path.strip_prefix("file://").unwrap_or(path);
+    let too_big = || format!("{p}: a style file is at most {} MB", MAX_LOCAL_STYLE >> 20);
+    let len = std::fs::metadata(p).map_err(|e| format!("{p}: {e}"))?.len();
+    if len > MAX_LOCAL_STYLE {
+        return Err(too_big());
+    }
+    // Read no more than the limit allows, however large the file has grown since it was measured.
+    let mut text = Vec::new();
+    let file = std::fs::File::open(p).map_err(|e| format!("{p}: {e}"))?;
+    std::io::Read::read_to_end(&mut std::io::Read::take(file, MAX_LOCAL_STYLE + 1), &mut text).map_err(|e| format!("{p}: {e}"))?;
+    if text.len() as u64 > MAX_LOCAL_STYLE {
+        return Err(too_big());
+    }
+    let doc: Value = serde_json::from_slice(&text).map_err(|e| format!("{p}: not a JSON document ({e})"))?;
+    if !doc.is_object() {
+        return Err(format!("{p}: a MapLibre style is a JSON object"));
+    }
+    Ok(doc)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn read_local_style(path: &str) -> Result<Value, String> {
+    Err(format!("{path}: style files on this computer open in the desktop app; give the style's web address here"))
+}
+
 /// The document at `url`: `Ok(None)` while it is on its way.
 fn fetch_json(url: &str, from: Option<&address::Origin>) -> Result<Option<(Value, address::Origin)>, String> {
     match cache::document(url, from) {
@@ -923,6 +978,80 @@ mod tests {
             }
             _ => panic!("no vector source"),
         }
+    }
+
+    /// A MapLibre style saved on this computer (#2388) is read from its file, without a web
+    /// server, and its sources' web addresses are fetched as a web style's are. A file that
+    /// isn't there, isn't a style or isn't given by its full path says why.
+    #[test]
+    fn a_style_file_on_this_computer_resolves_its_web_sources() {
+        let _turn = cache::turn();
+        let tilejson = "https://local-style.example/tiles.json";
+        cache::set_fetcher(move |url, done| {
+            done(Ok(if url == tilejson {
+                json!({"tiles": ["https://local-style.example/{z}/{x}/{y}.pbf"], "attribution": "Basemap"})
+            } else {
+                json!({})
+            }
+            .to_string()
+            .into_bytes()));
+        });
+        let dir = std::env::temp_dir().join(format!("rustgis-local-style-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // A `#` in the name is part of it, not a fragment of an address.
+        let file = dir.join("topo #50k.json");
+        let style = json!({
+            "version": 8,
+            "sources": {"v": {"type": "vector", "url": tilejson}},
+            "layers": [
+                {"id": "bg", "type": "background", "paint": {"background-color": "#fff"}},
+                {"id": "roads", "type": "line", "source": "v", "source-layer": "roads"}
+            ]
+        });
+        std::fs::write(&file, style.to_string()).unwrap();
+        let path = file.display().to_string();
+        assert!(is_local_style(&path), "{path}");
+        let mut ready = None;
+        for _ in 0..3 {
+            match resolve(&spec(Kind::Style, &path)) {
+                Resolve::Ready(r) => {
+                    ready = Some(r);
+                    break;
+                }
+                Resolve::Pending => cache::wait(std::time::Duration::from_secs(2)),
+                Resolve::Failed(e) => panic!("{path}: {e}"),
+            }
+        }
+        let r = ready.expect("the style file resolves");
+        assert_eq!(r.style.layers.len(), 2);
+        match r.style.sources.first().map(|s| &s.1) {
+            Some(Source::Vector { tiles, .. }) => assert_eq!(tiles, &["https://local-style.example/{z}/{x}/{y}.pbf"]),
+            _ => panic!("no vector source"),
+        }
+        // What can't be drawn says so, with the file it is about.
+        let missing = dir.join("gone.json").display().to_string();
+        let Resolve::Failed(e) = resolve(&spec(Kind::Style, &missing)) else { panic!("a missing file must fail") };
+        assert!(e.contains("gone.json"), "{e}");
+        let array = dir.join("array.json");
+        std::fs::write(&array, "[]").unwrap();
+        let Resolve::Failed(e) = resolve(&spec(Kind::Style, &array.display().to_string())) else { panic!("not a style") };
+        assert!(e.contains("JSON object"), "{e}");
+        let text = dir.join("style.txt");
+        std::fs::write(&text, style.to_string()).unwrap();
+        let Resolve::Failed(e) = resolve(&spec(Kind::Style, &text.display().to_string())) else { panic!("not a .json file") };
+        assert!(e.contains(".json"), "{e}");
+        // A relative path is judged as a web address, and refused as one.
+        assert!(!is_local_style("styles/topo.json"));
+        assert!(matches!(resolve(&spec(Kind::Style, "styles/topo.json")), Resolve::Failed(_)));
+        // Windows reads mixed separators as a share too, and `C:topo.json` from the drive's current folder.
+        for path in ["/\\server\\share\\topo.json", "\\/server/share/topo.json", "file:///\\server\\share\\topo.json", "C:topo.json"] {
+            assert!(pmtiles::check_local_path(path, "a style file", &["json"]).is_err(), "{path}");
+            assert!(matches!(resolve(&spec(Kind::Style, path)), Resolve::Failed(_)), "{path}");
+        }
+        for path in ["C:\\Maps\\topo.json", "C:/Maps/topo.json", "/home/me/maps/topo.json"] {
+            assert!(pmtiles::check_local_path(path, "a style file", &["json"]).is_ok(), "{path}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A tile layer of one source that names its credit is credited with that alone, not again

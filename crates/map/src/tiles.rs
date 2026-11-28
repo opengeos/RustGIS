@@ -74,6 +74,10 @@ impl TileKind {
     /// The kind an address most likely is, from how it looks.
     pub fn guess(url: &str) -> TileKind {
         let url = rustgis_data::login_address::inner(url);
+        // A file's name is the whole path: `#` and `?` are characters of it, not a fragment or query.
+        if is_local_style(url) && url.to_ascii_lowercase().ends_with(".json") {
+            return TileKind::Style;
+        }
         let path = url.split(['?', '#']).next().unwrap_or(url).to_ascii_lowercase();
         if path.ends_with(".pmtiles") {
             TileKind::PmTiles
@@ -554,11 +558,14 @@ impl TileLayer {
         self.time_urls.dedup_by(|a, b| a.0 == b.0);
         self.time_urls.truncate(MAX_TIME_URLS);
         repairs.addresses = dated - self.time_urls.len() - usize::from(self.time_url.is_some());
-        let local = matches!(self.kind, TileKind::PmTiles | TileKind::MbTiles) && is_local_archive(&self.url);
+        let style_file = self.kind == TileKind::Style && is_local_style(&self.url);
+        let local = style_file || (matches!(self.kind, TileKind::PmTiles | TileKind::MbTiles) && is_local_archive(&self.url));
         if let Some(name) = self.url.strip_prefix(UPLOAD).filter(|_| self.kind == TileKind::MbTiles) {
             if name.is_empty() || name.len() > 512 || name.chars().any(char::is_control) {
                 return Err("an uploaded MBTiles file needs a name".into());
             }
+        } else if style_file {
+            check_path(&self.url, "json")?;
         } else if local {
             if self.error.is_none() {
                 check_path(&self.url, if self.kind == TileKind::MbTiles { "mbtiles" } else { "pmtiles" })?;
@@ -633,17 +640,32 @@ pub fn is_local_archive(url: &str) -> bool {
     !(lower.starts_with("https://") || lower.starts_with("http://") || lower.starts_with("s3://"))
 }
 
-/// Whether an archive's file path may be read: absolute, a `.<ext>` file (`pmtiles`,
-/// `mbtiles`), no longer than 4096 bytes.
+/// Whether a MapLibre style's address is a file on this computer (#2388): a path from the root
+/// or a drive, or a `file://` address, rather than a web address. Anything else is judged as a web
+/// address, and refused as one.
+pub fn is_local_style(url: &str) -> bool {
+    if !is_local_archive(url) {
+        return false;
+    }
+    let p = url.strip_prefix("file://").unwrap_or(url);
+    let drive = p.as_bytes().get(1) == Some(&b':') && p.as_bytes().first().is_some_and(u8::is_ascii_alphabetic);
+    url.starts_with("file://") || p.starts_with('/') || p.starts_with('\\') || drive
+}
+
+/// Whether an archive's or style's file path may be read: absolute, a `.<ext>` file (`pmtiles`,
+/// `mbtiles`, `json`), no longer than 4096 bytes.
 pub fn check_path(path: &str, ext: &str) -> Result<(), String> {
     let p = path.strip_prefix("file://").unwrap_or(path);
     if p.len() > 4096 || p.chars().any(char::is_control) {
         return Err("the path is too long or has control characters".into());
     }
-    let windows_drive = p.as_bytes().get(1) == Some(&b':') && p.as_bytes().first().is_some_and(u8::is_ascii_alphabetic);
-    // Not a network share (\\server\share, or file://server/…), which a project could use to
-    // make Windows connect to another machine.
-    let share = p.starts_with("\\\\") || p.starts_with("//") || (path.starts_with("file://") && !p.starts_with('/'));
+    // A drive path starts at the drive's root: `C:topo.json` is relative to its current folder.
+    let windows_drive = p.as_bytes().get(1) == Some(&b':')
+        && p.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
+        && matches!(p.as_bytes().get(2), Some(b'/' | b'\\'));
+    // Not a network share (\\server\share, /\server\share, or file://server/…), which a project
+    // could use to make Windows connect to another machine.
+    let share = is_share(p) || (path.starts_with("file://") && !p.starts_with('/'));
     if share || !(p.starts_with('/') || windows_drive) {
         return Err(format!("'{p}': give the full path of the archive on this computer"));
     }
@@ -651,6 +673,13 @@ pub fn check_path(path: &str, ext: &str) -> Result<(), String> {
         return Err(format!("'{p}' isn't a .{ext} file"));
     }
     Ok(())
+}
+
+/// Whether a path starts as a network share: two separators, `/` or `\` in any mix, which
+/// Windows reads as `\\server\share`.
+fn is_share(p: &str) -> bool {
+    let sep = |b: Option<&u8>| matches!(b, Some(b'/' | b'\\'));
+    sep(p.as_bytes().first()) && sep(p.as_bytes().get(1))
 }
 
 /// Whether `url` may be fetched: HTTP, HTTPS or S3, with a host, and no longer than 4096 bytes.
@@ -777,6 +806,43 @@ mod tests {
             assert!(error.contains(reason), "{error}");
             assert!(!error.contains("secret") && !error.contains("value"), "{error}");
         }
+    }
+
+    /// A MapLibre style may be a `.json` file on this computer (#2388), given by its full path:
+    /// it is kept as a style, named after the file; a relative path, a network share or another
+    /// kind of file is refused.
+    #[test]
+    fn a_style_file_on_this_computer_is_kept_by_its_path() {
+        // A `#` or `?` in a file's name is part of it, not a web address's fragment or query.
+        assert_eq!(TileKind::guess("/home/me/maps/day#night.json"), TileKind::Style);
+        assert_eq!(TileKind::guess("C:\\Maps\\what?.json"), TileKind::Style);
+        for path in ["/home/me/maps/topo.json", "C:\\Maps\\topo.json", "file:///home/me/maps/topo.json"] {
+            assert!(is_local_style(path), "{path}");
+            assert_eq!(TileKind::guess(path), TileKind::Style, "{path}");
+            let mut t = TileLayer::new("", TileKind::Style, path);
+            t.repair().unwrap();
+            assert_eq!(t.url, path);
+            // (A path's separators are this system's: a Windows path is named on Windows.)
+            if !path.starts_with("C:") || cfg!(windows) {
+                assert_eq!(t.name, "topo", "{path}");
+            }
+        }
+        for path in ["https://maps.test/style.json", "maps/topo.json", "rustgis-login:broken"] {
+            assert!(!is_local_style(path), "{path}");
+        }
+        // Windows reads mixed separators as a share too, and `C:topo.json` from the drive's current folder.
+        for path in [
+            "\\\\server\\share\\topo.json",
+            "//server/share/topo.json",
+            "/\\server\\share\\topo.json",
+            "\\/server/share/topo.json",
+            "file:///\\server\\share\\topo.json",
+            "C:topo.json",
+            "/home/me/maps/topo.txt",
+        ] {
+            assert!(TileLayer::new("", TileKind::Style, path).repair().is_err(), "{path}");
+        }
+        assert!(TileLayer::new("", TileKind::Style, "maps/topo.json").repair().unwrap_err().contains("https://"));
     }
 
     #[test]

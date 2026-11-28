@@ -25,6 +25,24 @@ fn pending(s: &Session, scope: &Scope, call: &Call) -> Pending {
     }
 }
 
+/// A MapLibre style file on this computer (#2388) is a file read as well as the network reach
+/// every tile layer has; a style by its web address is not.
+#[test]
+fn permission_policy_a_local_style_file_reads_files() {
+    use crate::policy::{Effect, command_effects};
+    let s = Session::new(Project::default());
+    let spec = s.registry.get("map.addTiles").unwrap();
+    for (params, files) in [
+        (json!({"url":"/home/me/maps/topo.json","kind":"style"}), true),
+        (json!({"url":"C:\\Maps\\topo.json"}), true),
+        (json!({"url":"https://maps.invalid/style.json"}), false),
+    ] {
+        let effects = command_effects(spec, &params);
+        assert_eq!(effects.contains(Effect::Files), files, "{params}");
+        assert!(effects.contains(Effect::Network), "{params}");
+    }
+}
+
 /// Reload's implicit local-file access uses the same grants as explicit file commands.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]

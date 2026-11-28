@@ -2796,7 +2796,7 @@ fn gpkg_discard(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
 /// Add Tile Layer: an XYZ/TMS/WMS template, vector tiles or a MapLibre style by address.
 fn add_tiles(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
     use rustgis_engine::map::TileKind;
-    ui.label(egui::RichText::new(tl!("A tile service's address: raster tiles with {z}/{x}/{y} (or {-y}, {q}, {bbox-epsg-3857} for WMS), vector tiles (.pbf) or TileJSON, a MapLibre style, a PMTiles archive (a web address, or a file on this computer), or an MBTiles file on this computer.")).weak());
+    ui.label(egui::RichText::new(tl!("A tile service's address: raster tiles with {z}/{x}/{y} (or {-y}, {q}, {bbox-epsg-3857} for WMS), vector tiles (.pbf) or TileJSON, a MapLibre style (a web address, or a .json file on this computer), a PMTiles archive (a web address, or a file on this computer), or an MBTiles file on this computer.")).weak());
     egui::Grid::new("tiles").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
         ui.label(tl!("Address"));
         ui.horizontal(|ui| {
@@ -2812,6 +2812,15 @@ fn add_tiles(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
                 && let Some(path) = pick_open(&["pmtiles", "mbtiles"], tl!("Tile archive"))
             {
                 app.dialogs.mode = if path.to_ascii_lowercase().ends_with(".mbtiles") { "mbtiles" } else { "pmtiles" };
+                app.dialogs.text = path;
+            }
+            // A MapLibre style saved on this computer, such as one exported from a style editor
+            // (#2388): its tiles still come from the web addresses it names.
+            if !cfg!(target_arch = "wasm32")
+                && ui.button(tl!("Style File…")).on_hover_text(tl!("A MapLibre style (.json) on this computer.")).clicked()
+                && let Some(path) = pick_open(&["json"], tl!("MapLibre style"))
+            {
+                app.dialogs.mode = "style";
                 app.dialogs.text = path;
             }
         });

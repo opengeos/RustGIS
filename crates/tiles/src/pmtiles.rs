@@ -204,10 +204,15 @@ pub fn check_local(archive: &str) -> Result<(), String> {
 /// file in the refusal.
 pub(crate) fn check_local_path(archive: &str, kind: &str, extensions: &[&str]) -> Result<(), String> {
     let p = archive.strip_prefix("file://").unwrap_or(archive);
-    let drive = p.as_bytes().get(1) == Some(&b':') && p.as_bytes().first().is_some_and(u8::is_ascii_alphabetic);
-    // A path on this computer: not a network share (\\server\share, or file://server/…), which a
-    // project could use to make Windows connect to another machine.
-    let share = p.starts_with("\\\\") || p.starts_with("//") || (archive.starts_with("file://") && !p.starts_with('/'));
+    // A drive path starts at the drive's root: `C:topo.json` is relative to its current folder.
+    let drive = p.as_bytes().get(1) == Some(&b':')
+        && p.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
+        && matches!(p.as_bytes().get(2), Some(b'/' | b'\\'));
+    // A path on this computer: not a network share (two leading separators in any mix, such as
+    // \\server\share or /\server\share, or file://server/…), which a project could use to make
+    // Windows connect to another machine.
+    let sep = |b: Option<&u8>| matches!(b, Some(b'/' | b'\\'));
+    let share = (sep(p.as_bytes().first()) && sep(p.as_bytes().get(1))) || (archive.starts_with("file://") && !p.starts_with('/'));
     if share || !(p.starts_with('/') || drive) || p.chars().any(char::is_control) || p.len() > 4096 {
         return Err(format!("'{p}': {kind} is given by its full path on this computer"));
     }

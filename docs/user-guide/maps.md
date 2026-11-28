@@ -536,7 +536,10 @@ colour off, as that basemap draws its own colours:
   the desktop read in place a tile at a time (**Tile Archive File…**, Add Data, or drop it on the
   window); in the web app added with Add Data and held in memory for the session (a project keeps
   the layer, and asks for the file again).
-- **Map styles**: a MapLibre style document (`style.json`), with its vector, raster and
+- **Map styles**: a MapLibre style document (`style.json`) by its web address or, on the desktop,
+  a `.json` file on this computer (**Style File…**, for one exported from a style editor such as
+  Maputnik; the project keeps its path, and a file that can no longer be read says why when the map
+  draws it), with its vector, raster and
   elevation (`raster-dem`: Terrarium, Mapbox or custom encoding) sources.
   RustGIS draws background, fill, line, circle and raster layers, labels with their icons from
   the style's sprites (SDF icons in their `icon-color`; the icons of a sprite in the style's
