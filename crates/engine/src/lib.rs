@@ -2978,6 +2978,15 @@ impl Session {
             self.notify(text, error);
         }
         for n in &news {
+            if let crate::grids::News::Finished { grids, bytes } = n {
+                self.notify_text(
+                    crate::notice_text::NoticeText::format(
+                        if *grids == 1 { "Downloaded {count} datum grid, {mb} MB" } else { "Downloaded {count} datum grids, {mb} MB" },
+                        [("count", grids.to_string().into()), ("mb", format!("{:.1}", *bytes as f64 / 1_000_000.0).into())],
+                    ),
+                    false,
+                );
+            }
             // Its download is over: one tried again (the setting turned on again) is said again.
             if let crate::grids::News::Got { name, .. } | crate::grids::News::Failed { name, .. } = n {
                 self.grid_downloads_said.remove(name);

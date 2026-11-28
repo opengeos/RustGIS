@@ -1523,7 +1523,10 @@ version RustGIS works with, and only then installs it in its data folder
 (by default `~/.local/share/rustgis/geolibre` on Linux, `~/Library/Application Support/RustGIS/geolibre`
 on macOS, `%LOCALAPPDATA%\RustGIS\geolibre` on Windows). `RUSTGIS_APP_DATA_DIR` overrides the
 data folder; Linux also honours `XDG_DATA_HOME`. From the command line, `gp.installGeolibre`
-does the same.
+does the same. The install card shows download progress and **Cancel**. Cancellation is checked
+between network reads and before the runner replaces an installed copy; a blocked read must end
+or time out first. A notice reports success with the tool count, or failure, even if the Tools
+pane was closed while the installation ran.
 
 To remove it, click **Uninstall** beside *GeoLibre* at the top of the Tools pane, then
 **Confirm uninstall** (`gp.uninstallGeolibre` from the command line): RustGIS deletes the runner

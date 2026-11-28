@@ -297,13 +297,19 @@ fn uninstall_geolibre_language(_s: &mut Session, p: &Value) -> CmdResult {
 /// program's path. `progress` gets the bytes received and the expected total. Blocks: the app
 /// calls it from a background thread, then picks the runner with `gp.setGeolibre`. Native only.
 pub fn install_geolibre(progress: &dyn Fn(u64, Option<u64>)) -> Result<String, String> {
+    install_geolibre_cancellable(progress, &std::sync::atomic::AtomicBool::new(false))
+}
+
+/// The UI install path, with Cancel observed before the runner is put in place.
+/// Blocking HTTP reads finish or time out before cancellation is observed.
+pub fn install_geolibre_cancellable(progress: &dyn Fn(u64, Option<u64>), cancel: &std::sync::atomic::AtomicBool) -> Result<String, String> {
     #[cfg(all(feature = "geolibre", not(target_arch = "wasm32")))]
     {
-        rustgis_geolibre::install::install(progress).map(|p| p.display().to_string())
+        rustgis_geolibre::install::install_cancellable(progress, cancel).map(|p| p.display().to_string())
     }
     #[cfg(not(all(feature = "geolibre", not(target_arch = "wasm32"))))]
     {
-        let _ = progress;
+        let _ = (progress, cancel);
         Err("this build can't install the GeoLibre runner".into())
     }
 }

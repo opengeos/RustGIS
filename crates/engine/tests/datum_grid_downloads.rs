@@ -80,7 +80,11 @@ fn a_read_waits_for_the_grids_its_system_needs() {
     news.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
     assert_eq!(
         news,
-        [News::Got { name: "us_noaa_conus.tif".into(), bytes: 173_029 }, News::Got { name: "us_noaa_ethpgn.tif".into(), bytes: 13_442 }]
+        [
+            News::Finished { grids: 2, bytes: 186_471 },
+            News::Got { name: "us_noaa_conus.tif".into(), bytes: 173_029 },
+            News::Got { name: "us_noaa_ethpgn.tif".into(), bytes: 13_442 }
+        ]
     );
     assert!(crs::missing_grids(texas).is_empty());
     // Read again, nothing more is asked for.

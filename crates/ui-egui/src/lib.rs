@@ -7440,6 +7440,7 @@ impl RustGisApp {
         self.fonts_pending = false;
         i18n::set_current(self.lang());
         rustgis_engine::plugins::set_language(self.lang().code());
+        panes::poll_geolibre_install(self, ctx);
         panes::poll_geolibre(self, ctx);
         panes::poll_plugin_run(self, ctx);
         #[cfg(not(target_arch = "wasm32"))]

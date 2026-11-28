@@ -48,12 +48,21 @@ pub enum News {
     Got { name: String, bytes: usize },
     /// A grid couldn't be had, and why.
     Failed { name: String, error: String },
+    /// A contiguous batch ended; failures have their own notices.
+    Finished { grids: usize, bytes: u64 },
     /// News a session asked for too late to hear, counted ([`news_since`]).
     Missed(u64),
 }
 
 #[derive(Default)]
 struct State {
+    /// Byte counter shared with the download transport, retained until this batch ends.
+    progress: std::sync::Arc<crate::render::rustgis_tiles::cache::Progress>,
+    batch_active: bool,
+    batch_total: usize,
+    batch_done: usize,
+    batch_got: usize,
+    batch_bytes: u64,
     /// Grids being downloaded now.
     busy: HashSet<String>,
     /// Grids whose download failed this run: not tried again until the setting is turned on again.
@@ -102,6 +111,37 @@ impl State {
         out.extend(self.news.iter().filter(|(n, _)| *n > *seen).map(|(_, news)| news.clone()));
         *seen = self.told;
         out
+    }
+
+    /// Records a settled download before waking readers, including its final batch summary.
+    fn finish(&mut self, name: &str, outcome: Result<usize, String>) {
+        self.busy.remove(name);
+        self.batch_done += 1;
+        match outcome {
+            Ok(bytes) => {
+                self.bytes += bytes;
+                self.batch_got += 1;
+                self.batch_bytes += bytes as u64;
+                self.got.insert(name.to_string());
+                self.tell(News::Got { name: name.to_string(), bytes });
+            }
+            Err(error) => {
+                self.failed.insert(name.to_string());
+                self.tell(News::Failed { name: name.to_string(), error });
+            }
+        }
+        self.running = self.running.saturating_sub(1);
+        self.finish_batch();
+    }
+
+    /// Ends a batch only after every queued or running grid has settled.
+    fn finish_batch(&mut self) {
+        if self.batch_active && self.busy.is_empty() {
+            self.batch_active = false;
+            if self.batch_got > 0 {
+                self.tell(News::Finished { grids: self.batch_got, bytes: self.batch_bytes });
+            }
+        }
     }
 
     /// The setting turned on: this run's failures are tried again, and the limits start over.
@@ -157,6 +197,13 @@ pub fn set_enabled(on: bool) {
 /// Whether datum grids are downloaded.
 pub fn enabled() -> bool {
     ENABLED.load(Ordering::SeqCst)
+}
+
+/// Current batch progress: settled grids, total grids, bytes received, and whether it is active.
+/// Native downloads count bytes as they arrive; browser downloads count them on completion.
+pub fn progress() -> (usize, usize, u64, bool) {
+    let s = lock();
+    (s.batch_done, s.batch_total, s.progress.received().max(s.batch_bytes), s.batch_active)
 }
 
 /// How many times downloads were turned on this run: a download said before is said again after.
@@ -260,6 +307,7 @@ fn next() {
         let Some(grid) = grid else { break };
         start(grid);
     }
+    lock().finish_batch();
     // Those dropped or refused on the way: their waiters see it.
     state().1.notify_all();
 }
@@ -312,6 +360,15 @@ impl State {
             self.tell(News::Failed { name: name.to_string(), error });
             return Claim::Settled;
         }
+        if !self.batch_active {
+            self.batch_active = true;
+            self.batch_total = 0;
+            self.batch_done = 0;
+            self.batch_got = 0;
+            self.batch_bytes = 0;
+            self.progress = Default::default();
+        }
+        self.batch_total += 1;
         self.started += 1;
         self.busy.insert(name.to_string());
         Claim::Mine
@@ -326,8 +383,10 @@ impl State {
             if !on {
                 self.busy.remove(&grid.name);
                 self.started = self.started.saturating_sub(1);
+                self.batch_total = self.batch_total.saturating_sub(1);
             } else if self.bytes >= MAX_BYTES {
                 self.busy.remove(&grid.name);
+                self.batch_done += 1;
                 self.failed.insert(grid.name.clone());
                 self.tell(News::Failed { name: grid.name, error: limit_text() });
             } else {
@@ -365,19 +424,7 @@ fn limit_text() -> String {
 /// Records how `name`'s download went, and wakes those waiting for it.
 fn finish(name: &str, outcome: Result<usize, String>) {
     let mut s = lock();
-    s.busy.remove(name);
-    match outcome {
-        Ok(bytes) => {
-            s.bytes += bytes;
-            s.got.insert(name.to_string());
-            s.tell(News::Got { name: name.to_string(), bytes });
-        }
-        Err(error) => {
-            s.failed.insert(name.to_string());
-            s.tell(News::Failed { name: name.to_string(), error });
-        }
-    }
-    s.running = s.running.saturating_sub(1);
+    s.finish(name, outcome);
     drop(s);
     state().1.notify_all();
     rustgis_map::source::wake();
@@ -545,7 +592,8 @@ fn start(grid: MissingGrid) {
 fn fetch_now(grid: &MissingGrid) {
     let got = std::panic::catch_unwind(|| {
         let download = *download().read().unwrap_or_else(|e| e.into_inner());
-        let bytes = download(&grid.url, MAX_GRID, DOWNLOAD_TIMEOUT)?;
+        let progress = lock().progress.clone();
+        let bytes = crate::render::rustgis_tiles::cache::with_progress(Some(progress), || download(&grid.url, MAX_GRID, DOWNLOAD_TIMEOUT))?;
         keep(&grid.name, &bytes).map(|()| bytes.len())
     })
     .unwrap_or_else(|payload| Err(crate::bug("the download", payload.as_ref())));
@@ -634,7 +682,7 @@ pub fn news_texts(news: &[News]) -> Vec<(String, bool)> {
     let mut count = 0;
     for n in news {
         match n {
-            News::Missed(_) => {}
+            News::Missed(_) | News::Finished { .. } => {}
             News::Got { name, bytes } => got.push(format!("{name} ({})", size_text(*bytes))),
             News::Failed { name, error } => {
                 count += 1;
@@ -691,6 +739,30 @@ fn size_text(bytes: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A completion is emitted once per batch, after its last grid settles, with only
+    /// successfully retained bytes counted; a later batch starts with fresh counters.
+    #[test]
+    fn batch_summary_waits_for_all_grids_and_counts_successes() {
+        let mut s = State::default();
+        assert!(matches!(s.claim("a.tif", true), Claim::Mine));
+        assert!(matches!(s.claim("b.tif", true), Claim::Mine));
+        s.finish("a.tif", Ok(123_456));
+        assert_eq!(s.news_since(&mut 0), [News::Got { name: "a.tif".into(), bytes: 123_456 }]);
+        s.finish("b.tif", Err("HTTP 404".into()));
+        s.finish_batch();
+        assert_eq!(
+            s.news_since(&mut 0),
+            [
+                News::Got { name: "a.tif".into(), bytes: 123_456 },
+                News::Failed { name: "b.tif".into(), error: "HTTP 404".into() },
+                News::Finished { grids: 1, bytes: 123_456 }
+            ]
+        );
+        assert!(!s.batch_active);
+        assert!(matches!(s.claim("c.tif", true), Claim::Mine));
+        assert_eq!((s.batch_total, s.batch_done, s.batch_got, s.batch_bytes), (1, 0, 0, 0));
+    }
 
     #[test]
     fn only_plain_names_are_kept() {

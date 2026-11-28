@@ -826,6 +826,9 @@ grids, not the server's other files such as deformation models):
   keeps its places until it is opened again.
 - Each download is said, with its size, and so is each that fails (not tried again until the
   setting is turned off and on). An answer that isn't a grid file is refused.
+- While downloads run, the setting shows settled grids out of the total and received bytes.
+  The desktop counts bytes as they arrive; the browser updates the size when each grid finishes.
+  A final notice counts successfully downloaded grids and their total retained size.
 - Turned off, grids already downloaded stay in use, and downloads already under way finish. On a
   computer, delete the `datum-grids` folder and start RustGIS again to stop using them (grids
   installed for PROJ are still used). The web app keeps a grid for the session only.
