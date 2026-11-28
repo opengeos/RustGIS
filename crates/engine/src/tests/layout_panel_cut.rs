@@ -14,14 +14,29 @@ const TALL: [f64; 4] = [-46.8, -30.0, -38.5, -2.2];
 
 /// A panel sheet with a title, a subtitle and sources, `extra`'s parameters over these.
 fn panel(extra: Value) -> Result<Layout, String> {
-    let mut s = world();
+    panel_of(world(), extra).map(|(l, _)| l)
+}
+
+/// The same over `s`'s map, with the command's warnings.
+fn panel_of(mut s: Session, extra: Value) -> Result<(Layout, String), String> {
     let mut p = json!({"profile": "a4-portrait", "style": "panel", "extent": area(-3.0), "title": "Piauí",
         "subtitle": "Vegetation trend, 2001–2025", "sources": ["Boundaries: IBGE 2022"]});
     for (k, v) in extra.as_object().unwrap() {
         p[k] = v.clone();
     }
-    s.run("layout.publication", &p)?;
-    Ok(s.project.layouts.pop().unwrap())
+    let r = s.run("layout.publication", &p)?;
+    Ok((s.project.layouts.pop().unwrap(), r["warnings"].to_string()))
+}
+
+/// What a legend with more rows than its box takes is warned with.
+const LEGEND_CUT: &str = "the legend lists more than fits its box";
+
+/// A cut sheet whose legend is whole.
+fn assert_cut_whole(extra: Value, uncut: f64, what: &str) -> Layout {
+    let (l, warnings) = panel_of(world(), extra).unwrap_or_else(|e| panic!("{what}: {e}"));
+    assert_cut(&l, uncut, what);
+    assert!(!warnings.contains(LEGEND_CUT), "{what}: {warnings}");
+    l
 }
 
 fn named<'a>(l: &'a Layout, name: &str) -> &'a Element {
@@ -114,9 +129,39 @@ fn a_wide_area_is_cut_on_every_page_size() {
 }
 
 #[test]
-fn an_area_already_cut_keeps_its_frame_and_a_tall_one_stays_whole() {
-    let h = frame(&panel(json!({"extent": area(-20.0)})).unwrap());
-    assert!((h - 86.0).abs() < 1.0, "{h}");
+fn a_cut_panel_keeps_its_legend_whole() {
+    let uncut = frame(&panel(json!({"extent": TALL})).unwrap());
+    // -20 was cut already, its legend short of its last layer; -3 is a band 1° tall.
+    for south in [-20.0, -16.0, -3.0] {
+        assert_cut_whole(json!({"extent": area(south)}), uncut, &format!("south {south}"));
+    }
+}
+
+#[test]
+fn the_cut_leaves_room_for_the_legend_asked_for() {
+    let uncut = frame(&panel(json!({"extent": TALL})).unwrap());
+    let all = frame(&assert_cut_whole(json!({}), uncut, "every layer"));
+    let fewer = assert_cut_whole(json!({"legend": {"exclude": ["Countries"]}}), uncut, "a layer left out");
+    assert!(frame(&fewer) < all, "{} and {all}", frame(&fewer));
+    let (none, _) = panel_of(world(), json!({"legend": "none"})).unwrap();
+    assert!(frame(&none) < frame(&fewer), "{} and {}", frame(&none), frame(&fewer));
+    assert_cut_whole(json!({"legend": {"columns": 2}}), uncut, "two columns");
+    assert_cut_whole(json!({"locator": ["inset", "globe"]}), uncut, "two locators");
+    assert_cut_whole(json!({"locator": "none"}), uncut, "no locator");
+}
+
+#[test]
+fn a_legend_no_cut_sheet_could_hold_leaves_the_sheet_whole() {
+    let mut s = world();
+    s.run("layer.symbology", &json!({"layer": "Countries", "type": "unique", "field": "name"})).unwrap();
+    let uncut = frame(&panel(json!({"extent": TALL})).unwrap());
+    let (l, warnings) = panel_of(s, json!({})).unwrap();
+    assert!(frame(&l) >= 0.97 * uncut, "{} from {uncut}", frame(&l));
+    assert!(warnings.contains(LEGEND_CUT), "{warnings}");
+}
+
+#[test]
+fn a_tall_area_stays_whole() {
     let tall = panel(json!({"extent": TALL})).unwrap();
     // A4's margin and padding put an uncut panel's top at 15 mm.
     assert!((named(&tall, "Panel Box").y - 15.0).abs() < 1e-6);
