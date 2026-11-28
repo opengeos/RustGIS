@@ -1437,6 +1437,8 @@ pub(crate) struct Totals {
 thread_local! {
     /// For tests: the totals open on this thread, and the most open at once.
     pub(crate) static OPEN_TOTALS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+    /// For tests: first's groups' best ranks held on this thread, and the most held at once.
+    pub(crate) static OPEN_RANKS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
 }
 
 #[cfg(test)]
@@ -1902,8 +1904,10 @@ impl ReduceRun {
             let mut seen = vec![0usize; outputs];
             let mut finished: Vec<Option<(Columns, Vec<f32>)>> = vec![None; slots];
             // First's: each group's cells' best rank so far, which the readers look at to leave
-            // out what can't change a cell. Made with the group's totals; a rank only goes down.
-            let best: Vec<std::sync::OnceLock<Vec<AtomicU32>>> = (0..outputs).map(|_| std::sync::OnceLock::new()).collect();
+            // out what can't change a cell. Made with the group's totals and let go with them
+            // (once the readers holding it are done); a rank only goes down.
+            let best: Vec<std::sync::RwLock<Option<Arc<Ranks>>>> = (0..outputs).map(|_| std::sync::RwLock::new(None)).collect();
+            let ranks_of = |g: usize| best.get(g).and_then(|b| b.read().unwrap_or_else(std::sync::PoisonError::into_inner).clone());
             let mut place = |k: usize, slice: Option<(Arc<Raster>, usize)>| -> Result<(), String> {
                 let g = self.group_of.get(k).copied().filter(|g| *g < outputs).ok_or("a date in no group")?;
                 let span = g * per..(g + 1) * per;
@@ -1941,10 +1945,15 @@ impl ReduceRun {
                     for t in &mut ts {
                         t.at(at);
                     }
-                    let ranks = if skips {
-                        best.get(g).map(|b| b.get_or_init(|| (0..cells).map(|_| AtomicU32::new(u32::MAX)).collect()))
-                    } else {
-                        None
+                    let ranks = match (skips, best.get(g)) {
+                        (true, Some(b)) => {
+                            let mut held = b.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+                            if held.is_none() {
+                                *held = Some(Arc::new(Ranks::new(cells)?));
+                            }
+                            held.clone()
+                        }
+                        _ => None,
                     };
                     // FirstDate's value: the date's day.
                     let day = (self.stat == Stat::FirstDate).then(|| (self.cube.dates().get(i).copied().unwrap_or(f64::NAN) / DAY).floor());
@@ -1963,7 +1972,7 @@ impl ReduceRun {
                                 }
                             }
                         }
-                        if let Some(b) = ranks.and_then(|b| b.get(c)) {
+                        if let Some(b) = ranks.as_ref().and_then(|b| b.0.get(c)) {
                             b.fetch_min(at, Ordering::Relaxed);
                         }
                     }
@@ -1984,6 +1993,10 @@ impl ReduceRun {
                     for (out, slot) in outs.into_iter().zip(finished.get_mut(span).unwrap_or_default()) {
                         *slot = Some(out);
                     }
+                    // Its dates are all read: its ranks go with its totals.
+                    if let Some(b) = best.get(g) {
+                        *b.write().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+                    }
                     if let Some(e) = classes_over(&totals, &finished, class_cap(self.stat)) {
                         return Err(e);
                     }
@@ -1999,13 +2012,13 @@ impl ReduceRun {
             // better one look idle: the outputs are the same whatever order the dates come in.
             let read = |k: usize| -> Result<Option<(Arc<Raster>, usize)>, String> {
                 let i = self.steps.get(k).copied().unwrap_or(0);
-                let ranks = self.group_of.get(k).and_then(|g| best.get(*g)).and_then(std::sync::OnceLock::get);
-                let (Some(ranks), true) = (ranks, skips) else { return cube.slice_of(i, piece) };
+                let ranks = if skips { self.group_of.get(k).and_then(|g| ranks_of(*g)) } else { None };
+                let Some(ranks) = ranks else { return cube.slice_of(i, piece) };
                 let at = rank.get(k).copied().unwrap_or(0);
-                if !ranks.is_empty() && ranks.iter().all(|r| r.load(Ordering::Relaxed) < at) {
+                if !ranks.0.is_empty() && ranks.0.iter().all(|r| r.load(Ordering::Relaxed) < at) {
                     return Ok(None);
                 }
-                cube.first_slice_of(i, piece, &|c| ranks.get(c).is_some_and(|r| r.load(Ordering::Relaxed) < at))
+                cube.first_slice_of(i, piece, &|c| ranks.0.get(c).is_some_and(|r| r.load(Ordering::Relaxed) < at))
             };
             // First's groups are read one after another, each's dates in rank order, so one
             // group's totals are open at a time however the ranks interleave them. Leaving dates
@@ -2150,6 +2163,28 @@ impl ReduceRun {
 
 /// A day in milliseconds.
 const DAY: f64 = 86_400_000.0;
+
+/// First's best rank so far of each cell of a group's piece, which the readers look at while the
+/// run places dates: 4 bytes a cell, reserved first (#1291).
+struct Ranks(Vec<AtomicU32>);
+
+impl Ranks {
+    fn new(cells: usize) -> Result<Ranks, String> {
+        let mut v = Vec::new();
+        reserve(&mut v, cells)?;
+        v.extend((0..cells).map(|_| AtomicU32::new(u32::MAX)));
+        #[cfg(test)]
+        OPEN_RANKS.with(|o| o.set((o.get().0 + 1, o.get().1.max(o.get().0 + 1))));
+        Ok(Ranks(v))
+    }
+}
+
+#[cfg(test)]
+impl Drop for Ranks {
+    fn drop(&mut self) {
+        OPEN_RANKS.with(|o| o.set((o.get().0.saturating_sub(1), o.get().1)));
+    }
+}
 
 #[cfg(test)]
 thread_local! {
@@ -2531,7 +2566,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn first_by_year_holds_one_years_totals_at_a_time() {
-        use super::{OPEN_TOTALS, Order, Stat};
+        use super::{OPEN_RANKS, OPEN_TOTALS, Order, Stat};
         use std::sync::Arc;
         use std::sync::atomic::{AtomicBool, AtomicUsize};
         const DATES: [f64; 6] = [0.0, super::DAY, 400.0 * super::DAY, 401.0 * super::DAY, 800.0 * super::DAY, 801.0 * super::DAY];
@@ -2583,9 +2618,16 @@ mod tests {
                 order,
             };
             OPEN_TOTALS.with(|o| o.set((0, 0)));
+            OPEN_RANKS.with(|o| o.set((0, 0)));
             let out = run.run(&AtomicBool::new(false), &AtomicUsize::new(0)).unwrap();
             assert_eq!(out.len(), 3);
             assert_eq!(OPEN_TOTALS.with(|o| o.get().1), 1, "{stat:?} by {order:?}: the most years' totals open at once");
+            // First's best ranks too: one year's at a time, let go with its totals.
+            assert!(
+                OPEN_RANKS.with(|o| o.get().1) <= 1,
+                "{stat:?} by {order:?}: {} years' ranks held at once",
+                OPEN_RANKS.with(|o| o.get().1)
+            );
         }
     }
 

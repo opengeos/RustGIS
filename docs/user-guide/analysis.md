@@ -2316,8 +2316,10 @@ band; a day before 1970 is labelled by its number). A band's names are indexed b
 layers hold 2 million of them in all, about a hundred layers of today's dates: the layers past
 that keep their days unnamed, drawn as a stretch, and that is said. First and firstDate read the dates in that order and leave out what can't change a cell: a
 date whose cells all hold a better date's value is not read, nor a STAC item whose mask lets
-through only such cells (unless `"minValid"` asks a cell for more than one date), so a dry
-season's composite reads little past its clearest dates. The median holds every date's value of
+through only such cells (an item whose mask file doesn't cover all of its part of the area is
+read, so the pixels outside it are counted and said; and nothing is left out when `"minValid"`
+asks a cell for more than one date), so a dry season's composite reads little past its clearest
+dates. The median holds every date's value of
 the cells being read, within the run's 64 million values on the desktop and 16 million in the web app (cells × dates,
 4 bytes each: up to 256 MB; a STAC collection is read in pieces that keep to it), and like first
 and firstDate is the data cube summary's only.
