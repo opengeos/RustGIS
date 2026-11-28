@@ -309,19 +309,6 @@ fn terrain_counted_on(
     Ok((out, counts.finish()))
 }
 
-/// Uncounted traversal used by the scalar/parallel equivalence regressions.
-#[cfg(test)]
-fn terrain_on(
-    threads: Option<usize>,
-    r: &Raster,
-    data: &[f32],
-    zf: f64,
-    ground: Option<&Extent>,
-    f: impl Fn(f64, f64) -> f64 + Sync,
-) -> Result<Vec<f32>, String> {
-    terrain_counted_on(threads, r, data, zf, ground, None, f).map(|(pixels, _)| pixels)
-}
-
 /// The terrain operation, with the same defaults and formulas as its standalone entrypoint.
 #[derive(Clone, Copy, Debug)]
 pub enum TerrainFunction {
@@ -2565,6 +2552,18 @@ impl Expr {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Uncounted traversal used by the scalar/parallel equivalence regressions.
+    fn terrain_on(
+        threads: Option<usize>,
+        r: &Raster,
+        data: &[f32],
+        zf: f64,
+        ground: Option<&Extent>,
+        f: impl Fn(f64, f64) -> f64 + Sync,
+    ) -> Result<Vec<f32>, String> {
+        terrain_counted_on(threads, r, data, zf, ground, None, f).map(|(pixels, _)| pixels)
+    }
 
     /// A grid the machine can't hold is an error naming its size, not the end of the program
     /// (#1291); one it can is the size asked for.
