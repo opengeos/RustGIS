@@ -11,7 +11,7 @@
 //! can't be read are counted.
 
 use std::cell::{Cell, OnceCell};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use roxmltree::{Node, ParsingOptions};
 use rustgis_geom::Coord;
@@ -516,15 +516,16 @@ impl ShapeLayer {
 /// member is part of that feature, just as a nested member inside a standard member is.
 fn collection_features<'a, 'input>(root: Node<'a, 'input>) -> Vec<Node<'a, 'input>> {
     let standard = |n: &Node| n.is_element() && matches!(local(n), "featureMember" | "featureMembers" | "member" | "members");
+    let allow_custom = !is_gml(&root) || local(&root) == "FeatureCollection";
     let custom = |n: &Node| {
-        n.is_element() && n.parent() == Some(root) && {
+        allow_custom && n.is_element() && n.parent() == Some(root) && {
             let name = local(n);
-            name.ends_with("Member") || name.ends_with("Members")
+            name != "cityObjectMember" && (name.ends_with("Member") || name.ends_with("Members"))
         }
     };
     let mut members: Vec<_> =
         root.descendants().filter(|n| standard(n) && n.ancestors().skip(1).all(|a| !standard(&a) && !custom(&a))).collect();
-    if members.is_empty() && !(is_gml(&root) && is_shape(local(&root))) {
+    if members.is_empty() {
         members.extend(root.children().filter(custom));
     }
     members
@@ -542,6 +543,11 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>>
 /// Reads a GML file into layers by feature type and geometry property. Cancel is checked between
 /// features. Parsing the whole document first is one step without a check.
 pub(crate) fn read_layers(file_name: &str, bytes: &[u8]) -> Result<Vec<LayerRead>> {
+    read_layers_with_budget(file_name, bytes, None)
+}
+
+/// Reads all primary rows with a shared allowance for rows copied into geometry siblings.
+fn read_layers_with_budget(file_name: &str, bytes: &[u8], mut extra_rows_budget: Option<usize>) -> Result<Vec<LayerRead>> {
     let stem = std::path::Path::new(file_name).file_stem().and_then(|s| s.to_str()).unwrap_or("gml").to_string();
     let text = std::str::from_utf8(bytes).map_err(|_| DataError::Format(format!("{file_name} is not UTF-8 text")))?;
     let opts = ParsingOptions { allow_dtd: false, nodes_limit: crate::io::XML_NODES, ..ParsingOptions::default() };
@@ -568,7 +574,8 @@ pub(crate) fn read_layers(file_name: &str, bytes: &[u8]) -> Result<Vec<LayerRead
         }
         let kind = kinds.entry(name).or_default();
         let mut attrs = BTreeMap::new();
-        let mut shapes = Vec::new();
+        let mut shapes: Vec<Shape<'_, '_>> = Vec::new();
+        let mut further_properties = HashSet::new();
         // Properties listed as unread are counted in document order. If no shape could be
         // decoded, the first failed property is accounted for by the feature's skipped count.
         let mut unread = Vec::new();
@@ -580,23 +587,27 @@ pub(crate) fn read_layers(file_name: &str, bytes: &[u8]) -> Result<Vec<LayerRead
                 continue;
             }
             if let Some(g) = p.children().find(|c| c.is_element() && is_gml(c) && GEOMETRIES.contains(&local(c))) {
+                let tag = p.tag_name();
+                let key = (tag.namespace(), tag.name());
+                if shapes.first().is_some_and(|shape| shape.property.tag_name() == tag) || further_properties.contains(&key) {
+                    unread.push((at, local(&p).to_string()));
+                    continue;
+                }
                 let declared_srs = g.attribute("srsName").or_else(|| g.descendants().find_map(|d| d.attribute("srsName")));
                 let parsed_srs = declared_srs.and_then(srs);
-                // The file still takes its system from the same properties as before: those
-                // considered up to and including each feature's first readable geometry.
-                if shapes.is_empty()
-                    && let Some(found) = parsed_srs
-                {
-                    file_srs.get_or_insert(found);
-                }
                 let (dims, lost) = (Cell::new(false), Cell::new(0));
                 match geometry(&g, &dims, &lost) {
                     Some(geometry) => {
-                        if shapes.is_empty()
-                            && parsed_srs.is_none()
-                            && let Some(s) = declared_srs
-                        {
-                            unknown_srs = Some(s.to_string());
+                        // Only a feature's first decoded geometry can establish the file's system.
+                        if shapes.is_empty() {
+                            shapes.reserve_exact(1);
+                            if let Some(found) = parsed_srs {
+                                file_srs.get_or_insert(found);
+                            } else if let Some(s) = declared_srs {
+                                unknown_srs = Some(s.to_string());
+                            }
+                        } else {
+                            further_properties.insert(key);
                         }
                         shapes.push(Shape { property: p, node: g, geometry, declared_srs, parsed_srs, zm: dims.get(), lost: lost.get() });
                     }
@@ -666,7 +677,7 @@ pub(crate) fn read_layers(file_name: &str, bytes: &[u8]) -> Result<Vec<LayerRead
     };
     let single = order.len() == 1;
     let mut extra_layers = MAX_LAYERS.saturating_sub(order.len());
-    let mut extra_rows_budget = None;
+    let mut used_names = HashSet::new();
     let mut out = Vec::new();
     for name in order {
         let Some(mut kind) = kinds.remove(&name) else { continue };
@@ -688,32 +699,30 @@ pub(crate) fn read_layers(file_name: &str, bytes: &[u8]) -> Result<Vec<LayerRead
         let layers = group_shapes(&mut kind.rows, &title, file_srs, unknown_srs.as_deref(), &mut limits, &mut notes)?;
         let split = layers.len() > 1;
         let first = out.len();
-        let mut used_names = BTreeMap::new();
-        let names: Vec<_> = layers
-            .iter()
-            .map(|(property, _)| match property.filter(|_| split) {
-                Some(property) => {
-                    let name = local(&property);
-                    let count = used_names.entry(name).or_insert(0);
-                    *count += 1;
-                    if *count == 1 { format!("{title} {name}") } else { format!("{title} {name} ({count})") }
-                }
+        report_attributes(&mut notes, &title, &fields, &kind)?;
+        let last = layers.len().saturating_sub(1);
+        for (i, (property, shapes)) in layers.into_iter().enumerate() {
+            let base = match property.filter(|_| split) {
+                Some(property) => format!("{title} {}", local(&property)),
                 None => title.clone(),
-            })
-            .collect();
-        for (layer_name, (_, shapes)) in names.into_iter().zip(layers) {
+            };
+            let mut layer_name = base.clone();
+            let mut suffix = 2;
+            while !used_names.insert(layer_name.to_ascii_lowercase()) {
+                layer_name = format!("{base} ({suffix})");
+                suffix += 1;
+            }
             let mut ds = Dataset::new(layer_name, GeometryType::None, fields.clone());
-            let rep = finish_layer(&mut ds, shapes, &kind.rows, file_srs, transform.as_ref())?;
+            let rep = finish_layer(&mut ds, shapes, &mut kind.rows, i == last, file_srs, transform.as_ref())?;
             out.push(LayerRead::plain(ds, rep));
         }
-        report_attributes(&mut notes, &title, &fields, kind);
         if let Some([primary, siblings @ ..]) = out.get_mut(first..) {
-            let mut shared = file_notices.clone();
-            shared.extend(notes.messages.iter().cloned());
+            let mut shared = ReadReport { skipped: notes.skipped, messages: file_notices.clone(), ..Default::default() };
+            shared.messages.extend(notes.messages.iter().cloned());
             let shared = std::sync::Arc::new(shared);
-            primary.sibling_messages = Some(shared.clone());
+            primary.sibling_report = Some(shared.clone());
             for layer in siblings {
-                layer.sibling_messages = Some(shared.clone());
+                layer.sibling_report = Some(shared.clone());
             }
             if first == 0 {
                 primary.report.messages.extend(file_notices.iter().cloned());
@@ -735,16 +744,22 @@ struct SplitLimits<'a> {
 impl SplitLimits<'_> {
     /// Charge the extra output row before materializing it, including its dense attribute slots
     /// and room for row capacity. A source feature's first row is covered by the ordinary reader.
-    fn charge_row(&mut self, attrs: &BTreeMap<String, String>, title: &str) -> Result<()> {
+    fn charge_row(&mut self, attrs: &BTreeMap<String, String>) -> bool {
         let remaining = self.rows_budget.get_or_insert_with(|| crate::memory::planned(256 << 20, 1 << 30, 1));
+        if *remaining == 0 {
+            return false;
+        }
         let bytes =
             attrs.values().fold(2 * std::mem::size_of::<crate::Feature>() + self.columns * std::mem::size_of::<Value>(), |bytes, text| {
                 bytes.saturating_add(text.len())
             });
-        *remaining = remaining.checked_sub(bytes).ok_or_else(|| {
-            DataError::Format(format!("{title}: the geometry layers' additional rows exceed the memory budget. Import a smaller GML file."))
-        })?;
-        Ok(())
+        if let Some(left) = remaining.checked_sub(bytes) {
+            *remaining = left;
+            true
+        } else {
+            *remaining = 0;
+            false
+        }
     }
 }
 
@@ -760,39 +775,50 @@ fn group_shapes<'a, 'input>(
 ) -> Result<Vec<(Option<Node<'a, 'input>>, ShapeLayer)>> {
     let mut layers: Vec<(Option<Node>, ShapeLayer)> = Vec::new();
     let mut missing = Vec::new();
-    let (mut mismatch, mut over) = (0, 0);
-    let (mut mismatched_names, mut capped_names) = (Names::default(), Names::default());
+    let (mut mismatch, mut unset, mut over, mut over_budget) = (0, 0, 0, 0);
+    let (mut mismatched_names, mut unset_names, mut capped_names, mut budget_names) =
+        (Names::default(), Names::default(), Names::default(), Names::default());
     for (i, row) in rows.iter_mut().enumerate() {
         crate::progress::check()?;
         let mut kept = false;
-        for shape in std::mem::take(&mut row.shapes) {
+        for (shape_index, shape) in std::mem::take(&mut row.shapes).into_iter().enumerate() {
             let property = shape.property;
-            if let Some(declared) = shape.declared_srs {
+            if shape_index > 0
+                && let Some(declared) = shape.declared_srs
+            {
                 let matches = if file_srs.is_some() { shape.parsed_srs == file_srs } else { unknown_srs == Some(declared) };
                 if !matches {
-                    mismatch += 1;
-                    mismatched_names.add(local(&property).to_string());
+                    if file_srs.is_none() && unknown_srs.is_none() {
+                        unset += 1;
+                        unset_names.add(local(&property).to_string());
+                    } else {
+                        mismatch += 1;
+                        mismatched_names.add(local(&property).to_string());
+                    }
                     continue;
                 }
             }
-            let layer = match layers.iter().position(|(p, _)| p.is_some_and(|p| p.tag_name() == property.tag_name())) {
+            let index = layers.iter().position(|(p, _)| p.is_some_and(|p| p.tag_name() == property.tag_name()));
+            if index.is_none() && !layers.is_empty() && *limits.layers == 0 {
+                over += 1;
+                capped_names.add(local(&property).to_string());
+                continue;
+            }
+            if kept && !limits.charge_row(&row.attrs) {
+                over_budget += 1;
+                budget_names.add(local(&property).to_string());
+                continue;
+            }
+            let layer = match index {
                 Some(i) => layers.get_mut(i),
-                None if layers.is_empty() || *limits.layers > 0 => {
+                None => {
                     if !layers.is_empty() {
                         *limits.layers -= 1;
                     }
                     layers.push((Some(property), ShapeLayer::default()));
                     layers.last_mut()
                 }
-                None => {
-                    over += 1;
-                    capped_names.add(local(&property).to_string());
-                    continue;
-                }
             };
-            if kept {
-                limits.charge_row(&row.attrs, title)?;
-            }
             if let Some((_, layer)) = layer {
                 layer.push(i, shape);
             }
@@ -810,6 +836,20 @@ fn group_shapes<'a, 'input>(
                 "{title}: {mismatch} geometry {what} not read: coordinate system or axis order differs from the layer's ({})",
                 mismatched_names.said()
             ),
+        ));
+    }
+    if unset > 0 {
+        let what = if unset == 1 { "property" } else { "properties" };
+        report.messages.push(crate::loss::Note::loss(
+            crate::loss::LossCode::DroppedValue,
+            format!("{title}: {unset} geometry {what} not read: the layer has no declared coordinate system ({})", unset_names.said()),
+        ));
+    }
+    if over_budget > 0 {
+        let what = if over_budget == 1 { "property" } else { "properties" };
+        report.messages.push(crate::loss::Note::loss(
+            crate::loss::LossCode::DroppedOverLimit,
+            format!("{title}: {over_budget} geometry {what} not read past the additional-row memory budget ({})", budget_names.said()),
         ));
     }
     if over > 0 {
@@ -835,7 +875,8 @@ fn group_shapes<'a, 'input>(
 fn finish_layer(
     ds: &mut Dataset,
     shapes: ShapeLayer,
-    rows: &[Row<'_, '_>],
+    rows: &mut [Row<'_, '_>],
+    last: bool,
     file_srs: Option<(Crs, bool)>,
     transform: Option<&(Option<Transformer>, bool)>,
 ) -> Result<ReadReport> {
@@ -851,8 +892,16 @@ fn finish_layer(
     }
     for (i, g) in shapes.rows {
         crate::progress::check()?;
-        let Some(row) = rows.get(i) else { continue };
-        let attrs = &row.attrs;
+        let Some(row) = rows.get_mut(i) else { continue };
+        // Each row appears at most once in a property layer. The final layer can take
+        // ownership of its attributes and free them as it builds.
+        let owned;
+        let attrs = if last {
+            owned = std::mem::take(&mut row.attrs);
+            &owned
+        } else {
+            &row.attrs
+        };
         let g = g.map(|g| match transform {
             Some((_, true)) => g.map_coords(&|c| Coord::new(c.y, c.x)),
             _ => g,
@@ -864,26 +913,16 @@ fn finish_layer(
         let mut e = rustgis_geom::Extent::EMPTY;
         let g = match (transform, g) {
             (Some((Some(t), _)), Some(g)) => {
-                let lonlat = std::cell::Cell::new(rustgis_geom::Extent::EMPTY);
-                let missing = std::cell::Cell::new(false);
-                let kept = g.map_coords(&|c| match t.to_lonlat(c) {
-                    Some(l) if l.is_finite() => {
-                        let mut b = lonlat.get();
-                        b.expand(l);
-                        lonlat.set(b);
-                        c
-                    }
-                    _ if !c.is_finite() => c,
-                    _ => {
-                        missing.set(true);
-                        c
-                    }
+                let mut missing = false;
+                g.for_each_coord(|c| match t.to_lonlat(c) {
+                    Some(l) if l.is_finite() => e.expand(l),
+                    _ if c.is_finite() => missing = true,
+                    _ => {}
                 });
-                unplaced += usize::from(missing.get());
-                e = lonlat.get();
+                unplaced += usize::from(missing);
                 // Converted, but beyond longitude/latitude: it draws out of place.
-                beyond += usize::from(!missing.get() && e.beyond_lonlat());
-                Some(kept)
+                beyond += usize::from(!missing && e.beyond_lonlat());
+                Some(g)
             }
             (_, g) => {
                 if let Some(g) = &g {
@@ -895,15 +934,7 @@ fn finish_layer(
         if !e.is_empty() {
             outside |= e.min_x < -180.0 || e.max_x > 180.0 || e.min_y < -90.0 || e.max_y > 90.0;
         }
-        let row = ds
-            .fields
-            .iter()
-            .map(|f| match attrs.get(&f.name) {
-                Some(v) if Value::is_null_marker(v) => Value::Null,
-                Some(v) => Value::parse_file(v, f.ty),
-                None => Value::Null,
-            })
-            .collect();
+        let row = ds.fields.iter().map(|f| attrs.get(&f.name).map_or(Value::Null, |v| Value::parse_file(v, f.ty))).collect();
         ds.push_next(g, row);
     }
     ds.geometry_type = crate::io::dominant_type(ds);
@@ -974,12 +1005,14 @@ fn finish_layer(
 }
 
 /// Attribute loss belongs to the source feature and is reported once, even if it has several shapes.
-fn report_attributes(rep: &mut ReadReport, name: &str, fields: &[Field], kind: Kind<'_, '_>) {
+fn report_attributes(rep: &mut ReadReport, name: &str, fields: &[Field], kind: &Kind<'_, '_>) -> Result<()> {
     let (unread, unread_names) = (kind.unread, kind.unread_names.said());
+    let index: HashMap<_, _> = fields.iter().enumerate().map(|(i, f)| (f.name.as_str(), i)).collect();
     let mut null_text = Vec::new();
-    for row in kind.rows {
+    for row in &kind.rows {
+        crate::progress::check()?;
         for (field, _) in row.attrs.iter().filter(|(_, value)| Value::is_null_marker(value)) {
-            if let Some(i) = fields.iter().position(|f| f.name == *field) {
+            if let Some(&i) = index.get(field.as_str()) {
                 crate::source::null_text_at(&mut null_text, i);
             }
         }
@@ -1028,6 +1061,7 @@ fn report_attributes(rep: &mut ReadReport, name: &str, fields: &[Field], kind: K
             ),
         ));
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1456,6 +1490,137 @@ mod tests {
             report.messages[0].as_str(),
             "parcels: 1 geometry property not read: coordinate system or axis order differs from the layer's (begrenzingPerceel)"
         );
+    }
+
+    fn point_property(name: &str, position: &str, system: &str) -> String {
+        let srs = if system.is_empty() { String::new() } else { format!(r#" srsName="{system}""#) };
+        format!("<app:{name}><gml:Point{srs}><gml:pos>{position}</gml:pos></gml:Point></app:{name}>")
+    }
+
+    fn parcel(properties: &str) -> String {
+        format!("<gml:featureMember><app:Parcel>{properties}</app:Parcel></gml:featureMember>")
+    }
+
+    #[test]
+    fn repeating_a_geometry_property_keeps_the_first_shape_once() {
+        let first = point_property("label", "5 52", "");
+        let repeated = point_property("label", "6 53", "");
+        for (properties, expected) in [(first.clone(), None), (first + &repeated, Some("1 property"))] {
+            let layers = read("parcels.gml", doc(&parcel(&properties)).as_bytes()).unwrap();
+            let [(ds, report)] = layers.as_slice() else { panic!("expected one layer") };
+            assert_eq!(ds.features.len(), 1);
+            assert_eq!(ds.features[0].geometry, Some(Geometry::Point(Coord::new(5.0, 52.0))));
+            if let Some(expected) = expected {
+                assert_eq!(report.messages.len(), 1);
+                assert_eq!(report.messages[0].loss, Some(crate::loss::LossCode::DroppedValue));
+                assert!(report.messages[0].contains(expected) && report.messages[0].ends_with("(label)"));
+            } else {
+                assert!(report.messages.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn feature_members_with_one_shape_each_keep_the_file_wide_axis_order() {
+        for (first, second, expected_note) in [
+            ("EPSG:4326", "urn:ogc:def:crs:EPSG::4326", None),
+            ("unknown-a", "unknown-b", Some("unknown coordinate system 'unknown-b': coordinates are read as they are")),
+        ] {
+            let members = parcel(&point_property("label", "5 52", first)) + &parcel(&point_property("label", "6 53", second));
+            let layers = read("parcels.gml", doc(&members).as_bytes()).unwrap();
+            let [(ds, report)] = layers.as_slice() else { panic!("expected one layer") };
+            assert_eq!(ds.features.len(), 2);
+            assert_eq!(ds.features[0].geometry, Some(Geometry::Point(Coord::new(5.0, 52.0))));
+            assert_eq!(ds.features[1].geometry, Some(Geometry::Point(Coord::new(6.0, 53.0))));
+            assert_eq!(report.messages.texts().collect::<Vec<_>>(), expected_note.into_iter().collect::<Vec<_>>());
+        }
+    }
+
+    #[test]
+    fn a_later_geometry_declaring_a_system_is_said_when_the_file_declares_none() {
+        let first = point_property("label", "5 52", "");
+        let later = point_property("boundary", "6 53", "EPSG:4326");
+        let layers = read("parcels.gml", doc(&parcel(&(first + &later))).as_bytes()).unwrap();
+        let [(ds, report)] = layers.as_slice() else { panic!("expected one layer") };
+        assert_eq!(ds.features[0].geometry, Some(Geometry::Point(Coord::new(5.0, 52.0))));
+        assert_eq!(report.messages.len(), 1);
+        assert_eq!(report.messages[0].loss, Some(crate::loss::LossCode::DroppedValue));
+        assert_eq!(
+            report.messages[0].as_str(),
+            "parcels: 1 geometry property not read: the layer has no declared coordinate system (boundary)"
+        );
+    }
+
+    #[test]
+    fn an_unreadable_shape_does_not_establish_the_file_system() {
+        let bad = point_property("bad", "invalid", "EPSG:3857");
+        let good = point_property("good", "5 52", "EPSG:4326");
+        let layers = read("parcels.gml", doc(&parcel(&(bad + &good))).as_bytes()).unwrap();
+        let [(ds, report)] = layers.as_slice() else { panic!("expected one layer") };
+        assert_eq!(ds.held_in, Crs::LonLat);
+        assert_eq!(ds.features[0].geometry, Some(Geometry::Point(Coord::new(5.0, 52.0))));
+        assert_eq!(report.messages.len(), 1);
+        assert!(report.messages[0].contains("1 property not read") && report.messages[0].ends_with("(bad)"));
+    }
+
+    #[test]
+    fn case_distinct_geometry_properties_have_selectable_layer_names() {
+        let properties = point_property("label", "5 52", "") + &point_property("Label", "6 53", "");
+        let layers = read("parcels.gml", doc(&parcel(&properties)).as_bytes()).unwrap();
+        let [(first, _), (second, _)] = layers.as_slice() else { panic!("expected two layers") };
+        assert_eq!(first.name, "parcels label");
+        assert_eq!(second.name, "parcels Label (2)");
+        assert_eq!(first.features[0].geometry, Some(Geometry::Point(Coord::new(5.0, 52.0))));
+        assert_eq!(second.features[0].geometry, Some(Geometry::Point(Coord::new(6.0, 53.0))));
+    }
+
+    #[test]
+    fn exhausted_split_budget_keeps_primary_rows_and_names_omitted_properties() {
+        let first = point_property("primary", "5 52", "");
+        let second = point_property("secondary", "6 53", "");
+        let third = point_property("tertiary", "7 54", "");
+        let xml = doc(&(parcel(&(first.clone() + &second)) + &parcel(&(first + &second + &third))));
+        let layers = read_layers_with_budget("parcels.gml", xml.as_bytes(), Some(2 * std::mem::size_of::<crate::Feature>())).unwrap();
+        let [primary, secondary] = layers.as_slice() else { panic!("expected two layers") };
+        assert_eq!(primary.dataset.features.len(), 2);
+        assert_eq!(secondary.dataset.features.len(), 1);
+        assert_eq!(primary.report.messages.len(), 1);
+        assert_eq!(primary.report.messages[0].loss, Some(crate::loss::LossCode::DroppedOverLimit));
+        assert_eq!(
+            primary.report.messages[0].as_str(),
+            "parcels: 2 geometry properties not read past the additional-row memory budget (secondary, tertiary)"
+        );
+        let clean = read("parcels.gml", xml.as_bytes()).unwrap();
+        assert_eq!(clean.len(), 3);
+        assert!(clean.iter().all(|(_, report)| report.messages.is_empty()));
+    }
+
+    #[test]
+    fn the_geometry_layer_cap_counts_and_names_the_remaining_properties() {
+        let mut properties = String::new();
+        for i in 0..MAX_LAYERS {
+            properties.push_str(&point_property(&format!("shape{i}"), "5 52", ""));
+        }
+        let clean = read("parcels.gml", doc(&parcel(&properties)).as_bytes()).unwrap();
+        assert_eq!(clean.len(), MAX_LAYERS);
+        assert!(clean.iter().all(|(_, report)| report.messages.is_empty()));
+        properties.push_str(&(point_property("overA", "5 52", "") + &point_property("overB", "5 52", "")));
+        let capped = read("parcels.gml", doc(&parcel(&properties)).as_bytes()).unwrap();
+        assert_eq!(capped.len(), MAX_LAYERS);
+        assert_eq!(capped[0].1.messages.len(), 1);
+        assert_eq!(capped[0].1.messages[0].loss, Some(crate::loss::LossCode::DroppedOverLimit));
+        assert_eq!(capped[0].1.messages[0].as_str(), "parcels: 2 geometry properties not read past the 64-layer limit (overA, overB)");
+    }
+
+    #[test]
+    fn custom_members_leave_non_feature_collection_gml_and_city_objects_to_their_readers() {
+        for xml in [
+            r#"<gml:TopoComplex xmlns:gml="http://www.opengis.net/gml"><gml:topoPrimitiveMember><gml:Node/></gml:topoPrimitiveMember></gml:TopoComplex>"#,
+            r#"<app:Root xmlns:app="http://example.com/app"><app:cityObjectMember><app:Building/></app:cityObjectMember></app:Root>"#,
+        ] {
+            let error = read("test.gml", xml.as_bytes()).unwrap_err().to_string();
+            assert!(error.contains("no features in GML collection member elements"), "{error}");
+        }
     }
 
     fn said(layer: &(Dataset, ReadReport), what: &str) -> bool {

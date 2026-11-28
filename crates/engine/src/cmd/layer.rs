@@ -2892,7 +2892,7 @@ fn add_picked(
             .enumerate()
             .filter(|(i, r)| {
                 !pick(&r.dataset.name)
-                    && r.sibling_messages.is_none()
+                    && r.sibling_report.is_none()
                     && !reads.iter().take(*i).any(|o| same(o, r))
                     && (whole || (lower.ends_with(".zip") && reads.iter().skip(i + 1).any(|o| same(o, r))))
             })
@@ -2942,14 +2942,19 @@ fn add_picked(
 /// Restore shared reports on a selected sibling and avoid repeating notices already carried by
 /// the zip or another selected layer of the same source.
 fn restore_sibling_notices(reads: &mut [rustgis_data::io::LayerRead]) {
-    if reads.iter().all(|r| r.sibling_messages.is_none()) {
+    if reads.iter().all(|r| r.sibling_report.is_none()) {
         return;
     }
     let mut seen: std::collections::HashSet<_> =
         reads.iter().flat_map(|r| r.report.messages.iter().map(move |n| (r.dataset.source.clone(), n.clone()))).collect();
+    let mut counted: std::collections::HashSet<_> =
+        reads.iter().filter(|r| r.report.skipped > 0).filter_map(|r| r.sibling_report.as_ref().map(std::sync::Arc::as_ptr)).collect();
     for read in reads {
-        if let Some(notes) = read.sibling_messages.take() {
-            for note in notes.iter() {
+        if let Some(shared) = read.sibling_report.take() {
+            if shared.skipped > 0 && counted.insert(std::sync::Arc::as_ptr(&shared)) {
+                read.report.skipped += shared.skipped;
+            }
+            for note in shared.messages.iter() {
                 if seen.insert((read.dataset.source.clone(), note.clone())) {
                     read.report.messages.push(note.clone());
                 }
@@ -8487,6 +8492,25 @@ mod tests {
                     assert!(geometry_notices[0].text.starts_with("parks label: 1 part of multi-geometries not read"));
                 }
             }
+        }
+    }
+
+    #[test]
+    fn a_selected_gml_sibling_carries_the_skipped_geometry_count_once() {
+        let gml = br#"<gml:FeatureCollection xmlns:gml="http://www.opengis.net/gml"><gml:featureMembers>
+<Park><label><gml:Point><gml:pos>10 48</gml:pos></gml:Point></label>
+<entrance><gml:Point><gml:pos>11 48</gml:pos></gml:Point></entrance></Park>
+<Park><label><gml:Point><gml:pos>invalid</gml:pos></gml:Point></label></Park>
+</gml:featureMembers></gml:FeatureCollection>"#;
+        for pick_sibling in [false, true] {
+            let mut reads = rustgis_data::io::read_layers("parks.gml", gml).unwrap();
+            assert_eq!(reads.len(), 2);
+            if pick_sibling {
+                reads.retain(|read| read.dataset.name == "parks entrance");
+            }
+            super::restore_sibling_notices(&mut reads);
+            assert_eq!(reads.len(), if pick_sibling { 1 } else { 2 });
+            assert_eq!(reads.iter().map(|read| read.report.skipped).sum::<usize>(), 1);
         }
     }
 
