@@ -126,6 +126,9 @@ mod layout_removed_map;
 #[path = "tests/layout_edge.rs"]
 mod layout_edge;
 
+#[path = "tests/layout_panel_figures.rs"]
+mod layout_panel_figures;
+
 #[path = "tests/layout_chart_notices.rs"]
 mod layout_chart_notices;
 
@@ -138,8 +141,14 @@ mod layout_typed_values;
 #[path = "tests/layout_legend_class_labels.rs"]
 mod layout_legend_class_labels;
 
+#[path = "tests/layout_legend_counts.rs"]
+mod layout_legend_counts;
+
 #[path = "tests/layout_report_text.rs"]
 mod layout_report_text;
+
+#[path = "tests/layout_publication_locators.rs"]
+mod layout_publication_locators;
 
 #[path = "tests/sde_connections.rs"]
 mod sde_connections;
@@ -2959,7 +2968,7 @@ fn svg_image_markers_that_dont_draw_are_said_with_why() {
         (MarkerRefusal::TooManyBytes, "Image markers in \"Cities\", \"Rivers\" are longer than 2 MiB as base64 and are drawn as circles"),
         (
             MarkerRefusal::SvgTooMuchToRead,
-            "Image markers in \"Cities\", \"Rivers\" are SVGs whose style sheets, element attributes or entities holding tags take more to read than RustGIS allows and are drawn as circles",
+            "Image markers in \"Cities\", \"Rivers\" are SVGs whose style sheets, element attributes, namespaces or entities take more to read than RustGIS allows and are drawn as circles",
         ),
         (
             MarkerRefusal::SvgTooNested,
@@ -4344,8 +4353,8 @@ fn qgis_raster_image_markers_read_their_files_from_the_style_folder() {
     }
 }
 
-/// A QGIS style's and project's SVG markers draw their file through the importer's one reader, and
-/// saving asks for `svg-markers`; one whose colours the style sets is a circle, noted.
+/// A QGIS style's and project's SVG markers draw their file through the importer's one reader, in
+/// the layer's colours where it takes them, and saving asks for `svg-markers`.
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn qgis_svg_markers_draw_their_file_and_saving_requires_svg_markers() {
@@ -4380,11 +4389,20 @@ fn qgis_svg_markers_draw_their_file_and_saving_requires_svg_markers() {
         assert!(notes(&r).is_empty(), "{:?}", notes(&r));
         assert_eq!(serde_json::to_value(&s.project).unwrap()["requires"], json!(["picture-markers", "svg-markers"]));
     }
-    std::fs::write(&path, qml("tinted.svg")).unwrap();
-    let mut s = world();
-    let r = s.run("style.importQgis", &json!({"layer": "Cities", "path": path.to_string_lossy()})).unwrap();
-    assert_eq!(marker(&s), Marker::Circle);
-    assert_eq!(notes(&r), ["SVG markers whose colours the style sets, which RustGIS doesn't apply yet, drawn as circles"]);
+    // One whose colours the style sets takes the layer's, from the file and embedded.
+    let tinted = svg.replace("#c81e1e", "param(fill) #c81e1e");
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&tinted);
+    let set = base64::engine::general_purpose::STANDARD.encode(svg.replace("#c81e1e", "#1e963c"));
+    for file in ["tinted.svg".to_string(), format!("base64:{b64}")] {
+        let colour = r#"<Option name="color" value="30,150,60,255"/></Option></layer>"#;
+        std::fs::write(&path, qml(&file).replace("</Option></layer>", colour)).unwrap();
+        let mut s = world();
+        let r = s.run("style.importQgis", &json!({"layer": "Cities", "path": path.to_string_lossy()})).unwrap();
+        assert!(notes(&r).is_empty(), "{:?}", notes(&r));
+        assert_eq!(marker(&s), Marker::Picture(Picture::new(&set)), "{file}");
+        assert!(rustgis_render::picture_marker_draws(Picture::new(&set)));
+        assert_eq!(serde_json::to_value(&s.project).unwrap()["requires"], json!(["picture-markers", "svg-markers"]));
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -6534,7 +6552,8 @@ fn a_qgis_project_opens_as_a_map_and_a_qgis_style_styles_a_layer() {
         <maplayer type="raster" hasScaleBasedVisibilityFlag="1" minScale="100000" maxScale="1000"><id>w</id><datasource>url=https://wms.example/wms&amp;layers=a</datasource><layername>Web</layername><provider>wms</provider>
         <pipe><rasterrenderer opacity="0.5" type="singlebandcolordata"/></pipe><blendMode>6</blendMode></maplayer></projectlayers></qgis>"#;
     let mut report = rustgis_map::qgis::Report::default();
-    let project = rustgis_map::qgis::read_project(web, "", &mut |_| Err(rustgis_map::qgis::IMAGE_UNOPENED), &mut report).unwrap();
+    let project =
+        rustgis_map::qgis::read_project(web, "", &mut |_, _| Err((rustgis_map::qgis::IMAGE_UNOPENED, false)), &mut report).unwrap();
     let mut w = world();
     let before = w.active_layer;
     w.active_layer = w.map().layers.iter().map(|l| l.id).find(|id| Some(*id) != before);
@@ -8537,6 +8556,7 @@ fn hostile_junk() -> Vec<Value> {
         json!({"kind": "legend", "element": 1, "classLabels": {"x".repeat(5000): {"": "y".repeat(5000)}}}),
         json!({"kind": "legend", "element": 1, "classLabels": [{"Countries": [null]}]}),
         json!({"kind": "legend", "element": 1, "classLabels": {"Countries": {"Africa": f64::MAX}}}),
+        json!({"kind": "legend", "element": 1, "showCounts": [{"x": f64::MAX}]}),
         // A QGIS project and style whose web layer and scale range are junk.
         json!({"text": "<qgis><projectlayers><maplayer type=\"raster\" hasScaleBasedVisibilityFlag=\"1\" minScale=\"NaN\" maxScale=\"-1e308\"><datasource>type=xyz&amp;url=&amp;zmax=999</datasource><layername></layername><provider>wms</provider><pipe><rasterrenderer opacity=\"inf\"/></pipe></maplayer></projectlayers></qgis>"}),
         // A label class placed along lines, with junk the placement and style read after it.
@@ -13231,6 +13251,7 @@ fn a_manual_legend_that_overflows_still_warns_and_a_fitted_one_does_not() {
         exclude: &[],
         labels: &labels,
         class_labels: &NO_CLASS_LABELS,
+        show_counts: false,
     };
     // A box as wide as its rows at 9 points, and half-way between their heights at 9 and at 4.
     let (big, small) = (legend_sizes(&mut s, frame, &at(9.0))[0], legend_sizes(&mut s, frame, &at(4.0))[0]);
@@ -13282,6 +13303,7 @@ fn a_fit_that_cannot_make_a_legend_fit_says_so() {
         exclude: &[],
         labels: &labels,
         class_labels: &NO_CLASS_LABELS,
+        show_counts: false,
     };
     let (big, small) = (legend_sizes(&mut s, frame, &at(9.0)), legend_sizes(&mut s, frame, &at(4.0)));
     // A box less than half as tall as its rows in six columns at 4 points: no fit makes them fit.
@@ -13360,6 +13382,7 @@ fn a_report_says_the_fitted_legends_on_its_layouts_that_no_longer_fit() {
         exclude: &[],
         labels: &labels,
         class_labels: &NO_CLASS_LABELS,
+        show_counts: false,
     };
     let point = r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{},"geometry":{"type":"Point","coordinates":[2.35,48.85]}}]}"#;
     let added = json!({"fileName": "extra.geojson", "text": point, "name": "Extra"});
@@ -13424,6 +13447,7 @@ fn a_fitted_legend_that_no_longer_fits_says_so_at_export() {
         exclude: &[],
         labels: &labels,
         class_labels: &NO_CLASS_LABELS,
+        show_counts: false,
     };
     let point = r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{},"geometry":{"type":"Point","coordinates":[2.35,48.85]}}]}"#;
     let added = json!({"fileName": "extra.geojson", "text": point, "name": "Extra"});
@@ -16324,21 +16348,21 @@ fn a_publication_reads_streamed_layers_for_the_move_searchs_wide_drawing() {
 fn a_veil_panel_groups_the_surrounds_by_the_bands_shape() {
     use crate::cmd::layout::veil_panel;
     let (legend, arrow, scale) = ((80.0, 50.0), Some((8.0, 12.0)), (60.0, 10.0));
-    let (l, locator, a, b) = veil_panel((0.0, 0.0, 160.0, 70.0), legend, Some(40.0), arrow, scale, 3.0).unwrap();
+    let (l, locator, a, b) = veil_panel((0.0, 0.0, 160.0, 70.0), legend, Some((40.0, 40.0)), arrow, scale, 3.0).unwrap();
     let a = a.unwrap();
     assert!(l.0 + l.2 <= locator.unwrap().0, "beside it: {l:?} {locator:?}");
     assert!(a.0 + a.2 <= 160.0 && b.1 >= locator.unwrap().1 + 40.0, "{a:?} {b:?}");
     let apart =
         |p: (f64, f64, f64, f64), q: (f64, f64, f64, f64)| p.0 + p.2 <= q.0 || q.0 + q.2 <= p.0 || p.1 + p.3 <= q.1 || q.1 + q.3 <= p.1;
     assert!(apart(a, l) && apart(a, (locator.unwrap().0, locator.unwrap().1, 40.0, 40.0)), "the arrow clear: {a:?} {l:?} {locator:?}");
-    let (l, locator, _, b) = veil_panel((0.0, 0.0, 90.0, 130.0), legend, Some(40.0), arrow, scale, 3.0).unwrap();
+    let (l, locator, _, b) = veil_panel((0.0, 0.0, 90.0, 130.0), legend, Some((40.0, 40.0)), arrow, scale, 3.0).unwrap();
     assert!(l.1 >= b.1 + b.3 && locator.unwrap().0 == b.0, "under it: {l:?} {b:?}");
-    assert!(veil_panel((0.0, 0.0, 60.0, 60.0), legend, Some(40.0), arrow, scale, 3.0).is_none());
+    assert!(veil_panel((0.0, 0.0, 60.0, 60.0), legend, Some((40.0, 40.0)), arrow, scale, 3.0).is_none());
     // With nothing to group beside it, a legend the size of the band fits it: no gap is kept.
     assert!(veil_panel((0.0, 0.0, legend.0, legend.1), legend, None, None, (0.0, 0.0), 3.0).is_some());
     assert!(veil_panel((0.0, 0.0, 160.0, 70.0), legend, None, arrow, scale, 3.0).unwrap().1.is_none());
     // With no north arrow (a continental extent, #1379), the locator stands alone over the scale bar.
-    let (_, locator, a, b) = veil_panel((0.0, 0.0, 160.0, 70.0), legend, Some(40.0), None, scale, 3.0).unwrap();
+    let (_, locator, a, b) = veil_panel((0.0, 0.0, 160.0, 70.0), legend, Some((40.0, 40.0)), None, scale, 3.0).unwrap();
     assert!(a.is_none(), "no place for an arrow there isn't: {a:?}");
     assert_eq!(locator.unwrap().0, b.0, "the locator over the scale bar: {locator:?} {b:?}");
     // With neither, the scale bar heads its group, with no gap over it: a band just as tall as the

@@ -120,6 +120,7 @@ pub const CAPABILITIES: &[&str] = &[
     "layout-text-size",
     "layout-legend-fit",
     "layout-legend-class-labels",
+    "layout-legend-counts",
     "layout-scale-bar-details",
     "label-guide",
     "label-weight",
@@ -2351,7 +2352,7 @@ pub(crate) fn picture_notices_by<'a>(
     for (names, what) in [
         (
             too_much_to_read,
-            "Image markers in {names} are SVGs whose style sheets, element attributes or entities holding tags take more to read than RustGIS allows and are drawn as circles",
+            "Image markers in {names} are SVGs whose style sheets, element attributes, namespaces or entities take more to read than RustGIS allows and are drawn as circles",
         ),
         (
             too_nested,

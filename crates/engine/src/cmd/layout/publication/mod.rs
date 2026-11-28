@@ -27,12 +27,11 @@ pub(in crate::cmd::layout) fn decimal_mark(p: &Value) -> Result<Option<bool>, St
     }
 }
 
-/// What a publication layout locates its area on.
+/// What a publication layout locates its area on, in the order they nest.
 #[derive(Clone, Copy, PartialEq)]
 pub(in crate::cmd::layout) enum Locator {
-    Globe,
     Inset,
-    None,
+    Globe,
 }
 
 /// The scale at which `map` on the globe, centred on `center`, draws a globe `d_mm` across in a
@@ -121,7 +120,7 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
     };
     let headings = texts_of(p, "headings")?.unwrap_or_default();
     let comma = decimal_mark(p)?.unwrap_or(false);
-    let locator = publication_locator(p, sheet, whole_globe)?;
+    let locators = publication_locators(p, sheet, whole_globe)?;
     let colorbar = publication_colorbar(p)?;
     let may_veil = publication_veil(p)?;
     let context_in_legend = publication_flag(p, "contextInLegend")?.unwrap_or(false);
@@ -147,10 +146,14 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
     if accent.a() != 255 {
         return Err("accent is an opaque colour as #RRGGBB".into());
     }
-    // Only an edge sheet draws these: given to another, they are refused rather than left out.
+    // Only some sheets draw these: given to another, they are refused rather than left out.
     let edge = sheet && style == Style::Edge;
-    if let Some(k) = ["paper", "kicker", "figures"].into_iter().find(|k| !edge && p.get(*k).is_some_and(|v| !v.is_null())) {
+    let given = |k: &str| p.get(k).is_some_and(|v| !v.is_null());
+    if let Some(k) = ["paper", "kicker"].into_iter().find(|k| !edge && given(k)) {
         return Err(format!("{k} is for a sheet with \"style\": \"edge\""));
+    }
+    if !(edge || sheet && style == Style::Panel) && given("figures") {
+        return Err("figures is for a sheet with \"style\": \"edge\" or \"panel\"".into());
     }
     // White is the page's own colour, kept as none, as `layout.page` keeps it.
     let page_colour = crate::cmd::opaque_color(p, "paper")?.flatten().filter(|c| *c != Rgba::rgb(0xFF, 0xFF, 0xFF));
@@ -197,11 +200,7 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
     let strip_scale = grid.as_ref().map_or(k, |g| k * (g.label_size / grid_pt));
     let room_side = if labelled.left || labelled.right { LABEL_ROOM_SIDE * strip_scale } else { 0.0 };
     let room_end = if labelled.top || labelled.bottom { LABEL_ROOM_END * strip_scale } else { 0.0 };
-    let reference = reference.unwrap_or_else(|| {
-        let [projection_line, datum_and_grid] = PUBLICATION_DEFAULT_REFERENCE;
-        let line = if step.is_some() { datum_and_grid } else { "Datum: {datum}" };
-        vec![projection_line.into(), line.into()]
-    });
+    let reference = reference.unwrap_or_else(|| publication_default_reference(step.is_some()).map(Into::into).to_vec());
     let step_said = step.map_or_else(|| "—".to_string(), step_text);
     let fill = |t: &str| t.replace("{projection}", &projection).replace("{datum}", &datum).replace("{grid}", &step_said);
     // Text is measured as it is drawn: bold as bold, and the tokens the layout fills only when it
@@ -314,6 +313,9 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
     // A later pass failing where an earlier one held (its shorter page leaving the texts too
     // little room) settles on the last that held: only the first pass's failure is the request's.
     let (mut held, mut settled) = (0.0f64, false);
+    // The least a panel with headline figures is cut to: a shorter one fails the next pass, and the
+    // sheet would be left uncut.
+    let mut panel_needs = 0.0f64;
     let warned = warnings.len();
     let (w, h, (fx, fy, fw, fh), column) = loop {
         around.clear();
@@ -712,6 +714,29 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
                             ));
                             y += 4.0 * k;
                         }
+                        // The headline figures, one under another, each value over its label.
+                        for (i, (value, label)) in headlines.iter().enumerate() {
+                            let value = wrap_as(value, tw, title_pt, true);
+                            let vh = value.lines.len() as f64 * pitch(title_pt);
+                            let name = format!("Figure {} Value", i + 1);
+                            around.push((name, (ix, y, tw, vh), pub_text(value, title_pt, ink, true, TextAlign::Left)));
+                            y += vh;
+                            let label = label.as_deref().map(|t| wrap(t, tw, body_pt)).unwrap_or_default();
+                            if !label.lines.is_empty() {
+                                let lh = label.lines.len() as f64 * pitch(body_pt);
+                                let name = format!("Figure {} Label", i + 1);
+                                around.push((name, (ix, y, tw, lh), pub_text(label, body_pt, soft, false, TextAlign::Left)));
+                                y += lh;
+                            }
+                            y += if i + 1 < headlines.len() { 2.0 * k } else { 3.0 * k };
+                        }
+                        if !under && !headlines.is_empty() {
+                            // The height down to here, the 30·k the check below asks for the locator and
+                            // the legend with 1·k to spare (a pass may land 0.5 mm short), and what the
+                            // sources and reference take from the map once under it.
+                            let moved = foot - footer(&mut Vec::new(), &plain, true, true);
+                            panel_needs = y - top + ip + 31.0 * k + moved;
+                        }
                         // The sources and the reference, stacked up from the panel's foot.
                         let mut yb = panel_bottom - ip;
                         for (name, head, lines) in sections(tw, head_pt, body_pt).into_iter().rev().filter(|_| !under) {
@@ -732,10 +757,10 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
                             yb -= 3.0 * k;
                         }
                         if yb - y < 30.0 * k {
-                            return Err(
-                            "the panel's texts leave no room for the locator and the legend: shorten the title, the sources or the reference"
-                                .into(),
-                        );
+                            let figures = if headlines.is_empty() { "" } else { " the figures," };
+                            return Err(format!(
+                                "the panel's texts leave no room for the locator and the legend: shorten the title,{figures} the sources or the reference"
+                            ));
                         }
                         (page_w, page_h, (x0, top, mw, room(top, panel_bottom)?), Some(Column { x: ix, y, w: tw, h: yb - y }))
                     }
@@ -874,7 +899,7 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
             target = (sheet && matches!(style, Style::Panel | Style::Editorial))
                 .then(|| aspect(s, &extent))
                 .flatten()
-                .map(|a| (((lw - 2.0 * room_side).max(1.0) * a + 2.0 * room_end) * 1.15).max(40.0 * k))
+                .map(|a| (((lw - 2.0 * room_side).max(1.0) * a + 2.0 * room_end) * 1.15).max(40.0 * k).max(panel_needs))
                 // Only a frame clearly too tall is cut.
                 .filter(|n| *n < 0.97 * lh);
         }
@@ -975,17 +1000,20 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
     // The locator: a globe (a copy of the map's polygon layers on the globe, its diameter nearly
     // the frame's) or the surrounding region on the map itself, the area outlined on either by
     // the map frame's extent indicator.
+    // Two locators sit side by side, each `side` square.
+    let (locator_count, locator_gap) = (locators.len().max(1) as f64, 3.0 * k);
     let side = match column {
-        // In a column, its width up to an A4 portrait column's (a landscape sheet's wider
-        // column doesn't make it larger), leaving the legend most of the height under it.
-        Some(c) => c.w.min(52.0 * k).min(0.45 * c.h).max(0.0),
+        // In a column, its width (shared by two) up to an A4 portrait column's (a landscape
+        // sheet's wider column doesn't make it larger), leaving the legend most of the height
+        // under it.
+        Some(c) => ((c.w - (locator_count - 1.0) * locator_gap) / locator_count).min(52.0 * k).min(0.45 * c.h).max(0.0),
         None if sheet => (0.24 * fw.min(fh)).clamp(25.0 * k, 70.0 * k),
         None => (0.3 * fw.min(fh)).clamp(18.0, 45.0),
     };
     let mut locator_cut = None;
-    let locator_map = match locator {
-        Locator::None => None,
-        Locator::Globe => {
+    let globe_locator = match locators.contains(&Locator::Globe) {
+        false => None,
+        true => {
             let src = s.map();
             let base = format!("{} Locator", src.name);
             // A locator an earlier sheet made that no layout shows any more (its layout deleted)
@@ -1118,8 +1146,16 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
             }
             Some((name, globe, FrameShape::Circle, at))
         }
-        Locator::Inset => Some((s.map().name.clone(), round_scale(scale * fw / side * 4.0), FrameShape::Rectangle, center)),
     };
+    // The inset first: it outlines the area, and the globe after it outlines the inset.
+    let inset_locator = locators
+        .contains(&Locator::Inset)
+        .then(|| (s.map().name.clone(), round_scale(scale * fw / side * 4.0), FrameShape::Rectangle, center));
+    let locator_maps: Vec<_> = [(Locator::Inset, inset_locator), (Locator::Globe, globe_locator)]
+        .into_iter()
+        .filter_map(|(kind, frame)| frame.map(|frame| (kind, frame)))
+        .collect();
+    let locators_w = locator_count * side + (locator_count - 1.0) * locator_gap;
     // The legend lists what the frame draws: its map synced to the frame's view first, as an
     // export does, so a streamed layer has its features there. (This changes the session's map,
     // so it comes after the last refusal: nothing below fails.) While one is still reading, the
@@ -1229,8 +1265,8 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
     let pad = 2.0;
     // The surrounds to place: what each is and its size (the arrangement gives its corner).
     let mut surrounds: Vec<(Surround, f64, f64)> = Vec::new();
-    if locator_map.is_some() && column.is_none() {
-        surrounds.push((Surround::Locator, side, side));
+    if !locator_maps.is_empty() && column.is_none() {
+        surrounds.push((Surround::Locator, locators_w, side));
     }
     // At a continental span the graticule's lines give north, and one arrow can't point north
     // across the whole frame: none, unless "northArrow": "always" (#1379). Left out so, it is said;
@@ -1363,14 +1399,14 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
         bands
     };
     let size_of = |kind: Surround| surrounds.iter().find(|x| x.0 == kind).map(|x| (x.1, x.2));
-    let (locator_side, arrow_size) = (size_of(Surround::Locator).map(|x| x.0), size_of(Surround::Arrow));
+    let (locator_size, arrow_size) = (size_of(Surround::Locator), size_of(Surround::Arrow));
     // The fewest columns from `from` up in which the surrounds group in a band around `clip`, with
     // their places; the scale bar's box `scale_bar` is the one at the scale tried.
     let grouped = |clip: Rect, from: usize, known: &[(f64, f64); PUBLICATION_LEGEND_COLUMNS], scale_bar: (f64, f64)| {
         (from..known.len()).find_map(|i| {
             bands_around(clip)
                 .iter()
-                .find_map(|band| veil_panel(*band, whole(known[i]), locator_side, arrow_size, scale_bar, GROUP_GAP))
+                .find_map(|band| veil_panel(*band, whole(known[i]), locator_size, arrow_size, scale_bar, GROUP_GAP))
                 .map(|places| (i, places))
         })
     };
@@ -1855,11 +1891,11 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
     let spot_of = |what: Surround| spots.iter().find(|(kind, _)| *kind == what).map(|(_, r)| *r);
     // In a column, at its top, centred across it; otherwise in its corner over the map.
     let locator_rect = match column {
-        Some(c) => Some((c.x + (c.w - side) / 2.0, c.y, side, side)),
+        Some(c) => Some((c.x + (c.w - locators_w) / 2.0, c.y, locators_w, side)),
         None => spot_of(Surround::Locator).inspect(|&r| placed.push(("locator", r))),
     };
     let surround_box = |fill: Rgba| if style.cards() { pub_card(fill, clear, 0.0, 2.0 * k) } else { pub_box(fill, clear, 0.0) };
-    if let (Some((map, locator_scale, shape, locator_center)), Some(r)) = (&locator_map, locator_rect) {
+    if let Some(r) = locator_rect.filter(|_| !locator_maps.is_empty()) {
         if let (true, Some(c)) = (card, column) {
             l.add(
                 "Locator Card",
@@ -1867,25 +1903,38 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
                 pub_card(Rgba::rgb(0xFF, 0xFF, 0xFF), Rgba::new(0x2B, 0x26, 0x20, 60), 0.4, card_r),
             );
         }
-        l.add(
-            "Locator",
-            r,
-            ElementKind::MapFrame {
-                map: map.clone(),
-                center: *locator_center,
-                scale: *locator_scale,
-                shape: shape.clone(),
-                grid: None,
-                sections: Vec::new(),
-                extent_of: Some(frame),
-                extent_color: rustgis_map::layout::INDICATOR_COLOR,
-                extent_width: rustgis_map::layout::INDICATOR_WIDTH,
-                border_color: rustgis_map::layout::FRAME_BORDER_COLOR,
-                border_width: rustgis_map::layout::FRAME_BORDER_WIDTH,
-                bearing: 0.0,
-                pitch: 0.0,
-            },
-        );
+        // Inset first from the left. A pair over the map's right half is mirrored, so the inset
+        // is the one against the frame's edge there too.
+        let from_right = column.is_none() && r.0 + r.2 / 2.0 > fx + fw / 2.0;
+        // What the next locator outlines: the map frame, then the locator before it.
+        let mut target = frame;
+        for (i, (kind, (map, locator_scale, shape, locator_center))) in locator_maps.iter().enumerate() {
+            let slot = if from_right { locator_maps.len() - 1 - i } else { i };
+            let name = match kind {
+                _ if locator_maps.len() == 1 => "Locator",
+                Locator::Inset => "Locator Inset",
+                Locator::Globe => "Locator Globe",
+            };
+            target = l.add(
+                name,
+                (r.0 + slot as f64 * (side + locator_gap), r.1, side, r.3),
+                ElementKind::MapFrame {
+                    map: map.clone(),
+                    center: *locator_center,
+                    scale: *locator_scale,
+                    shape: shape.clone(),
+                    grid: None,
+                    sections: Vec::new(),
+                    extent_of: Some(target),
+                    extent_color: rustgis_map::layout::INDICATOR_COLOR,
+                    extent_width: rustgis_map::layout::INDICATOR_WIDTH,
+                    border_color: rustgis_map::layout::FRAME_BORDER_COLOR,
+                    border_width: rustgis_map::layout::FRAME_BORDER_WIDTH,
+                    bearing: 0.0,
+                    pitch: 0.0,
+                },
+            );
+        }
     }
     if let Some(r) = spot_of(Surround::Arrow) {
         placed.push(("north arrow", r));
@@ -1897,7 +1946,7 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
     // In a panel, the legend under the locator, as tall as it needs within what is left.
     let legend_rect = match column {
         Some(c) if content_h > 0.0 => {
-            let ly = c.y + if locator_map.is_some() { side + 3.0 * k + if card { 2.0 * card_pad } else { 0.0 } } else { 0.0 };
+            let ly = c.y + if !locator_maps.is_empty() { side + 3.0 * k + if card { 2.0 * card_pad } else { 0.0 } } else { 0.0 };
             let room_h = c.y + c.h - ly;
             if room_h < MIN_LEGEND_MM {
                 warnings.push("the side column leaves the legend no room under the locator, so it is left out: shorten its texts".into());
@@ -1988,6 +2037,7 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
                     fit: LegendFit::Manual,
                     show_layer_names: LayerNames::Shown,
                     class_labels: Default::default(),
+                    show_counts: Default::default(),
                 },
             );
         }
@@ -2087,7 +2137,9 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
     if let Some(crs) = p.get("grid").and_then(|g| g.get("crs")).and_then(Value::as_str) {
         crate::cmd::say_crs_note(s, crs);
     }
-    let locator = locator_map.map(|(map, ..)| map);
+    // One locator's map by name; two, both names, the inset's first.
+    let mut named_maps: Vec<String> = locator_maps.into_iter().map(|(_, (map, ..))| map).collect();
+    let locator = if named_maps.len() > 1 { json!(named_maps) } else { json!(named_maps.pop()) };
     Ok(
         json!({"layout": i, "name": name, "profile": profile.id, "page": [w, h], "scale": scale, "grid": step, "locator": locator, "style": style.code(), "arrangement": arrangement_used, "legendColumns": legend.as_ref().map(|_| legend_cols), "mapShift": [map_shift.0, map_shift.1], "veiled": veiled.is_some(), "legendBox": legend_rect.is_some() && !legend_bare, "elements": elements, "moved": moved, "coverage": coverage_written, "warnings": warnings}),
     )
@@ -2255,23 +2307,31 @@ pub(crate) fn globe_locator_center(map: &Map, area: Coord, scale: f64, side_mm: 
     if globe(inside).forward(area).is_some() { (inside, true) } else { (area, false) }
 }
 
-/// Parses the publication's locator choice with its default: a globe on a sheet, none on a figure
-/// or where the map is itself the globe seen whole (it would only show it again, smaller).
-pub(in crate::cmd::layout) fn publication_locator(p: &Value, sheet: bool, whole_globe: bool) -> Result<Locator, String> {
+/// Parses the publication's locator choice, a name or a list of "inset" and "globe", with its
+/// default: a globe on a sheet, none on a figure or where the map is itself the globe seen whole (it
+/// would only show it again, smaller). A list is a set: whatever its order, the inset comes first.
+pub(in crate::cmd::layout) fn publication_locators(p: &Value, sheet: bool, whole_globe: bool) -> Result<Vec<Locator>, String> {
+    let one = |v: &Value| match v.as_str().map(str::trim) {
+        Some("globe") => Ok(Some(Locator::Globe)),
+        Some("inset") => Ok(Some(Locator::Inset)),
+        Some("none") => Ok(None),
+        _ => Err("locator is \"globe\", \"inset\", \"none\" or a list of \"inset\" and \"globe\"".to_string()),
+    };
     Ok(match p.get("locator").filter(|v| !v.is_null()) {
-        None => {
-            if sheet && !whole_globe {
-                Locator::Globe
-            } else {
-                Locator::None
+        None => (sheet && !whole_globe).then_some(Locator::Globe).into_iter().collect(),
+        Some(Value::Array(list)) => {
+            let mut chosen = Vec::new();
+            for v in list {
+                let locator = one(v)?.ok_or("locator: \"none\" goes alone, not in a list")?;
+                if chosen.contains(&locator) {
+                    return Err(format!("locator: {v} is given twice"));
+                }
+                chosen.push(locator);
             }
+            chosen.sort_by_key(|&l| l == Locator::Globe);
+            chosen
         }
-        Some(v) => match v.as_str().map(str::trim) {
-            Some("globe") => Locator::Globe,
-            Some("inset") => Locator::Inset,
-            Some("none") => Locator::None,
-            _ => return Err("locator is \"globe\", \"inset\" or \"none\"".into()),
-        },
+        Some(v) => one(v)?.into_iter().collect(),
     })
 }
 
