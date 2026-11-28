@@ -60,8 +60,14 @@ beside it, and other APIs with GET item search work. **Collections** lists what 
 and **Find Items** shows up to 50 items as cards
 (with "Showing 50 of 1234 items" when the API says how many match) and draws their footprints as
 a layer. Each card has the item's preview picture when it has one, its id, a collection · date ·
-cloud cover line, and **Zoom** (to the item), the asset to add, **Add** and **Details** (the item's
-properties). The asset chosen at first is `visual` (true colour) when there is one, else the first
+cloud cover line, and **Zoom** (to the item), the asset to add, **Add** and **Details**. Details
+reads the item's own document from its address and shows it in two tabs: **Formatted** (what it is,
+its properties, its assets and its links, up to 200 rows a section with
+the rest counted; each asset has **Add to map**, **Download** (a link to its web address, not offered for
+an address that needs signing, such as Planetary Computer's) and **Copy link**) and **JSON** (the document, pretty-printed with its keys sorted (a repeated key keeps its last value), with **Copy JSON**; the first
+200,000 bytes are drawn and Copy takes all of it). An item with no address of its own, or one the
+network reach it was found with doesn't allow reading, shows what RustGIS read of it instead (the first 100
+plain properties, long text cut), with a line saying so. The asset chosen at first is `visual` (true colour) when there is one, else the first
 GeoTIFF, else the first point cloud, else the first data asset, preferring HTTP(S) assets.
 Cloud-optimised GeoTIFF, GeoParquet and FlatGeobuf assets are read in place, and PMTiles a tile
 at a time; other assets download whole (see [Files on the web](data-formats.md#files-on-the-web)).

@@ -1010,19 +1010,42 @@ impl Item {
     /// may point to, not one that needs signing or a cloud store's own protocol.
     pub fn asset_href(&self, key: Option<&str>) -> Result<(String, String), String> {
         let a = self.pick(key)?;
-        let lower = crate::logins::inner(&a.href).to_ascii_lowercase();
-        if !(lower.starts_with("https://") || lower.starts_with("http://") || crate::s3::is_s3(&lower)) {
-            let scheme = lower.split("://").next().unwrap_or("");
-            return Err(format!(
-                "{}: asset '{}' is at {} (a {scheme}:// address); RustGIS adds assets by their web or s3:// address",
-                self.id, a.key, a.href
-            ));
-        }
+        self.check_asset_href(&a.key, &a.href)?;
+        Ok((a.key.clone(), a.href.clone()))
+    }
+
+    /// Checks an address given for asset `key` as [`Item::asset_href`] checks the item's own: a
+    /// web or s3:// address that the item's origin and reach allow.
+    pub fn check_asset_href(&self, key: &str, href: &str) -> Result<(), String> {
+        self.check_asset_scheme(key, href)?;
         // Judged by where the item came from; an item given whole may only point at public
         // addresses (as a document on the web may). A Planetary Computer asset is signed by the
         // caller ([`needs_signing`]).
-        self.check_href(&a.href)?;
-        Ok((a.key.clone(), a.href.clone()))
+        self.check_href(href)
+    }
+
+    /// The scheme half of [`Item::check_asset_href`], for an address judged against another
+    /// document's origin: a web or s3:// address, else an error naming what it is.
+    pub fn check_asset_scheme(&self, key: &str, href: &str) -> Result<(), String> {
+        let lower = crate::logins::inner(href).to_ascii_lowercase();
+        if lower.starts_with("https://") || lower.starts_with("http://") || crate::s3::is_s3(&lower) {
+            return Ok(());
+        }
+        // The scheme is the letters before the first colon (`data:` and `mailto:` have no `//`).
+        let scheme = lower
+            .split_once(':')
+            .map(|(s, _)| s)
+            .filter(|s| s.len() > 1 && s.starts_with(|c: char| c.is_ascii_alphabetic()))
+            .filter(|s| s.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'-' | b'.')));
+        let slashes = lower.split_once(':').is_some_and(|(_, rest)| rest.starts_with("//"));
+        let what = match (scheme, slashes) {
+            (Some(scheme), true) => format!("a {scheme}:// address"),
+            (Some(scheme), false) => format!("a {scheme}: address"),
+            (None, _) => "a relative address that couldn't be made absolute".to_string(),
+        };
+        let cut = href.chars().count() > 200;
+        let shown: String = href.chars().take(200).chain(cut.then_some('…')).collect();
+        Err(format!("{}: asset '{key}' is at {shown} ({what}); RustGIS adds assets by their web or s3:// address", self.id))
     }
 }
 

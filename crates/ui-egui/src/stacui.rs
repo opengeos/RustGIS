@@ -198,6 +198,8 @@ pub struct State {
     pub chosen: Vec<String>,
     /// The item whose properties are shown.
     pub details: Option<usize>,
+    /// The JSON view of the item whose details are open: its own document, read or read from.
+    json: Option<JsonView>,
     /// Whether `info` is a search's count (kept when a catalog's children land after it).
     counted: bool,
     /// Items' preview pictures, by address.
@@ -270,6 +272,7 @@ impl Default for State {
             sort_is_default: false,
             chosen: Vec::new(),
             details: None,
+            json: None,
             counted: false,
             thumbs: Default::default(),
             footprints: None,
@@ -321,6 +324,94 @@ fn post_service(app: &mut RustGisApp, url: &str, body: String) -> Answer {
         }
         Err(e) => Slot::new(std::sync::Mutex::new(Some(Err(crate::connectionui::translated(&e))))),
     }
+}
+
+/// Reads an item's own document off the frame, at most [`DOCUMENT_BYTES`] (an item is far below
+/// it), and has it parsed and printed there too, so the window only takes the finished text. The
+/// document must be this item (a `Feature` with its id), else it is refused with the reason. The
+/// read can't be stopped once started: an abandoned one runs to its end and its answer is dropped.
+fn fetch_document(app: &mut RustGisApp, url: &str, from_document: bool, id: &str) -> DocAnswer {
+    // Read under the reach `start_json` checked the address under (the item's own), not widened
+    // by whether the dialog's API came from a document.
+    let connection = selected_connection(app);
+    let base = app.ui.stac.api.clone();
+    let url = match crate::serviceui::request_from(app, connection.as_deref(), &base, url) {
+        Ok(url) => url,
+        Err(e) => return Slot::new(std::sync::Mutex::new(Some(Err(crate::connectionui::translated(&e))))),
+    };
+    let slot: DocAnswer = Slot::default();
+    let land = slot.clone();
+    let id = id.to_string();
+    let done = Box::new(move |r: Result<cache::Fetched, String>| {
+        *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(r.and_then(|f| land_document(f, &id)));
+    });
+    let ceiling = if from_document { Reach::Public } else { Reach::Local };
+    cache::download_limited_reaching_with_origin(&url, DOCUMENT_BYTES, None, ceiling, done);
+    slot
+}
+
+/// A fetched document as the inspector shows it, if it is the item `id`.
+fn land_document(f: cache::Fetched, id: &str) -> Result<Landed, String> {
+    if f.bytes.len() > DOCUMENT_BYTES {
+        return Err(i18n::fmt("larger than {n} MB", &[("n", &(DOCUMENT_BYTES >> 20).to_string())]));
+    }
+    let (text, drawn, doc) = raw_text(&f.bytes)?;
+    let is = doc.get("type").and_then(|t| t.as_str()) == Some("Feature");
+    let found = doc.get("id").and_then(|i| i.as_str());
+    if !is || found != Some(id) {
+        let found = found.map(|f| f.chars().take(100).collect::<String>()).unwrap_or_default();
+        return Err(i18n::fmt("the address answered with a document that is not this item ({found})", &[("found", &found)]));
+    }
+    Ok(Landed { text, drawn, doc, source: (f.origin.url().to_string(), f.origin.reach()) })
+}
+
+/// How many bytes of `text` the pane draws: up to [`JSON_SHOWN_BYTES`], cut where a character ends.
+fn shown_bytes(text: &str) -> usize {
+    let mut drawn = text.len().min(JSON_SHOWN_BYTES);
+    while !text.is_char_boundary(drawn) {
+        drawn -= 1;
+    }
+    drawn
+}
+
+/// The most bytes read of an item's own document. An item is a few kilobytes, rarely a megabyte;
+/// the limit is small because the document is held as text and as a parsed tree (a tree of
+/// numbers is several times the bytes it came from) for as long as its card is open.
+const DOCUMENT_BYTES: usize = 4 << 20;
+
+/// The most of an item's JSON the pane draws: more is cut from the view (Copy still takes it all).
+const JSON_SHOWN_BYTES: usize = 200_000;
+
+/// The JSON view of one item (by its place in the list).
+struct JsonView {
+    /// Whether the JSON text is the tab shown (else the formatted page).
+    text_tab: bool,
+    item: usize,
+    raw: Raw,
+}
+
+/// An item's own document, read and made ready off the frame.
+struct Landed {
+    text: String,
+    drawn: usize,
+    doc: serde_json::Value,
+    /// The address it was read from and the reach it was read under.
+    source: (String, Reach),
+}
+
+type DocAnswer = Slot<Result<Landed, String>>;
+
+/// An item's own document, pretty-printed with its keys sorted (a repeated key keeps its last
+/// value), for the JSON view.
+enum Raw {
+    /// Being read from the item's own address.
+    Loading(DocAnswer),
+    /// Ready: the whole text (what Copy takes), how much of it the pane draws, and a line saying
+    /// what is not the catalog's whole document or why not (read failed, text cut).
+    /// `source` is the address the document was read from, with the reach it was read under: its
+    /// relative links resolve against the address, and its asset addresses are held to the reach.
+    /// None when the pane shows what RustGIS read instead.
+    Shown { text: String, drawn: usize, note: Option<String>, doc: serde_json::Value, source: Option<(String, Reach)> },
 }
 
 /// An item's preview picture: being fetched, shown, or not to be had.
@@ -426,6 +517,7 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
     poll_walk(app, ctx);
     poll_loading(app, ctx);
     poll_preparing(app, ctx);
+    poll_json(app, ctx);
     stop_stale_drawing(app);
     let pending = match &app.ui.stac.waiting {
         Some((Asked::Link { url, opened }, _)) => Some((*opened, url.clone())),
@@ -503,6 +595,7 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
                         st.info = Some(i18n::fmt("{count}. {note}", &[("count", st.info.as_deref().unwrap_or(&count)), ("note", note)]));
                     }
                     st.details = None;
+                    st.json = None;
                     st.counted = true;
                     st.chosen = items.iter().map(|i| i.pick(None).map(|a| a.key.clone()).unwrap_or_default()).collect();
                     st.items = items;
@@ -649,6 +742,7 @@ fn poll_walk(app: &mut RustGisApp, ctx: &egui::Context) {
         i18n::fmt("Showing {n} items (more match: narrow the search)", &[("n", &n)])
     });
     st.details = None;
+    st.json = None;
     st.counted = true;
     let items = walk.into_items();
     st.chosen = items.iter().map(|i| i.pick(None).map(|a| a.key.clone()).unwrap_or_default()).collect();
@@ -819,6 +913,42 @@ fn add_item_asset(app: &mut RustGisApp, item: &Item, key: Option<&str>) {
     }
 }
 
+/// Whether the asset `key` at `href`, an address a document gave, may be added: the checks
+/// [`Item::asset_href`] makes, held to where the document was read and the reach it was read
+/// under (`source`), or to the item's own when the pane shows only what RustGIS read.
+fn document_asset_allowed(item: &Item, key: &str, href: &str, source: Option<(&str, Reach)>) -> Result<(), String> {
+    match source {
+        Some((base, reach)) => {
+            item.check_asset_scheme(key, href)?;
+            Origin::with_observed_reach(base, reach)?.check(href)
+        }
+        None => item.check_asset_href(key, href),
+    }
+}
+
+/// The address and reach the open inspector's document was read under, if it was read.
+fn document_source(app: &RustGisApp) -> Option<(String, Reach)> {
+    match &app.ui.stac.json {
+        Some(JsonView { raw: Raw::Shown { source, .. }, .. }) => source.clone(),
+        _ => None,
+    }
+}
+
+/// Adds the asset `key` at `href`, the address its document shows, under the item's name, after
+/// the checks [`Item::asset_href`] makes, held to the document's own reach.
+fn add_document_asset(app: &mut RustGisApp, item: &Item, key: &str, href: &str) {
+    let source = document_source(app);
+    let allowed = document_asset_allowed(item, key, href, source.as_ref().map(|(b, r)| (b.as_str(), *r)));
+    let (from, public) = match source {
+        Some((base, reach)) => (base, reach == Reach::Public),
+        None => (item_document_origin(app, item), item.origin_reach == Reach::Public),
+    };
+    match allowed {
+        Ok(()) => add_signed(app, href, &format!("{} {key}", item.id), &from, public),
+        Err(e) => app.ui.stac.error = Some(e),
+    }
+}
+
 /// Opens the dialog on an item's or a collection's address (a `?stac=` link), fetching it off
 /// the frame.
 pub fn open_link(app: &mut RustGisApp, url: &str) -> Result<(), String> {
@@ -860,6 +990,8 @@ fn landed_link(app: &mut RustGisApp, requested_url: &str, r: Result<cache::Fetch
                 app.ui.stac.collection = item.collection.clone();
                 app.ui.stac.chosen = vec![item.pick(None).map(|a| a.key.clone()).unwrap_or_default()];
                 app.ui.stac.items = vec![item.clone()];
+                app.ui.stac.details = None;
+                app.ui.stac.json = None;
                 app.ui.stac.searched_area = None;
                 let found = api.is_some();
                 if let Some(api) = api {
@@ -1982,6 +2114,10 @@ fn results(app: &mut RustGisApp, ui: &mut egui::Ui) {
     }
     want_thumbs(app);
     let (mut zoom, mut add, mut details) = (None, None, None);
+    // The view picked on an open card (true: JSON), whether Copy was clicked, and whether Cancel.
+    let (mut view, mut copy, mut cancel) = (None::<bool>, false, false);
+    // The asset picked in an open card's Formatted tab: its item's place and its key.
+    let mut asset: Option<(usize, String, String)> = None;
     // The band combination picked on a card: its item's place and the combination's id.
     #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
     let mut bands: Option<(usize, &'static str)> = None;
@@ -2088,20 +2224,51 @@ fn results(app: &mut RustGisApp, ui: &mut egui::Ui) {
                                     ui.weak(tl!("Bands left out")).on_hover_text(cut);
                                 }
                             }
-                            if ui.selectable_label(st.details == Some(i), tl!("Details")).clicked() {
+                            if ui.add(egui::Button::new(tl!("Details")).selected(st.details == Some(i))).clicked() {
                                 details = Some(i);
                             }
                         });
                     });
                 });
-                if st.details == Some(i) {
-                    properties(ui, i, item);
+                if st.details == Some(i)
+                    && let Some(j) = st.json.as_ref().filter(|j| j.item == i)
+                {
+                    let did = inspector(ui, j, item);
+                    view = view.or(did.tab);
+                    (copy, cancel) = (copy || did.copy, cancel || did.cancel);
+                    if let Some((key, href)) = did.add {
+                        asset = Some((i, key, href));
+                    }
                 }
             });
         }
     });
     if let Some(i) = details {
-        app.ui.stac.details = if app.ui.stac.details == Some(i) { None } else { Some(i) };
+        let open = app.ui.stac.details != Some(i);
+        app.ui.stac.details = open.then_some(i);
+        // Opening a card reads its item's own document (another card's view, or a read still
+        // going, is dropped); closing it drops the view.
+        app.ui.stac.json = None;
+        if open {
+            start_json(app, i);
+        }
+    }
+    if let (Some(text_tab), Some(j)) = (view, app.ui.stac.json.as_mut()) {
+        j.text_tab = text_tab;
+    }
+    if let Some((i, key, href)) = asset
+        && let Some(item) = app.ui.stac.items.get(i).cloned()
+    {
+        add_document_asset(app, &item, &key, &href);
+    }
+    if cancel {
+        // Drops the read (a download can't be stopped once started: it runs to its end, at most
+        // 4 MB, and its answer is not kept) and with it the card's details.
+        app.ui.stac.json = None;
+        app.ui.stac.details = None;
+    }
+    if copy && let Some(JsonView { raw: Raw::Shown { text, .. }, .. }) = &app.ui.stac.json {
+        ui.ctx().copy_text(text.clone());
     }
     if let Some(e) = zoom.and_then(|i| app.ui.stac.items.get(i)).and_then(|i| i.bbox) {
         app.session.zoom_to(&rustgis_engine::geom::Extent::new(e[0], e[1], e[2], e[3]));
@@ -2194,24 +2361,315 @@ fn add_item_index(app: &mut RustGisApp, _item: &Item, _index: &str) {
     app.ui.stac.error = Some(tl!("Indices are made on the desktop for now").to_string());
 }
 
-/// An item's properties, a row each (the first hundred, long values cut).
-fn properties(ui: &mut egui::Ui, i: usize, item: &Item) {
-    let Some(props) = item.properties.as_ref().and_then(|p| p.as_object()) else {
-        ui.label(egui::RichText::new(tl!("No properties")).weak());
+/// The catalog's document pretty-printed, and how many of its bytes the pane draws (a cut on a
+/// character boundary). Not JSON is an error: it is not shown as the item.
+fn raw_text(bytes: &[u8]) -> Result<(String, usize, serde_json::Value), String> {
+    let value: serde_json::Value = serde_json::from_slice(bytes).map_err(|e| i18n::fmt("not JSON: {e}", &[("e", &e.to_string())]))?;
+    let text = serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?;
+    let drawn = shown_bytes(&text);
+    Ok((text, drawn, value))
+}
+
+/// What the pane keeps of an item when it can't show the catalog's own document: its properties
+/// (the first hundred plain ones, long text cut), assets and footprint as RustGIS read them.
+fn trimmed_text(item: &Item) -> (String, usize, serde_json::Value) {
+    let doc = stac::item_json_with(item, true);
+    let text = serde_json::to_string_pretty(&doc).unwrap_or_default();
+    let drawn = shown_bytes(&text);
+    (text, drawn, doc)
+}
+
+/// The line saying a view is not the whole document: text cut from the view, then why the
+/// document wasn't used.
+fn raw_note(text: &str, drawn: usize, why: Option<String>) -> Option<String> {
+    let cut = (drawn < text.len()).then(|| {
+        i18n::fmt(
+            "Showing the first {shown} of {total} bytes; Copy takes all of it",
+            &[("shown", &drawn.to_string()), ("total", &text.len().to_string())],
+        )
+    });
+    match (why, cut) {
+        (Some(why), Some(cut)) => Some(i18n::fmt("{why} {cut}", &[("why", &why), ("cut", &cut)])),
+        (why, cut) => why.or(cut),
+    }
+}
+
+/// Opens the inspector of item `i`: the item's own document read from its address, off the frame;
+/// or, when it has none (or may not be read from there), what RustGIS read of it, with the reason.
+fn start_json(app: &mut RustGisApp, i: usize) {
+    let Some(item) = app.ui.stac.items.get(i).cloned() else { return };
+    let trimmed = |why: String| {
+        let (text, drawn, doc) = trimmed_text(&item);
+        let note = raw_note(&text, drawn, Some(why));
+        Raw::Shown { text, drawn, note, doc, source: None }
+    };
+    let Some(url) = item.url.clone() else {
+        let why = tl!(
+            "This item has no address of its own to read, so this is what RustGIS read of it: the first 100 plain properties, long text cut."
+        );
+        app.ui.stac.json = Some(JsonView { item: i, text_tab: false, raw: trimmed(why.to_string()) });
         return;
     };
-    egui::Grid::new(("stac_props", i)).num_columns(2).striped(true).spacing(vec2(10.0, 2.0)).show(ui, |ui| {
-        for (k, v) in props.iter().take(100) {
-            let text = match v {
-                serde_json::Value::String(s) => s.clone(),
-                other => other.to_string(),
-            };
-            let short: String = text.chars().take(160).collect();
+    // The address is the document's own claim: it is read under the reach the item was found with.
+    let public = item.origin_reach == Reach::Public;
+    let from = item_document_origin(app, &item);
+    let ceiling = rustgis_engine::cmd::layer::origin_ceiling(Some(&from), public);
+    let raw = match address::check_reach(&url, ceiling) {
+        Ok(()) => Raw::Loading(fetch_document(app, &url, public, &item.id)),
+        Err(e) => trimmed(i18n::fmt(
+            "{url} was not read: {e}. This is what RustGIS read of the item instead: the first 100 plain properties, long text cut.",
+            &[("url", &rustgis_engine::sources::address_in_message(&url)), ("e", &e)],
+        )),
+    };
+    app.ui.stac.json = Some(JsonView { item: i, text_tab: false, raw });
+}
+
+/// Lands an item's own document in the inspector.
+fn poll_json(app: &mut RustGisApp, ctx: &egui::Context) {
+    let Some(JsonView { item: i, text_tab, raw: Raw::Loading(slot) }) = &app.ui.stac.json else { return };
+    let (i, text_tab) = (*i, *text_tab);
+    let Some(r) = slot.lock().unwrap_or_else(|e| e.into_inner()).take() else {
+        ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        return;
+    };
+    let Some(item) = app.ui.stac.items.get(i).cloned() else {
+        app.ui.stac.json = None;
+        return;
+    };
+    let raw = match r {
+        Ok(Landed { text, drawn, doc, source }) => {
+            let note = raw_note(&text, drawn, None);
+            Raw::Shown { text, drawn, note, doc, source: Some(source) }
+        }
+        Err(e) => {
+            let (text, drawn, doc) = trimmed_text(&item);
+            let why = i18n::fmt(
+                "The item's own document was not read: {e}. This is what RustGIS read of it instead: the first 100 plain properties, long text cut.",
+                &[("e", &e)],
+            );
+            let note = raw_note(&text, drawn, Some(why));
+            Raw::Shown { text, drawn, note, doc, source: None }
+        }
+    };
+    app.ui.stac.json = Some(JsonView { item: i, text_tab, raw });
+}
+
+/// What was clicked in an inspector.
+#[derive(Default)]
+struct Inspected {
+    /// A tab: true for the JSON text.
+    tab: Option<bool>,
+    copy: bool,
+    /// The key and the shown address of an asset to add to the map.
+    add: Option<(String, String)>,
+    cancel: bool,
+}
+
+/// The inspector under an open card: the Formatted and JSON tabs, then the tab shown, or a
+/// spinner and Cancel while the document is read.
+fn inspector(ui: &mut egui::Ui, view: &JsonView, item: &Item) -> Inspected {
+    let mut did = Inspected::default();
+    ui.horizontal(|ui| {
+        if ui.add(egui::Button::new(tl!("Formatted")).selected(!view.text_tab)).clicked() {
+            did.tab = Some(false);
+        }
+        if ui.add(egui::Button::new(tl!("JSON")).selected(view.text_tab)).clicked() {
+            did.tab = Some(true);
+        }
+        if view.text_tab && matches!(view.raw, Raw::Shown { .. }) {
+            did.copy = ui.button(tl!("Copy JSON")).clicked();
+        }
+    });
+    match &view.raw {
+        Raw::Loading(_) => {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(tl!("Reading the item…"));
+                did.cancel = ui.button(tl!("Cancel")).clicked();
+            });
+        }
+        Raw::Shown { text, drawn, note, doc, source } => {
+            if let Some(note) = note {
+                ui.label(egui::RichText::new(note).small().weak());
+            }
+            if view.text_tab {
+                if source.is_some() {
+                    // The document is read into a tree of sorted keys, so it is not shown as written.
+                    ui.label(
+                        egui::RichText::new(tl!("Keys are listed in alphabetical order, and a repeated key keeps its last value."))
+                            .small()
+                            .weak(),
+                    );
+                }
+                egui::ScrollArea::both().id_salt(("stac_json", view.item)).max_height(260.0).show(ui, |ui| {
+                    let mut shown = text.get(..*drawn).unwrap_or_default();
+                    ui.add(egui::TextEdit::multiline(&mut shown).code_editor().desired_width(f32::INFINITY).interactive(true));
+                });
+            } else {
+                did.add = formatted(ui, view.item, doc, source.as_ref().map(|(b, r)| (b.as_str(), *r)), item);
+            }
+        }
+    }
+    did
+}
+
+/// The most rows a section of the formatted page draws; the rest is said, not dropped.
+const FORMATTED_ROWS: usize = 200;
+
+/// Takes bytes up to a limit and then refuses more, so printing a large value stops at the limit
+/// (the page draws every frame, and a value can be as large as the document).
+struct Bounded(Vec<u8>);
+
+impl std::io::Write for Bounded {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        // Four bytes a character at most: the first 160 characters are within it.
+        let room = (4 * SHORT_VALUE_CHARS).saturating_sub(self.0.len());
+        self.0.extend_from_slice(buf.get(..room.min(buf.len())).unwrap_or_default());
+        if buf.len() > room { Err(std::io::Error::other("full")) } else { Ok(buf.len()) }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// The most characters of a value the formatted page shows on a line.
+const SHORT_VALUE_CHARS: usize = 160;
+
+/// A value as one short line: text as it is, anything else as JSON, cut at 160 characters. Work
+/// is bounded by the cut, not by the value's size.
+fn short_value(v: &serde_json::Value) -> String {
+    let (text, whole): (String, bool) = match v {
+        serde_json::Value::String(s) => (s.chars().take(SHORT_VALUE_CHARS + 1).collect(), true),
+        other => {
+            let mut out = Bounded(Vec::new());
+            let whole = serde_json::to_writer(&mut out, other).is_ok();
+            (String::from_utf8_lossy(&out.0).chars().take(SHORT_VALUE_CHARS + 1).collect(), whole)
+        }
+    };
+    // Past the line, or cut by the limit on the way: ends in an ellipsis.
+    if whole && text.chars().count() <= SHORT_VALUE_CHARS {
+        return text;
+    }
+    let mut short: String = text.chars().take(SHORT_VALUE_CHARS).collect();
+    short.push('…');
+    short
+}
+
+/// A titled section of two-column rows (a label and a value): the rows given, and how many more
+/// the document had.
+fn section(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, title: &str, rows: Vec<(String, String)>, total: usize) {
+    if rows.is_empty() {
+        return;
+    }
+    ui.add_space(4.0);
+    ui.label(egui::RichText::new(title).strong());
+    egui::Grid::new(id).num_columns(2).striped(true).spacing(vec2(10.0, 2.0)).show(ui, |ui| {
+        for (k, v) in &rows {
             ui.label(egui::RichText::new(k).small());
-            ui.add(egui::Label::new(egui::RichText::new(short).small().weak()).wrap());
+            ui.add(egui::Label::new(egui::RichText::new(v).small().weak()).wrap());
             ui.end_row();
         }
     });
+    if total > rows.len() {
+        let more = (total - rows.len()).to_string();
+        ui.label(egui::RichText::new(i18n::fmt("{n} more are not shown: see JSON", &[("n", &more)])).small().weak());
+    }
+}
+
+/// An item's document laid out as a page: what it is, its properties, its assets and its links.
+/// Only what the document holds is drawn; a section it lacks is left out.
+fn formatted(
+    ui: &mut egui::Ui,
+    id: usize,
+    doc: &serde_json::Value,
+    source: Option<(&str, Reach)>,
+    item: &Item,
+) -> Option<(String, String)> {
+    let base = source.map(|(b, _)| b);
+    let field = |k: &str| doc.get(k).filter(|v| !v.is_null()).map(short_value);
+    let head: Vec<(String, String)> = [
+        (tl!("ID"), field("id")),
+        (tl!("Collection"), field("collection")),
+        (tl!("Extent"), field("bbox")),
+        (tl!("Footprint"), doc.get("geometry").and_then(|g| g.get("type")).map(short_value)),
+        (tl!("Extensions"), field("stac_extensions")),
+    ]
+    .into_iter()
+    .filter_map(|(k, v)| Some((k.to_string(), v?)))
+    .collect();
+    let n = head.len();
+    section(ui, ("stac_head", id), tl!("Item"), head, n);
+    if let Some(props) = doc.get("properties").and_then(|p| p.as_object()) {
+        let rows = props
+            .iter()
+            .take(FORMATTED_ROWS)
+            .map(|(k, v)| (short_value(&serde_json::Value::String(k.chars().take(SHORT_VALUE_CHARS + 1).collect())), short_value(v)))
+            .collect();
+        section(ui, ("stac_props", id), tl!("Properties"), rows, props.len());
+    }
+    let mut add = None;
+    if let Some(assets) = doc.get("assets").and_then(|a| a.as_object()) {
+        ui.add_space(4.0);
+        ui.label(egui::RichText::new(tl!("Assets")).strong());
+        for (key, a) in assets.iter().take(FORMATTED_ROWS) {
+            let part = |k: &str| a.get(k).filter(|v| !v.is_null()).map(short_value);
+            let detail = [part("title"), part("type"), part("roles")].into_iter().flatten().collect::<Vec<_>>().join(" · ");
+            // The document's own address for the asset, a relative one resolved against the address
+            // the document was read from (as written when it can't be). The full address, not the
+            // shortened label, is what Copy link takes.
+            let href =
+                a.get("href").and_then(|h| h.as_str()).map(|h| base.and_then(|b| stac::resolve(b, h)).unwrap_or_else(|| h.to_string()));
+            // Offered to the browser only where the item may read it from and it needs no signing.
+            let web = href
+                .clone()
+                .filter(|h| document_asset_allowed(item, key, h, source).is_ok())
+                .filter(|h| address::is_https(h) || h.get(..7).is_some_and(|s| s.eq_ignore_ascii_case("http://")))
+                .filter(|h| !stac::needs_signing(h));
+            ui.push_id(("stac_asset", id, key), |ui| {
+                ui.label(egui::RichText::new(key).small().strong());
+                if !detail.is_empty() {
+                    ui.add(egui::Label::new(egui::RichText::new(detail).small().weak()).wrap());
+                }
+                if let Some(h) = &href {
+                    ui.add(
+                        egui::Label::new(egui::RichText::new(short_value(&serde_json::Value::String(h.clone()))).small().weak()).truncate(),
+                    )
+                    .on_hover_text(h);
+                }
+                ui.horizontal(|ui| {
+                    // The address added is the one shown in this row; a row with none has nothing to add.
+                    let button = egui::Button::new(tl!("Add to map")).small();
+                    if ui.add_enabled(href.is_some(), button).on_hover_text(tl!("Add this asset to the map")).clicked()
+                        && let Some(h) = &href
+                    {
+                        add = Some((key.clone(), h.clone()));
+                    }
+                    if let Some(h) = &web {
+                        ui.hyperlink_to(egui::RichText::new(tl!("Download")).small(), h).on_hover_text(h);
+                    }
+                    if let Some(h) = &href
+                        && ui.add(egui::Button::new(tl!("Copy link")).small()).on_hover_text(h).clicked()
+                    {
+                        ui.ctx().copy_text(h.clone());
+                    }
+                });
+            });
+        }
+        if assets.len() > FORMATTED_ROWS {
+            let more = (assets.len() - FORMATTED_ROWS).to_string();
+            ui.label(egui::RichText::new(i18n::fmt("{n} more are not shown: see JSON", &[("n", &more)])).small().weak());
+        }
+    }
+    if let Some(links) = doc.get("links").and_then(|l| l.as_array()) {
+        let rows = links
+            .iter()
+            .take(FORMATTED_ROWS)
+            .map(|l| (l.get("rel").map(short_value).unwrap_or_default(), l.get("href").map(short_value).unwrap_or_default()))
+            .collect();
+        section(ui, ("stac_links", id), tl!("Links"), rows, links.len());
+    }
+    add
 }
 
 #[cfg(test)]
@@ -3467,5 +3925,270 @@ mod tests {
         assert_eq!(notices.len(), 3);
         assert!(notices.iter().any(|n| n.text.contains("1 catalog links were refused")));
         assert!(notices.iter().any(|n| n.text.contains("1 catalog links were left out because their addresses")));
+    }
+
+    /// A public item, as a search of `https://stac.example/api` found it: with its own address when `own`.
+    fn json_test_item(own: bool) -> Item {
+        let mut raw = json!({
+            "type": "Feature", "id": "scene-1", "collection": "c", "bbox": [0.0, 0.0, 1.0, 1.0],
+            "properties": {"datetime": "2025-01-01T00:00:00Z"},
+            "assets": {"visual": {"href": "https://stac.example/a.tif", "type": "image/tiff; application=geotiff; profile=cloud-optimized"}},
+        });
+        if own {
+            raw["links"] = json!([{"rel": "self", "href": "https://stac.example/api/collections/c/items/scene-1"}]);
+        }
+        let item = stac::parse_item_from_origin(raw.to_string().as_bytes(), &Origin::named("https://stac.example/api/search")).unwrap();
+        assert_eq!(item.origin_reach, Reach::Public);
+        item
+    }
+
+    #[test]
+    fn an_items_json_is_pretty_cut_on_a_character_boundary_and_not_json_is_refused() {
+        let (text, drawn, _) = raw_text(br#"{"a":1}"#).unwrap();
+        assert!(drawn == text.len() && text.contains("\"a\": 1"));
+        assert_eq!(raw_note(&text, drawn, None), None, "a whole document has no note");
+        // More than the pane draws: cut where a character ends, and said, with Copy taking it all.
+        let long = json!({"k": "é".repeat(JSON_SHOWN_BYTES)});
+        let (text, drawn, _) = raw_text(long.to_string().as_bytes()).unwrap();
+        assert!(drawn < text.len() && drawn <= JSON_SHOWN_BYTES && text.is_char_boundary(drawn));
+        let note = raw_note(&text, drawn, Some("why.".into())).unwrap();
+        assert!(note.starts_with("why.") && note.contains("Showing the first"), "{note}");
+        assert!(raw_text(b"<html>not a document</html>").unwrap_err().contains("not JSON"));
+    }
+
+    #[test]
+    fn json_without_an_own_address_shows_what_was_read_and_says_so_without_a_request() {
+        let _turn = crate::fetching::turn();
+        let asked = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = asked.clone();
+        cache::set_fetcher(move |_, _| {
+            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        });
+        let mut app = RustGisApp::with_sample();
+        app.ui.stac.items = vec![json_test_item(false)];
+        start_json(&mut app, 0);
+        let Some(JsonView { raw: Raw::Shown { text, note, .. }, .. }) = &app.ui.stac.json else { panic!("shown at once") };
+        assert!(text.contains("scene-1"));
+        assert!(note.as_deref().unwrap_or("").contains("no address of its own"), "{note:?}");
+        assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn json_reads_the_items_own_document_and_a_failed_read_falls_back_with_the_reason() {
+        let _turn = crate::fetching::turn();
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = seen.clone();
+        let own = "https://stac.example/api/collections/c/items/scene-1";
+        cache::set_fetcher(move |url, done| {
+            log.lock().unwrap().push(url.clone());
+            // What RustGIS drops from an item: its links, here, past the self link.
+            let doc = json!({"type": "Feature", "id": "scene-1", "links": [{"rel": "alternate", "href": "https://stac.example/page"}]});
+            done(Ok(doc.to_string().into_bytes()));
+        });
+        let ctx = egui::Context::default();
+        let mut app = RustGisApp::with_sample();
+        app.ui.stac.items = vec![json_test_item(true)];
+        start_json(&mut app, 0);
+        assert!(matches!(app.ui.stac.json, Some(JsonView { raw: Raw::Loading(_), .. })));
+        poll_json(&mut app, &ctx);
+        let Some(JsonView { raw: Raw::Shown { text, note, .. }, .. }) = &app.ui.stac.json else { panic!("landed") };
+        assert!(text.contains("\"alternate\""), "the catalog's own document, not the trimmed copy: {text}");
+        assert_eq!(note, &None);
+        let asked = seen.lock().unwrap().clone();
+        assert!(asked.len() == 1 && asked[0].ends_with(own), "{asked:?}");
+
+        // A read that fails (or isn't JSON) shows what RustGIS has, and why.
+        for failure in [Err("the server said no".to_string()), Ok(b"<html></html>".to_vec())] {
+            let said = failure.clone();
+            cache::set_fetcher(move |_, done| done(said.clone()));
+            start_json(&mut app, 0);
+            poll_json(&mut app, &ctx);
+            let Some(JsonView { raw: Raw::Shown { text, note, .. }, .. }) = &app.ui.stac.json else { panic!("landed") };
+            assert!(text.contains("scene-1") && !text.contains("alternate"));
+            let note = note.as_deref().unwrap_or("");
+            assert!(note.contains("was not read") && note.contains("what RustGIS read"), "{note}");
+        }
+    }
+
+    #[test]
+    fn details_opens_the_formatted_page_of_the_items_own_document_and_the_json_tab_shows_its_text() {
+        let _turn = crate::fetching::turn();
+        use egui_kittest::kittest::Queryable;
+        cache::set_fetcher(|_, done| {
+            // More properties than the page draws, and a link RustGIS drops from an item.
+            let props: serde_json::Map<String, serde_json::Value> = (0..250).map(|n| (format!("p{n:03}"), json!(n))).collect();
+            let doc = json!({
+                "type": "Feature", "id": "scene-1", "collection": "c", "properties": props,
+                "links": [{"rel": "alternate", "href": "https://stac.example/page"}],
+            });
+            done(Ok(doc.to_string().into_bytes()));
+        });
+        let mut app = RustGisApp::with_sample();
+        app.ui.stac.chosen = vec![String::new()];
+        app.ui.stac.items = vec![json_test_item(true)];
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(900.0, 900.0))
+            .build_ui_state(|ui, app: &mut RustGisApp| results(app, ui), app);
+        h.step();
+        assert!(h.query_by_label("Formatted").is_none(), "nothing is read until Details is opened");
+        h.get_by_label("Details").click();
+        h.step();
+        let ctx = h.ctx.clone();
+        poll_json(h.state_mut(), &ctx);
+        h.step();
+        h.step();
+        h.get_by_label("alternate");
+        h.get_by_label("50 more are not shown: see JSON");
+        assert!(h.state().ui.stac.json.as_ref().is_some_and(|j| !j.text_tab));
+        h.get_by_label("JSON").click();
+        h.step();
+        assert!(h.state().ui.stac.json.as_ref().is_some_and(|j| j.text_tab));
+        h.step();
+        h.get_by_label("Copy JSON");
+    }
+
+    #[test]
+    fn an_assets_row_adds_it_to_the_map_and_offers_a_download_only_for_a_web_address() {
+        let _turn = crate::fetching::turn();
+        use egui_kittest::kittest::Queryable;
+        cache::set_fetcher(|_, done| {
+            let doc = json!({
+                "type": "Feature", "id": "scene-1", "collection": "c",
+                "assets": {
+                    "visual": {"href": "https://stac.example/a.tif", "type": "image/tiff"},
+                    "bucket": {"href": "s3://stac-bucket/b.tif"},
+                },
+            });
+            done(Ok(doc.to_string().into_bytes()));
+        });
+        let mut app = RustGisApp::with_sample();
+        app.ui.stac.chosen = vec![String::new()];
+        app.ui.stac.items = vec![json_test_item(true)];
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(900.0, 900.0))
+            .build_ui_state(|ui, app: &mut RustGisApp| results(app, ui), app);
+        h.step();
+        h.get_by_label("Details").click();
+        h.step();
+        let ctx = h.ctx.clone();
+        poll_json(h.state_mut(), &ctx);
+        h.step();
+        h.step();
+        // Both assets can be added and copied; only the https one is a download link.
+        assert_eq!(h.get_all_by_label("Add to map").count(), 2);
+        assert_eq!(h.get_all_by_label("Copy link").count(), 2);
+        assert_eq!(h.get_all_by_label("Download").count(), 1);
+        // The document's keys come out in order: bucket, then visual.
+        let visual = h.get_all_by_label("Add to map").nth(1).unwrap();
+        visual.click();
+        h.step();
+        h.step();
+        let said = h.state().ui.stac.error.clone();
+        assert!(said.is_none(), "{said:?}");
+        // The https asset was read (the s3 one wasn't asked for).
+        let notices = h.state().session.notices.iter().map(|n| n.text.clone()).collect::<Vec<_>>();
+        assert!(notices.iter().any(|n| n.contains("Reading https://stac.example/a.tif")), "{notices:?}");
+    }
+
+    #[test]
+    fn a_document_that_is_not_this_item_or_is_over_the_cap_falls_back_with_the_reason() {
+        let _turn = crate::fetching::turn();
+        let ctx = egui::Context::default();
+        let mut app = RustGisApp::with_sample();
+        app.ui.stac.items = vec![json_test_item(true)];
+        // Another item, a collection, and a document with no id: none is this item's own.
+        for doc in [json!({"type": "Feature", "id": "other"}), json!({"type": "Collection", "id": "scene-1"}), json!({"type": "Feature"})] {
+            cache::set_fetcher(move |_, done| done(Ok(doc.to_string().into_bytes())));
+            start_json(&mut app, 0);
+            poll_json(&mut app, &ctx);
+            let Some(JsonView { raw: Raw::Shown { note, source, .. }, .. }) = &app.ui.stac.json else { panic!("landed") };
+            let note = note.as_deref().unwrap_or("");
+            assert!(note.contains("not this item") && source.is_none(), "{note}");
+        }
+        // More than the cap: said, and the trimmed copy shown, not the document.
+        cache::set_fetcher(|_, done| done(Ok(vec![b' '; DOCUMENT_BYTES + 1])));
+        start_json(&mut app, 0);
+        poll_json(&mut app, &ctx);
+        let Some(JsonView { raw: Raw::Shown { note, source, .. }, .. }) = &app.ui.stac.json else { panic!("landed") };
+        assert!(note.as_deref().unwrap_or("").contains("larger than 4 MB") && source.is_none(), "{note:?}");
+    }
+
+    #[test]
+    fn a_value_is_cut_at_a_line_without_printing_all_of_it() {
+        let line = SHORT_VALUE_CHARS;
+        let exact = "é".repeat(line);
+        assert_eq!(short_value(&json!(exact)), exact, "a value that fits is shown as it is");
+        assert_eq!(short_value(&json!(format!("{exact}x"))), format!("{exact}…"));
+        // A nested value far larger than the line: a line of it, and the cut said.
+        let big = json!({"k": (0..100_000).collect::<Vec<u32>>()});
+        let short = short_value(&big);
+        assert!(short.chars().count() == line + 1 && short.ends_with('…') && short.starts_with("{\"k\":[0,1,2"), "{short}");
+        assert_eq!(short_value(&json!([1, 2])), "[1,2]");
+    }
+
+    #[test]
+    fn an_assets_address_from_a_document_is_held_to_the_documents_reach_and_a_relative_one_is_named() {
+        let item = json_test_item(true);
+        let public = Some(("https://stac.example/api/items/scene-1", Reach::Public));
+        assert!(document_asset_allowed(&item, "k", "https://stac.example/a.tif", public).is_ok());
+        // A document read from the public web may not point at the user's own machine.
+        for local in ["http://localhost/a.tif", "http://127.0.0.1:8080/a.tif", "http://192.168.1.5/a.tif"] {
+            assert!(document_asset_allowed(&item, "k", local, public).is_err(), "{local}");
+        }
+        let said = document_asset_allowed(&item, "k", "./extra.tif", public).unwrap_err();
+        assert!(said.contains("relative address"), "{said}");
+        let said = document_asset_allowed(&item, "k", "ftp://x/a.tif", public).unwrap_err();
+        assert!(said.contains("a ftp:// address"), "{said}");
+        for (href, named) in [("data:text/plain;base64,AAAA", "a data: address"), ("mailto:a@b.c", "a mailto: address")] {
+            let said = document_asset_allowed(&item, "k", href, public).unwrap_err();
+            assert!(said.contains(named) && !said.contains("relative"), "{said}");
+        }
+    }
+
+    #[test]
+    fn an_assets_row_acts_on_the_address_the_documents_row_shows_even_when_the_search_item_has_none() {
+        let _turn = crate::fetching::turn();
+        use egui_kittest::kittest::Queryable;
+        cache::set_fetcher(|_, done| {
+            // `extra` is only in the document (a relative address); `visual` is at another
+            // address than the search item gave it.
+            let doc = json!({
+                "type": "Feature", "id": "scene-1", "collection": "c",
+                "assets": {
+                    "extra": {"href": "./extra.tif", "type": "image/tiff"},
+                    "visual": {"href": "https://stac.example/doc/visual.tif", "type": "image/tiff"},
+                },
+            });
+            done(Ok(doc.to_string().into_bytes()));
+        });
+        let mut app = RustGisApp::with_sample();
+        app.ui.stac.chosen = vec![String::new()];
+        app.ui.stac.items = vec![json_test_item(true)];
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(900.0, 900.0))
+            .build_ui_state(|ui, app: &mut RustGisApp| results(app, ui), app);
+        h.step();
+        h.get_by_label("Details").click();
+        h.step();
+        let ctx = h.ctx.clone();
+        poll_json(h.state_mut(), &ctx);
+        h.step();
+        h.step();
+        // Both rows offer a download, though the search item has no `extra` asset.
+        assert_eq!(h.get_all_by_label("Download").count(), 2);
+        // The keys come out in order: extra, then visual.
+        h.get_all_by_label("Add to map").next().unwrap().click();
+        h.step();
+        h.step();
+        h.get_all_by_label("Add to map").nth(1).unwrap().click();
+        h.step();
+        h.step();
+        let said = h.state().ui.stac.error.clone();
+        assert!(said.is_none(), "{said:?}");
+        let notices = h.state().session.notices.iter().map(|n| n.text.clone()).collect::<Vec<_>>();
+        let read = |url: &str| notices.iter().any(|n| n.contains(&format!("Reading {url}")));
+        assert!(read("https://stac.example/api/collections/c/items/extra.tif"), "{notices:?}");
+        assert!(read("https://stac.example/doc/visual.tif"), "{notices:?}");
+        assert!(!read("https://stac.example/a.tif"), "the search item's address was used: {notices:?}");
     }
 }
