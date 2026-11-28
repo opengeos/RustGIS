@@ -732,7 +732,9 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
                             y += if i + 1 < headlines.len() { 2.0 * k } else { 3.0 * k };
                         }
                         if !under && !headlines.is_empty() {
-                            // What the sources and reference take from the map once under it.
+                            // The height down to here, the 30·k the check below asks for the locator and
+                            // the legend with 1·k to spare (a pass may land 0.5 mm short), and what the
+                            // sources and reference take from the map once under it.
                             let moved = foot - footer(&mut Vec::new(), &plain, true, true);
                             panel_needs = y - top + ip + 31.0 * k + moved;
                         }
