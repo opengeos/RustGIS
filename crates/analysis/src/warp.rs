@@ -862,7 +862,7 @@ fn aggregated(
     let (west, east) = (r.transform.origin_x, r.transform.origin_x + w as f64 * r.transform.pixel_width);
     let wrap =
         (r.crs.is_geographic() && pixel > 0.0 && (west + 180.0).abs() <= pixel && (east - 180.0).abs() <= pixel).then_some(360.0 / pixel);
-    let each = Aggregate { r, canvas: &canvas, nearest, mode, round, wrap };
+    let each = Aggregate { r, canvas: &canvas, nearest, mode, round, wrap, eastward: g.cell_x > 0.0 };
     // A cell's work in `MIN_ROW_WORK`'s units (some 30 ns): its corners, and the pixels it takes
     // per band (the source's pixels, shared among the cells that cover them).
     let work = ow.saturating_mul(oh).saturating_add(w.saturating_mul(h)).saturating_mul(canvas.nb.saturating_add(1));
@@ -926,6 +926,9 @@ struct Aggregate<'a> {
     round: bool,
     /// One turn of longitude in columns, for a source that spans the globe, where a cell across ±180° wraps.
     wrap: Option<f64>,
+    /// Whether the output's columns run east (its cell width is positive): at a half-turn tie only an
+    /// eastward cell is read as across the seam.
+    eastward: bool,
 }
 
 impl Aggregate<'_> {
@@ -957,8 +960,10 @@ impl Aggregate<'_> {
             }) {
                 let shifted = quad.map(|p| if p.0 < turn / 2.0 { (p.0 + turn, p.1) } else { p });
                 let moved = shifted.iter().fold((f64::MAX, f64::MIN), |(lo, hi), p| (lo.min(p.0), hi.max(p.0)));
-                // (A cell of exactly half the image is as wide either way: the wrapped one is the cell.)
-                if moved.1 - moved.0 <= span.1 - span.0 {
+                // (A cell of exactly half the image is as wide either way: an eastward one is read as
+                // across the seam, a westward one, whose corners are the same, as the pixels it starts west over.)
+                let (shifted_width, width) = (moved.1 - moved.0, span.1 - span.0);
+                if shifted_width < width || (shifted_width == width && self.eastward) {
                     (quad, span, wrapped) = (shifted, moved, true);
                 }
             }
@@ -1934,5 +1939,14 @@ mod tests {
         let folded = |x: f64, y: f64| Some((((x + 180.0).rem_euclid(360.0)) / 360.0 * 8.0, (90.0 - y) / 90.0));
         // Columns 7, 0, 1, 2: (3 + 1 + 100 + 100) / 4.
         assert_eq!(one_cell(&r, 135.0, 315.0, false, &folded), Some(51.0));
+    }
+
+    /// A westward cell exactly half the globe wide (min_x 135, cell_x -180) has the same corners as the
+    /// eastward one, but takes the pixels west of its start (columns 3, 4, 5, 6), not the ones across the seam.
+    #[test]
+    fn a_westward_cell_exactly_half_the_globe_wide_keeps_its_own_pixels() {
+        let r = globe(360.0);
+        let folded = |x: f64, y: f64| Some((((x + 180.0).rem_euclid(360.0)) / 360.0 * 8.0, (90.0 - y) / 90.0));
+        assert_eq!(one_cell(&r, 135.0, -45.0, false, &folded), Some(100.0));
     }
 }
