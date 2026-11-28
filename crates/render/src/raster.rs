@@ -1139,6 +1139,7 @@ mod tests {
             ambient: None,
             balanced: false,
             shadow_softness: None,
+            aerial: 0.0,
         }
     }
 
@@ -1236,6 +1237,7 @@ mod tests {
                 ambient: None,
                 balanced: false,
                 shadow_softness: None,
+                aerial: 0.0,
             };
             style.resampling = Resampling::Nearest;
             let mut pm = Pixmap::new(1, 1).unwrap();
@@ -1412,6 +1414,7 @@ mod tests {
                 ambient: None,
                 balanced: false,
                 shadow_softness: None,
+                aerial: 0.0,
             };
             style.resampling = Resampling::Nearest;
             let view = View {
@@ -1778,6 +1781,7 @@ mod tests {
             ambient: None,
             balanced: false,
             shadow_softness: None,
+            aerial: 0.0,
         };
         style.resampling = resampling;
         let view = View {

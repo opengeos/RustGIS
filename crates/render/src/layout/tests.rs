@@ -2952,6 +2952,7 @@ fn a_page_says_why_a_frame_drew_no_cast_shadows() {
         ambient: None,
         balanced: false,
         shadow_softness: None,
+        aerial: 0.0,
     };
     for shadow in [0.0, 1.0] {
         let map = ramp_map(relief(shadow), rustgis_map::raster::Stretch::MinMax);
@@ -3005,6 +3006,7 @@ fn page_settles_with_suns(suns: &[f64]) {
             ambient: None,
             balanced: false,
             shadow_softness: None,
+            aerial: 0.0,
         };
         let mut m = Map::new(name.clone());
         assert_eq!(m.add_raster("dem", copy), 1);
@@ -3077,6 +3079,7 @@ fn a_reliefs_shadow_softness_changes_its_page_only_off_the_default() {
             ambient: None,
             balanced: false,
             shadow_softness: softness,
+            aerial: 0.0,
         };
         let mut m = Map::new("m");
         assert_eq!(m.add_raster("dem", rl), 1);

@@ -7527,6 +7527,8 @@ fn raster_symbology(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
             ambient,
             balanced,
             shadow_softness,
+            // Not in this pane yet (#3141).
+            aerial: _,
         } => {
             use rustgis_engine::map::shadow::{SOFT_EDGE_MAX, SOFT_EDGE_MIN, soft_edge};
             let (az, alt, zf, sh, sk, fl) = (*azimuth, *altitude, *z_factor, *shadow, *sky, *fill);

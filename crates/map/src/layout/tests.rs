@@ -770,6 +770,7 @@ fn a_balanced_reliefs_colour_bar_is_its_flat_ground() {
             ambient: None,
             balanced,
             shadow_softness: None,
+            aerial: 0.0,
         };
         let Some(ColorScale::Ramp { lo, hi, colors }) = color_scale(&rl) else { panic!("a ramp") };
         let colorizer = Colorizer::new(&rl.style, &r, None);

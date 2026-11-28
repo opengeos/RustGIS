@@ -1295,7 +1295,8 @@
           "layout-text-statistics",
           "layout-publication-parts",
           "layout-publication-legend",
-          "shaded-relief-shadow-softness"
+          "shaded-relief-shadow-softness",
+          "shaded-relief-aerial"
         ],
         "type": "string"
       },
@@ -1419,7 +1420,8 @@
     "layout-text-statistics",
     "layout-publication-parts",
     "layout-publication-legend",
-    "shaded-relief-shadow-softness"
+    "shaded-relief-shadow-softness",
+    "shaded-relief-aerial"
   ],
   "x-rustgis-reads-format": 2,
   "x-rustgis-writes-format": 2

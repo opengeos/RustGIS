@@ -913,6 +913,7 @@ fn raster_renderers_read_as_rustgis_raster_styles() {
             ambient: None,
             balanced: false,
             shadow_softness: None,
+            aerial: 0.0,
         }
     );
     assert!(report.notes.iter().any(|n| n.text.contains("saturation")));
