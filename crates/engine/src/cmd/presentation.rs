@@ -640,7 +640,6 @@ const PRESENTATIONS_LISTED: usize = 3;
 const PAGES_LISTED: usize = 5;
 
 /// The map pages [`pages_without_their_map`] looks at.
-#[derive(Clone, Copy)]
 pub(crate) enum PagesOf<'a> {
     /// Every one: the project has just been opened.
     All,
