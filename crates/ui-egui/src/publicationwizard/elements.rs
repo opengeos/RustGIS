@@ -16,6 +16,8 @@ pub enum LocatorChoice {
     Default,
     Globe,
     Inset,
+    /// Both side by side, the globe outlining the inset.
+    InsetAndGlobe,
     None,
 }
 
@@ -132,7 +134,7 @@ impl Draft {
         match self.elements.locator {
             LocatorChoice::Default => self.default_locator(s),
             LocatorChoice::None => false,
-            LocatorChoice::Globe | LocatorChoice::Inset => true,
+            LocatorChoice::Globe | LocatorChoice::Inset | LocatorChoice::InsetAndGlobe => true,
         }
     }
 
@@ -225,9 +227,10 @@ impl Draft {
         let mut p = self.params();
         let locator = match e.locator {
             LocatorChoice::Default => None,
-            LocatorChoice::Globe => Some("globe"),
-            LocatorChoice::Inset => Some("inset"),
-            LocatorChoice::None => Some("none"),
+            LocatorChoice::Globe => Some("globe".into()),
+            LocatorChoice::Inset => Some("inset".into()),
+            LocatorChoice::InsetAndGlobe => Some(json!(["inset", "globe"])),
+            LocatorChoice::None => Some("none".into()),
         };
         // A look makes its element an object; without one it goes as its mode alone.
         let north = match (e.north, self.north_look(s)) {
@@ -252,7 +255,7 @@ impl Draft {
             object([("title", title.map(Value::from)), ("columns", columns.map(Value::from)), ("exclude", exclude)])
         };
         for (key, value) in [
-            ("locator", locator.map(Value::from)),
+            ("locator", locator),
             ("northArrow", north),
             ("legend", legend),
             ("legendBox", (e.legend_box && self.usable(Control::LegendBox, s)).then(|| "always".into())),
@@ -338,6 +341,7 @@ pub(super) fn elements_value(s: &Session, d: &Draft) -> String {
         let which = match e.locator {
             LocatorChoice::Globe => tl_raw!("Globe"),
             LocatorChoice::Inset => tl_raw!("Inset"),
+            LocatorChoice::InsetAndGlobe => tl_raw!("Inset and globe"),
             _ => tl_raw!("Default (globe)"),
         };
         on.push(i18n::fmt("{surround}: {choice}", &[("surround", surround_labels()[LOCATOR]), ("choice", which)]));
@@ -389,6 +393,7 @@ pub(super) fn elements_step(ui: &mut egui::Ui, s: &Session, d: &mut Draft) {
         ui.radio_value(choice, LocatorChoice::Default, default_locator);
         ui.radio_value(choice, LocatorChoice::Globe, tl!("Globe"));
         ui.radio_value(choice, LocatorChoice::Inset, tl!("Inset"));
+        ui.radio_value(choice, LocatorChoice::InsetAndGlobe, tl!("Inset and globe"));
         ui.radio_value(choice, LocatorChoice::None, tl!("None"));
     });
     ui.label(tl!("North arrow"));
@@ -625,11 +630,12 @@ mod tests {
         let mut app = app();
         raster(&mut app);
         type Set = fn(&mut Elements);
-        let cases: [(Set, Value); 13] = [
+        let cases: [(Set, Value); 14] = [
             (|e| e.frame_grid = false, json!({"grid": "none"})),
             (|e| e.locator = LocatorChoice::Globe, json!({"locator": "globe"})),
             (|e| e.locator = LocatorChoice::Inset, json!({"locator": "inset"})),
             (|e| e.locator = LocatorChoice::None, json!({"locator": "none"})),
+            (|e| e.locator = LocatorChoice::InsetAndGlobe, json!({"locator": ["inset", "globe"]})),
             (|e| e.north = NorthChoice::Always, json!({"northArrow": "always"})),
             (|e| e.north = NorthChoice::None, json!({"northArrow": "none"})),
             (|e| e.legend = false, json!({"legend": "none"})),
@@ -1139,7 +1145,7 @@ mod tests {
     #[test]
     fn the_controls_set_the_answers() {
         let mut h = step_of(raster);
-        pick(&mut h, "Inset", 0);
+        pick(&mut h, "Inset and globe", 0);
         pick(&mut h, "None", 1);
         pick(&mut h, "Comma (1,5)", 0);
         for label in [
@@ -1152,7 +1158,7 @@ mod tests {
             click_box(&mut h, label);
         }
         let want = Elements {
-            locator: LocatorChoice::Inset,
+            locator: LocatorChoice::InsetAndGlobe,
             north: NorthChoice::None,
             legend: true,
             legend_box: true,
@@ -1194,7 +1200,7 @@ mod tests {
         app.dialogs.publication.as_mut().unwrap().step = Step::Elements;
         app.dialogs.publication.as_mut().unwrap().style = "panel".into();
         let h = harness_sized(app, egui::vec2(320.0, 900.0));
-        for label in ["Default: Globe", "Inset", "Comma (1,5)"] {
+        for label in ["Default: Globe", "Inset and globe", "Comma (1,5)"] {
             let rect = h.get_by_role_and_label(Role::RadioButton, label).rect();
             assert!(rect.left() >= 0.0 && rect.right() <= 320.0, "{label} at {rect:?}");
         }
@@ -1246,6 +1252,26 @@ mod tests {
         assert!(h.query_by_label(want).is_some());
     }
 
+    /// Both locators are named in the review and sent, on a sheet, a figure and a whole globe.
+    #[test]
+    fn the_review_names_both_locators() {
+        type Prepare = fn(&mut RustGisApp);
+        let cases: [(&str, Prepare); 3] = [
+            ("a sheet", |_| {}),
+            ("a figure", |app| app.dialogs.publication.as_mut().unwrap().size = "figure-1col".into()),
+            ("a whole globe", globe),
+        ];
+        for (case, prepare) in cases {
+            let h = step_of(|app| {
+                prepare(app);
+                let d = app.dialogs.publication.as_mut().unwrap();
+                (d.step, d.elements.locator) = (Step::Review, LocatorChoice::InsetAndGlobe);
+            });
+            assert!(h.query_by_label_contains("Locator: Inset and globe").is_some(), "{case}");
+            assert_eq!(draft(&h).sent(&h.state().session)["locator"], json!(["inset", "globe"]), "{case}");
+        }
+    }
+
     /// The frame grid's box is on, and unticked it sends no grid, on a whole globe too.
     #[test]
     fn the_frame_grid_box_sets_the_answer() {
@@ -1288,6 +1314,25 @@ mod tests {
         assert!(!l.elements.iter().any(|e| matches!(e.kind, ElementKind::Legend { .. })), "no legend");
         let locators = l.elements.iter().filter(|e| matches!(e.kind, ElementKind::MapFrame { extent_of: Some(_), .. }));
         assert_eq!(locators.count(), 0, "no locator");
+        h.state_mut().run("edit.undo", Value::Null).unwrap();
+        assert_eq!(h.state().session.project.layouts.len(), before);
+    }
+
+    /// Create draws both locators asked for; Undo takes them away with the layout.
+    #[test]
+    fn create_draws_both_locators() {
+        let mut app = app();
+        open(&mut app);
+        let d = app.dialogs.publication.as_mut().unwrap();
+        d.step = Step::Review;
+        d.elements.locator = LocatorChoice::InsetAndGlobe;
+        let before = app.session.project.layouts.len();
+        let mut h = harness(app);
+        click(&mut h, "Create");
+        assert_eq!(h.state().session.project.layouts.len(), before + 1);
+        let l = h.state().session.project.layouts.last().unwrap();
+        let locators = l.elements.iter().filter(|e| matches!(e.kind, ElementKind::MapFrame { extent_of: Some(_), .. }));
+        assert_eq!(locators.map(|e| e.name.as_str()).collect::<Vec<_>>(), ["Locator Inset", "Locator Globe"]);
         h.state_mut().run("edit.undo", Value::Null).unwrap();
         assert_eq!(h.state().session.project.layouts.len(), before);
     }

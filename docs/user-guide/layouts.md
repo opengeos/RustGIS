@@ -56,7 +56,7 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
     switched or the map renamed, is said and nothing is made); without a name the layout is
     `Publication`; the review says when a layout has that name, so the new one is numbered. The
     **elements** are what is drawn around the map: the locator (the default, named as what it will
-    be, a globe, an inset or none), the north arrow (auto, always or none), the legend or not, which
+    be, a globe, an inset, both or none), the north arrow (auto, always or none), the legend or not, which
     can be set always on a box and to list the context layers, the colorbar, the scale bar and the
     frame grid or not (without it the default reference leaves the graticule out; the map's own
     graticule is still drawn when on), whether the map may be veiled for the legend's room, and the

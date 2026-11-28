@@ -422,7 +422,7 @@ mod tests {
         fn draft_of(app: &mut RustGisApp) -> &mut Draft {
             app.dialogs.publication.as_mut().unwrap()
         }
-        let cases: [(&str, Set, [bool; 4]); 7] = [
+        let cases: [(&str, Set, [bool; 4]); 8] = [
             ("no locator", |a| draft_of(a).elements.locator = LocatorChoice::None, [false, true, true, true]),
             ("no north arrow", |a| draft_of(a).elements.north = NorthChoice::None, [true, false, true, true]),
             ("no scale bar", |a| draft_of(a).elements.scale_bar = false, [true, true, true, false]),
@@ -430,6 +430,11 @@ mod tests {
             (
                 "a figure with a locator",
                 |a| (draft_of(a).size, draft_of(a).elements.locator) = ("figure-1col".into(), LocatorChoice::Inset),
+                [true, true, true, true],
+            ),
+            (
+                "a figure with both locators",
+                |a| (draft_of(a).size, draft_of(a).elements.locator) = ("figure-1col".into(), LocatorChoice::InsetAndGlobe),
                 [true, true, true, true],
             ),
             ("a whole globe", |a| a.session.map_mut().projection = rustgis_engine::map::Projection::Globe, [false, false, true, false]),
