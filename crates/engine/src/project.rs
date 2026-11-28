@@ -117,6 +117,7 @@ pub const CAPABILITIES: &[&str] = &[
     NATIVE_COORDINATES,
     "layout-text-size",
     "layout-legend-fit",
+    "layout-legend-class-labels",
     "layout-picture-source",
     "layout-scale-bar-details",
     "label-guide",
