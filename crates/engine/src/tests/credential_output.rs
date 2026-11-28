@@ -1076,11 +1076,26 @@ fn the_problem_report_masks_a_login_in_use_with_a_quote_in_it() {
     let mut s = Session::new(Project::default());
     s.log.clear();
     s.log.push(crate::project_log::LogEntry { command: "map.new".into(), params: json!({"name": login}), ok: true, ..Default::default() });
+    // A number can be a login too.
+    s.log.push(crate::project_log::LogEntry {
+        command: "map.zoomTo".into(),
+        params: json!({"scale": 9_073_640_215_u64}),
+        ok: true,
+        ..Default::default()
+    });
     let binding =
         logins::activate("https://report-quote.invalid", "synthetic-report-quote", logins::Method::Header("X-Key".into()), login, false)
             .unwrap();
+    let number = logins::activate(
+        "https://report-number.invalid",
+        "synthetic-report-number",
+        logins::Method::Header("X-Pin".into()),
+        "9073640215",
+        false,
+    )
+    .unwrap();
     let report = s.problem_report(&crate::problem_report::About::default());
-    assert!(logins::deactivate(&binding));
-    assert!(!report.contains("ass-X7-synthetic"), "{report}");
+    assert!(logins::deactivate(&binding) && logins::deactivate(&number));
+    assert!(!report.contains("ass-X7-synthetic") && !report.contains("9073640215"), "{report}");
     assert!(report.contains("may not run as it ran\nmap.new"), "{report}");
 }

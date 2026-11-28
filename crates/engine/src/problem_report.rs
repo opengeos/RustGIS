@@ -133,11 +133,17 @@ impl Session {
     }
 }
 
-/// `params` with each text in it, keys too, scrubbed of addresses' logins and the logins in use.
+/// `params` with each text in it, keys too, scrubbed of addresses' logins and the logins in use; a
+/// number too, as a login can be one, given as text when the scrub changed it.
 fn scrubbed_values(params: &serde_json::Value) -> serde_json::Value {
     use serde_json::Value;
     match params {
         Value::String(s) => Value::String(crate::durable::generated_text(s)),
+        Value::Number(n) => {
+            let text = n.to_string();
+            let scrubbed = crate::durable::generated_text(&text);
+            if scrubbed == text { params.clone() } else { Value::String(scrubbed) }
+        }
         Value::Array(items) => Value::Array(items.iter().map(scrubbed_values).collect()),
         Value::Object(map) => Value::Object(map.iter().map(|(k, v)| (crate::durable::generated_text(k), scrubbed_values(v))).collect()),
         other => other.clone(),
