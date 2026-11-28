@@ -84,8 +84,8 @@ pub enum MarkerRefusal {
     TooMuchToDraw,
     /// It is an SVG whose style sheets and `style` attributes, or whose elements' attributes, take
     /// more to read than `svg::STYLE_UNITS` and `svg::ATTRIBUTE_PAIRS` allow, whose namespaces
-    /// take more to resolve than `rustgis_data::xml::check_limits` allows, or whose entities hold
-    /// tags, which no count sees.
+    /// take more to resolve, or whose entities expand to more, than
+    /// `rustgis_data::xml::check_limits` allows, or whose entities hold tags, which no count sees.
     SvgTooMuchToRead,
     /// It is an SVG with more XML nodes than `svg::XML_NODES` (40,000) or nested deeper than
     /// `svg::DEPTH` (64).
@@ -142,7 +142,7 @@ refusal_phrases! {
     TooManyBytes => "is longer than 2 MiB as base64",
     TooManyPixels => "has more pixels than 2048 × 2048",
     TooMuchToDraw => "is an SVG with more to draw than a 2048 × 2048 image",
-    SvgTooMuchToRead => "is an SVG whose style sheets, element attributes, namespaces or entities holding tags take more to read than RustGIS allows",
+    SvgTooMuchToRead => "is an SVG whose style sheets, element attributes, namespaces or entities take more to read than RustGIS allows",
     SvgTooNested => "is an SVG with more than 40,000 XML nodes or nested deeper than 64 levels",
     SvgUnknownRadius => "is an SVG with a radius whose size RustGIS can't know (in em or ex, or in % of a size in em or ex, or of a nested size in % over 100%)",
     SvgTooSmall => "is an SVG too small to draw",
