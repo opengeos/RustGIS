@@ -117,6 +117,9 @@ fn first_keyed_provider_is_the_first_key_provider_and_never_a_sign_in() {
     // Opper comes after Requesty, so its key never takes the place of another provider's either.
     assert_eq!(first_keyed(keyed(&["opper", "requesty"])), Some("requesty"));
     assert_eq!(first_keyed(keyed(&["opper"])), Some("opper"));
+    // Mistral follows the existing keyed presets.
+    assert_eq!(first_keyed(keyed(&["mistral", "opper"])), Some("opper"));
+    assert_eq!(first_keyed(keyed(&["mistral"])), Some("mistral"));
     assert_eq!(first_keyed(keyed(&[])), None);
 }
 
@@ -5515,6 +5518,7 @@ fn mistral_typed_stream_preserves_visible_text_thinking_and_signatures_for_repla
     let response = streamed(&chunks);
     let reply = parse_reply(Api::OpenAi, &response).unwrap();
     assert_eq!(reply.text, "Before Hello world");
+    assert!(reply.notes.is_empty());
     assert_eq!(reply.native["content"][1], thinking);
     let replay = Turn::Assistant { text: reply.text.clone(), calls: vec![], native: Some((Api::OpenAi, reply.native.clone())) };
     let request = chat_request(&cfg("openai"), "system", std::slice::from_ref(&replay), &[]);
@@ -5533,4 +5537,43 @@ fn mistral_typed_stream_preserves_visible_text_thinking_and_signatures_for_repla
         body: json!({"choices":[{"message":reply.native, "finish_reason":"stop"}]}).to_string().into_bytes(),
     };
     assert_eq!(parse_reply(Api::OpenAi, &whole).unwrap().text, "Before Hello world");
+}
+
+#[test]
+fn typed_reply_notices_count_unsupported_parts_and_keep_the_native_content() {
+    let content = json!([
+        {"type":"text", "text":"Answer"},
+        {"type":"thinking", "thinking":[], "signature":"signed"},
+        {"type":"reference", "reference_ids":[0]},
+        {"type":"reference", "reference_ids":[1]}
+    ]);
+    let streamed = streamed(&[
+        json!({"choices":[{"delta":{"content":""}}]}),
+        json!({"choices":[{"delta":{"content":content.clone()}}]}),
+        json!({"choices":[{"delta":{"content":""}, "finish_reason":"stop"}]}),
+    ]);
+    let mut preview = StreamPreview::new(Api::OpenAi);
+    preview.feed(&streamed.body);
+    assert_eq!(preview.text(), "Answer");
+    let whole = HttpResponse {
+        status: 200,
+        headers: vec![],
+        body: json!({"choices":[{"message":{"role":"assistant", "content":content}, "finish_reason":"stop"}]}).to_string().into_bytes(),
+    };
+    for response in [streamed, whole] {
+        let mut session = sample();
+        let mut agent = Agent::new(cfg("mistral"), &session);
+        assert!(matches!(agent.ask("hello", &session), Step::Send(_)));
+        assert_eq!(agent.receive(agent.generation(), Ok(response), &mut session), Step::Done);
+        let notes: Vec<_> =
+            agent.transcript.iter().filter_map(|entry| if let Entry::Note(note) = entry { Some(note) } else { None }).collect();
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].template, "The reply contains {count} content parts of type {kind} that aren't displayed.");
+        assert_eq!(notes[0].args, [("count", "2".to_string()), ("kind", "reference".to_string())]);
+        assert!(agent.transcript.iter().any(|entry| matches!(entry, Entry::Assistant(text) if text == "Answer")));
+        let Some(Turn::Assistant { native: Some((Api::OpenAi, native)), .. }) = agent.turns().last() else {
+            panic!("missing native reply")
+        };
+        assert_eq!(native["content"], content);
+    }
 }

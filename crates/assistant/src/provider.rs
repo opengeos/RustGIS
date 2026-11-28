@@ -710,6 +710,7 @@ impl Note {
 
 /// Every [`Note`] template RustGIS writes (the interface's catalogs translate each).
 pub const NOTE_TEMPLATES: &[&str] = &[
+    "The reply contains {count} content parts of type {kind} that aren't displayed.",
     "OpenRouter found no endpoint matching your data policy. Check Private routing in the Assistant settings or your OpenRouter privacy settings.",
     "The reply reached its length limit.",
     "The provider's content filter stopped the reply.",
@@ -780,6 +781,8 @@ pub struct Reply {
     pub text: String,
     pub calls: Vec<ToolCall>,
     pub native: Value,
+    /// Nonfatal diagnostics about content the interface cannot display.
+    pub notes: Vec<Note>,
     /// Why the reply stopped early (length limit, a refusal), if it did.
     pub cut: Option<Note>,
     /// A failed terminal response accompanying partial text.
@@ -898,7 +901,7 @@ fn openai_assembled(events: &[Value]) -> Value {
     for e in events {
         for choice in e.get("choices").and_then(Value::as_array).into_iter().flatten() {
             let delta = choice.get("delta").unwrap_or(&Value::Null);
-            if let Some(next) = delta.get("content").filter(|v| !v.is_null()) {
+            if let Some(next) = delta.get("content").filter(|v| !v.is_null() && v.as_str() != Some("")) {
                 match (&mut content, next) {
                     (Value::String(text), Value::String(more)) => text.push_str(more),
                     (Value::Array(parts), Value::Array(more)) => parts.extend(more.iter().cloned()),
@@ -1103,6 +1106,8 @@ impl StreamPreview {
         self.text.len() > before
     }
 
+    /// Extracts visible text from one event. Native thinking and signatures are assembled by
+    /// the completed-response parser rather than streamed into the answer.
     fn delta(&self, v: &Value) -> String {
         let s = |p: &str| v.pointer(p).and_then(Value::as_str).unwrap_or("").to_string();
         match self.api {
@@ -1295,11 +1300,34 @@ fn openai_content_text(content: Option<&Value>) -> String {
     }
 }
 
+/// Counts unsupported display parts once per type. Thinking is native replay metadata;
+/// other non-text parts remain native too, but their omission from the answer must be visible.
+fn openai_content_notes(content: Option<&Value>) -> Vec<Note> {
+    let mut counts = std::collections::BTreeMap::<&str, usize>::new();
+    for part in content.and_then(Value::as_array).into_iter().flatten() {
+        let kind = part.get("type").and_then(Value::as_str).unwrap_or("unknown");
+        if kind == "thinking" || (kind == "text" && part.get("text").is_some_and(Value::is_string)) {
+            continue;
+        }
+        *counts.entry(kind).or_default() += 1;
+    }
+    counts
+        .into_iter()
+        .map(|(kind, count)| {
+            Note::with(
+                "The reply contains {count} content parts of type {kind} that aren't displayed.",
+                [("count", count.to_string()), ("kind", kind.to_string())],
+            )
+        })
+        .collect()
+}
+
 /// Reads Chat Completions, retaining native typed content for the next request.
 fn openai_reply(v: &Value) -> Result<Reply, String> {
     let choice = v.get("choices").and_then(|c| c.get(0)).ok_or("the reply has no choices")?;
     let msg = choice.get("message").ok_or("the reply has no message")?;
     let text = openai_content_text(msg.get("content"));
+    let notes = openai_content_notes(msg.get("content"));
     let calls = msg
         .get("tool_calls")
         .and_then(Value::as_array)
@@ -1333,7 +1361,7 @@ fn openai_reply(v: &Value) -> Result<Reply, String> {
     if let Some(o) = native.as_object_mut() {
         o.retain(|k, _| matches!(k.as_str(), "role" | "content" | "tool_calls" | "reasoning_content"));
     }
-    Ok(Reply { text, calls, native, cut, failure: None })
+    Ok(Reply { text, calls, native, notes, cut, failure: None })
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1554,7 +1582,7 @@ fn responses_reply(resp: &HttpResponse) -> Result<Reply, Error> {
         })
         .collect();
     let failure = (!completed && last.get("error").is_some_and(Value::is_object)).then(|| Error::response(&last, resp));
-    Ok(Reply { text, calls, native: Value::Array(native), cut, failure })
+    Ok(Reply { text, calls, native: Value::Array(native), notes: Vec::new(), cut, failure })
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1681,7 +1709,7 @@ fn anthropic_reply(v: &Value) -> Result<Reply, String> {
     if v.get("stop_reason").and_then(Value::as_str) == Some("refusal") {
         calls.clear();
     }
-    Ok(Reply { text, calls, native: Value::Array(content.clone()), cut, failure: None })
+    Ok(Reply { text, calls, native: Value::Array(content.clone()), notes: Vec::new(), cut, failure: None })
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1821,7 +1849,7 @@ fn gemini_reply(v: &Value) -> Result<Reply, String> {
     if native.get("role").is_none() {
         native["role"] = json!("model");
     }
-    Ok(Reply { text, calls, native, cut, failure: None })
+    Ok(Reply { text, calls, native, notes: Vec::new(), cut, failure: None })
 }
 
 /// `v` if it is an object, else an empty one (providers require objects for tool input).
