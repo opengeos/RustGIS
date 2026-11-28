@@ -943,7 +943,7 @@ impl Aggregate<'_> {
             let mut span = quad.iter().fold((f64::MAX, f64::MIN), |(lo, hi), p| (lo.min(p.0), hi.max(p.0)));
             // A cell across ±180° has its west corners at columns near the east end of the image
             // and its east corners near the west end: going east along an edge, the column drops by
-            // more than half the image. The pixels between are the far side of the globe. Its
+            // half the image or more. The pixels between are the far side of the globe. Its
             // corners in the west go on past the east edge instead (by one turn of longitude, not
             // always the image's width), and the pixels past it are the west's again. A cell wide enough to take in the whole image, or one whose
             // columns grow eastward as they do in an ordinary cell, is not across the seam. (An
@@ -953,11 +953,12 @@ impl Aggregate<'_> {
             let drop = |from: &(f64, f64), to: &(f64, f64)| from.0 - to.0;
             if let Some(turn) = self.wrap.filter(|turn| {
                 let whole = span.0 <= 0.0 && span.1 >= *turn;
-                !whole && (drop(tl, tr) > turn / 2.0 || drop(bl, br) > turn / 2.0)
+                !whole && (drop(tl, tr) >= turn / 2.0 || drop(bl, br) >= turn / 2.0)
             }) {
                 let shifted = quad.map(|p| if p.0 < turn / 2.0 { (p.0 + turn, p.1) } else { p });
                 let moved = shifted.iter().fold((f64::MAX, f64::MIN), |(lo, hi), p| (lo.min(p.0), hi.max(p.0)));
-                if moved.1 - moved.0 < span.1 - span.0 {
+                // (A cell of exactly half the image is as wide either way: the wrapped one is the cell.)
+                if moved.1 - moved.0 <= span.1 - span.0 {
                     (quad, span, wrapped) = (shifted, moved, true);
                 }
             }
@@ -1020,14 +1021,26 @@ impl Aggregate<'_> {
                         // see-through ones count for nothing, as in the mean. A cell where none
                         // shows takes the mode of all (see-through, alpha 0).
                         let shows = |(x, k): (&f32, &f32)| if alpha == Some(b) { *x > 0.0 } else { *k > 0.0 };
-                        let shown: Vec<f32> = v.iter().zip(k).filter(|p| shows(*p)).map(|(x, _)| *x).collect();
-                        match (shown.is_empty(), alpha) {
-                            (false, _) => mode_of(&shown),
+                        // The scans below can take long on a big cell: Cancel is looked at as they go,
+                        // and a cell stopped is left unwritten.
+                        let mut shown: Vec<f32> = Vec::new();
+                        for p in v.iter().zip(k) {
+                            if pace.stop(1) {
+                                return;
+                            }
+                            if shows(p) {
+                                shown.push(*p.0);
+                            }
+                        }
+                        let found = match (shown.is_empty(), alpha) {
+                            (false, _) => mode_of(&shown, pace),
                             // No pixel that shows has a colour here: none is taken from one that
                             // doesn't.
-                            (true, Some(a)) if a != b => f32::NAN,
-                            (true, _) => mode_of(v),
-                        }
+                            (true, Some(a)) if a != b => Some(f32::NAN),
+                            (true, _) => mode_of(v, pace),
+                        };
+                        let Some(found) = found else { return };
+                        found
                     } else {
                         mean_of(*sum, round)
                     };
@@ -1075,11 +1088,16 @@ fn mean_of((sum, weight): (f64, f64), round: bool) -> f32 {
 /// The most frequent value of `v`; NaN when it is empty. Of the values tied, the one that reaches
 /// the top count first, `v` taken in its order (the cell's pixels, row by row), as GDAL's `mode`
 /// does: a cell of 3, 5, 5, 3 takes 5, one of 5, 3, 3, 5 takes 3.
-fn mode_of(v: &[f32]) -> f32 {
+///
+/// `None` when `pace` says to stop (Cancel was asked for) before it is found.
+fn mode_of(v: &[f32], pace: &mut crate::control::Pace) -> Option<f32> {
     // Capped: a cell can take many pixels, and a few distinct values are the common case.
     let mut counts: HashMap<u32, usize> = HashMap::with_capacity(v.len().min(256));
     let (mut best, mut best_n) = (f32::NAN, 0usize);
     for &x in v {
+        if pace.stop(1) {
+            return None;
+        }
         // `+ 0.0` counts -0.0 and 0.0 as one value, as `==` does.
         let n = counts.entry((x + 0.0).to_bits()).or_insert(0);
         *n += 1;
@@ -1087,7 +1105,7 @@ fn mode_of(v: &[f32]) -> f32 {
             (best, best_n) = (x, *n);
         }
     }
-    best
+    Some(best)
 }
 
 #[cfg(test)]
@@ -1505,7 +1523,7 @@ mod tests {
         let mirrored = project(&utm(4, 4, classes, "UInt8"), &g, Method::Mode, "m".into()).unwrap();
         assert_eq!(values(&mirrored)[0], Some(3.0));
         // -0.0 and 0.0 are one value: the zero reaches two first, the 1 before it doesn't.
-        assert_eq!(mode_of(&[1.0, -0.0, 0.0]), 0.0);
+        assert_eq!(mode_of(&[1.0, -0.0, 0.0], &mut crate::control::Pace::default()), Some(0.0));
         // A whole-number type's mean is rounded: (3 + 5 + 5 + 3) / 4 = 4, (7 + 7 + 7 + 2) / 4 = 5.75.
         let avg = project(&r, &g, Method::Average, "a".into()).unwrap();
         assert_eq!(values(&avg)[..2], [Some(4.0), Some(6.0)]);
@@ -1888,5 +1906,33 @@ mod tests {
         let out = aggregated(Some(1), &r, &g, Canvas::of(&r, false), false, &source, "big".into()).unwrap();
         assert_eq!(out.value(0, 0, 0), None);
         assert_eq!(run.looked(), 3);
+    }
+
+    /// A cell of millions of pixels looks at Cancel while its mode is found too (the values are
+    /// scanned to drop the see-through ones, then counted): cancelled at the fourth look (the row's
+    /// was the first, the traversal's the second and third), it is left empty, not finished.
+    #[test]
+    fn a_cell_looks_at_cancel_while_its_mode_is_found() {
+        let n = 3000;
+        let gt = GeoTransform { origin_x: 0.0, origin_y: f64::from(n), pixel_width: 1.0, pixel_height: -1.0 };
+        let r =
+            Raster::new("big", n, n, vec![vec![100.0; (n * n) as usize]], gt, Crs::Epsg(32613), None, ColorHint::Gray, "Float32").unwrap();
+        let g = Grid { crs: r.crs, min_x: 0.0, max_y: f64::from(n), cell_x: f64::from(n), cell_y: f64::from(n), width: 1, height: 1 };
+        let source = |x: f64, y: f64| Some((x, f64::from(n) - y));
+        let run = crate::control::Control::cancelled_at_look(4);
+        let _installed = crate::control::install(Some(run.clone()));
+        let out = aggregated(Some(1), &r, &g, Canvas::of(&r, false), true, &source, "big".into()).unwrap();
+        assert_eq!(out.value(0, 0, 0), None);
+        assert_eq!(run.looked(), 4);
+    }
+
+    /// An eastward cell exactly half the globe wide across ±180° (corners at columns 7 and 3 of 8)
+    /// takes the pixels either side of the seam (columns 7, 0, 1, 2), not the ones west of its start.
+    #[test]
+    fn a_cell_exactly_half_the_globe_wide_across_the_antimeridian_wraps() {
+        let r = globe(360.0);
+        let folded = |x: f64, y: f64| Some((((x + 180.0).rem_euclid(360.0)) / 360.0 * 8.0, (90.0 - y) / 90.0));
+        // Columns 7, 0, 1, 2: (3 + 1 + 100 + 100) / 4.
+        assert_eq!(one_cell(&r, 135.0, 315.0, false, &folded), Some(51.0));
     }
 }

@@ -5286,6 +5286,10 @@ fn kriging_interpolation(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, Strin
                     // The extent skips coordinates that aren't numbers: empty with coordinates, all were rejected.
                     left_out.no_place += g.coord_count();
                 } else {
+                    // Coordinates that aren't numbers, which the extent skipped, are left out too.
+                    let mut finite = 0;
+                    g.for_each_coord(|c| finite += usize::from(c.is_finite()));
+                    left_out.no_place += g.coord_count() - finite;
                     let center = Coord::new((ext.min_x + ext.max_x) * 0.5, (ext.min_y + ext.max_y) * 0.5);
                     if center.is_finite() {
                         raw_pts.push((center, v));
@@ -12411,6 +12415,28 @@ mod tests {
             (DroppedGeometry, format!("Ordinary Kriging: 3 coordinate(s) left out: {place}")),
         ];
         assert_eq!(got, want);
+    }
+
+    /// A line or polygon with some coordinates that aren't numbers still gets its centre from the
+    /// rest, and the ones its extent skipped are counted as coordinates left out.
+    #[test]
+    fn kriging_counts_skipped_coordinates_of_a_partly_finite_line_and_polygon() {
+        use rustgis_data::loss::LossCode::DroppedGeometry;
+        let mut ds = Dataset::new("lines", GeometryType::Polyline, vec![Field::new("v", FieldType::Double)]);
+        for (x, y, v) in [(0.5, 0.5, 1.0), (1.5, 0.5, 2.0)] {
+            ds.push(Some(Geometry::Point(Coord::new(x, y))), vec![Value::Float(v)]);
+        }
+        let line = vec![Coord::new(0.5, 1.0), Coord::new(f64::NAN, 1.0), Coord::new(1.5, 1.5), Coord::new(1.0, f64::INFINITY)];
+        ds.push(Some(Geometry::Line(vec![line])), vec![Value::Float(3.0)]);
+        let ring =
+            vec![Coord::new(0.0, 0.0), Coord::new(f64::NAN, f64::NAN), Coord::new(1.0, 0.0), Coord::new(1.0, 1.0), Coord::new(0.0, 0.0)];
+        ds.push(Some(Geometry::Polygon(vec![vec![ring]])), vec![Value::Float(4.0)]);
+        let m = Map(HashMap::from([("lines".to_string(), ds)]));
+        let p = serde_json::json!({"input": "lines", "field": "v", "extent": "0,0,2,2", "pixelSize": 0.5});
+        let r = crate::run("kriging", &m, &p).unwrap_or_else(|e| panic!("{e}"));
+        let got: Vec<(rustgis_data::loss::LossCode, String)> = r.losses.iter().map(|l| (l.code, l.text.clone())).collect();
+        let place = "a coordinate (or, for a line or polygon, its centre) is not a finite number";
+        assert_eq!(got, vec![(DroppedGeometry, format!("Ordinary Kriging: 3 coordinate(s) left out: {place}"))]);
     }
 
     /// With too few points left, the error says what was left out.
