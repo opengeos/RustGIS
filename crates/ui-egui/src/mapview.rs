@@ -1045,8 +1045,11 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     let time = now(ui);
     app.map.record_frame(time);
 
-    if app.session.tool == Tool::SelectRadius && !app.map.hide_overlays {
-        radius_panel(app, ui, rect);
+    if app.session.tool == Tool::SelectRadius {
+        sync_radius_units(app);
+        if !app.map.hide_overlays {
+            radius_panel(app, ui, rect);
+        }
     }
     interact(app, ui, &resp, rect);
 
@@ -2741,9 +2744,8 @@ fn finish_area_selection(app: &mut RustGisApp, ui: &Ui, rect: Rect) {
     }
 }
 
-/// Keeps radius entry clear of the map's navigation controls and below dialogs.
-/// Explicit suffixes preserve a valid entry when the measurement setting changes.
-fn radius_panel(app: &mut RustGisApp, ui: &Ui, rect: Rect) {
+/// Preserves the entered physical distance on unit changes, even while the editor is hidden.
+fn sync_radius_units(app: &mut RustGisApp) {
     let imperial = app.ui.measurement_imperial;
     if imperial != app.map.radius_imperial {
         if app.map.radius_text.trim().parse::<f64>().is_ok()
@@ -2753,6 +2755,11 @@ fn radius_panel(app: &mut RustGisApp, ui: &Ui, rect: Rect) {
         }
         app.map.radius_imperial = imperial;
     }
+}
+
+/// Keeps radius entry clear of the map's navigation controls and below dialogs.
+fn radius_panel(app: &mut RustGisApp, ui: &Ui, rect: Rect) {
+    let imperial = app.ui.measurement_imperial;
     egui::Area::new(egui::Id::unique("select_radius_entry"))
         .fixed_pos(pos2((rect.max.x - 260.0).max(rect.min.x + 70.0), rect.min.y + 12.0))
         .constrain_to(rect)
@@ -2776,7 +2783,7 @@ fn radius_panel(app: &mut RustGisApp, ui: &Ui, rect: Rect) {
         });
 }
 
-/// Dispatches map-only gestures; typed radii use the command's projection validation.
+/// Handles polygon/lasso gestures and typed or dragged radius selection.
 /// Clicks on the radius entry belong to its own area.
 fn selection_interact(app: &mut RustGisApp, ui: &Ui, resp: &egui::Response, rect: Rect) {
     let tool = app.session.tool;
@@ -2813,8 +2820,10 @@ fn selection_interact(app: &mut RustGisApp, ui: &Ui, resp: &egui::Response, rect
             }
             let point = resp.interact_pointer_pos().ok_or_else(invalid_selection)?;
             let center = selection_coord(app, rect, point, &Flat::of(&app.session.map().projection))?;
-            validate_radius(app, center, radius)?;
-            app.run("select.byRadius", json!({"lon":center.x,"lat":center.y,"radius":radius,"mode":selection_mode(ui)})).map(|_| ())
+            radius_outline(app, rect, center, radius)?;
+            // The app dispatcher reports command failures; only pre-dispatch errors escape here.
+            let _ = app.run("select.byRadius", json!({"lon":center.x,"lat":center.y,"radius":radius,"mode":selection_mode(ui)}));
+            Ok(())
         })();
         app.map.cancel_sketch();
         if let Err(error) = result {
@@ -6645,12 +6654,56 @@ mod tests {
         );
         h.run();
         assert!(h.query_by_label("Radius").is_some());
+        h.state_mut().0.map.radius_text = "1000".into();
+        h.state_mut().0.ui.measurement_imperial = true;
         h.state_mut().1 = true;
         h.run();
         assert!(h.query_by_label("Radius").is_none(), "map-only snapshots hide the radius editor");
+        assert_eq!(
+            crate::measure_units::parse_distance(&h.state().0.map.radius_text, true).unwrap(),
+            Some(1000.0),
+            "hidden controls preserve the entered physical distance"
+        );
         h.state_mut().1 = false;
         h.run();
         assert!(h.query_by_label("Radius").is_some(), "normal selection keeps its editor");
+    }
+
+    /// A command refused after UI validation is reported once by the app dispatcher.
+    #[test]
+    fn typed_radius_command_failure_is_reported_once() {
+        let mut h = selection_harness();
+        h.state_mut().run("tool.set", json!({"tool":"selectRadius"})).unwrap();
+        h.state_mut().map.radius_text = "1 km".into();
+        h.state_mut().session.registry.commands.retain(|c| c.id != "select.byRadius");
+        let mark = h.state().session.notice_mark();
+        selection_click(&mut h, [0.5, 0.5]);
+        let errors: Vec<_> = h.state().session.notices_since(mark).iter().filter(|n| n.error).collect();
+        assert_eq!(errors.len(), 1, "a command refusal must produce one error notice");
+        assert!(errors[0].text.contains("select.byRadius"), "the notice names the refused command");
+        assert!(selection_rows(&h).is_empty());
+    }
+
+    /// A circle near a local projection's boundary has valid extrema but an invalid arc.
+    #[test]
+    fn typed_radius_rejects_the_same_projection_boundary_as_drag() {
+        let mut h = selection_harness();
+        h.state_mut().run("tool.set", json!({"tool":"selectRadius"})).unwrap();
+        h.state_mut().run("select.rows", json!({"layer":"Points", "rows":[0]})).unwrap();
+        h.state_mut().run("map.projection", json!({"type":"local:0,45"})).unwrap();
+        h.state_mut().run("map.zoomToExtent", json!({"extent":[4,-61,6,-59]})).unwrap();
+        h.run();
+        let center = Coord::new(5.0, -60.0);
+        let rect = h.state().map.view_rect.unwrap().0;
+        assert!(validate_radius(h.state(), center, 2_250_000.0).is_ok(), "four extrema alone miss the projection boundary crossing");
+        assert!(radius_outline(h.state(), rect, center, 2_250_000.0).is_err(), "dragging rejects the sampled arc");
+        h.state_mut().map.radius_text = "2250 km".into();
+        let mark = h.state().session.notice_mark();
+        selection_click(&mut h, [5.0, -60.0]);
+        let errors: Vec<_> = h.state().session.notices_since(mark).iter().filter(|n| n.error).collect();
+        assert_eq!(errors.len(), 1, "typed circles must reject the same unsupported arc as a drag");
+        assert_eq!(errors[0].text, invalid_selection());
+        assert_eq!(selection_rows(&h), vec![0], "invalid input preserves selection");
     }
 
     /// Typed distances reach the real map handler in metres, preserve fractional values,
