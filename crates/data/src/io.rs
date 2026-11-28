@@ -6796,10 +6796,16 @@ mod tests {
             }
             ds
         };
+        let short = |n| std::iter::repeat_n(line(2), n);
+        // The limit counts what each file's buffer has allocated, which doubles as it grows, so
+        // a layer needs more than its files' lengths. Both are refused if the room the `.shp` and
+        // `.shx` hold is counted again.
         for (ds, max) in [
-            (layer(vec![line(1_000)], 200, 254), 100_000),
-            // A short line's growth of the `.shp` takes all that is left, and the rest fit in it.
-            (layer(std::iter::once(line(900)).chain(std::iter::repeat_n(line(2), 30)).collect(), 0, 1), 17_500),
+            // Files of 87 KB that need 119 KB of room, the `.dbf` holding over half of the limit.
+            (layer(vec![line(1_000)], 200, 254), 130_000),
+            // The long line's growth of the `.shp` takes all that is left, and the short lines
+            // after it fit in it. Those before it give the `.shx` and `.dbf` their room first.
+            (layer(short(12).chain([line(900)]).chain(short(18)).collect(), 0, 1), 18_000),
         ] {
             let unlimited = shapefile_parts_in(&ds, Crs::LonLat).unwrap().0;
             let (parts, ..) = shapefile_parts_within(&ds, Crs::LonLat, None, &Limit::new(max)).unwrap();
