@@ -12370,6 +12370,182 @@ fn symbology_classes_follow_the_definition_query() {
     assert!(err.contains("definition query"), "{err}");
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn geopackage_new_class_columns_are_reported_and_kept_for_geojson_export() {
+    use rustgis_data::{Dataset, Field, FieldType, GeometryType, Value as Cell, raster::Crs, source::gpkg};
+    struct Cleanup(std::path::PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let serial = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let directory = std::env::temp_dir().join(format!("rustgis-class-column-{}-{serial}", std::process::id()));
+    std::fs::create_dir(&directory).unwrap();
+    let _cleanup = Cleanup(directory.clone());
+    let path = directory.join("annotations.gpkg");
+    let mut ds = Dataset::new("annotations", GeometryType::Polygon, vec![Field::new("name", FieldType::Text)]);
+    let ring = vec![
+        rustgis_geom::Coord::new(0., 0.),
+        rustgis_geom::Coord::new(10., 0.),
+        rustgis_geom::Coord::new(10., 10.),
+        rustgis_geom::Coord::new(0., 0.),
+    ];
+    ds.push(Some(rustgis_data::Geometry::Polygon(vec![vec![ring]])), vec![Cell::Text("seed".into())]);
+    gpkg::write_in(&ds, &path, Crs::from_epsg(3857).unwrap()).unwrap();
+    let mut s = Session::new(Project::default());
+    s.run("gpkg.addLayer", &json!({"path":path,"table":"annotations"})).unwrap();
+    let id = s.active_layer.unwrap();
+    s.run("edit.enable", &json!({"on":true})).unwrap();
+    s.run("edit.addField", &json!({"name":"class","type":"text"})).unwrap();
+    s.run("edit.setValue", &json!({"row":0,"field":"class","value":"box","classStyle":true})).unwrap();
+    let mark = s.notice_mark();
+    let answer = s.run("gpkg.saveEdits", &json!({})).unwrap();
+    assert!(answer["skippedFields"].as_array().unwrap().iter().any(|v| v == "class"));
+    assert!(s.notices_since(mark).iter().any(|n| n.text.contains("class") && n.text.contains("no column")));
+    let l = s.map().layer(id).unwrap();
+    assert_eq!(l.dataset.value(0, l.dataset.field_index("class").unwrap()), &Cell::Text("box".into()));
+    let export = directory.join("annotations.geojson");
+    s.run("share.exportLayer", &json!({"path":export})).unwrap();
+    let exported: Value = serde_json::from_slice(&std::fs::read(export).unwrap()).unwrap();
+    assert_eq!(exported["features"][0]["properties"]["class"], "box");
+}
+
+#[test]
+fn class_assignment_restores_styling_atomically_and_refusals_leave_everything_unchanged() {
+    use rustgis_data::{Dataset, Field, FieldType, GeometryType, Value as Cell};
+    let mut ds =
+        Dataset::new("Classes", GeometryType::Polygon, vec![Field::new("class", FieldType::Text), Field::new("score", FieldType::Double)]);
+    let geometry = rustgis_data::Geometry::Polygon(vec![vec![vec![
+        rustgis_geom::Coord::new(0., 0.),
+        rustgis_geom::Coord::new(1., 0.),
+        rustgis_geom::Coord::new(1., 1.),
+        rustgis_geom::Coord::new(0., 0.),
+    ]]]);
+    ds.push(Some(geometry.clone()), vec![Cell::Text("car".into()), Cell::Float(1.)]);
+    ds.push(Some(geometry), vec![Cell::Text("car".into()), Cell::Float(2.)]);
+    let mut s = Session::new(Project::default());
+    let id = s.map_mut().add_dataset(ds);
+    s.active_layer = Some(id);
+    s.run("edit.enable", &json!({"on":true})).unwrap();
+    let rows = s.map().layer(id).unwrap().dataset.features.to_vec();
+    let renderer = s.map().layer(id).unwrap().renderer.clone();
+    let depth = s.undo_depth();
+    s.run("edit.setValue", &json!({"row":0,"field":"class","value":"truck","classStyle":true})).unwrap();
+    assert_eq!(s.undo_depth(), depth + 1);
+    assert_eq!(s.map().layer(id).unwrap().dataset.value(0, 0), &Cell::Text("truck".into()));
+    assert!(s.map().layer(id).unwrap().renderer.legend().iter().any(|entry| entry.label == "truck"));
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.map().layer(id).unwrap().dataset.features.to_vec(), rows);
+    assert_eq!(s.map().layer(id).unwrap().renderer, renderer);
+    s.run("edit.redo", &json!({})).unwrap();
+    assert_eq!(s.map().layer(id).unwrap().dataset.value(0, 0), &Cell::Text("truck".into()));
+    // Numeric, null and malformed requests must never leave a value or a style behind.
+    for bad in [
+        json!({"row":0,"field":"score","value":3,"classStyle":true}),
+        json!({"row":0,"field":"class","value":null,"classStyle":true}),
+        json!({"row":0,"field":"class","value":"car","classStyle":"yes"}),
+        json!({"row":999,"field":"class","value":"car","classStyle":true}),
+    ] {
+        let before = serde_json::to_value(&s.project).unwrap();
+        let depth = s.undo_depth();
+        assert!(s.run("edit.setValue", &bad).is_err());
+        assert_eq!(serde_json::to_value(&s.project).unwrap(), before);
+        assert_eq!(s.undo_depth(), depth);
+    }
+    for params in [json!({"type":"graduated","field":"score"}), json!({"type":"unique","expression":"upper(class)"})] {
+        s.run("layer.symbology", &params).unwrap();
+        let before = serde_json::to_value(&s.project).unwrap();
+        let depth = s.undo_depth();
+        assert!(s.run("edit.setValue", &json!({"row":0,"field":"class","value":"plane","classStyle":true})).is_err());
+        assert_eq!(serde_json::to_value(&s.project).unwrap(), before, "a refused colour rule also rolls back the attribute");
+        assert_eq!(s.undo_depth(), depth);
+    }
+    assert!(s.run("layer.classStyle", &json!({"field":"class","value":"TRUCK","color":"#123456"})).unwrap_err().contains("create"));
+    assert!(s.run("layer.classStyle", &json!({"field":"class","value":"new","create":true})).unwrap_err().contains("expression"));
+}
+
+#[test]
+fn class_style_create_appends_without_recolouring_and_preserves_no_fill() {
+    use rustgis_data::{Dataset, Field, FieldType, GeometryType};
+    use rustgis_map::Renderer;
+    let mut s = Session::new(Project::default());
+    let id = s.map_mut().add_dataset(Dataset::new("Classes", GeometryType::Polygon, vec![Field::new("class", FieldType::Text)]));
+    s.active_layer = Some(id);
+    let create = |value: &str| json!({"field":"class","value":value,"create":true});
+    let initial = s.map().layer(id).unwrap().renderer.clone();
+    s.run("layer.classStyle", &create("car")).unwrap();
+    s.run("layer.classStyle", &json!({"value":"car","color":"#F3B82064","outline":"#102030","label":"Cars"})).unwrap();
+    let before = s.map().layer(id).unwrap().renderer.clone();
+    let depth = s.undo_depth();
+    s.run("layer.classStyle", &create("box")).unwrap();
+    assert_eq!(s.undo_depth(), depth + 1);
+    let after = s.map().layer(id).unwrap().renderer.clone();
+    let (
+        Renderer::Unique { classes: old, other: old_other, class_labels: old_labels, .. },
+        Renderer::Unique { classes, other, class_labels, .. },
+    ) = (&before, &after)
+    else {
+        panic!("Unique Values expected")
+    };
+    assert_eq!(classes.len(), 2);
+    assert_eq!(classes[0], old[0]);
+    assert_eq!(other, old_other);
+    assert_eq!(class_labels, old_labels);
+    assert_ne!(classes[0].1.fill.hex(), classes[1].1.fill.hex());
+    assert!(after.legend().iter().any(|entry| entry.label == "box"));
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.map().layer(id).unwrap().renderer, before);
+    s.run("edit.redo", &json!({})).unwrap();
+    assert_eq!(s.map().layer(id).unwrap().renderer, after);
+    s.run("layer.noFill", &json!({})).unwrap();
+    s.run("layer.classStyle", &create("bird")).unwrap();
+    let Renderer::Unique { classes, .. } = &s.map().layer(id).unwrap().renderer else { panic!() };
+    assert!(classes.iter().all(|(_, symbol)| symbol.fill.a() == 0), "adding a class respects No Fill");
+    assert!(classes.iter().all(|(_, symbol)| symbol.stroke.a() > 0));
+    s.run("layer.restoreFill", &json!({})).unwrap();
+    let Renderer::Unique { classes, other, .. } = &s.map().layer(id).unwrap().renderer else { panic!() };
+    let Renderer::Unique { classes: old, other: old_other, .. } = after else { panic!() };
+    assert_eq!(&classes[..2], old.as_slice());
+    assert_eq!(other, &old_other);
+    assert_eq!(classes[2].1.fill.a(), other.fill.a());
+    let Renderer::Single(base) = initial else { panic!() };
+    assert_eq!(old_other, base, "Single Symbol keeps its symbol for other values");
+}
+
+#[test]
+fn class_style_create_validates_and_bounds_the_automatic_palette() {
+    use rustgis_data::{Dataset, Field, FieldType, GeometryType};
+    let mut s = Session::new(Project::default());
+    let id = s.map_mut().add_dataset(Dataset::new("Classes", GeometryType::Polygon, vec![Field::new("class", FieldType::Text)]));
+    s.active_layer = Some(id);
+    for bad in [
+        json!({"create":true,"value":"box"}),
+        json!({"create":true,"field":"absent","value":"box"}),
+        json!({"create":true,"field":"class","other":true}),
+        json!({"create":true,"field":"class","value":"  "}),
+        json!({"create":"yes","field":"class","value":"box"}),
+        json!({"create":true,"field":"class","value":"box","color":"bad"}),
+        json!({"value":"box","color":"#123456"}),
+    ] {
+        let before = serde_json::to_value(&s.project).unwrap();
+        let depth = s.undo_depth();
+        assert!(s.run("layer.classStyle", &bad).is_err(), "{bad}");
+        assert_eq!(serde_json::to_value(&s.project).unwrap(), before);
+        assert_eq!(s.undo_depth(), depth);
+    }
+    for i in 0..64 {
+        s.run("layer.classStyle", &json!({"create":true,"field":"class","value":format!("class{i}")})).unwrap();
+    }
+    let before = s.map().layer(id).unwrap().renderer.clone();
+    let rustgis_map::Renderer::Unique { classes, .. } = &before else { panic!() };
+    assert_eq!(classes.iter().map(|(_, symbol)| symbol.fill.hex()).collect::<std::collections::BTreeSet<_>>().len(), 64);
+    assert!(s.run("layer.classStyle", &json!({"create":true,"field":"class","value":"one too many"})).unwrap_err().contains("64"));
+    assert_eq!(s.map().layer(id).unwrap().renderer, before);
+    assert!(s.map().layer(id).unwrap().dataset.features.is_empty(), "class creation needs no feature scan");
+}
+
 #[test]
 fn layer_class_style_edits_one_class() {
     // #314: one class's colour and legend label, by command (the Symbology pane runs the same).

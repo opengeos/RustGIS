@@ -261,6 +261,8 @@ layer.classStyle={"layer":"Countries","value":"1. High income: OECD","color":"#2
 layer.classStyle={"layer":"Countries","index":0,"label":"Under 1 million"}
 layer.classStyle={"layer":"Countries","index":0,"color":"#2E6B4FFF"}
 layer.classStyle={"layer":"Countries","other":true,"label":"No data"}
+layer.classStyle={"layer":"Countries","field":"income_grp","value":"New category","create":true}
+edit.setValue={"layer":"Annotations","row":0,"field":"class","value":"truck","classStyle":true}
 ```
 
 `value` names a Unique Values class, `index` a Graduated Colors class (0 is the lowest) and

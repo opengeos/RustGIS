@@ -111,7 +111,7 @@ edit.reshape line
 edit.rotate angle
 edit.scale factor
 edit.setGeometry layer? row geometry
-edit.setValue layer? table? row field value
+edit.setValue layer? table? row field value classStyle?
 edit.settings showVertices?
 edit.snap lon lat
 edit.snapping on? tolerancePx? vertex? edge? end?
@@ -227,7 +227,7 @@ layer.addUrl url bytes? format? name? layer? zoom? x? y? wkt? crs? delimiter? pa
 layer.addZarr path url variable? index? cells? bbox? crs? name? time? start? end? ran? summary?
 layer.aggregation layer? shape size?
 layer.blend layer? mode
-layer.classStyle layer? value? index? other? color? outline? label?
+layer.classStyle layer? value? create? field? index? other? color? outline? label?
 layer.clearDiagram layer?
 layer.color layer? color
 layer.copy layer? group?

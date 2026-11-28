@@ -288,7 +288,55 @@ Choose **No image** to return explicitly to Web Mercator grid metres (or the lay
 **Original Image Grid** in Command Search reports the active image's original dimensions and
 EPSG coordinate system in a notice, while keeping the Annotate pane open.
 
-Space or middle-drag pans; releasing Space keeps the drawing tool. Use the selected object's
+For multiclass annotation, choose an existing text **Class field**, or explicitly **Create class
+field** to add a text field named `class`. When choosing a target layer, a unique text field named
+`class` (ignoring case) is selected automatically. **No class field** remains an explicit opt-out
+while that target stays active; no class value is chosen automatically. Choose an **Active class** or enter a new name and
+click **Use class**. Class names are trimmed, limited to 256 characters and cannot use the
+reserved missing-value marker `<Null>`. On desktop, creating the field runs in the background with progress and
+Cancel; wait for it before choosing a class. If cancelled, use **Retry class field creation**.
+On GeoPackage/PostGIS editing layers, a new local field does not create a database column.
+Save Edits reports fields with no matching column and keeps their local values. Save the project
+or export GeoJSON to preserve them, or create the database column before annotating.
+Each new circle or rotated box captures that class when the drag starts;
+changing the default afterwards affects subsequent shapes. Other template defaults are kept.
+**No class default** leaves the class to the normal template/default rules.
+
+Opening Annotate from Explore starts in **Select / Edit** instead of opening feature-information popups.
+Click an annotation to select it; a circle or box constructed in this session automatically
+activates its editing handles. **Select / Edit** returns to selection without drawing new shapes.
+Reopened/imported polygons remain ordinary polygons: right-click and **Convert to Shape…** to fit an
+exact circle or box, or use Edit Vertices. Selection never converts a polygon automatically.
+
+Select one annotation, choose the desired active class, then **Assign to selected annotation**.
+This edits only its class property, preserves its ID, geometry and constrained handles, and is
+undoable. Class defaults reset when changing target layer, project or map; a removed class field
+must be restored or another field chosen before drawing with that default.
+Alternatively, right-click an annotation and choose **Change class** for a direct, undoable
+assignment from the same styled/recent classes. This changes only the clicked annotation and
+keeps the active class for new shapes. Missing colour rules are restored atomically with the
+attribute assignment; a refusal changes neither. **Other class…** opens Annotate to enter another name.
+This menu also works in ordinary polygon editing outside Annotate, with editing enabled and a
+unique text `class` field (or a class field chosen earlier in Annotate).
+Opening Annotate resets map tilt to zero without changing its bearing. While Annotate is open,
+or a circle/rotated-box tool is active, right-drag and Ctrl-drag in Explore pan instead of
+rotating/tilting; Shift+arrow keys also pan. Zoom remains available, and the box's rotation handle
+still rotates the object. Closing Annotate and leaving the shape tool restores normal map
+navigation. Explicit camera commands can still change tilt; in that case class changes remain
+available, and **Reset map tilt** restores geometry editing.
+
+Adding a new class immediately creates its own legend entry and chooses an automatic colour,
+preserving existing class colours, labels and outlines. A Single Symbol layer becomes Unique
+Values on the class field, keeping its old symbol for other values. Existing Unique Values must
+use that same field; for other renderers choose **Class colours…** first. Automatic palettes
+support up to 64 classes. Class creation is undoable separately from drawing a feature.
+**Class colours…** opens Symbology to customise colours without rebuilding existing categories.
+The Active class list offers
+up to 64 styled values and the last 32 choices; other names can be entered directly. Class values
+are ordinary GeoJSON properties and survive export/import. Colours are layer styling, saved in
+projects/layer styles; they are not exported as a GeoJSON palette or custom annotation metadata.
+
+Space, middle-drag or right-drag pans; releasing Space keeps the drawing tool. Use the selected object's
 existing handles, Undo/Redo, and **Export GeoJSON…**. **Shape details** is collapsed by default;
 expand it for numeric dimensions and additional editing controls. Map handles remain available
 while the section is hidden. Refused drawing gestures show an error notification even when
@@ -612,8 +660,10 @@ styles too, which the topmost and visible modes leave out.
 
 Circles and rotated boxes shared as GeoJSON reopen as ordinary polygons. To edit one with
 constrained handles again, turn **Edit › Edit** on, select its loaded polygon layer, right-click
-the object and choose **Convert Polygon…**. Choose Circle or Rotated Box once, in the conversion
-pane. The **Editing** pane also has
+the object and choose **Convert to Shape…**. Choose Circle or Rotated Box once, in the conversion
+pane. Conversion restores constrained editing for imported geometry. Known circles and boxes
+hide this action while annotating: edit them with their
+handles or dimension controls instead. The **Editing** pane also has
 **Convert Selected Polygon…**, and Command Search has **Convert Polygon to Shape…**. These tools
 are available independently of any annotation workflow. A right-click keeps the selected object
 under the pointer; Alt-right-click cycles overlapping objects. In Explore, selection tools and

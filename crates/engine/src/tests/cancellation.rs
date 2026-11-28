@@ -229,6 +229,18 @@ pub(super) fn long_commands(boundaries: bool) {
         .collect();
     std::fs::write(out("many.geojson"), json!({"type": "FeatureCollection", "features": many}).to_string()).unwrap();
     read(&s, "layer.addData", &json!({"path": out("many.geojson"), "stream": true}));
+    // Creating a class column also visits every feature, on the same field-edit worker.
+    {
+        let mut classes = Session::new(Project::default());
+        // The shared harness renames Cities to seed Undo/Redo before each cancellation.
+        let mut data = rustgis_data::Dataset::new("Cities", rustgis_data::GeometryType::Polygon, vec![]);
+        for _ in 0..3 {
+            data.push(None, vec![]);
+        }
+        let layer = classes.map_mut().add_dataset(data);
+        classes.active_layer = Some(layer);
+        read(&classes, "edit.addField", &json!({"layer":layer,"name":"class","type":"text"}));
+    }
     // Original TIFF headers share the read queue and both cancellation sweeps.
     read(&s, "raster.imageGrid", &json!({"layer": dem}));
     // A PDF's page is read on the same queue: the file, then its drawing, Cancel looked at between
@@ -756,4 +768,64 @@ fn tiny_raster(scene: bool) -> String {
     )
     .unwrap();
     base64::engine::general_purpose::STANDARD.encode(geotiff::write(&raster, 0).unwrap())
+}
+
+/// A public synchronous command is a transaction even when Cancel arrives after several rows.
+#[test]
+fn synchronous_add_field_mid_loop_cancel_restores_rows_fields_and_history() {
+    use rustgis_data::{Dataset, Field, FieldType, GeometryType, Value as Cell, progress};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    };
+    struct CancelAfter(AtomicU64);
+    impl progress::Probe for CancelAfter {
+        fn cancelled(&self) -> bool {
+            self.0.load(Ordering::Relaxed) >= 5
+        }
+        fn begin(&self, _: u64) {
+            self.0.store(0, Ordering::Relaxed);
+        }
+        fn advance(&self, n: u64) {
+            self.0.fetch_add(n, Ordering::Relaxed);
+        }
+    }
+    for table in [false, true] {
+        let mut ds = Dataset::new("Rows", GeometryType::Polygon, vec![Field::new("name", FieldType::Text)]);
+        for i in 0..20 {
+            ds.push(None, vec![Cell::Text(format!("row{i}"))]);
+        }
+        let before = ds.clone();
+        let mut s = Session::new(Project::default());
+        let (id, p) = if table {
+            let id = s.project.add_table(ds);
+            (id, json!({"table":id,"name":"class","type":"text"}))
+        } else {
+            let id = s.map_mut().add_dataset(ds);
+            s.active_layer = Some(id);
+            (id, json!({"layer":id,"name":"class","type":"text"}))
+        };
+        let mut seed = p.clone();
+        seed["name"] = json!("temporary");
+        s.run("edit.addField", &seed).unwrap();
+        s.run("edit.undo", &json!({})).unwrap();
+        let depth = s.undo_depth();
+        let redo = s.redo_labels().collect::<Vec<_>>();
+        assert!(!redo.is_empty());
+        let probe = Arc::new(CancelAfter(AtomicU64::new(0)));
+        let guard = progress::install(Some(probe.clone()));
+        let error = s.run("edit.addField", &p).unwrap_err();
+        drop(guard);
+        assert!(error.contains("cancelled"), "{error}");
+        assert_eq!(probe.0.load(Ordering::Relaxed), 5, "cancellation happened after several row writes");
+        let after = if table { &s.project.table(id).unwrap().dataset } else { &s.map().layer(id).unwrap().dataset };
+        assert_eq!(after.fields, before.fields);
+        assert_eq!(after.features.to_vec(), before.features.to_vec());
+        assert_eq!(s.undo_depth(), depth);
+        assert_eq!(s.redo_labels().collect::<Vec<_>>(), redo);
+        s.run("edit.addField", &p).unwrap();
+        let after = if table { &s.project.table(id).unwrap().dataset } else { &s.map().layer(id).unwrap().dataset };
+        assert_eq!(after.fields.len(), 2);
+        assert!(after.features.rows().all(|row| row.values().len() == 2 && row.value(1).is_null()));
+    }
 }

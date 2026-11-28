@@ -25,6 +25,7 @@ struct Gesture {
     row: Option<usize>,
     feature: Option<u64>,
     original: CircleSpec,
+    attributes: serde_json::Value,
     start: [f64; 2],
     handle: Handle,
 }
@@ -145,6 +146,21 @@ pub(crate) fn drag_start(app: &mut RustGisApp, rect: Rect, origin: Pos2, force_n
             (None, CircleSpec { frame, center: [0., 0.], radius: 1., tolerance: 0.25 }, Handle::New)
         }
     };
+    let attributes = if row.is_none() {
+        match crate::annotation_classes::drawing_attributes(app) {
+            Ok(attributes) => attributes,
+            Err(error) => {
+                crate::annotation_classes::refused(app, &error);
+                if app.circles.error.as_deref() != Some(error.as_str()) {
+                    app.session.notify(error.clone(), true);
+                }
+                app.circles.error = Some(error);
+                return false;
+            }
+        }
+    } else {
+        json!({})
+    };
     let Some(start) = original.frame.to_local(c) else { return false };
     if let Some(row) = row {
         rustgis_engine::cmd::select::set(&mut app.session, id, vec![row], rustgis_engine::cmd::select::Mode::New);
@@ -163,6 +179,7 @@ pub(crate) fn drag_start(app: &mut RustGisApp, rect: Rect, origin: Pos2, force_n
             row,
             feature: row.and_then(|r| l.dataset.features.get(r).map(|f| f.id)),
             original,
+            attributes,
             start,
             handle,
         }),
@@ -215,7 +232,7 @@ pub(crate) fn drag_stop(app: &mut RustGisApp) {
             let _ = app.run("edit.updateCircle", json!({"layer":g.layer,"row":row,"featureId":g.feature,"circle":b}));
         }
     } else {
-        let mut p = json!({"layer":g.layer,"circle":b});
+        let mut p = json!({"layer":g.layer,"circle":b,"attributes":g.attributes});
         if app.session.map().layer(g.layer).is_some_and(|l| l.design.templates.iter().any(|t| t.name == app.forms.template)) {
             p["template"] = json!(app.forms.template);
         }
@@ -445,9 +462,9 @@ mod tests {
         let (id, _, b) = create(&mut app);
         app.run("edit.addCircle", json!({"circle":b})).unwrap();
         let c = b.frame.to_lonlat(b.center).unwrap();
-        click(&mut app, c, false, false);
+        click(&mut app, c, false, false, false);
         let one = selected(&app).unwrap().1;
-        click(&mut app, c, false, true);
+        click(&mut app, c, false, false, true);
         let two = selected(&app).unwrap().1;
         assert_ne!(one, two);
         let center = at(&app, rect(), &b.frame, b.center).unwrap();
@@ -463,12 +480,12 @@ mod tests {
         app.run("edit.addCircle", json!({"circle":b})).unwrap();
         app.run("edit.addFeature", json!({"geometry":rustgis_engine::data::io::geometry_to_geojson(&b.geometry().unwrap())})).unwrap();
         let c = b.frame.to_lonlat(b.center).unwrap();
-        click(&mut app, c, false, false);
+        click(&mut app, c, false, false, false);
         assert_eq!(app.session.map().layer(id).unwrap().selection, vec![2]);
         assert!(selected(&app).is_none());
-        click(&mut app, c, false, true);
+        click(&mut app, c, false, false, true);
         assert_eq!(selected(&app).unwrap().1, 1);
-        click(&mut app, c, false, true);
+        click(&mut app, c, false, false, true);
         assert_eq!(selected(&app).unwrap().1, first);
         let p = at(&app, rect(), &b.frame, b.center).unwrap();
         assert!(drag_start(&mut app, rect(), p, false));

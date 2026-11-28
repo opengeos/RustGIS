@@ -2587,6 +2587,16 @@ fn pan(app: &mut RustGisApp, dx: f64, dy: f64, w: f64, h: f64) {
     }
 }
 
+/// The same drag pans while annotating and changes the viewing angle otherwise.
+fn navigation_drag(app: &mut RustGisApp, delta: egui::Vec2, w: f64, h: f64) {
+    if crate::annotation::planar_navigation(app) {
+        pan(app, f64::from(delta.x), f64::from(delta.y), w, h);
+    } else {
+        turn_by(app, f64::from(delta.x) * 0.8);
+        tilt_by(app, -f64::from(delta.y) * 0.5);
+    }
+}
+
 /// Turns the map or the globe by `degrees` about the view's centre.
 fn turn_by(app: &mut RustGisApp, degrees: f64) {
     let cam = &mut app.session.map_mut().camera;
@@ -3080,6 +3090,7 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
             ui.ctx().request_repaint();
         }
     }
+    let planar_navigation = crate::annotation::planar_navigation(app);
     // Arrow keys pan; Shift+Left and Shift+Right turn the map, Shift+Up and Shift+Down tilt it
     // (as in MapLibre). With Alt or Mod held the arrows are shortcuts (Alt+Shift+arrows move the
     // active layer in the Layers pane's outline, #836), not map moves. With the attribute table
@@ -3093,7 +3104,7 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
             }
             // Ninety degrees a second, whatever the frame rate.
             let step = (f64::from(i.stable_dt) * 90.0).clamp(0.0, 15.0);
-            if i.modifiers.shift {
+            if i.modifiers.shift && !planar_navigation {
                 if i.key_down(egui::Key::ArrowLeft) {
                     turn -= step;
                 }
@@ -3136,15 +3147,18 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
     }
 
     let shift = ui.input(|i| i.modifiers.shift);
-    let middle = ui.input(|i| i.pointer.middle_down() || (matches!(tool, Tool::RotatedBox | Tool::Circle) && i.key_down(egui::Key::Space)));
+    let annotation_selection = app.ui.right == Some(crate::RightPane::Annotation) && matches!(tool, Tool::Explore | Tool::Select);
+    let middle = ui.input(|i| {
+        i.pointer.middle_down()
+            || ((matches!(tool, Tool::RotatedBox | Tool::Circle) || annotation_selection) && i.key_down(egui::Key::Space))
+    });
     let ctrl = ui.input(|i| i.modifiers.ctrl || i.modifiers.command);
     // Dragging with the right button turns the map or the globe (to the right turns it
     // clockwise) and tilts it (up tilts it further), as in MapLibre.
     if resp.dragged_by(egui::PointerButton::Secondary) {
         let d = resp.drag_delta();
         if d != egui::Vec2::ZERO {
-            turn_by(app, d.x as f64 * 0.8);
-            tilt_by(app, -d.y as f64 * 0.5);
+            navigation_drag(app, d, w, h);
             app.map.camera_moved = true;
             app.map.last_interaction = time;
         }
@@ -3194,7 +3208,7 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
                 Tool::Explore if crate::pluginpanel::picks_box(app) => DragKind::Box,
                 Tool::Explore if shift => DragKind::Box,
                 // Ctrl+drag turns and tilts the map, as the right button does.
-                Tool::Explore if ctrl => DragKind::Turn,
+                Tool::Explore if ctrl && !planar_navigation => DragKind::Turn,
                 Tool::Explore => DragKind::Pan,
                 Tool::Select | Tool::ZoomIn => DragKind::Box,
                 t if drag_shape(t).is_some() => DragKind::Sketch,
@@ -3331,8 +3345,7 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
     if let Some((_, DragKind::Turn)) = app.map.drag {
         let d = resp.drag_delta();
         if d != egui::Vec2::ZERO {
-            turn_by(app, d.x as f64 * 0.8);
-            tilt_by(app, -d.y as f64 * 0.5);
+            navigation_drag(app, d, w, h);
             app.map.camera_moved = true;
             app.map.last_interaction = time;
         }
@@ -3503,6 +3516,12 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
             }
             return;
         }
+        if annotation_selection && middle {
+            return;
+        }
+        if crate::annotation::click(app, c, ui.input(|i| i.modifiers)) {
+            return;
+        }
         // Sketch vertices snap to features when snapping is on.
         let c = if tool.creates() || tool.draws_edit() || matches!(tool, Tool::Graphic(_) | Tool::Measure | Tool::MeasureArea) {
             snapped(app, c)
@@ -3554,12 +3573,20 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
             Tool::EditVertices => crate::vertexedit::click(app, rect, p, c, shift),
             Tool::RotatedBox => {
                 if !middle {
-                    crate::boxedit::click(app, c, shift, ui.input(|i| i.modifiers.alt));
+                    let (command, alt) = ui.input(|i| (i.modifiers.command, i.modifiers.alt));
+                    crate::boxedit::click(app, c, shift, command, alt);
+                    if !ui.input(|i| i.modifiers.shift || i.modifiers.command) {
+                        crate::annotation::selected_tool(app);
+                    }
                 }
             }
             Tool::Circle => {
                 if !middle {
-                    crate::circleedit::click(app, c, shift, ui.input(|i| i.modifiers.alt));
+                    let (command, alt) = ui.input(|i| (i.modifiers.command, i.modifiers.alt));
+                    crate::circleedit::click(app, c, shift, command, alt);
+                    if !ui.input(|i| i.modifiers.shift || i.modifiers.command) {
+                        crate::annotation::selected_tool(app);
+                    }
                 }
             }
             Tool::CreatePoint => {
@@ -6291,6 +6318,160 @@ mod tests {
 
     fn selection_rows(h: &egui_kittest::Harness<'_, RustGisApp>) -> Vec<usize> {
         h.state().session.map().layer_by_name("Points").unwrap().selection.clone()
+    }
+
+    #[test]
+    fn annotation_navigation_pans_and_zooms_without_changing_viewing_angle() {
+        let mut h = selection_harness();
+        h.state_mut().run("layer.template", json!({"template":"polygons","name":"Annotations"})).unwrap();
+        h.state_mut().run("edit.enable", json!({"on":true})).unwrap();
+        h.state_mut().run("map.setBearing", json!({"bearing":17})).unwrap();
+        h.state_mut().run("map.setPitch", json!({"pitch":12})).unwrap();
+        h.state_mut().run("ui.pane.annotation", Value::Null).unwrap();
+        assert_eq!(h.state().session.map().camera.pitch, 0.0);
+        assert_eq!(h.state().session.map().camera.bearing, 17.0);
+        let layers = serde_json::to_value(&h.state().session.map().layers).unwrap();
+        let drag = |h: &mut egui_kittest::Harness<'_, RustGisApp>, button, modifiers| {
+            for _ in 0..6 {
+                h.step();
+            }
+            let start = h.state().map.view_rect.unwrap().0.center();
+            h.event(egui::Event::ModifiersChanged(modifiers));
+            h.event(egui::Event::PointerMoved(start));
+            h.event(egui::Event::PointerButton { pos: start, button, pressed: true, modifiers });
+            h.step();
+            h.event(egui::Event::PointerMoved(start + vec2(40., -20.)));
+            h.step();
+            h.event(egui::Event::PointerButton { pos: start + vec2(40., -20.), button, pressed: false, modifiers });
+            h.step();
+        };
+        // Every annotation mode uses the same right-drag pan. A retained shape tool
+        // keeps this navigation even if the user closes the pane to inspect symbology.
+        for tool in ["select", "circle", "rotatedBox"] {
+            h.state_mut().run("tool.set", json!({"tool":tool})).unwrap();
+            let center = h.state().session.map().camera.center;
+            drag(&mut h, egui::PointerButton::Secondary, egui::Modifiers::NONE);
+            assert_ne!(h.state().session.map().camera.center, center);
+            assert_eq!(h.state().session.map().camera.pitch, 0.0);
+            assert_eq!(h.state().session.map().camera.bearing, 17.0);
+        }
+        h.state_mut().run("tool.set", json!({"tool":"explore"})).unwrap();
+        let center = h.state().session.map().camera.center;
+        drag(&mut h, egui::PointerButton::Primary, egui::Modifiers::CTRL);
+        assert_ne!(h.state().session.map().camera.center, center);
+        assert_eq!(h.state().session.map().camera.pitch, 0.0);
+        assert_eq!(h.state().session.map().camera.bearing, 17.0);
+        let center = h.state().session.map().camera.center;
+        let shift = egui::Modifiers::SHIFT;
+        h.event(egui::Event::ModifiersChanged(shift));
+        h.event(egui::Event::Key { key: egui::Key::ArrowUp, physical_key: None, pressed: true, repeat: false, modifiers: shift });
+        h.step();
+        h.event(egui::Event::Key { key: egui::Key::ArrowUp, physical_key: None, pressed: false, repeat: false, modifiers: shift });
+        h.step();
+        assert_ne!(h.state().session.map().camera.center, center);
+        assert_eq!(h.state().session.map().camera.pitch, 0.0);
+        let resolution = h.state().session.map().camera.res;
+        h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+        h.event(egui::Event::Zoom(1.25));
+        h.step();
+        assert_ne!(h.state().session.map().camera.res, resolution, "zoom remains available");
+        assert_eq!(serde_json::to_value(&h.state().session.map().layers).unwrap(), layers, "navigation never edits features");
+        h.state_mut().run("ui.pane.annotation", Value::Null).unwrap();
+        h.state_mut().run("tool.set", json!({"tool":"circle"})).unwrap();
+        drag(&mut h, egui::PointerButton::Secondary, egui::Modifiers::NONE);
+        assert_eq!(h.state().session.map().camera.pitch, 0.0);
+        assert_eq!(h.state().session.map().camera.bearing, 17.0);
+        h.state_mut().run("tool.set", json!({"tool":"explore"})).unwrap();
+        drag(&mut h, egui::PointerButton::Secondary, egui::Modifiers::NONE);
+        assert_ne!(h.state().session.map().camera.bearing, 17.0, "normal navigation returns outside annotation");
+        assert_ne!(h.state().session.map().camera.pitch, 0.0);
+    }
+
+    #[test]
+    fn annotation_selection_opens_shape_handles_instead_of_identify() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = selection_harness();
+        let app = h.state_mut();
+        app.run("layer.template", json!({"template":"polygons","name":"Annotations"})).unwrap();
+        app.run("edit.enable", json!({"on":true})).unwrap();
+        app.run("edit.addBox", json!({"box":{"center":[111319.,-111325.],"width":50000.,"height":50000.,"angle":20.}})).unwrap();
+        app.run("edit.addCircle", json!({"circle":{"center":[333958.,-111325.],"radius":25000.,"tolerance":100.}})).unwrap();
+        app.run("edit.addFeature", json!({"geometry":{"type":"Polygon","coordinates":[[[0,3],[1,3],[1,4],[0,4],[0,3]]]}})).unwrap();
+        app.run("tool.set", json!({"tool":"explore"})).unwrap();
+        app.run("ui.pane.annotation", Value::Null).unwrap();
+        assert_eq!(app.session.tool, Tool::Select, "Annotate starts with selection, not identify");
+        let layer = app.session.active_layer.unwrap();
+        let before = serde_json::to_value(&app.session.project).unwrap();
+        for _ in 0..6 {
+            h.step();
+        }
+        selection_click(&mut h, [1., 1.]);
+        assert_eq!(h.state().session.tool, Tool::RotatedBox);
+        assert_eq!(h.state().session.map().layer(layer).unwrap().selection, vec![0]);
+        assert!(h.state().map.popup.is_none());
+        selection_click(&mut h, [3., 1.]);
+        assert_eq!(h.state().session.tool, Tool::Circle, "clicking another known shape changes its editor");
+        assert_eq!(h.state().session.map().layer(layer).unwrap().selection, vec![1]);
+        assert!(h.state().map.popup.is_none());
+        h.state_mut().run("tool.set", json!({"tool":"explore"})).unwrap();
+        selection_click(&mut h, [0.5, 3.5]);
+        h.step();
+        assert!(h.state().map.popup.is_none(), "Explore within Annotate also selects without a popup");
+        assert_eq!(h.state().session.map().layer(layer).unwrap().selection, vec![2]);
+        assert!(h.query_by_label("This is an ordinary polygon. To edit it as an exact shape, right-click it and choose Convert to Shape…; otherwise use Edit Vertices.").is_some());
+        assert!(h.state().session.box_spec(layer, 2).is_none());
+        assert!(h.state().session.circle_spec(layer, 2).is_none(), "plain polygons are never automatically converted");
+        let mut after = serde_json::to_value(&h.state().session.project).unwrap();
+        // Selection itself is saved, but no feature or construction is changed by a click.
+        after["maps"][0]["layers"][0]["selection"] = before["maps"][0]["layers"][0]["selection"].clone();
+        assert_eq!(after, before);
+        let notices = h.state().session.notice_mark();
+        selection_click(&mut h, [2.5, 0.5]);
+        selection_click(&mut h, [4., 4.]);
+        assert!(h.state().session.map().layer(layer).unwrap().selection.is_empty(), "other layers are not annotation targets");
+        assert!(selection_rows(&h).is_empty());
+        assert!(h.state().session.notices_since(notices).iter().all(|n| !n.error), "empty clicks never complain about an empty selection");
+        h.state_mut().run("edit.enable", json!({"on":false})).unwrap();
+        h.state_mut().run("tool.set", json!({"tool":"select"})).unwrap();
+        selection_click(&mut h, [1., 1.]);
+        assert_eq!(h.state().session.tool, Tool::Select, "selecting with editing disabled never activates an editor");
+        assert_eq!(h.state().session.map().layer(layer).unwrap().selection, vec![0]);
+        assert!(h.state().map.popup.is_none());
+        let start = h.state().map.view_rect.unwrap().0.center();
+        let end = start + vec2(40., -20.);
+        let camera = h.state().session.map().camera.center;
+        h.event(egui::Event::Key {
+            key: egui::Key::Space,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        let blank = selection_screen(&h, [2.5, 0.5]);
+        selection_pointer(&mut h, blank, Some(true), egui::Modifiers::NONE);
+        selection_pointer(&mut h, blank, Some(false), egui::Modifiers::NONE);
+        assert_eq!(h.state().session.map().layer(layer).unwrap().selection, vec![0], "Space-click does not change selection");
+        selection_pointer(&mut h, start, Some(true), egui::Modifiers::NONE);
+        selection_pointer(&mut h, end, None, egui::Modifiers::NONE);
+        selection_pointer(&mut h, end, Some(false), egui::Modifiers::NONE);
+        h.event(egui::Event::Key {
+            key: egui::Key::Space,
+            physical_key: None,
+            pressed: false,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.step();
+        assert_ne!(h.state().session.map().camera.center, camera);
+        assert_eq!(h.state().session.tool, Tool::Select);
+        assert!(h.state().map.popup.is_none());
+        h.state_mut().run("ui.pane.annotation", Value::Null).unwrap();
+        h.state_mut().run("tool.set", json!({"tool":"explore"})).unwrap();
+        for _ in 0..6 {
+            h.step();
+        }
+        selection_click(&mut h, [1., 1.]);
+        assert!(h.state().map.popup.is_some(), "normal Explore still identifies outside Annotate");
     }
 
     /// The Move Label tool: a label dragged and let go is kept where it was put, as one undo
