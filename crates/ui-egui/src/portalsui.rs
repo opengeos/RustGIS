@@ -34,8 +34,11 @@ pub struct State {
     pub countries_error: Option<String>,
     pub country: String,
     country_filter: String,
+    /// Names as received, with their search text cached once per country list.
+    country_search: std::collections::BTreeMap<String, (String, String)>,
     /// Each successful catalogue is authoritative only for its own level.
     availability: [Option<std::collections::BTreeMap<String, Option<u64>>>; 6],
+    availability_errors: [Option<String>; 6],
     level_waiting: Vec<(usize, Answer)>,
     pub level: String,
     waiting: Option<(Asked, Answer)>,
@@ -54,7 +57,9 @@ impl Default for State {
             countries_error: None,
             country: String::new(),
             country_filter: String::new(),
+            country_search: Default::default(),
             availability: Default::default(),
+            availability_errors: Default::default(),
             level_waiting: Vec::new(),
             level: "ADM1".into(),
             waiting: None,
@@ -70,6 +75,14 @@ fn fetch(url: &str, ceiling: Reach) -> Answer {
     crate::fetch_within(url, cache::MAX_DOWNLOAD, None, ceiling)
 }
 
+/// Catalogues are small metadata lists, not feature downloads. Keep even an oversized service
+/// answer bounded independently of the large data-download allowance.
+const MAX_CATALOGUE: usize = 4 << 20;
+
+fn fetch_catalogue(url: &str) -> Answer {
+    crate::fetch_within(url, MAX_CATALOGUE, None, Reach::Local)
+}
+
 /// Lands the answers.
 pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
     app.ui.portals.level_waiting.retain(|(level, slot)| {
@@ -77,7 +90,21 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
             return true;
         };
-        app.ui.portals.availability[*level] = result.ok().and_then(|(bytes, _)| boundaries::parse_availability(&bytes).ok());
+        let result = result.and_then(|(bytes, _)| boundaries::parse_availability(&bytes));
+        if let (Some(catalogue), Some(error)) =
+            (app.ui.portals.availability.get_mut(*level), app.ui.portals.availability_errors.get_mut(*level))
+        {
+            match result {
+                Ok(available) => {
+                    *catalogue = Some(available);
+                    *error = None;
+                }
+                Err(reason) => {
+                    *catalogue = None;
+                    *error = Some(reason);
+                }
+            }
+        }
         false
     });
     let Some((_, slot)) = &app.ui.portals.waiting else { return };
@@ -108,6 +135,8 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
             app.ui.portals.countries_error = match r.and_then(|b| boundaries::parse_countries(&b)) {
                 Ok(c) if c.is_empty() => Some(tl!("geoBoundaries listed no countries: type a country's code").to_string()),
                 Ok(c) => {
+                    app.ui.portals.country_search =
+                        c.iter().map(|(iso, name)| (iso.clone(), (name.clone(), format!("{name} {iso}").to_lowercase()))).collect();
                     app.ui.portals.countries = c;
                     None
                 }
@@ -230,10 +259,10 @@ pub fn boundaries(app: &mut RustGisApp, ui: &mut egui::Ui) {
         app.ui.portals.countries_asked = true;
         for level in 1..=5 {
             if let Ok(url) = boundaries::level_url(&level.to_string()) {
-                app.ui.portals.level_waiting.push((level, fetch(&url, Reach::Local)));
+                app.ui.portals.level_waiting.push((level, fetch_catalogue(&url)));
             }
         }
-        app.ui.portals.waiting = Some((Asked::Countries, fetch(&boundaries::countries_url(), Reach::Local)));
+        app.ui.portals.waiting = Some((Asked::Countries, fetch_catalogue(&boundaries::countries_url())));
     }
     if let Some(e) = &app.ui.portals.countries_error {
         ui.label(egui::RichText::new(e).small().weak());
@@ -261,7 +290,12 @@ pub fn boundaries(app: &mut RustGisApp, ui: &mut egui::Ui) {
                         .labelled_by(input_label.id);
                     let needle = st.country_filter.trim().to_lowercase();
                     for (iso, name) in &st.countries {
-                        if !iso.to_lowercase().contains(&needle) && !name.to_lowercase().contains(&needle) {
+                        let cached = st.country_search.get(iso).filter(|(original, _)| original == name);
+                        let matches = cached.map_or_else(
+                            || format!("{name} {iso}").to_lowercase().contains(&needle),
+                            |(_, search)| search.contains(&needle),
+                        );
+                        if !matches {
                             continue;
                         }
                         if ui.selectable_value(&mut st.country, iso.clone(), format!("{name} ({iso})")).clicked() {
@@ -309,6 +343,18 @@ pub fn boundaries(app: &mut RustGisApp, ui: &mut egui::Ui) {
     });
     let st = &app.ui.portals;
     let (available, _) = level_info(st, &st.level);
+    if let Some(error) = st
+        .level
+        .strip_prefix("ADM")
+        .and_then(|n| n.parse::<usize>().ok())
+        .and_then(|n| st.availability_errors.get(n))
+        .and_then(Option::as_ref)
+    {
+        ui.small(crate::i18n::fmt(
+            "Availability for {level} couldn't be read ({error}); this level remains offered without unit counts.",
+            &[("level", &st.level), ("error", error)],
+        ));
+    }
     if !available {
         ui.small(missing_level(st, &st.level));
     }
@@ -380,18 +426,44 @@ mod tests {
     /// Availability lands even with no dialog open and a failed level never disables choices.
     #[test]
     fn availability_lands_independently_of_boundary_downloads() {
+        use egui_kittest::kittest::Queryable;
         let mut app = RustGisApp::new(rustgis_engine::Session::new(rustgis_engine::Project::default()));
         let answer = |result| std::sync::Arc::new(std::sync::Mutex::new(Some(result)));
         app.ui.portals.level_waiting = vec![
             (2, answer(Ok((br#"[{"boundaryISO":"PER","admUnitCount":"196"}]"#.to_vec(), Reach::Public)))),
             (3, answer(Ok((b"[]".to_vec(), Reach::Public)))),
             (4, answer(Err("offline".to_string()))),
+            (5, answer(Ok((b"{}".to_vec(), Reach::Public)))),
         ];
         poll(&mut app, &egui::Context::default());
         assert_eq!(app.ui.portals.availability[2].as_ref().unwrap().get("PER"), Some(&Some(196)));
         assert!(!app.ui.portals.availability[3].as_ref().unwrap().contains_key("PER"));
         assert!(app.ui.portals.availability[4].is_none());
+        assert_eq!(app.ui.portals.availability_errors[4].as_deref(), Some("offline"));
+        assert_eq!(app.ui.portals.availability_errors[5].as_deref(), Some("the geoBoundaries list isn't a list"));
         assert!(app.ui.portals.level_waiting.is_empty());
+        app.ui.portals.countries_asked = true;
+        app.ui.portals.country = "PER".into();
+        app.run("ui.dialog", json!({"name":"boundaries"})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).build_ui_state(
+            |ui, app: &mut RustGisApp| {
+                app.logic(ui.ctx());
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run();
+        assert!(h.query_by_label_contains("couldn't be read").is_none());
+        for (level, reason) in [("ADM4", "offline"), ("ADM5", "the geoBoundaries list isn't a list")] {
+            h.state_mut().ui.portals.level = level.into();
+            h.run();
+            let note = crate::i18n::fmt(
+                "Availability for {level} couldn't be read ({error}); this level remains offered without unit counts.",
+                &[("level", level), ("error", reason)],
+            );
+            assert!(h.query_by_label(&note).is_some(), "{note}");
+            assert!(level_info(&h.state().ui.portals, level).0);
+        }
     }
 
     /// The boundaries geoBoundaries' description names are read within the reach the description

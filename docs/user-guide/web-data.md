@@ -498,7 +498,8 @@ when the public one is busy.
 divisions (`ADM1`) and finer divisions down to `ADM5` where they exist, simplified for the map.
 Filter the country list by name or ISO code. Once a level's catalogue arrives, its unit count is
 shown and levels unavailable for the country are disabled with a reason. If a catalogue cannot be
-read, its levels remain offered. `boundaries.countries` lists the countries.
+read, its levels remain offered and the selected level shows why its availability is unknown.
+`boundaries.countries` lists the countries.
 
 ```sh
 rustgis-cli run --cmd 'osm.download={"bbox":[7.44,46.944,7.456,46.952],"preset":"buildings"}' --cmd 'boundaries.add={"country":"KEN","level":"ADM1"}'

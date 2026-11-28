@@ -35,23 +35,30 @@ pub fn meta_url(country: &str, level: &str) -> String {
 
 /// The address of every country's ADM0 entry (a list of countries).
 pub fn countries_url() -> String {
-    format!("{API}/ALL/ADM0/")
+    catalogue_url("ADM0")
 }
 
 /// The address of all countries available at a validated administrative level.
 pub fn level_url(level: &str) -> Result<String, String> {
-    Ok(format!("{API}/ALL/{}/", self::level(level)?))
+    Ok(catalogue_url(&self::level(level)?))
+}
+
+/// The shared address shape; callers supply a validated level or the fixed country level.
+fn catalogue_url(level: &str) -> String {
+    format!("{API}/ALL/{level}/")
 }
 
 /// Available countries at one level, with a unit count when the service supplies one.
-/// Reject malformed entries rather than interpreting an unreadable catalogue as absence.
+/// Reject the entire catalogue on any malformed country entry: skipping it would incorrectly
+/// mark that country's level unavailable. The caller offers unknown levels and explains why.
 pub fn parse_availability(bytes: &[u8]) -> Result<std::collections::BTreeMap<String, Option<u64>>, String> {
     let v: Value = serde_json::from_slice(bytes).map_err(|_| "the geoBoundaries list isn't JSON".to_string())?;
     v.as_array()
         .ok_or_else(|| "the geoBoundaries list isn't a list".to_string())?
         .iter()
         .map(|entry| {
-            let iso = country(entry.get("boundaryISO").and_then(Value::as_str).ok_or("missing country code")?)?;
+            let iso = country(entry.get("boundaryISO").and_then(Value::as_str).ok_or("missing country code")?)
+                .map_err(|_| "the geoBoundaries list has an invalid country code")?;
             let count = entry.get("admUnitCount").and_then(|n| n.as_u64().or_else(|| n.as_str()?.parse().ok()));
             Ok((iso, count))
         })
