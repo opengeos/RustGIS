@@ -182,6 +182,16 @@ impl Draft {
     }
 }
 
+/// Why the colorbar's box is off: [`colorbar_layer`] also gives a raster whose pixels, and so
+/// colour scale, aren't here, still on their way or failed.
+fn colorbar_off_reason(s: &Session) -> &'static str {
+    match colorbar_layer(s.map(), None).and_then(|l| l.raster.as_ref()) {
+        Some(r) if r.error.is_some() => tl!("The top raster couldn't be read."),
+        Some(_) => tl!("The top raster is still being read."),
+        None => tl!("The map has no raster with a colour scale."),
+    }
+}
+
 /// What is on, a line each, as the review lists it.
 pub(super) fn elements_value(s: &Session, d: &Draft) -> String {
     let e = &d.elements;
@@ -241,18 +251,17 @@ pub(super) fn elements_step(ui: &mut egui::Ui, s: &Session, d: &mut Draft) {
     ui.indent("publication_wizard_legend", |ui| {
         let own_box = d.column() || d.cards();
         let usable = d.usable(Control::LegendBox, s);
-        let why =
-            if own_box { tl!("In this style the legend has a box of its own.") } else { tl!("There is no legend or colorbar to box.") };
+        let own_note = tl!("In this style the legend has a box of its own.");
+        let why = if own_box { own_note } else { tl!("There is no legend or colorbar to box.") };
         tick(ui, usable, &mut d.elements.legend_box, tl!("Always on a box"), why);
         let usable = d.usable(Control::Context, s);
         tick(ui, usable, &mut d.elements.context, tl!("List the context layers"), tl!("There is no legend to list them in."));
         if own_box {
-            let note = tl!("In this style the legend has a box of its own.");
-            ui.label(egui::RichText::new(note).small().weak());
+            ui.label(egui::RichText::new(own_note).small().weak());
         }
     });
     let usable = d.usable(Control::Colorbar, s);
-    let why = tl!("The map has no raster with a colour scale.");
+    let why = colorbar_off_reason(s);
     tick(ui, usable, &mut d.elements.colorbar, tl!("Colorbar"), why)
         .on_hover_text(tl!("Drawn when the map's top raster has a colour scale."));
     let usable = d.usable(Control::ScaleBar, s);
@@ -423,6 +432,18 @@ mod tests {
         h.run_steps(4);
         assert!(!off(&h, "Colorbar"), "a raster added meanwhile");
         assert_eq!(added(&h.state().session, draft(&h)), json!({"colorbar": "none"}));
+    }
+
+    /// The off colorbar says whether the map has no colour scale, or its top raster's isn't read:
+    /// still on its way, or failed.
+    #[test]
+    fn the_off_colorbar_says_why() {
+        let mut app = app();
+        assert_eq!(colorbar_off_reason(&app.session), "The map has no raster with a colour scale.");
+        let id = app.session.map_mut().add_raster("Scene", RasterLayer::unread_in_place("https://example.com/scene.tif"));
+        assert_eq!(colorbar_off_reason(&app.session), "The top raster is still being read.");
+        app.session.map_mut().layer_mut(id).unwrap().raster.as_mut().unwrap().fail("gone");
+        assert_eq!(colorbar_off_reason(&app.session), "The top raster couldn't be read.");
     }
 
     /// With nothing to make room for, the veil isn't sent.
