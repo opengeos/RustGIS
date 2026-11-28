@@ -58,6 +58,24 @@ impl NoticeText {
         })
     }
 
+    /// Reports the net change in the source's size since the project was saved.
+    pub(crate) fn source_count_changed(name: &str, saved: u64, current: u64) -> Self {
+        let key = match (current, current > saved) {
+            (1, true) => "{name}: the source has {count} feature, {change} more than when the project was saved",
+            (1, false) => "{name}: the source has {count} feature, {change} fewer than when the project was saved",
+            (_, true) => "{name}: the source has {count} features, {change} more than when the project was saved",
+            (_, false) => "{name}: the source has {count} features, {change} fewer than when the project was saved",
+        };
+        Self::format(
+            key,
+            [
+                ("name", name.to_string().into()),
+                ("count", rustgis_map::graphics::commas(&current.to_string()).into()),
+                ("change", rustgis_map::graphics::commas(&saved.abs_diff(current).to_string()).into()),
+            ],
+        )
+    }
+
     /// Renders trusted templates through the front end's formatter; literal data bypasses it.
     pub(crate) fn render(&self, format: &impl Fn(&str, &[(&str, &str)]) -> String) -> String {
         match self {

@@ -788,6 +788,7 @@ impl Layer {
                 return src.is_pending();
             }
         }
+        src.check_feature_count();
         if let Some(info) = self.source.as_ref().and_then(|s| s.info()) {
             match self.fields_from_source(&info.fields, info.format) {
                 Ok(fields) => {
@@ -5124,6 +5125,8 @@ mod tests {
             let l = Layer::new_streamed(1, src);
             assert!(l.dataset.features.is_empty());
             assert_eq!(l.feature_count(), count);
+            let saved = serde_json::to_value(&l.source).unwrap();
+            assert_eq!(saved.get("saved_feature_count"), count.map(serde_json::Value::from).as_ref());
         }
         // Not open yet: nothing to say.
         assert_eq!(Layer::new_streamed(1, source::SourceLayer::default()).feature_count(), None);

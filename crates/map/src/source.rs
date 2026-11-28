@@ -119,6 +119,7 @@ impl AmbiguousAreas {
 
 /// A streamed layer's source.
 #[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(remote = "Self")]
 pub struct SourceLayer {
     /// The file it reads; reopened when the project loads.
     #[serde(default)]
@@ -129,6 +130,12 @@ pub struct SourceLayer {
     /// The GeoPackage table.
     #[serde(default)]
     pub table: Option<String>,
+    /// The whole-source count saved with this layer, until the reopened header is compared.
+    #[serde(default, skip_serializing_if = "Option::is_none", getter = "Self::feature_count_for_save")]
+    saved_feature_count: Option<u64>,
+    /// The whole-source count seen at the first source header check.
+    #[serde(skip)]
+    checked_feature_count: Option<u64>,
     /// A Shapefile's source CRS override, reapplied when its path is reopened.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shapefile_crs: Option<rustgis_data::raster::Crs>,
@@ -271,6 +278,18 @@ pub struct SourceLayer {
     /// For a layer read live from a SQL Server table (desktop only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sqlserver: Option<SqlServerOrigin>,
+}
+
+impl Serialize for SourceLayer {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        Self::serialize(self, serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for SourceLayer {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Self::deserialize(deserializer)
+    }
 }
 
 /// A PostGIS table a layer reads live.
@@ -882,6 +901,8 @@ impl SourceLayer {
             path: _,
             file_name: _,
             table: _,
+            saved_feature_count: _,
+            checked_feature_count: _,
             shapefile_crs,
             embedded: _,
             handle: _,
@@ -1073,7 +1094,44 @@ impl SourceLayer {
         if self.same_opening(live) {
             self.read_notes.clone_from(&live.read_notes);
             self.read_note_kinds.clone_from(&live.read_note_kinds);
+            self.saved_feature_count = live.saved_feature_count;
+            self.checked_feature_count = live.checked_feature_count;
         }
+    }
+
+    /// A direct file link's known whole-source count. Opening may have omitted unreadable rows
+    /// from that metadata. Conversions can contain a geometry subset, and live table counts can
+    /// be filtered or estimated.
+    fn linked_feature_count(&self) -> Option<u64> {
+        let linked = self.linked_file().is_some() || self.path.as_deref().is_some_and(rustgis_data::source::is_remote_name);
+        if self.gdal.is_some() || self.duckdb.is_some() || !linked {
+            return None;
+        }
+        let handle = self.handle.as_ref()?;
+        if handle.skipped_at_open() > 0 {
+            return None;
+        }
+        handle.info().count
+    }
+
+    /// The count this source will write, obtained without opening the source or reading rows.
+    /// Unopened links retain the last known count.
+    pub fn feature_count_for_save(&self) -> Option<u64> {
+        if self.is_open() { self.linked_feature_count() } else { self.checked_feature_count.or(self.saved_feature_count) }
+    }
+
+    /// Records the first comparable header, independently of which rows the view asks for.
+    pub fn check_feature_count(&mut self) {
+        if self.saved_feature_count.is_some() && self.checked_feature_count.is_none() {
+            self.checked_feature_count = self.linked_feature_count();
+        }
+    }
+
+    /// Takes the saved-to-current difference once, including across subsequent view reads.
+    pub fn take_feature_count_change(&mut self) -> Option<(u64, u64)> {
+        let current = self.checked_feature_count?;
+        let saved = self.saved_feature_count.take()?;
+        (saved != current).then_some((saved, current))
     }
 
     /// Whether another installed window needs its retained display expressions checked.
@@ -2371,6 +2429,8 @@ impl SourceLayer {
             path,
             file_name: _,
             table: _,
+            saved_feature_count: _,
+            checked_feature_count: _,
             shapefile_crs: _,
             embedded,
             handle: _,
