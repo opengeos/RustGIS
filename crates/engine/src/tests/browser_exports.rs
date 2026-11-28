@@ -735,6 +735,28 @@ fn a_browser_file_command_over_the_limit_is_stopped_as_it_is_made() {
     }
 }
 
+/// An STL's room is for the triangles it keeps: zero-area ones, which it leaves out, take none of
+/// it. A point's cube of next to no height keeps its top and bottom, 284 bytes; a whole cube is
+/// 684.
+#[test]
+fn a_browser_stl_is_held_to_its_room_by_the_triangles_it_keeps() {
+    let files = Files::new();
+    let mut s = session(&files, true);
+    let flat = json!({"layer": "Places", "height": 1e-12, "path": "flat.stl"});
+    let cube = json!({"layer": "Places", "path": "cube.stl"});
+    for (params, bytes) in [(&flat, 284), (&cube, 684)] {
+        s.download_cap = Some(bytes - 1);
+        let e = s.run("share.export3d", params).unwrap_err();
+        assert!(e.contains(".stl: stopped once the file passed"), "{e}");
+        assert!(s.take_gp_files().is_empty());
+        s.download_cap = Some(bytes);
+        let pending = s.run("share.export3d", params).unwrap();
+        let (_, file, answer) = deliver(&mut s, &pending, None);
+        assert_eq!(file.len(), bytes);
+        answer.unwrap();
+    }
+}
+
 /// A full queue is refused before a file command makes anything: nothing of the file is said.
 #[test]
 fn a_browser_file_command_is_refused_before_it_is_made_when_no_more_can_wait() {

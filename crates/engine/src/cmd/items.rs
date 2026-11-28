@@ -1391,7 +1391,7 @@ fn placed_extent(ds: &Dataset, to: &rustgis_data::raster::Reprojection) -> Resul
 /// Why a 3D export past its own limits is refused.
 const TOO_LARGE_3D: &str = "the 3D file would be too large; export fewer features";
 
-/// A feature layer as a mesh, for the file `out`: a downloaded one stops at its room.
+/// A feature layer as a mesh, for the file `out`: a downloaded OBJ stops at twice its room.
 fn layer_mesh(s: &Session, p: &Value, keep_lines: bool, out: Output<'_>) -> Result<Mesh, String> {
     let id = s.layer_id(p)?;
     let l = s.map().layer(id).ok_or("no such layer")?;
@@ -1418,11 +1418,12 @@ fn layer_mesh(s: &Session, p: &Value, keep_lines: bool, out: Output<'_>) -> Resu
         let m = rustgis_geom::lonlat_to_merc(c);
         ((m.x - origin.x) * k, (m.y - origin.y) * k)
     };
-    // STL's estimate is its exact size, so it stops where the writer would; OBJ's is rough, and
-    // is let run to twice the file's limit, which the writer then holds to.
-    let (own, rooms) = if keep_lines { (MAX_MESH, 2) } else { (MAX_OBJ, 1) };
-    let room = out.most().saturating_mul(rooms);
-    let most = if room < own { (room, out.refusal()) } else { (own, TOO_LARGE_3D.to_string()) };
+    // The mesh's own limit bounds memory; the writer holds the file to its room. STL's estimate
+    // counts triangles its writer may leave out as zero-area, so the room doesn't stop it here.
+    // OBJ's is rough, and is let run to twice the room.
+    let own = if keep_lines { MAX_MESH } else { MAX_OBJ };
+    let room = out.most().saturating_mul(2);
+    let most = if keep_lines && room < own { (room, out.refusal()) } else { (own, TOO_LARGE_3D.to_string()) };
     let mut mesh = Mesh { keep_lines, most, layer: l.name.clone(), ..Mesh::default() };
     let rows = l.visible_rows();
     for (row, ft) in l.dataset.features.iter().enumerate() {
@@ -1674,7 +1675,7 @@ const MAX_STL_TRIANGLES: usize = (MAX_OBJ - 84) / 50;
 /// [`stl_bytes`] with a smaller triangle cap, to test the size guard.
 #[cfg(test)]
 pub(crate) fn stl_with_cap(s: &Session, p: &Value, cap: usize) -> Result<usize, String> {
-    mesh_stl(&layer_mesh(s, p, false, Output::UNLIMITED)?, cap).map(|(_, r)| r.triangles)
+    mesh_stl(&layer_mesh(s, p, false, Output::UNLIMITED)?, cap, Output::UNLIMITED).map(|(_, r)| r.triangles)
 }
 
 /// Says what a layer's mesh left out, or used in place of a feature's own value.
@@ -1712,7 +1713,7 @@ pub(crate) fn fanned_caps_note(n: usize) -> String {
 /// A feature layer as binary STL, noting what it leaves out.
 fn stl_bytes(s: &mut Session, p: &Value, out: Output<'_>) -> Result<(Vec<u8>, StlReport, Vec<rustgis_data::loss::Note>), String> {
     let mesh = layer_mesh(s, p, false, out)?;
-    let (bytes, report) = mesh_stl(&mesh, MAX_STL_TRIANGLES)?;
+    let (bytes, report) = mesh_stl(&mesh, MAX_STL_TRIANGLES, out)?;
     mesh_notices(s, &mesh);
     if mesh.flat > 0 {
         s.say(rustgis_data::loss::Note::loss(
@@ -1741,8 +1742,9 @@ fn stl_bytes(s: &mut Session, p: &Value, out: Output<'_>) -> Result<(Vec<u8>, St
 }
 
 /// A mesh as binary STL: an 80-byte header, the triangle count, then per triangle a normal and
-/// three vertices as little-endian f32 and a zero attribute.
-fn mesh_stl(mesh: &Mesh, max_triangles: usize) -> Result<(Vec<u8>, StlReport), String> {
+/// three vertices as little-endian f32 and a zero attribute. Written for the file `out`: it stops
+/// at the first triangle kept that would pass its room.
+fn mesh_stl(mesh: &Mesh, max_triangles: usize, out: Output<'_>) -> Result<(Vec<u8>, StlReport), String> {
     // The mesh is east, up and south; STL is written east, north and up, as slicers expect.
     let mut verts: Vec<[f64; 3]> =
         mesh.items.iter().filter_map(|it| if let Item::Vertex([x, y, z], _) = it { Some([*x, -*z, *y]) } else { None }).collect();
@@ -1755,8 +1757,8 @@ fn mesh_stl(mesh: &Mesh, max_triangles: usize) -> Result<(Vec<u8>, StlReport), S
     }
     let at = |n: usize| verts.get(n).copied();
     // Each triangle is written as it comes (50 bytes), and the count filled in at the end.
-    let mut out = b"RustGIS binary STL, metres, Z up".to_vec();
-    out.resize(84, 0);
+    let mut file = b"RustGIS binary STL, metres, Z up".to_vec();
+    file.resize(84, 0);
     let mut count = 0usize;
     let mut degenerate = 0;
     let mut add = |ids: [usize; 3], orient: Orient| -> Result<(), String> {
@@ -1784,16 +1786,17 @@ fn mesh_stl(mesh: &Mesh, max_triangles: usize) -> Result<(Vec<u8>, StlReport), S
         if count > max_triangles || count > u32::MAX as usize {
             return Err("the STL file would be too large; export fewer features".into());
         }
+        out.check(file.len() + 50)?;
         let (b, c, n) = if flip { (c, b, [-n[0], -n[1], -n[2]]) } else { (b, c, n) };
         for x in n {
-            out.extend_from_slice(&((x / len) as f32).to_le_bytes());
+            file.extend_from_slice(&((x / len) as f32).to_le_bytes());
         }
         for v in [a, b, c] {
             for x in v {
-                out.extend_from_slice(&(x as f32).to_le_bytes());
+                file.extend_from_slice(&(x as f32).to_le_bytes());
             }
         }
-        out.extend_from_slice(&0u16.to_le_bytes());
+        file.extend_from_slice(&0u16.to_le_bytes());
         Ok(())
     };
     for item in &mesh.items {
@@ -1823,11 +1826,11 @@ fn mesh_stl(mesh: &Mesh, max_triangles: usize) -> Result<(Vec<u8>, StlReport), S
         });
     }
     let n = u32::try_from(count).map_err(|_| "the STL file would be too large; export fewer features".to_string())?;
-    if let Some(slot) = out.get_mut(80..84) {
+    if let Some(slot) = file.get_mut(80..84) {
         slot.copy_from_slice(&n.to_le_bytes());
     }
     let report = StlReport { triangles: count, degenerate, lines: mesh.lines, fanned: mesh.fanned };
-    Ok((out, report))
+    Ok((file, report))
 }
 
 /// The (unnormalised) normal of a triangle, counter-clockwise from the side it faces.
