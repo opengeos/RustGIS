@@ -21,7 +21,7 @@ pub(super) fn reference_step(ui: &mut egui::Ui, d: &mut Draft) {
 
 /// The reference's box and the tick that leaves it out, as two rows of a step's grid.
 fn reference_rows(ui: &mut egui::Ui, d: &mut Draft) {
-    let hint = publication_default_reference(d.elements.graticule).join("\n");
+    let hint = publication_default_reference(d.elements.frame_grid).join("\n");
     list(ui, d, tl!("Reference"), Field::Reference, &hint, 2);
     ui.label("");
     // Wrapped to the column: a long label would widen the narrowed window.
@@ -496,14 +496,14 @@ mod tests {
         }
     }
 
-    /// Without a graticule the review's default names the projection and datum alone, on a sheet
+    /// Without a frame grid the review's default names the projection and datum alone, on a sheet
     /// and on a figure; lines typed and no reference read as with one.
     #[test]
-    fn without_a_graticule_the_default_reference_names_none() {
+    fn without_a_frame_grid_the_default_reference_names_no_graticule() {
         let with = "The default: projection, datum and graticule, filled in on the sheet";
         let without = "The default: projection and datum, filled in on the sheet";
         for size in ["a4", "figure-1col"] {
-            let mut h = at(Step::Review, |d| (d.size, d.elements.graticule) = (size.into(), false));
+            let mut h = at(Step::Review, |d| (d.size, d.elements.frame_grid) = (size.into(), false));
             assert!(h.query_by_label(without).is_some() && h.query_by_label(with).is_none(), "{size}");
             h.state_mut().dialogs.publication.as_mut().unwrap().reference = "UTM 23S".into();
             h.run_steps(4);
@@ -516,7 +516,7 @@ mod tests {
         }
     }
 
-    /// The reference's box hints the default's lines, following the graticule's tick, on a sheet
+    /// The reference's box hints the default's lines, following the frame grid's tick, on a sheet
     /// and on a figure.
     #[test]
     fn the_reference_box_hints_the_default() {
@@ -529,13 +529,13 @@ mod tests {
                 edit.accesskit_node().placeholder().map(str::to_owned)
             };
             assert_eq!(hint(&h).as_deref(), Some(with), "{size}");
-            h.state_mut().dialogs.publication.as_mut().unwrap().elements.graticule = false;
+            h.state_mut().dialogs.publication.as_mut().unwrap().elements.frame_grid = false;
             h.run_steps(4);
             assert_eq!(hint(&h).as_deref(), Some(without), "{size}");
         }
     }
 
-    /// Create draws the default reference with a graticule and without one, a figure's on one
+    /// Create draws the default reference with a frame grid and without one, a figure's on one
     /// line; the frame's grid follows, and Undo takes the layout away.
     #[test]
     fn create_draws_the_default_reference() {
@@ -547,7 +547,7 @@ mod tests {
             ("figure-1col", true, format!("{figure} · Graticule: 30°")),
             ("figure-1col", false, figure.to_string()),
         ] {
-            let mut h = at(Step::Review, |d| (d.size, d.elements.graticule) = (size.into(), graticule));
+            let mut h = at(Step::Review, |d| (d.size, d.elements.frame_grid) = (size.into(), graticule));
             let before = h.state().session.project.layouts.len();
             click(&mut h, "Create");
             let layout = h.state().session.project.layouts.last().unwrap();
