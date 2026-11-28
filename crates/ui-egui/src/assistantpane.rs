@@ -155,6 +155,11 @@ fn provider_settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, cfg: &mut Co
             .response
             .labelled_by(provider_label.id);
         ui.end_row();
+        if let Some(p) = provider::preset(&cfg.provider) {
+            ui.label("");
+            ui.add(egui::Label::new(RichText::new(tl!(p.description)).small().color(t.text_dim)).wrap());
+            ui.end_row();
+        }
         if cfg.login() {
             ui.label(tl!("Account"));
             ui.vertical(|ui| account_row(app, ui, t, cfg));

@@ -27,6 +27,8 @@ pub enum Api {
 /// A provider the settings offer, with its defaults.
 pub struct Preset {
     pub id: &'static str,
+    /// Who operates the service and the privacy considerations for its default account.
+    pub description: &'static str,
     pub label: &'static str,
     pub api: Api,
     pub base_url: &'static str,
@@ -47,6 +49,7 @@ pub struct Preset {
 pub const PRESETS: &[Preset] = &[
     Preset {
         id: "anthropic",
+        description: "Anthropic's own API, from the makers of Claude. API requests aren't used for training; content may be kept for safety checks, with exceptions to the standard 30-day deletion period.",
         label: "Anthropic",
         api: Api::Anthropic,
         base_url: "https://api.anthropic.com",
@@ -59,6 +62,7 @@ pub const PRESETS: &[Preset] = &[
     },
     Preset {
         id: "openai",
+        description: "OpenAI's own API, from the makers of GPT. API requests aren't used for training by default; abuse monitoring logs may be kept up to 30 days, with legal and safety exceptions.",
         label: "OpenAI",
         api: Api::OpenAi,
         base_url: "https://api.openai.com/v1",
@@ -71,6 +75,7 @@ pub const PRESETS: &[Preset] = &[
     },
     Preset {
         id: "chatgpt",
+        description: "OpenAI's models, billed to your ChatGPT plan. On a personal plan, ChatGPT's \"Improve the model\" setting decides whether requests are used for training; Business, Enterprise and Edu plans aren't trained on by default.",
         label: "ChatGPT (sign in)",
         api: Api::Responses,
         base_url: crate::chatgpt::API,
@@ -85,6 +90,7 @@ pub const PRESETS: &[Preset] = &[
     },
     Preset {
         id: "gemini",
+        description: "Google's own API. With a free key, Google may use requests to improve its products and people may read them; a Cloud project with billing turns that off. In the EEA, Switzerland and the UK, paid-service data terms also cover free use.",
         label: "Google Gemini",
         api: Api::Gemini,
         base_url: "https://generativelanguage.googleapis.com/v1beta",
@@ -97,6 +103,7 @@ pub const PRESETS: &[Preset] = &[
     },
     Preset {
         id: "openrouter",
+        description: "A US gateway to hundreds of models from many services. OpenRouter doesn't keep request content by default; each service behind it follows its own policy, and some train on requests.",
         label: "OpenRouter",
         api: Api::OpenAi,
         base_url: "https://openrouter.ai/api/v1",
@@ -109,6 +116,7 @@ pub const PRESETS: &[Preset] = &[
     },
     Preset {
         id: "ollama",
+        description: "Models you run with Ollama on this computer or a server of your own. Requests go to the server at the chosen address; its models and configuration determine any onward use.",
         label: "Ollama (local)",
         api: Api::OpenAi,
         base_url: "http://localhost:11434/v1",
@@ -121,6 +129,7 @@ pub const PRESETS: &[Preset] = &[
     },
     Preset {
         id: "custom",
+        description: "Any service or local server that speaks OpenAI's API. What happens to requests is up to the service at the chosen address.",
         label: "OpenAI-compatible",
         api: Api::OpenAi,
         base_url: "http://localhost:1234/v1",
@@ -133,6 +142,7 @@ pub const PRESETS: &[Preset] = &[
     },
     Preset {
         id: "requesty",
+        description: "A UK gateway to hundreds of models, which can move to another service when one fails. It logs requests up to 30 days by default; you can turn that off for each key. Upstream policies also apply; on the free plan, some models permit training.",
         label: "Requesty",
         api: Api::OpenAi,
         base_url: "https://router.requesty.ai/v1",
@@ -145,6 +155,7 @@ pub const PRESETS: &[Preset] = &[
     },
     Preset {
         id: "trustedrouter",
+        description: "A US gateway to models from many services, run on servers whose software can be checked independently. The gateway doesn't keep request content; each service behind it follows its own policy and may keep or train on requests.",
         label: "TrustedRouter",
         api: Api::OpenAi,
         base_url: "https://api.trustedrouter.com/v1",
@@ -157,6 +168,7 @@ pub const PRESETS: &[Preset] = &[
     },
     Preset {
         id: "opper",
+        description: "A Swedish gateway to hundreds of models, built for keeping data in the EU. It doesn't store request content by default, but a model name without a route prefix may run outside the EU.",
         label: "Opper",
         api: Api::OpenAi,
         base_url: "https://api.opper.ai/v3/compat",
