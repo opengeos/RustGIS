@@ -1957,8 +1957,7 @@ fn add_geodatabase(s: &mut Session, p: &Value, path: &str) -> CmdResult {
         }
         Err(e) => return Err(format!("{path}: {e}")),
     };
-    let reads =
-        read.layers.into_iter().map(|(dataset, report)| rustgis_data::io::LayerRead { dataset, report, styles: Vec::new() }).collect();
+    let reads = read.layers.into_iter().map(|(dataset, report)| rustgis_data::io::LayerRead::plain(dataset, report)).collect();
     // The tables read, then those it couldn't read (compressed, raster fields), through GDAL when it
     // is installed; else, or if GDAL can't either, said. The second go on whether the first added.
     let mut results: Vec<Value> = Vec::new();
@@ -2275,7 +2274,7 @@ fn city_reads(file_name: &str, bytes: &[u8], crs: Option<rustgis_data::raster::C
         .into_iter()
         .map(|(mut dataset, report)| {
             dataset.source.get_or_insert_with(|| file_name.to_string());
-            rustgis_data::io::LayerRead { dataset, report, styles: Vec::new() }
+            rustgis_data::io::LayerRead::plain(dataset, report)
         })
         .collect())
 }
@@ -2401,7 +2400,7 @@ fn dxf_reads(
     Ok(rustgis_data::dxf::read(name, bytes, &opts)
         .map_err(|e| e.to_string())?
         .into_iter()
-        .map(|(dataset, report)| rustgis_data::io::LayerRead { dataset, report, styles: Vec::new() })
+        .map(|(dataset, report)| rustgis_data::io::LayerRead::plain(dataset, report))
         .collect())
 }
 
@@ -2850,7 +2849,7 @@ pub(crate) fn add_layers(s: &mut Session, p: &Value, file_name: &str, bytes: &[u
             rustgis_data::landxml::read(file_name, bytes, Some(crs))
                 .map_err(|e| e.to_string())?
                 .into_iter()
-                .map(|(dataset, report)| rustgis_data::io::LayerRead { dataset, report, styles: Vec::new() })
+                .map(|(dataset, report)| rustgis_data::io::LayerRead::plain(dataset, report))
                 .collect()
         }
         None => match rustgis_data::io::read_layers(file_name, bytes) {
@@ -2885,13 +2884,15 @@ fn add_picked(
         let pick = |n: &str| n.eq_ignore_ascii_case(want) || n.rsplit(' ').next().is_some_and(|w| w.eq_ignore_ascii_case(want));
         // A city model's first layer holds what the file as a whole says, after its own one
         // notice: that its heights were dropped (it has no other). OSM has no such height notice.
-        // In a zip, a model is the one member that gives several layers, and it says so for its own layers only.
+        // A zip member can give several layers. When the reader provides shared notices,
+        // those are restored below instead of borrowing its first layer's report.
         let same = |a: &rustgis_data::io::LayerRead, b: &rustgis_data::io::LayerRead| a.dataset.source == b.dataset.source;
         let file_wide: Vec<(Option<String>, rustgis_data::ReadReport)> = reads
             .iter()
             .enumerate()
             .filter(|(i, r)| {
                 !pick(&r.dataset.name)
+                    && r.sibling_report.is_none()
                     && !reads.iter().take(*i).any(|o| same(o, r))
                     && (whole || (lower.ends_with(".zip") && reads.iter().skip(i + 1).any(|o| same(o, r))))
             })
@@ -2933,8 +2934,33 @@ fn add_picked(
                 kept.report.skipped += said.skipped;
             }
         }
+        restore_sibling_notices(&mut reads);
     }
     add_reads(s, p, file_name, reads, overlays, zoom)
+}
+
+/// Restore shared reports on a selected sibling and avoid repeating notices already carried by
+/// the zip or another selected layer of the same source.
+fn restore_sibling_notices(reads: &mut [rustgis_data::io::LayerRead]) {
+    if reads.iter().all(|r| r.sibling_report.is_none()) {
+        return;
+    }
+    let mut seen: std::collections::HashSet<_> =
+        reads.iter().flat_map(|r| r.report.messages.iter().map(move |n| (r.dataset.source.clone(), n.clone()))).collect();
+    let mut counted: std::collections::HashSet<_> =
+        reads.iter().filter(|r| r.report.skipped > 0).filter_map(|r| r.sibling_report.as_ref().map(std::sync::Arc::as_ptr)).collect();
+    for read in reads {
+        if let Some(shared) = read.sibling_report.take() {
+            if shared.skipped > 0 && counted.insert(std::sync::Arc::as_ptr(&shared)) {
+                read.report.skipped += shared.skipped;
+            }
+            for note in shared.messages.iter() {
+                if seen.insert((read.dataset.source.clone(), note.clone())) {
+                    read.report.messages.push(note.clone());
+                }
+            }
+        }
+    }
 }
 
 /// Adds the layers a file gave and its ground overlays: a layer that can't be added is skipped
@@ -8444,6 +8470,71 @@ pub(crate) fn external_dataset_selector(command: &str) -> bool {
 mod tests {
     use crate::Session;
     use serde_json::json;
+
+    /// A geometry selected from a loose file or a zip still reports its source feature's unread
+    /// properties. Adding both geometry layers says that once as well.
+    #[test]
+    fn gml_selected_geometry_has_its_shared_notices() {
+        use base64::Engine;
+        use rustgis_data::loss::LossCode;
+
+        let gml = r#"<app:Collection xmlns:app="http://example.com/app" xmlns:gml="http://www.opengis.net/gml/3.2">
+<app:parkMember><app:Park>
+<app:label><gml:MultiPoint><gml:pointMember><gml:Point><gml:pos>10 48</gml:pos></gml:Point></gml:pointMember>
+<gml:pointMember/></gml:MultiPoint></app:label>
+<app:entrance><gml:Point><gml:pos>10.1 48</gml:pos></gml:Point></app:entrance>
+<app:owner><app:name>Ann</app:name></app:owner>
+</app:Park></app:parkMember>
+</app:Collection>"#;
+        let zip = rustgis_data::zip::write(&[("parks.gml".into(), gml.as_bytes().to_vec())]).unwrap();
+        let zip = base64::engine::general_purpose::STANDARD.encode(zip);
+        for (cmd, params) in [
+            ("layer.addDataText", json!({"fileName": "parks.gml", "text": gml})),
+            ("layer.addDataBytes", json!({"fileName": "parks.zip", "data": zip})),
+        ] {
+            for pick in [false, true] {
+                let mut s = Session::new(crate::Project::default());
+                let mut params = params.clone();
+                if pick {
+                    params["layer"] = json!("parks entrance");
+                }
+                let mark = s.notice_mark();
+                s.run(cmd, &params).unwrap();
+                assert_eq!(s.map().layers.len(), if pick { 1 } else { 2 });
+                assert!(s.map().layer_by_name("parks entrance").is_some());
+                let notices: Vec<_> = s.notices_since(mark).iter().filter(|n| n.loss() == Some(LossCode::DroppedValue)).collect();
+                assert_eq!(notices.len(), 1, "{notices:?}");
+                assert_eq!(notices[0].text, "parks: 1 property not read: nested records, other GML values or further shapes (owner)");
+                let geometry_notices: Vec<_> =
+                    s.notices_since(mark).iter().filter(|n| n.loss() == Some(LossCode::DroppedGeometry)).collect();
+                if pick {
+                    assert!(geometry_notices.is_empty(), "{geometry_notices:?}");
+                } else {
+                    assert_eq!(geometry_notices.len(), 1, "{geometry_notices:?}");
+                    assert!(geometry_notices[0].text.starts_with("parks label: 1 part of multi-geometries not read"));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_selected_gml_sibling_carries_the_skipped_geometry_count_once() {
+        let gml = br#"<gml:FeatureCollection xmlns:gml="http://www.opengis.net/gml"><gml:featureMembers>
+<Park><label><gml:Point><gml:pos>10 48</gml:pos></gml:Point></label>
+<entrance><gml:Point><gml:pos>11 48</gml:pos></gml:Point></entrance></Park>
+<Park><label><gml:Point><gml:pos>invalid</gml:pos></gml:Point></label></Park>
+</gml:featureMembers></gml:FeatureCollection>"#;
+        for pick_sibling in [false, true] {
+            let mut reads = rustgis_data::io::read_layers("parks.gml", gml).unwrap();
+            assert_eq!(reads.len(), 2);
+            if pick_sibling {
+                reads.retain(|read| read.dataset.name == "parks entrance");
+            }
+            super::restore_sibling_notices(&mut reads);
+            assert_eq!(reads.len(), if pick_sibling { 1 } else { 2 });
+            assert_eq!(reads.iter().map(|read| read.report.skipped).sum::<usize>(), 1);
+        }
+    }
 
     /// A GDAL conversion's parts say their Z or M values once for each kind: a part alone in a
     /// fresh conversion's words, several counted together; parts without any say nothing.

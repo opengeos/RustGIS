@@ -230,6 +230,16 @@ pub struct LayerRead {
     pub dataset: Dataset,
     pub report: ReadReport,
     pub styles: Vec<(String, crate::kml::Style)>,
+    /// Notices and skipped feature counts shared with other layers from this file. Add Data
+    /// can restore them when it picks a layer without its sibling that carries them.
+    pub sibling_report: Option<std::sync::Arc<ReadReport>>,
+}
+
+impl LayerRead {
+    /// A layer read without styles or notices shared with other layers.
+    pub fn plain(dataset: Dataset, report: ReadReport) -> Self {
+        Self { dataset, report, styles: Vec::new(), sibling_report: None }
+    }
 }
 
 /// Whether a file holds several layers ([`read_layers`] reads them all): a zip, KML, KMZ, GPX or
@@ -278,10 +288,10 @@ fn read_city_member(file_name: &str, bytes: &[u8], crs: Option<Crs>) -> Result<V
 }
 
 /// Reads every layer of a file held in memory: the Shapefiles and other files of a zip, a KML or
-/// KMZ's points, lines and polygons (with their styles), or a GPX's waypoints, routes, tracks and
-/// track points. Other files give their one layer. A file read as it is added (KML and KMZ,
-/// LandXML, RSS, Atom, GeoRSS, XML that isn't a city model) stays within [`BYTES_FLOOR`], as
-/// before #2408; the others take [`max_bytes`].
+/// KMZ's points, lines and polygons (with their styles), a GPX's waypoints, routes, tracks and
+/// track points, or a GML collection's layers by feature type and geometry property. A file
+/// read as it is added (KML and KMZ, LandXML, RSS, Atom, GeoRSS, XML that isn't a city model)
+/// stays within [`BYTES_FLOOR`], as before #2408; the others take [`max_bytes`].
 pub fn read_layers(file_name: &str, bytes: &[u8]) -> Result<Vec<LayerRead>> {
     let ext = Path::new(file_name).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
     // KML and KMZ, LandXML, RSS, Atom, GeoRSS and other XML that isn't a city model are read as
@@ -293,13 +303,12 @@ pub fn read_layers(file_name: &str, bytes: &[u8]) -> Result<Vec<LayerRead>> {
     if bytes.len() as u64 > max {
         return Err(DataError::Format(file_size_error(file_name, max)));
     }
-    let plain =
-        |v: Vec<(Dataset, ReadReport)>| v.into_iter().map(|(dataset, report)| LayerRead { dataset, report, styles: Vec::new() }).collect();
+    let plain = |v: Vec<(Dataset, ReadReport)>| v.into_iter().map(|(d, r)| LayerRead::plain(d, r)).collect();
     let mut out: Vec<LayerRead> = match ext.as_str() {
         "zip" => read_zip_layers(file_name, bytes, &CsvOptions::default())?,
         "kml" | "kmz" => crate::kml::read(file_name, bytes)?
             .into_iter()
-            .map(|l| LayerRead { dataset: l.dataset, report: l.report, styles: l.styles })
+            .map(|l| LayerRead { dataset: l.dataset, report: l.report, styles: l.styles, sibling_report: None })
             .collect(),
         "gpx" => plain(crate::gpx::read(file_name, bytes)?),
         "rss" | "atom" | "georss" => plain(crate::georss::read(file_name, bytes)?),
@@ -318,7 +327,7 @@ pub fn read_layers(file_name: &str, bytes: &[u8]) -> Result<Vec<LayerRead>> {
             } else if text.contains("<kml") {
                 crate::kml::read(file_name, bytes)?
                     .into_iter()
-                    .map(|l| LayerRead { dataset: l.dataset, report: l.report, styles: l.styles })
+                    .map(|l| LayerRead { dataset: l.dataset, report: l.report, styles: l.styles, sibling_report: None })
                     .collect()
             } else {
                 return Err(DataError::Format(format!(
@@ -328,7 +337,7 @@ pub fn read_layers(file_name: &str, bytes: &[u8]) -> Result<Vec<LayerRead>> {
         }
         // A CityGML city model, or the features of a collection.
         "gml" if crate::citygml::looks_like_citygml(bytes) => plain(crate::citygml::read(file_name, bytes, None)?),
-        "gml" => plain(crate::gml::read(file_name, bytes)?),
+        "gml" => crate::gml::read_layers(file_name, bytes)?,
         "dxf" => plain(crate::dxf::read(file_name, bytes, &crate::dxf::Options::default())?),
         // OpenStreetMap PBF, not a vector tile (`.pbf` too).
         "pbf" if crate::osm::looks_like_osm_pbf(bytes) => plain(crate::osm::read(file_name, bytes)?),
@@ -4147,7 +4156,7 @@ fn read_zip_layers_budget(file_name: &str, bytes: &[u8], opts: &CsvOptions, budg
         match read_shapefile_parts(ShapefileParts { shp, shx, dbf, prj, cpg }, &name, crs) {
             Ok((mut dataset, report)) => {
                 dataset.source = Some(format!("{file_name}/{n}"));
-                out.push(LayerRead { dataset, report, styles: Vec::new() });
+                out.push(LayerRead::plain(dataset, report));
             }
             Err(DataError::Cancelled) => return Err(DataError::Cancelled),
             Err(e) => skipped.push(format!("{n} ({e})")),
@@ -4169,7 +4178,7 @@ fn read_zip_layers_budget(file_name: &str, bytes: &[u8], opts: &CsvOptions, budg
         match crate::mapinfo::read_bytes(&mif, mid.as_deref(), &name) {
             Ok((mut dataset, report)) => {
                 dataset.source = Some(format!("{file_name}/{n}"));
-                out.push(LayerRead { dataset, report, styles: Vec::new() });
+                out.push(LayerRead::plain(dataset, report));
             }
             Err(DataError::Cancelled) => return Err(DataError::Cancelled),
             Err(e) => skipped.push(format!("{n} ({e})")),
@@ -4204,9 +4213,7 @@ fn read_zip_layers_budget(file_name: &str, bytes: &[u8], opts: &CsvOptions, budg
             continue;
         }
         let leaf = n.rsplit('/').next().unwrap_or(&n);
-        let plain = |reads: Vec<(Dataset, ReadReport)>| {
-            reads.into_iter().map(|(dataset, report)| LayerRead { dataset, report, styles: Vec::new() }).collect::<Vec<_>>()
-        };
+        let plain = |reads: Vec<(Dataset, ReadReport)>| reads.into_iter().map(|(d, r)| LayerRead::plain(d, r)).collect::<Vec<_>>();
         let mut table = false;
         // A city model has many layers.
         let read = if ext_of(&n) == "dbf" {
@@ -4249,7 +4256,14 @@ fn read_zip_layers_budget(file_name: &str, bytes: &[u8], opts: &CsvOptions, budg
                     Err(e) => skipped.push(format!("{n}'s ground overlays, which couldn't be counted ({e})")),
                 }
             }
-            read_layers(leaf, &b).and_then(|layers| {
+            read_layers(leaf, &b).and_then(|mut layers| {
+                // Only layers that fit the archive's cap can contribute to its retained memory.
+                let remaining = MAX_ZIP_LAYERS - out.len();
+                if layers.len() > remaining {
+                    for layer in layers.drain(remaining..) {
+                        skipped.push(format!("{n}: {} (past the {MAX_ZIP_LAYERS}-layer limit)", layer.dataset.name));
+                    }
+                }
                 // A KML's styles stay with its layers.
                 let styles = layers.iter().flat_map(|l| &l.styles).fold(0usize, |sum, (id, _)| {
                     sum.saturating_add(std::mem::size_of::<(String, crate::kml::Style)>()).saturating_add(id.capacity())
@@ -9744,6 +9758,26 @@ mod tests {
         let allowance = retained_cost(&rows_only) + 1024;
         let e = read_zip_budget("books.zip", &zip, None, &mut { allowance }).unwrap_err().to_string();
         assert!(e.contains("a.xlsx") && e.contains("memory budget"), "{e}");
+    }
+
+    #[test]
+    fn zipped_gml_only_charges_layers_that_fit_the_zip_layer_cap() {
+        use std::fmt::Write as _;
+        let mut gml = r#"<gml:FeatureCollection xmlns:gml="http://www.opengis.net/gml"><gml:featureMember><Parcel>"#.to_owned();
+        for i in 0..=MAX_ZIP_LAYERS {
+            write!(gml, "<shape{i}><gml:Point><gml:pos>5 52</gml:pos></gml:Point></shape{i}>").unwrap();
+        }
+        gml.push_str("</Parcel></gml:featureMember></gml:FeatureCollection>");
+        let loose = read_layers("parcels.gml", gml.as_bytes()).unwrap();
+        assert_eq!(loose.len(), MAX_ZIP_LAYERS + 1);
+        let mut budget = loose.iter().take(MAX_ZIP_LAYERS).map(|layer| retained_cost(&layer.dataset)).sum();
+        let zip = crate::zip::write(&[("parcels.gml".into(), gml.into_bytes())]).unwrap();
+        let layers = read_zip_budget("parcels.zip", &zip, None, &mut budget).unwrap();
+        assert_eq!(layers.len(), MAX_ZIP_LAYERS);
+        assert_eq!(budget, 0);
+        assert_eq!(layers[0].0.name, "parcels shape0");
+        let notice = format!("parcels.zip: skipped parcels.gml: parcels shape{MAX_ZIP_LAYERS} (past the {MAX_ZIP_LAYERS}-layer limit)");
+        assert_eq!(layers[0].1.messages.texts().collect::<Vec<_>>(), [notice.as_str()]);
     }
 
     /// A zipped KML says the ground overlays it doesn't draw, and its layers share the zip's
