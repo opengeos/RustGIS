@@ -1111,6 +1111,9 @@ fn trend_cmd(s: &mut Session, p: &Value) -> CmdResult {
     // A run the app worked out: added if it is still kept (the last few are), never worked out
     // again here, which would block.
     if let Some(ran) = p.get("ran").filter(|v| !v.is_null()) {
+        if !s.policy_user() {
+            return Err("internal trend results are reserved for the app".into());
+        }
         let id = ran.as_u64().ok_or("ran is the number of a run the app worked out")?;
         let at = s.trend_results.iter().position(|(k, ..)| *k == id).ok_or("that trend is no longer kept: run it again")?;
         let (_, rasters, dates) = s.trend_results.remove(at);

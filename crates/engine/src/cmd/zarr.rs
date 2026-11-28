@@ -505,6 +505,9 @@ pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
         Source::Dir(d) | Source::Url(d) => d.clone(),
     };
     // A slice the app read itself (the web app, or a store by address): its GeoTIFF, handed over.
+    if p.get("ran").is_some_and(|v| !v.is_null()) && !s.policy_user() {
+        return Err("internal read results are reserved for the app".into());
+    }
     if let Some(id) = super::f(p, "ran").filter(|v| *v >= 0.0 && v.fract() == 0.0).map(|v| v as u64) {
         let i = s.downloaded.iter().position(|(d, _)| *d == id).ok_or("no such read (it was dropped when another project opened)")?;
         let (_, tif) = s.downloaded.remove(i);

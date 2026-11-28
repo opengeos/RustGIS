@@ -164,6 +164,9 @@ impl Group {
 /// Settles the S3 sources of the project: see the module's text. Called when a project opens
 /// and when maps or layers are imported, never from a frame.
 pub(crate) fn resolve_project_s3(s: &mut Session) {
+    if !s.policy_allows_reserved() {
+        return;
+    }
     let mut groups: Vec<Group> = Vec::new();
     for a in s.project.addresses_mut() {
         if let Some(u) = unresolved(a)

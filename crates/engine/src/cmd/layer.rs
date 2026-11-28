@@ -4460,6 +4460,9 @@ fn add_sql(s: &mut Session, p: &Value) -> CmdResult {
         let full = database.as_ref().map(|d| d.label());
         // A result the app ran off the frame (the SQL pane), taken only for the query and database
         // it came from (the layer saves them); or the query run now.
+        if p.get("ran").is_some_and(|v| !v.is_null()) && !s.policy_user() {
+            return Err("internal query results are reserved for the app".into());
+        }
         let ran = p.get("ran").and_then(Value::as_u64);
         let out = match ran {
             Some(id) => {

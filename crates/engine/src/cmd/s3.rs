@@ -206,6 +206,32 @@ fn target(p: &Value) -> Result<(Option<String>, String), String> {
     Ok((bucket, prefix))
 }
 
+/// Resolves the bucket listing connection and request URL for `s3.list`. When no signed
+/// connection is authorized for this scope, wraps the URL with [`s3::anonymous`] so transport
+/// preparation never attaches an implicit bucket or endpoint signer.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn bucket_list_url(
+    s: &Session,
+    bucket: &str,
+    prefix: &str,
+    token: Option<&str>,
+    named: Option<&s3::Connection>,
+) -> Result<String, String> {
+    let allow_implicit = !s.web_logins.is_anonymous() && s.policy_allows_reserved();
+    let conn = named.cloned().or_else(|| s3::for_bucket(bucket).filter(|c| allow_implicit || c.credentials.is_none()));
+    let url = s3::list_url(bucket, prefix, token, conn.as_ref());
+    match &conn {
+        Some(c) if c.credentials.is_some() => match s3::binding_of(&c.name) {
+            Some(_) => {
+                let binding = owned_saved_binding(s, c).ok_or_else(|| format!("no S3 connection named '{}'", c.name))?;
+                s3::bound_url(&binding, &url)
+            }
+            None => Ok(url),
+        },
+        _ => Ok(s3::anonymous(&url)),
+    }
+}
+
 pub(super) fn list(s: &mut Session, p: &Value) -> CmdResult {
     let (bucket, prefix) = target(p)?;
     let named = match ps(p, "connection").map(str::trim).filter(|n| !n.is_empty()) {
@@ -267,14 +293,9 @@ pub(super) fn list(s: &mut Session, p: &Value) -> CmdResult {
                 None => s3::grant(&c.name, &bucket),
             }
         }
-        let conn = named.or_else(|| s3::for_bucket(&bucket).filter(|c| !s.web_logins.is_anonymous() || c.credentials.is_none()));
         let (mut prefixes, mut objects, mut token, mut pages) = (Vec::new(), Vec::new(), None::<String>, 0);
         loop {
-            let url = s3::list_url(&bucket, &prefix, token.as_deref(), conn.as_ref());
-            let url = match &conn {
-                Some(c) => through(c, url)?,
-                None => url,
-            };
+            let url = bucket_list_url(s, &bucket, &prefix, token.as_deref(), named.as_ref())?;
             let page = s3::parse_list(&fetch(&url)?)?;
             prefixes.extend(page.prefixes);
             objects.extend(page.objects);

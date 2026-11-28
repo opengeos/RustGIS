@@ -243,7 +243,7 @@ pub fn commands() -> Vec<C> {
             super::connections::resolve_project(s);
             super::connections::note_waiting(s);
             Ok(Value::Null)
-        }).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Replaces).with(crate::policy::Effect::Files))
+        }).roles(&[crate::ParamRole { key: "text", role: crate::Role::Document(crate::Document::Project) }]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Replaces).with(crate::policy::Effect::Files))
         .view()
         .params(r#"{"path"?: "*.rgistemplate", "text"?: template JSON, "data"?: base64 file, "name"?: new project name}"#),
         // Packages.

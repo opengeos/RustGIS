@@ -103,6 +103,8 @@ mod service_logins;
 #[path = "tests/scopes_and_redaction.rs"]
 mod scopes_and_redaction;
 
+#[path = "tests/engine_guards.rs"]
+mod engine_guards;
 #[path = "tests/tiled_files.rs"]
 mod tiled_files;
 

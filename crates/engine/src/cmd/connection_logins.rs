@@ -67,6 +67,9 @@ pub(crate) fn resolve_keys(s: &mut Session, keys: &[(&'static str, String)]) {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn resolve(s: &mut Session, only: Option<&[(&'static str, String)]>) {
+    if !s.policy_allows_reserved() {
+        return;
+    }
     for ((kind, key), layers) in groups(s) {
         if let Some(only) = only
             && !only.iter().any(|(k, database)| *k == kind && *database == key)

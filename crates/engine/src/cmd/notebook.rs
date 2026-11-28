@@ -485,11 +485,20 @@ fn jupyter_outputs(outputs: &[Value]) -> (String, bool) {
 /// A RustGIS or Jupyter notebook.
 fn parse(text: &str, fallback_name: &str) -> Result<Notebook, String> {
     let v: Value = serde_json::from_str(text).map_err(|e| format!("not a notebook: {e}"))?;
-    // nbformat 3 keeps its cells in worksheets: opened as 4, they'd be lost on save.
-    if let Some(major) = v.get("nbformat").and_then(Value::as_u64).filter(|n| *n < 4) {
-        return Err(format!("this is an nbformat {major} notebook; RustGIS opens nbformat 4 notebooks (Jupyter converts older ones)"));
-    }
-    if v.get("nbformat").is_some() {
+    // nbformat 3 keeps its cells in worksheets; a newer major version may carry fields this
+    // version doesn't know: opened as 4, they'd be lost on save.
+    if let Some(nbformat) = v.get("nbformat") {
+        if nbformat.as_u64() != Some(4) {
+            return Err(match nbformat.as_u64() {
+                Some(major) if major < 4 => {
+                    format!("this is an nbformat {major} notebook; RustGIS opens nbformat 4 notebooks (Jupyter converts older ones)")
+                }
+                Some(major) => {
+                    format!("this is an nbformat {major} notebook; RustGIS opens nbformat 4 notebooks (update RustGIS to open newer ones)")
+                }
+                None => "this notebook's nbformat isn't a version number; RustGIS opens nbformat 4 notebooks".into(),
+            });
+        }
         let meta = v.get("metadata").filter(|m| m.is_object());
         let name = meta.and_then(|m| m.get("title")).and_then(Value::as_str).unwrap_or(fallback_name).to_string();
         // Kept even when empty: a Jupyter notebook that doesn't say it's RustGIS isn't commands.
@@ -528,6 +537,7 @@ fn parse(text: &str, fallback_name: &str) -> Result<Notebook, String> {
         }
         return Ok(nb);
     }
+    crate::project::check_format(text, "notebook")?;
     let cells = v.get("cells").and_then(Value::as_array).map_or(0, Vec::len);
     if cells > MAX_CELLS {
         return Err(format!("this notebook has {cells} cells; RustGIS opens notebooks of up to {MAX_CELLS}"));

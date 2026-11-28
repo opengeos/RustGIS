@@ -445,16 +445,19 @@ impl Session {
             let plan = self.plan(scope, call)?;
             let decision = plan.decision(self, scope)?;
             /// Finds imports whose operations cannot be enumerated before external content is read.
-            fn generated(n: &Node) -> bool {
-                n.generated || n.children.iter().any(generated)
+            fn generated(n: &Node) -> Option<&str> {
+                if n.generated {
+                    return Some(n.id());
+                }
+                n.children.iter().find_map(generated)
             }
-            if generated(&plan.root) {
+            if let Some(id) = generated(&plan.root) {
                 return Err(format!(
                     "{}; RustGIS can't show its operations before reading it; import it yourself",
-                    if plan.root.id() == "project.importQgis" {
-                        "it adds the files and web addresses a QGIS project names"
-                    } else {
-                        "it adds the files and web addresses a GeoLibre project names"
+                    match id {
+                        "project.importQgis" => "it adds the files and web addresses a QGIS project names",
+                        "map.import" => "it adds the files and web addresses a map file names",
+                        _ => "it adds the files and web addresses a GeoLibre project names",
                     }
                 ));
             }
@@ -760,9 +763,8 @@ impl Session {
         let still = continuation.map(|c| Arc::new(move || c.check().is_ok()) as crate::render::rustgis_tiles::cache::Still);
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             // Plugins reach only the internet: so does every request a command one runs makes,
-            // the ones it derives from an address it was given (a listing, a search, a next page)
-            // and the ones a saved connection sends.
-            let held = node.effects.contains(super::Effect::Network) && self.plugin_held();
+            // whether it declares Network directly or reads a file that names web addresses.
+            let held = self.plugin_held();
             crate::render::rustgis_tiles::cache::with_optional_still(still, || {
                 crate::render::rustgis_tiles::cache::held_to_public(held, || f(self))
             })

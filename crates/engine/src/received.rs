@@ -19,14 +19,15 @@ const NAMED: usize = 3;
 impl Session {
     /// The widest reach what a file being read names may have (`p`: the command's parameters).
     /// A file downloaded by its web address is read within the reach it was read at
-    /// ([`Session::receiving`]); file text or data supplied by anything but the user (the
-    /// Assistant, MCP, a plugin) within the internet; a file read from a path, or given by the user,
-    /// within this computer and the local network, as before. That includes a path an attached
-    /// agent opens, even one it wrote: what the file names reaches no further than the agent's own
-    /// approved commands do already (its `layer.addUrl` of a local server reads from there).
+    /// ([`Session::receiving`]); a held plugin, or file text or data supplied by anything but the
+    /// user (the Assistant, MCP, a plugin), within the internet; a file read from a path, or given
+    /// by the user, within this computer and the local network, as before. That includes a path an
+    /// attached agent opens, even one it wrote: what the file names reaches no further than the
+    /// agent's own approved commands do already (its `layer.addUrl` of a local server reads from
+    /// there).
     pub(crate) fn file_reach(&self, p: &Value) -> Reach {
         let supplied = ["text", "data"].iter().any(|k| p.get(k).is_some_and(Value::is_string));
-        let given = if supplied && !self.policy_user() { Reach::Public } else { Reach::Local };
+        let given = if self.plugin_held() || (supplied && !self.policy_user()) { Reach::Public } else { Reach::Local };
         self.received.map_or(given, |read| given.min(read.min(Reach::Local)))
     }
 

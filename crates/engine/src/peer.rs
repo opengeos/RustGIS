@@ -311,7 +311,7 @@ impl Exchange {
 
     /// Checks last exchange, both incoming censuses, unique account and the exact current live
     /// value in one synchronous replacement. Public URL or incoming id alone grants nothing.
-    fn retain(&self, live: &Project, incoming: &mut Project, raw: &HashSet<SlotKey<'static>>) {
+    fn retain(&self, live: &Project, incoming: &mut Project, raw: &HashSet<SlotKey<'static>>) -> Vec<(&'static str, String)> {
         let current = census(live);
         let normalized = census(incoming);
         let mut records: HashMap<SlotKey<'_>, (usize, &Entry)> = HashMap::new();
@@ -345,27 +345,35 @@ impl Exchange {
             })
             .collect();
         drop(normalized);
+        let mut retained_db_keys = Vec::new();
         for (at, full) in edits {
             if let Some(FieldMut::Text(slot)) = incoming.field_mut(&at.owners, &at.leaf) {
                 *slot = full;
             }
-            reopen(incoming, &at);
+            for key in reopen(incoming, &at) {
+                if !retained_db_keys.contains(&key) {
+                    retained_db_keys.push(key);
+                }
+            }
         }
+        retained_db_keys
     }
 }
 
 /// A retained address must reopen its own reader, which normalization previously opened with
 /// the public form. Only the exact retained owner/role is touched; S3 wrappers are excluded.
-fn reopen(p: &mut Project, at: &At) {
-    let Some(owner) = at.owners.first() else { return };
+/// Returns the database key(s) of any retained database source so `Peer::Bridge` can re-resolve
+/// only those unchanged sources.
+fn reopen(p: &mut Project, at: &At) -> Vec<(&'static str, String)> {
+    let Some(owner) = at.owners.first() else { return Vec::new() };
     let map = match owner {
         Owner::Map(i) => p.maps.get_mut(*i),
         Owner::Area(i) => p.offline_areas.get_mut(*i).map(|a| &mut a.data),
         _ => None,
     };
-    let Some(map) = map else { return };
-    let Leaf::Map(rustgis_map::SlotPos::Layer { layer, role }) = &at.leaf else { return };
-    let Some(layer) = map.layers.get_mut(*layer) else { return };
+    let Some(map) = map else { return Vec::new() };
+    let Leaf::Map(rustgis_map::SlotPos::Layer { layer, role }) = &at.leaf else { return Vec::new() };
+    let Some(layer) = map.layers.get_mut(*layer) else { return Vec::new() };
     match role {
         rustgis_map::LayerRole::Streamed
         | rustgis_map::LayerRole::PostgisDatabase
@@ -379,6 +387,7 @@ fn reopen(p: &mut Project, at: &At) {
                 if let Err(e) = source.reopen() {
                     source.error = Some(rustgis_data::diagnostics::Redacted::new(&e).into_string());
                 }
+                return crate::cmd::connections::layer_keys(source);
             }
         }
         rustgis_map::LayerRole::Raster => {
@@ -390,6 +399,7 @@ fn reopen(p: &mut Project, at: &At) {
         }
         _ => {}
     }
+    Vec::new()
 }
 
 /// Values borrow the project, but identities include all duplicates; no normalization runs here.
@@ -438,10 +448,23 @@ impl Session {
     /// authority. Reset advances generation, clears item trust, history, pending work and active
     /// connections; old approvals and continuations must bind to that generation.
     pub fn open_peer_text(&mut self, peer: Peer, text: &str) -> Result<Report, String> {
-        self.with_scope(crate::policy::Scope::peer(), |s| s.open_peer_text_scoped(peer, text))?
+        let (mut report, retained_db_keys) = self.with_scope(crate::policy::Scope::peer(), |s| s.open_peer_text_scoped(peer, text))??;
+        if peer == Peer::Bridge {
+            // Only unchanged database sources explicitly retained by the Bridge exchange may
+            // re-acquire their remembered login; Peer::Embedder and any newly introduced or
+            // modified sources stay under Scope::peer() and never trigger saved login resolution.
+            if !retained_db_keys.is_empty() {
+                crate::cmd::connections::resolve_keys(self, &retained_db_keys);
+                crate::cmd::connections::note_waiting(self);
+            }
+            let (exchange, omitted) = Exchange::record(&self.project, self.opened);
+            self.exchange = Some(exchange);
+            report.not_retained = omitted;
+        }
+        Ok(report)
     }
     /// The existing raw census/reset path runs synchronously under peer provenance.
-    fn open_peer_text_scoped(&mut self, peer: Peer, text: &str) -> Result<Report, String> {
+    fn open_peer_text_scoped(&mut self, peer: Peer, text: &str) -> Result<(Report, Vec<(&'static str, String)>), String> {
         let mut p = Project::from_peer_raw(text)?;
         let exchange = self.exchange.as_ref().filter(|e| peer == Peer::Bridge && e.generation == self.opened);
         let raw = exchange.map(|e| e.incoming(&p));
@@ -459,9 +482,8 @@ impl Session {
         p.read_notices.extend(repair_notices);
         let mut report = Report::default();
 
-        if let (Some(exchange), Some(raw)) = (exchange, raw) {
-            exchange.retain(&self.project, &mut p, &raw);
-        }
+        let retained_db_keys =
+            if let (Some(exchange), Some(raw)) = (exchange, raw) { exchange.retain(&self.project, &mut p, &raw) } else { Vec::new() };
         report.reconnect = p
             .maps
             .iter()
@@ -492,12 +514,7 @@ impl Session {
         crate::cmd::connections::resolve_project(self);
         crate::cmd::connections::note_waiting(self);
         self.revision = self.revision.wrapping_add(1);
-        if peer == Peer::Bridge {
-            let (exchange, omitted) = Exchange::record(&self.project, self.opened);
-            self.exchange = Some(exchange);
-            report.not_retained = omitted;
-        }
-        Ok(report)
+        Ok((report, retained_db_keys))
     }
 }
 

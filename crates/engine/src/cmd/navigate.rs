@@ -1479,6 +1479,7 @@ pub(crate) fn bookmarks_file(map: &Map) -> Result<Vec<u8>, String> {
 
 fn import_bookmarks(s: &mut Session, p: &Value) -> CmdResult {
     let text = super::items::read_text(p)?;
+    crate::project::check_format(&text, "bookmarks file")?;
     let v: Value = serde_json::from_str(&text).map_err(|e| format!("not a RustGIS bookmarks file: {e}"))?;
     let list = v.get("bookmarks").and_then(Value::as_array).ok_or("not a RustGIS bookmarks file: no bookmarks")?;
     let m = s.map_mut();

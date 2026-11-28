@@ -31,7 +31,7 @@ fn kind(s: &Session, k: &Kind, node: &Node) -> Decision {
     match k {
         Kind::User => Allow,
         Kind::Peer => {
-            if node.effects.contains(Replaces) {
+            if node.effects.contains(Replaces) && !node.effects.contains(Files) {
                 Allow
             } else {
                 Deny

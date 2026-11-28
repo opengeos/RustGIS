@@ -1196,7 +1196,7 @@ fn reads(s: &Session) -> BTreeMap<(String, String), Reads> {
 pub(crate) fn resolve(s: &mut Session, only: Option<&BTreeSet<String>>) {
     // Imports and nested commands a plugin runs must not adopt a login before their additions
     // have been marked anonymous at the plugin boundary.
-    if s.web_logins.is_anonymous() {
+    if s.web_logins.is_anonymous() || !s.policy_allows_reserved() {
         return;
     }
     let mut pending = Vec::new();

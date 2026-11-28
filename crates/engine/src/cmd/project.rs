@@ -821,7 +821,11 @@ fn open_text(s: &mut Session, p: &Value) -> CmdResult {
     super::connections::clear_active();
     // What it names is held within this as it is read, before anything it names is read.
     let reach = s.file_reach(p);
-    let proj = if package { Project::from_import_json_within(text, None, reach) } else { Project::from_json_within(text, reach) };
+    let proj = if package || !s.policy_user() {
+        Project::from_import_json_within(text, None, reach)
+    } else {
+        Project::from_json_within(text, reach)
+    };
     let (proj, named) = match proj {
         Ok(proj) => proj,
         Err(error) => {

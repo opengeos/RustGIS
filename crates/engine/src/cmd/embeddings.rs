@@ -438,6 +438,9 @@ fn series_notes(f: &emb::SeriesFound) -> Vec<String> {
 
 /// Bytes the app read and handed over, by their id (`ran`).
 fn handed(s: &mut Session, p: &Value) -> Result<Option<(u64, Vec<u8>)>, String> {
+    if p.get("ran").is_some_and(|v| !v.is_null()) && !s.policy_user() {
+        return Err("internal read results are reserved for the app".into());
+    }
     let Some(id) = f(p, "ran").filter(|v| *v >= 0.0 && v.fract() == 0.0).map(|v| v as u64) else { return Ok(None) };
     let i = s.downloaded.iter().position(|(d, _)| *d == id).ok_or("no such read (it was dropped when another project opened)")?;
     Ok(Some((id, s.downloaded.remove(i).1)))

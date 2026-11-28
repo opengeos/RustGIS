@@ -272,16 +272,27 @@ fn share_bytes_inner(s: &mut Session, kind: &str, p: &Value) -> Result<(String, 
             let mut m = map_of(s, p)?;
             m.layers.iter_mut().filter(|l| shared_layer("webMap", l)).try_for_each(|l| load_whole(s, l))?;
             let mut unplaced = Unplaced::default();
-            let html = web_map_html(&m, &m.name, &mut unplaced)?;
+            let mut limited = 0usize;
+            let html = web_map_html(&m, &m.name, &mut unplaced, &mut limited)?;
             unplaced.say(s, "The web map");
+            if limited > 0 {
+                s.notify(format!("{limited} feature(s) left out of the web map: the {MAX_FEATURES} feature limit was reached"), false);
+            }
             Ok((m.name.clone(), html.into_bytes(), m.name))
         }
         "webLayer" => {
             let mut l = layer_of(s, p)?;
             load_whole(s, &mut l)?;
             let mut unplaced = Unplaced::default();
-            let zip = web_layer_zip(s, &l, &mut unplaced)?;
+            let mut limited = 0usize;
+            let zip = web_layer_zip(s, &l, &mut unplaced, &mut limited)?;
             unplaced.say(s, "The web layer");
+            if limited > 0 {
+                s.notify(
+                    format!("{limited} feature(s) left out of the web layer's viewer page: the {MAX_FEATURES} feature limit was reached"),
+                    false,
+                );
+            }
             Ok((l.name.clone(), zip, l.name.clone()))
         }
         "webStyle" => {
@@ -294,8 +305,12 @@ fn share_bytes_inner(s: &mut Session, kind: &str, p: &Value) -> Result<(String, 
             let fields: Option<Vec<String>> =
                 p.get("fields").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect());
             let mut unplaced = Unplaced::default();
-            let loc = locator(&l, fields.as_deref(), &mut unplaced)?;
+            let mut limited = 0usize;
+            let loc = locator(&l, fields.as_deref(), &mut unplaced, &mut limited)?;
             unplaced.say(s, "The locator");
+            if limited > 0 {
+                s.notify(format!("{limited} feature(s) left out of the locator: the {MAX_FEATURES} feature limit was reached"), false);
+            }
             Ok((l.name.clone(), serde_json::to_vec(&loc).map_err(|e| e.to_string())?, l.name.clone()))
         }
         "geodataService" => {
@@ -549,9 +564,13 @@ fn css(c: Rgba) -> String {
 
 /// A layer's visible features as GeoJSON, each with its drawn style: in longitude/latitude,
 /// whatever system the layer holds its coordinates in. One with a place that can't be given there
-/// is left out, counted in `unplaced`.
-fn styled_features(l: &Layer, budget: &mut usize, unplaced: &mut Unplaced) -> Result<Vec<Value>, String> {
+/// is left out, counted in `unplaced`; visible features past `budget` are counted in `limited`.
+fn styled_features(l: &Layer, budget: &mut usize, unplaced: &mut Unplaced, limited: &mut usize) -> Result<Vec<Value>, String> {
     let rows = l.visible_rows();
+    if *budget == 0 {
+        *limited += rows.iter().filter(|&&v| v).count();
+        return Ok(Vec::new());
+    }
     let opacity = 1.0 - f64::from(l.transparency.clamp(0.0, 100.0)) / 100.0;
     let mut out = Vec::new();
     // Its symbol by expression (no map scale: the page zooms on its own).
@@ -559,6 +578,7 @@ fn styled_features(l: &Layer, budget: &mut usize, unplaced: &mut Unplaced) -> Re
     let to = l.dataset.lonlat_conversion().map_err(|e| format!("{}: {e}", l.name))?;
     for (row, ft) in l.dataset.features.rows().enumerate() {
         if *budget == 0 {
+            *limited += rows.get(row..).map_or(0, |tail| tail.iter().filter(|&&v| v).count());
             break;
         }
         if rows.get(row) != Some(&true) {
@@ -585,7 +605,7 @@ fn styled_features(l: &Layer, budget: &mut usize, unplaced: &mut Unplaced) -> Re
 
 /// A self-contained web map page: the map's layers (rasters as images) drawn on a canvas in Web
 /// Mercator, with pan, zoom, a layer list and pop-ups. No libraries or server.
-fn web_map_html(m: &Map, title: &str, unplaced: &mut Unplaced) -> Result<String, String> {
+fn web_map_html(m: &Map, title: &str, unplaced: &mut Unplaced, limited: &mut usize) -> Result<String, String> {
     let mut budget = MAX_FEATURES;
     let mut pictures = 0usize;
     let mut layers = Vec::new();
@@ -619,7 +639,7 @@ fn web_map_html(m: &Map, title: &str, unplaced: &mut Unplaced) -> Result<String,
                 json!({"name": l.name, "image": base64::engine::general_purpose::STANDARD.encode(png), "bounds": [a.x, a.y, b.x, b.y]}),
             );
         } else {
-            layers.push(json!({"name": l.name, "features": styled_features(l, &mut budget, unplaced)?}));
+            layers.push(json!({"name": l.name, "features": styled_features(l, &mut budget, unplaced, limited)?}));
         }
     }
     let c = m.center_lonlat();
@@ -932,7 +952,7 @@ fn ogc_zip(title: &str, layers: &[&Dataset], extra: &[(String, Vec<u8>)], unplac
 }
 
 /// A web layer: the layer as an OGC API Features collection, its style, and a viewer page.
-fn web_layer_zip(s: &Session, l: &Layer, unplaced: &mut Unplaced) -> Result<Vec<u8>, String> {
+fn web_layer_zip(s: &Session, l: &Layer, unplaced: &mut Unplaced, limited: &mut usize) -> Result<Vec<u8>, String> {
     let style = serde_json::to_vec_pretty(&web_style(l)).map_err(|e| e.to_string())?;
     // The same features as the collection's items, counted there.
     let geojson = serde_json::to_vec(&rustgis_data::io::to_geojson(&l.dataset.in_lonlat_leaving_out()?.0)).map_err(|e| e.to_string())?;
@@ -948,7 +968,7 @@ fn web_layer_zip(s: &Session, l: &Layer, unplaced: &mut Unplaced) -> Result<Vec<
         m.camera.clamp();
     }
     // The page's features are the same, already counted by the collection below.
-    let html = web_map_html(&m, &l.name, &mut Unplaced::default())?;
+    let html = web_map_html(&m, &l.name, &mut Unplaced::default(), limited)?;
     let src = safe(&l.name);
     ogc_zip(
         &l.name,
@@ -967,7 +987,7 @@ pub struct Locator {
     pub entries: Vec<(String, f64, f64)>,
 }
 
-fn locator(l: &Layer, fields: Option<&[String]>, unplaced: &mut Unplaced) -> Result<Locator, String> {
+fn locator(l: &Layer, fields: Option<&[String]>, unplaced: &mut Unplaced, limited: &mut usize) -> Result<Locator, String> {
     let ds = &l.dataset;
     let fis: Vec<usize> = match fields {
         Some(fs) => {
@@ -980,7 +1000,12 @@ fn locator(l: &Layer, fields: Option<&[String]>, unplaced: &mut Unplaced) -> Res
     }
     let lonlat = ds.lonlat_conversion()?;
     let mut entries = Vec::new();
-    for (row, ft) in ds.features.iter().enumerate().take(MAX_FEATURES) {
+    let mut taken = 0usize;
+    for (row, ft) in ds.features.iter().enumerate() {
+        if taken >= MAX_FEATURES {
+            *limited = ds.features.len().saturating_sub(row);
+            break;
+        }
         let Some(g) = &ft.geometry else { continue };
         let e = g.extent();
         if e.is_empty() {
@@ -997,6 +1022,7 @@ fn locator(l: &Layer, fields: Option<&[String]>, unplaced: &mut Unplaced) -> Res
             unplaced.add(&l.name, 1);
             continue;
         };
+        taken += 1;
         for &fi in &fis {
             let t = match ds.value(row, fi) {
                 rustgis_data::Value::Null => continue,

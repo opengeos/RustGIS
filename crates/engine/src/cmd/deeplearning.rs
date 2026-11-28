@@ -89,7 +89,9 @@ pub fn commands() -> Vec<C> {
             // Only the model is inflated, whatever else the package holds.
             let entries = rustgis_data::zip::read_matching(&bytes, |n| n == "model.json")?;
             let json = entries.first().map(|e| &e.1).ok_or("not a deep learning package (no model.json)")?;
-            let mut m: DlModel = serde_json::from_slice(json).map_err(|e| format!("not a deep learning package: {e}"))?;
+            let text = std::str::from_utf8(json).map_err(|e| format!("not a deep learning package: {e}"))?;
+            crate::project::check_format(text, "deep learning package")?;
+            let mut m: DlModel = serde_json::from_str(text).map_err(|e| format!("not a deep learning package: {e}"))?;
             m.model.validate()?;
             for c in &mut m.model.classes {
                 *c = c.chars().take(200).collect();
