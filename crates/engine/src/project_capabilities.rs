@@ -229,10 +229,11 @@ fn command_sets_shadow_softness(id: &str, params: &Value) -> bool {
 
 /// A saved `raster.symbology` that sets a Shaded Relief's aerial perspective (#3141): an older reader
 /// runs it without the key, saying nothing, so the low ground would be drawn without its haze.
-/// `null` and 0 ask for none, which an older reader draws.
+/// Read as the command reads it (a numeric string is its number): `null` and 0 ask for none,
+/// which an older reader draws.
 fn command_sets_aerial(id: &str, params: &Value) -> bool {
     match id {
-        "raster.symbology" => params.get("aerial").is_some_and(|v| !v.is_null() && v.as_f64() != Some(0.0)),
+        "raster.symbology" => crate::cmd::f(params, "aerial").is_some_and(|v| v != 0.0),
         "script.run" => params.get("script").and_then(Value::as_str).is_some_and(|s| script_uses(s, command_sets_aerial)),
         _ => false,
     }
@@ -1627,6 +1628,9 @@ mod tests {
             // null and 0 are the none an older reader draws.
             (&[], "raster.symbology", json!({"type": "shadedRelief", "aerial": null})),
             (&[], "raster.symbology", json!({"type": "shadedRelief", "aerial": 0})),
+            // Read as the command reads it: a numeric string is its number, so "0" is none too.
+            (&[], "raster.symbology", json!({"type": "shadedRelief", "aerial": "0"})),
+            (&["shaded-relief-aerial"], "raster.symbology", json!({"type": "shadedRelief", "aerial": "0.5"})),
             // An SVG image is a picture marker as well, in a node as in a saved command.
             (&["picture-markers", "svg-markers"], "layer.marker", json!({"image": svg})),
             (&[], "buffer", json!({"input": "Cities", "distance": 1})),
@@ -1646,6 +1650,11 @@ mod tests {
         }
         let missing: Vec<&str> = COMMAND_CAPABILITIES.iter().map(|&(name, _)| name).filter(|name| !covered.contains(name)).collect();
         assert!(missing.is_empty(), "add a sample for each command capability, missing: {missing:?}");
+        // A saved script's step is read as the command reads it too.
+        for (aerial, needs) in [("0", false), ("0.5", true)] {
+            let script = format!(r#"raster.symbology {{"type": "shadedRelief", "aerial": "{aerial}"}}"#);
+            assert_eq!(command_sets_aerial("script.run", &json!({ "script": script })), needs, "{aerial}");
+        }
     }
 
     /// An inline graph is read as the run reads it: only an object with `nodes`, only nodes of kind
