@@ -1163,15 +1163,15 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
             (fw * 0.3, fh * 0.25)
         }
     };
-    // Whether a layer the legend lists is one of those still reading: one it leaves out, asked or
-    // as context, gives it no rows to wait for.
+    // Whether a layer the legend lists is still reading. The legend doesn't wait for one it leaves
+    // out, asked or as context.
     let listed_reading = legend.as_ref().is_some_and(|legend| {
         let out = legend.left_out(&context);
         s.map().layers.iter().any(|l| {
             s.map().draws_at(l, render_scale)
                 && crate::render::layout::legend_lists(l)
                 && !out.iter().any(|n| n.eq_ignore_ascii_case(&l.name))
-                && (l.raster.as_ref().is_some_and(|r| r.is_reading()) || l.source.as_ref().is_some_and(|s| s.is_pending()))
+                && (l.raster.as_ref().is_some_and(|r| r.is_reading()) || l.source.as_ref().is_some_and(|src| src.is_pending()))
         })
     });
     if reading && listed_reading {
