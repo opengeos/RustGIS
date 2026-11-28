@@ -4840,6 +4840,10 @@ fn render_frame(
     }
     // Set when tiny-skia actually rasterizes into the accumulator.
     let mut cpu_dirty = false;
+    // The GPU scene's mesh vertices so far, against its budget: a layer may take more than its
+    // own limit only from what is left (`mesh::layer_room`).
+    let scene_budget = if backend.is_gpu() { mesh::scene_vertices() } else { 0 };
+    let mut scene_meshed = 0usize;
     // The pictures flushed so far, as the CPU fallback counts them (see `Runs`).
     let mut runs = Runs::default();
     // The see-through layers drawn as pictures of their own so far (see `GPU_ALONE`); none unless
@@ -5429,8 +5433,11 @@ fn render_frame(
         };
         let mut highlights: Vec<(usize, Geometry, Symbol, Vec<LineStroke>, f32)> = Vec::new();
         // The GPU mesh vertices the layer has left: a streamed layer's batches share them, so
-        // one too dense to mesh goes to the CPU however it is split.
-        let mut mesh_room = mesh::MAX_LAYER_VERTICES;
+        // one too dense to mesh goes to the CPU however it is split. A layer cut into tiles,
+        // each within its own limit, may take more, from what the scene has left; not a streamed
+        // one, whose batches are tiled apart, nor one mesh (a tilted view).
+        let mut mesh_room =
+            if mesh_tiled.is_some() && !complete_source { mesh::layer_room(scene_budget, scene_meshed) } else { mesh::MAX_LAYER_VERTICES };
         let mut extrusions = if complete_source
             && layer.geometry_type() == GeometryType::Polygon
             && layer.extrusion.is_some()
@@ -5594,7 +5601,7 @@ fn render_frame(
                 && layer.renderer.expression().is_none()
                 && !upright.contains(&layer.id);
             // Lyon refuses degenerate geometry tiny-skia draws fine, a layer too dense to mesh
-            // (`MAX_LAYER_VERTICES`) is quicker splatted, and zoomed in far, markers reaching too
+            // (past the room `mesh::layer_room` gives it, or a tile past `MAX_TILE_VERTICES`) is quicker splatted, and zoomed in far, markers reaching too
             // far for f32 are drawn where they are by the CPU (#902; lines and polygons are meshed
             // in tiles, each from its own corner, `mesh_tiles`): collect_layer reports all three,
             // and the layer runs the CPU branch below like any ineligible one. It meshes the
@@ -5627,7 +5634,16 @@ fn render_frame(
                     Some((rustgis_map::look::LayerLook::of(layer)?, made))
                 });
                 let before = cmds.len();
-                let collected = match keeping.as_ref().and_then(|(look, made)| layer_meshes::take(&mut cmds, look, made, &rows)) {
+                // A kept mesh past the layer's room now (the layers before it took more of the
+                // scene's budget) is given back and the layer made again within it.
+                let taken = match keeping.as_ref().and_then(|(look, made)| layer_meshes::take(&mut cmds, look, made, &rows)) {
+                    Some(used) if used > mesh_room => {
+                        cmds.truncate(before);
+                        None
+                    }
+                    taken => taken,
+                };
+                let collected = match taken {
                     Some(used) => Ok(used),
                     None => {
                         // Panned since, the tiles still in the scene are taken as they were made.
@@ -5659,6 +5675,9 @@ fn render_frame(
                 };
                 // Once a batch is too dense, the layer's later ones fall back too (they get no
                 // room); one lyon refused leaves the room to the batches after it.
+                if let Ok(used) = collected {
+                    scene_meshed = scene_meshed.saturating_add(used);
+                }
                 mesh_room = match collected {
                     Ok(used) => mesh_room.saturating_sub(used),
                     Err(mesh::TessError::TooDense) => 0,
@@ -11484,6 +11503,39 @@ mod tests {
                 assert!(vertices.len() <= mesh::MAX_LAYER_VERTICES, "{} vertices", vertices.len());
             }
         }
+    }
+
+    /// A layer past `MAX_LAYER_VERTICES` whose tiles each keep to `MAX_TILE_VERTICES` meshes,
+    /// from what the scene's budget has left, instead of being drawn on the CPU.
+    #[test]
+    fn gpu_backend_meshes_a_layer_past_its_own_limit_in_tiles_within_theirs() {
+        // 72,900 stroked triangles a few pixels across, over about 1,500 × 1,200 pixels.
+        let mut m = Map::new("Map");
+        let mut d = Dataset::new("spread", GeometryType::Polygon, vec![]);
+        for i in 0..270 {
+            for j in 0..270 {
+                let (x, y) = (f64::from(i) * 0.05, f64::from(j) * 0.04);
+                let ring = vec![Coord::new(x, y), Coord::new(x + 0.03, y), Coord::new(x, y + 0.03)];
+                d.push(Some(Geometry::Polygon(vec![vec![ring]])), vec![]);
+            }
+        }
+        m.add_dataset(d);
+        let camera = Camera { center: lonlat_to_merc(Coord::new(6.75, 5.4)), res: 1000.0, bearing: 0.0, pitch: 0.0 };
+        let view = View { width: 1600.0, height: 1300.0, pixels_per_point: 1.0, camera, sky: false };
+        let Some(RenderOutput::Gpu(scene)) = render_backend(&mut m, &view, Backend::Gpu) else { panic!("gpu scene") };
+        let kinds = cmd_kinds(&scene);
+        assert!(!kinds.contains(&"image"), "no CPU picture: {kinds:?}");
+        let meshes: Vec<usize> = scene
+            .cmds
+            .iter()
+            .filter_map(|c| match c {
+                gpu_scene::DrawCmd::Mesh { vertices, .. } => Some(vertices.len()),
+                _ => None,
+            })
+            .collect();
+        assert!(meshes.len() > 4, "in tiles: {}", meshes.len());
+        assert!(meshes.iter().sum::<usize>() > mesh::MAX_LAYER_VERTICES, "past a layer's own limit: {}", meshes.iter().sum::<usize>());
+        assert!(meshes.iter().all(|v| *v <= mesh::MAX_TILE_VERTICES), "each tile within its own: {meshes:?}");
     }
 
     /// A turned or tilted view with a layer too dense to mesh is drawn on the CPU, as the CPU

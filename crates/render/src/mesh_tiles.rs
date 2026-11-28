@@ -408,11 +408,14 @@ fn tile_mesh(
     let square = Extent::new(origin[0], origin[1], origin[0] + side, origin[1] + side);
     let (mut v, mut i, mut no_points) = (Vec::new(), Vec::new(), Vec::new());
     let mut need = 0usize;
+    // A tile's own room is the layer's limit, or a tile's when that is less: not what the tiles
+    // finished first left, so whether the layer meshes doesn't hang on which those were (the
+    // same on any number of threads).
+    let own = limit.min(crate::mesh::MAX_TILE_VERTICES);
     for &k in members {
         let Some(f) = features.get(k) else { continue };
         // Tiles finished already past the limit: the layer is refused whatever this one holds,
-        // so it stops early. A tile's own room is the whole limit, so whether the layer meshes
-        // doesn't hang on which tiles finished first (the same on any number of threads).
+        // so it stops early.
         if used.load(Ordering::Relaxed) > limit {
             return Err(TessError::TooDense);
         }
@@ -422,12 +425,12 @@ fn tile_mesh(
         if e.min_x >= grown.min_x && e.max_x <= grown.max_x && e.min_y >= grown.min_y && e.max_y <= grown.max_y {
             // Whole, it takes about its estimate; cut, only its part here, bounded as it's made.
             need = need.max(v.len().saturating_add(f.estimate));
-            if need > limit {
+            if need > own {
                 return Err(TessError::TooDense);
             }
-            crate::mesh::append_geometry(&mut v, &mut i, &mut no_points, f.geometry, &f.symbol, origin, wireframe, ppp, map_per_px, limit)?;
+            crate::mesh::append_geometry(&mut v, &mut i, &mut no_points, f.geometry, &f.symbol, origin, wireframe, ppp, map_per_px, own)?;
         } else {
-            append_cut(&mut v, &mut i, f, &grown, origin, wireframe, ppp, map_per_px, limit)?;
+            append_cut(&mut v, &mut i, f, &grown, origin, wireframe, ppp, map_per_px, own)?;
         }
     }
     // Each part is refused once it passes the room left: it fits a limit as low as the vertices.
@@ -480,7 +483,7 @@ fn tile_meshes_on(
     let threads = threads.unwrap_or_else(|| threads_for(features, &to_make));
     // The vertices of the tiles made or taken so far: past `limit` the layer is refused, and the
     // tiles still at work stop at their next feature, so it never holds much more than `limit`
-    // (by the tiles at work at once, each at most `limit`).
+    // (by the tiles at work at once, each at most a tile's limit).
     let used = AtomicUsize::new(taken.iter().flatten().map(|k| k.vertices()).fold(0, usize::saturating_add));
     if used.load(Ordering::Relaxed) > limit {
         return Some(Err(TessError::TooDense));
@@ -495,7 +498,7 @@ fn tile_meshes_on(
         let tile = match k {
             // One that wouldn't fit the limit would be refused again, and with it the layer, in
             // its place in grid order (an error in a tile before it is the layer's).
-            Some(k) if k.need > limit => return Some(Err(TessError::TooDense)),
+            Some(k) if k.need > limit.min(crate::mesh::MAX_TILE_VERTICES) => return Some(Err(TessError::TooDense)),
             Some(k) => k.share(),
             // A tile that panicked (hostile data) leaves the layer to the CPU, as lyon refusing it.
             None => match made.next().flatten().unwrap_or(Err(TessError::Refused)) {
@@ -643,6 +646,24 @@ mod tests {
                 let short = tile_meshes_on(std::slice::from_ref(&f), &area, &[], false, 1.0, 1.0, limit, Some(threads)).unwrap();
                 assert!(matches!(short, Err(TessError::TooDense)), "limit {limit}, {threads} threads");
             }
+        }
+    }
+
+    /// A tile denser than its own limit refuses the layer, whatever room the layer has: its
+    /// features are mostly under a pixel, quicker splatted on the CPU.
+    #[test]
+    fn a_tile_past_its_own_limit_refuses_the_layer() {
+        // 600,000 points on a straight line in one tile: about 1.2 million vertices stroked,
+        // refused on the estimate.
+        let pts: Vec<Coord> = (0..600_000u32).map(|k| Coord::new(100.0 + f64::from(k) * 0.0005, 100.0)).collect();
+        let line = Geometry::Line(vec![pts]);
+        let f = feature(&line, symbol(rustgis_map::Rgba::rgb(0, 0, 0), 1.0));
+        assert!(f.estimate > crate::mesh::MAX_TILE_VERTICES && f.estimate < crate::mesh::MAX_LAYER_VERTICES, "{}", f.estimate);
+        let area = Extent::new(10.0, 10.0, 500.0, 500.0);
+        for threads in [1, 8] {
+            let made =
+                tile_meshes_on(std::slice::from_ref(&f), &area, &[], false, 1.0, 1.0, crate::mesh::MAX_LAYER_VERTICES, Some(threads));
+            assert!(matches!(made, Some(Err(TessError::TooDense))), "{threads} threads");
         }
     }
 

@@ -34,8 +34,9 @@ use crate::mesh_tiles::MadeTile;
 /// The most bytes of meshes kept, with what each was made from ([`ENTRY_BYTES`] and its rows):
 /// about 3.3 million vertices on the desktop and 0.8 million in the browser. Past it, the meshes
 /// used longest ago go first, but never one a scene being drawn has used ([`Scene`]): when the
-/// newest doesn't fit beside those, it isn't kept. A layer's mesh is at most
-/// [`crate::mesh::MAX_LAYER_VERTICES`] vertices, 80 MB.
+/// newest doesn't fit beside those, it isn't kept. A layer's meshes are mostly at most
+/// [`crate::mesh::MAX_LAYER_VERTICES`] vertices, 80 MB; one cut into tiles may hold more, from the
+/// scene's budget ([`crate::mesh::layer_room`]), and isn't kept past this.
 pub(crate) const MAX_BYTES: usize = if cfg!(target_arch = "wasm32") { 32 << 20 } else { 128 << 20 };
 
 /// What a kept mesh is counted as holding beside its data and rows: its layer's look (the
