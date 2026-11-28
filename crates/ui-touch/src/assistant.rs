@@ -11,7 +11,7 @@ use egui::{Align, Layout, RichText, Sense, Stroke, Ui, Vec2};
 use rustgis_ui_egui::rustgis_assistant::{Asking, Entry, PRESETS, provider};
 use rustgis_ui_egui::rustgis_engine::platform::{TextEntry, TextKind, Typed};
 use rustgis_ui_egui::theme::Tokens;
-use rustgis_ui_egui::{RustGisApp, assistant, i18n, tl};
+use rustgis_ui_egui::{RustGisApp, assistant, i18n, tl, tl_raw};
 
 use super::{Sheet, Swipe, TARGET, action, entry_box, heading_row, icon_button, set_sheet, sheet, toggle_chip};
 
@@ -587,6 +587,15 @@ fn settings_form(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, state: &mut Chat
             }
         });
         let preset = provider::preset(&cfg.provider);
+        // What the provider does with what it is sent, as the desktop's settings say it.
+        if let Some(p) = preset {
+            let description = if p.login || matches!(p.id, "custom" | "ollama") {
+                tl!(p.description).to_owned()
+            } else {
+                i18n::fmt("At the default address: {description}", &[("description", tl_raw!(p.description))])
+            };
+            ui.label(RichText::new(description).size(13.0).color(t.text_dim));
+        }
         if cfg.login() {
             ui.label(
                 RichText::new(tl!("Signing in with ChatGPT is set up in the desktop interface: More › Use the Desktop Interface."))
@@ -613,6 +622,16 @@ fn settings_form(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, state: &mut Chat
                 if toggle_chip(ui, t, tl!("Remember the key on this device"), ui.available_width(), remember) {
                     remember = !remember;
                     app.assistant.set_remember_key(remember);
+                }
+            }
+            if cfg.provider == "openrouter" {
+                ui.label(
+                    RichText::new(tl!("Ask OpenRouter to exclude endpoints that collect request data. Turning this off permits more endpoints, subject to your OpenRouter account settings."))
+                        .size(13.0)
+                        .color(t.text_dim),
+                );
+                if toggle_chip(ui, t, tl!("Private routing"), ui.available_width(), cfg.openrouter_private) {
+                    cfg.openrouter_private = !cfg.openrouter_private;
                 }
             }
         }
@@ -981,6 +1000,8 @@ mod tests {
     #[test]
     fn the_settings_take_a_key_from_the_systems_text_field_for_its_provider_only() {
         let mut held = Held::new();
+        // Tall enough for the whole form, which scrolls on a phone.
+        held.screen = Vec2::new(411.0, 1600.0);
         let asked = native(&mut held);
         provider(&mut held, "openai", "gpt-test");
         assert_eq!(setup(&held.app), Setup::Missing);
@@ -1016,6 +1037,28 @@ mod tests {
         assert_eq!(held.app.assistant.config().map(|c| c.key.as_str()), Some(""));
         let notices = said(&held, mark);
         assert_eq!(notices.iter().filter(|n| n.contains("wasn't kept")).count(), 1, "{notices:?}");
+    }
+
+    /// The settings say what the provider does with what it is sent, and for OpenRouter offer
+    /// private routing, as the desktop's do; a tap turns it off.
+    #[test]
+    fn the_settings_describe_the_provider_and_offer_openrouters_private_routing() {
+        let mut held = Held::new();
+        // Tall enough for the whole form, which scrolls on a phone.
+        held.screen = Vec2::new(411.0, 1600.0);
+        provider(&mut held, "openai", "gpt-test");
+        raise(&held.ctx, Height::Full);
+        held.frame(Vec::new());
+        assert!(held.find("Private routing").is_none(), "only for OpenRouter");
+        provider(&mut held, "openrouter", "m");
+        raise(&held.ctx, Height::Full);
+        held.frame(Vec::new());
+        let description = provider::preset("openrouter").map(|p| p.description).unwrap();
+        assert!(held.find(&format!("At the default address: {description}")).is_some());
+        assert_eq!(held.app.assistant.config().map(|c| c.openrouter_private), Some(true));
+        let chip = held.find("Private routing").expect("the choice").center();
+        held.touch(&[chip]);
+        assert_eq!(held.app.assistant.config().map(|c| c.openrouter_private), Some(false));
     }
 
     /// What the system's text field sends for the settings after the extension is turned off is
