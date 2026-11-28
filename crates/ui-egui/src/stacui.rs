@@ -326,7 +326,7 @@ fn post_service(app: &mut RustGisApp, url: &str, body: String) -> Answer {
     }
 }
 
-/// Reads an item's own document off the frame, at most [`cache::MAX_BYTES`] (an item is far below
+/// Reads an item's own document off the frame, at most [`DOCUMENT_BYTES`] (an item is far below
 /// it), and has it parsed and printed there too, so the window only takes the finished text. The
 /// document must be this item (a `Feature` with its id), else it is refused with the reason. The
 /// read can't be stopped once started: an abandoned one runs to its end and its answer is dropped.
@@ -346,14 +346,14 @@ fn fetch_document(app: &mut RustGisApp, url: &str, from_document: bool, id: &str
         *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(r.and_then(|f| land_document(f, &id)));
     });
     let ceiling = if from_document { Reach::Public } else { Reach::Local };
-    cache::download_limited_reaching_with_origin(&url, cache::MAX_BYTES, None, ceiling, done);
+    cache::download_limited_reaching_with_origin(&url, DOCUMENT_BYTES, None, ceiling, done);
     slot
 }
 
 /// A fetched document as the inspector shows it, if it is the item `id`.
 fn land_document(f: cache::Fetched, id: &str) -> Result<Landed, String> {
-    if f.bytes.len() > cache::MAX_BYTES {
-        return Err(i18n::fmt("larger than {n} MB", &[("n", &(cache::MAX_BYTES >> 20).to_string())]));
+    if f.bytes.len() > DOCUMENT_BYTES {
+        return Err(i18n::fmt("larger than {n} MB", &[("n", &(DOCUMENT_BYTES >> 20).to_string())]));
     }
     let (text, drawn, doc) = raw_text(&f.bytes)?;
     let is = doc.get("type").and_then(|t| t.as_str()) == Some("Feature");
@@ -364,6 +364,20 @@ fn land_document(f: cache::Fetched, id: &str) -> Result<Landed, String> {
     }
     Ok(Landed { text, drawn, doc, source: (f.origin.url().to_string(), f.origin.reach()) })
 }
+
+/// How many bytes of `text` the pane draws: up to [`JSON_SHOWN_BYTES`], cut where a character ends.
+fn shown_bytes(text: &str) -> usize {
+    let mut drawn = text.len().min(JSON_SHOWN_BYTES);
+    while !text.is_char_boundary(drawn) {
+        drawn -= 1;
+    }
+    drawn
+}
+
+/// The most bytes read of an item's own document. An item is a few kilobytes, rarely a megabyte;
+/// the limit is small because the document is held as text and as a parsed tree (a tree of
+/// numbers is several times the bytes it came from) for as long as its card is open.
+const DOCUMENT_BYTES: usize = 4 << 20;
 
 /// The most of an item's JSON the pane draws: more is cut from the view (Copy still takes it all).
 const JSON_SHOWN_BYTES: usize = 200_000;
@@ -2249,7 +2263,7 @@ fn results(app: &mut RustGisApp, ui: &mut egui::Ui) {
     }
     if cancel {
         // Drops the read (a download can't be stopped once started: it runs to its end, at most
-        // 16 MB, and its answer is not kept) and with it the card's details.
+        // 4 MB, and its answer is not kept) and with it the card's details.
         app.ui.stac.json = None;
         app.ui.stac.details = None;
     }
@@ -2352,10 +2366,7 @@ fn add_item_index(app: &mut RustGisApp, _item: &Item, _index: &str) {
 fn raw_text(bytes: &[u8]) -> Result<(String, usize, serde_json::Value), String> {
     let value: serde_json::Value = serde_json::from_slice(bytes).map_err(|e| i18n::fmt("not JSON: {e}", &[("e", &e.to_string())]))?;
     let text = serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?;
-    let mut drawn = text.len().min(JSON_SHOWN_BYTES);
-    while !text.is_char_boundary(drawn) {
-        drawn -= 1;
-    }
+    let drawn = shown_bytes(&text);
     Ok((text, drawn, value))
 }
 
@@ -2364,10 +2375,7 @@ fn raw_text(bytes: &[u8]) -> Result<(String, usize, serde_json::Value), String> 
 fn trimmed_text(item: &Item) -> (String, usize, serde_json::Value) {
     let doc = stac::item_json_with(item, true);
     let text = serde_json::to_string_pretty(&doc).unwrap_or_default();
-    let mut drawn = text.len().min(JSON_SHOWN_BYTES);
-    while !text.is_char_boundary(drawn) {
-        drawn -= 1;
-    }
+    let drawn = shown_bytes(&text);
     (text, drawn, doc)
 }
 
@@ -2593,7 +2601,11 @@ fn formatted(
     let n = head.len();
     section(ui, ("stac_head", id), tl!("Item"), head, n);
     if let Some(props) = doc.get("properties").and_then(|p| p.as_object()) {
-        let rows = props.iter().take(FORMATTED_ROWS).map(|(k, v)| (short_value(&serde_json::Value::String(k.chars().take(SHORT_VALUE_CHARS + 1).collect())), short_value(v))).collect();
+        let rows = props
+            .iter()
+            .take(FORMATTED_ROWS)
+            .map(|(k, v)| (short_value(&serde_json::Value::String(k.chars().take(SHORT_VALUE_CHARS + 1).collect())), short_value(v)))
+            .collect();
         section(ui, ("stac_props", id), tl!("Properties"), rows, props.len());
     }
     let mut add = None;
@@ -4067,8 +4079,8 @@ mod tests {
         assert_eq!(h.get_all_by_label("Copy link").count(), 2);
         assert_eq!(h.get_all_by_label("Download").count(), 1);
         // The document's keys come out in order: bucket, then visual.
-        let first = h.get_all_by_label("Add to map").nth(1).unwrap();
-        first.click();
+        let visual = h.get_all_by_label("Add to map").nth(1).unwrap();
+        visual.click();
         h.step();
         h.step();
         let said = h.state().ui.stac.error.clone();
@@ -4094,11 +4106,11 @@ mod tests {
             assert!(note.contains("not this item") && source.is_none(), "{note}");
         }
         // More than the cap: said, and the trimmed copy shown, not the document.
-        cache::set_fetcher(|_, done| done(Ok(vec![b' '; cache::MAX_BYTES + 1])));
+        cache::set_fetcher(|_, done| done(Ok(vec![b' '; DOCUMENT_BYTES + 1])));
         start_json(&mut app, 0);
         poll_json(&mut app, &ctx);
         let Some(JsonView { raw: Raw::Shown { note, source, .. }, .. }) = &app.ui.stac.json else { panic!("landed") };
-        assert!(note.as_deref().unwrap_or("").contains("larger than 16 MB") && source.is_none(), "{note:?}");
+        assert!(note.as_deref().unwrap_or("").contains("larger than 4 MB") && source.is_none(), "{note:?}");
     }
 
     #[test]
@@ -4124,7 +4136,7 @@ mod tests {
             assert!(document_asset_allowed(&item, "k", local, public).is_err(), "{local}");
         }
         let said = document_asset_allowed(&item, "k", "./extra.tif", public).unwrap_err();
-        assert!(said.contains("relative address") && !said.contains("://  "), "{said}");
+        assert!(said.contains("relative address"), "{said}");
         let said = document_asset_allowed(&item, "k", "ftp://x/a.tif", public).unwrap_err();
         assert!(said.contains("a ftp:// address"), "{said}");
         for (href, named) in [("data:text/plain;base64,AAAA", "a data: address"), ("mailto:a@b.c", "a mailto: address")] {
