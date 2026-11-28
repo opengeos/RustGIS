@@ -107,6 +107,9 @@ fn a_wide_area_is_cut_on_every_page_size() {
         let uncut = frame(&panel(json!({"profile": id, "extent": TALL})).unwrap());
         let l = panel(json!({"profile": id})).unwrap_or_else(|e| panic!("{id}: {e}"));
         assert!(frame(&l) < 0.97 * uncut, "{id}: {} from {uncut}", frame(&l));
+        // The sheet's sizes are A4's, scaled by its short side.
+        let k = l.width.min(l.height) / 210.0;
+        assert!(column(&l) >= 30.0 * k, "{id}: {} mm for the locator and the legend", column(&l));
     }
 }
 
