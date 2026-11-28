@@ -34,8 +34,9 @@ const MIN_NAMESPACE_WORK: u64 = 1 << 20;
 /// [`check_limits`]'s refusal for namespaces that take too much to resolve.
 pub const TOO_MANY_NAMESPACES: &str = "the document's namespace declarations would take more to resolve than its size allows";
 
-/// Bytes of text the entities used in a document may expand to, per byte of the document: the
-/// parser bounds references within an entity, not how often the document uses it.
+/// What the entities used in a document may cost ([`expansion`]: bytes of text and declarations
+/// searched), per byte of the document: the parser bounds references within an entity, not how
+/// often the document uses it.
 const ENTITY_EXPANSION: u64 = 16;
 
 /// What any document's entities may expand to, however short.
@@ -298,24 +299,31 @@ fn references(text: &[u8]) -> impl Iterator<Item = &[u8]> {
     text.split(|&c| c == b'&').skip(1).filter_map(|after| after.get(..after.iter().position(|&c| c == b';')?))
 }
 
-/// The bytes the references of `body` to `entities` expand to, each entity's own references
-/// followed [`ENTITY_DEPTH`] deep; of an entity declared twice, the longer.
+/// What the references of `body` to `entities` cost the parser: the bytes each expands to, and
+/// for each reference, those within values too, one step a declaration, as it searches them one by
+/// one. Each entity's own references are followed [`ENTITY_DEPTH`] deep; of an entity declared
+/// twice, the longer.
 fn expansion(entities: &[(&[u8], &[u8])], body: &[u8]) -> u64 {
-    let mut lengths: HashMap<&[u8], u64> = HashMap::new();
-    let total = |lengths: &HashMap<&[u8], u64>, text: &[u8]| {
-        references(text).filter_map(|name| lengths.get(name)).fold(0u64, |sum, &n| sum.saturating_add(n))
+    let mut costs: HashMap<&[u8], u64> = HashMap::new();
+    let search = entities.len() as u64;
+    // What `text` comes to: its own bytes, a known reference's `&name;` giving way to its cost.
+    let cost = |costs: &HashMap<&[u8], u64>, text: &[u8]| {
+        references(text).filter_map(|name| Some((name, costs.get(name)?))).fold((0u64, 0u64), |(written, sum), (name, &n)| {
+            (written + name.len() as u64 + 2, sum.saturating_add(n).saturating_add(search))
+        })
     };
-    // One pass a level: a value's own bytes, and what its references came to the level before.
+    // One pass a level: what each value came to with its references at the level before.
     for _ in 0..=ENTITY_DEPTH {
         let mut next: HashMap<&[u8], u64> = HashMap::new();
         for &(name, value) in entities {
-            let length = (value.len() as u64).saturating_add(total(&lengths, value));
+            let (written, sum) = cost(&costs, value);
+            let came = (value.len() as u64).saturating_sub(written).saturating_add(sum);
             let longest = next.entry(name).or_default();
-            *longest = (*longest).max(length);
+            *longest = (*longest).max(came);
         }
-        lengths = next;
+        costs = next;
     }
-    total(&lengths, body)
+    cost(&costs, body).1
 }
 
 /// Whether a DOCTYPE declares an entity whose value holds markup (a `<`).
@@ -471,6 +479,13 @@ mod tests {
             let doc = format!("<!DOCTYPE r [{subset}]>{uses}");
             assert_eq!(check_limits(&doc, true).unwrap_err(), TOO_MUCH_ENTITY_TEXT);
         }
+        // Each use also costs the parser a search among the declarations, one by one.
+        let many: String = (0..20_000).map(|i| format!(r#"<!ENTITY e{i} "a">"#)).collect();
+        assert_eq!(check_limits(&declaring(&many, &"&e19999;".repeat(20_000)), true).unwrap_err(), TOO_MUCH_ENTITY_TEXT);
+        // A reference within a value counts as what it expands to, not as its own text too.
+        let name = "n".repeat(100);
+        let named = format!(r#"<!ENTITY {name} "x"><!ENTITY b "&{name};">"#);
+        assert!(check_limits(&declaring(&named, &"&b;".repeat(12_000)), true).is_ok());
         // Counted in time that grows with the document's length, however it is broken.
         let started = std::time::Instant::now();
         for doc in [format!("<!DOCTYPE r [{} ]><r/>", "<!ENTITY".repeat(50_000)), "<!x [<!ENTITY a ''>]>".repeat(50_000)] {
