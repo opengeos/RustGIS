@@ -193,8 +193,10 @@ Packages and project item files are described under [Project items](data.md#proj
 ## Sharing as open formats
 
 **Publish › Share As** writes open-format files to a chosen file on desktop, or downloads them
-in the browser. The Share As commands accept a `path`; without one they use the first
-**data store** (a folder added with **Add Data Store…** in the Shared Items pane).
+in the browser. The Share As commands accept a `path`. On the desktop, one run without a `path`
+writes to the first **data store** (a folder added with **Add Data Store…** in the Shared Items
+pane), or the one `store` names. The browser has no data stores: a Share As command needs a
+`path` there and is refused without one.
 
 - **Web Map** (`share.webMap`): an HTML page of visible layers (rasters as embedded images),
   pan and zoom, a layer list and pop-ups. It uses a flat Mercator view, not the project's
