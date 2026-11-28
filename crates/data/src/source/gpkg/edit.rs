@@ -346,16 +346,24 @@ impl EditTable {
             saved.updated += 1;
         }
         // What the updated rows held before the save, to tell a value the save changed from one the
-        // load already said. Only a value a read can say something of is kept: text or a blob (a
-        // date that isn't one, a number that isn't, text that isn't UTF-8) or a whole number in a
-        // decimal field; the deleted rows and the rest of each row aren't.
+        // load already said. Only a value a read can say something of is kept: any value of a date
+        // column, text or a blob (a number that isn't one, text that isn't UTF-8) or a whole number
+        // in a decimal field; the deleted rows and the rest of each row aren't.
         let updated: std::collections::HashSet<i64> = edits.updates.iter().map(|(f, _)| f.id.cast_signed()).collect();
         let decimal: std::collections::HashSet<usize> = snapshot_columns
             .iter()
             .filter(|(i, _)| fields.get(*i).is_some_and(|f| f.ty == crate::FieldType::Double))
             .map(|&(_, c)| c)
             .collect();
-        let said = |c: usize, v: &Sql| matches!(v, Sql::Text(_) | Sql::Blob(_)) || matches!(v, Sql::Integer(_)) && decimal.contains(&c);
+        let dated: std::collections::HashSet<usize> = snapshot_columns
+            .iter()
+            .filter(|(i, _)| fields.get(*i).is_some_and(|f| matches!(f.ty, crate::FieldType::Date | crate::FieldType::DateTime)))
+            .map(|&(_, c)| c)
+            .collect();
+        // A date column's every cell, as before (a number there isn't a date either).
+        let said = |c: usize, v: &Sql| {
+            dated.contains(&c) || matches!(v, Sql::Text(_) | Sql::Blob(_)) || matches!(v, Sql::Integer(_)) && decimal.contains(&c)
+        };
         let columns_kept: Vec<usize> = snapshot_columns.iter().map(|&(_, c)| c).collect();
         let before: std::collections::HashMap<(i64, usize), Sql> = current
             .iter()
