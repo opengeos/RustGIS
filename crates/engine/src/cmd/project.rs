@@ -461,15 +461,20 @@ fn reset(s: &mut Session, p: Project) {
             rustgis_render::terrain::walls_layer(m, l).is_none().then(|| format!("{} ('{l}')", m.name))
         })
         .collect();
-    if !bandless.is_empty() {
-        s.notify(
+    match bandless.as_slice() {
+        [] => {}
+        [one] => s.notify(
+            format!("{one}: the block diagram's walls' top layer is missing, isn't a polygon layer, holds its features only a view at a time, or shares its name with another layer, so its walls have no top band"),
+            false,
+        ),
+        _ => s.notify(
             format!(
-                "{} block diagram(s) have a walls' top layer that is missing, isn't a polygon layer, holds its features only a view at a time, or shares its name with another layer, so their walls have no top band: {}",
+                "{} block diagrams have a walls' top layer that is missing, isn't a polygon layer, holds its features only a view at a time, or shares its name with another layer, so their walls have no top band: {}",
                 bandless.len(),
                 bandless.join(", ")
             ),
             false,
-        );
+        ),
     }
     // A block's water bed (#2434) that is missing, isn't a raster layer or shares its name with
     // another layer gives no floor (`block::water_runs` reads it as the terrain command takes it):

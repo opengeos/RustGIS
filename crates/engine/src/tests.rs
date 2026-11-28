@@ -18420,6 +18420,43 @@ fn terrain_block_walls_follow_a_polygon_layer() {
 /// its thickness checked before anything changes, reported and saved with the walls, following
 /// its layer's renames, and said when it is removed or a saved project's is missing.
 #[test]
+fn terrain_block_says_a_removal_that_leaves_no_layer_to_colour_its_walls() {
+    // #2173, #2607: the walls and their top band both from "solos". Removing it while a raster of
+    // that name stays, or while two polygon layers of that name stay, leaves no layer they can
+    // be drawn from (`walls_layer`): both say so, as when no layer of that name is left.
+    use base64::Engine;
+    let soils = json!({"type": "FeatureCollection", "features": [
+        {"type": "Feature", "properties": {"classe": "latossolo"}, "geometry": {"type": "Polygon", "coordinates": [[[10.0, 45.0], [10.02, 45.0], [10.02, 45.04], [10.0, 45.04], [10.0, 45.0]]]}},
+    ]});
+    let soils = base64::engine::general_purpose::STANDARD.encode(soils.to_string().as_bytes());
+    for left in ["a raster", "two polygon layers"] {
+        let mut s = Session::new(Project::default());
+        s.run("layer.addDataBytes", &json!({"fileName": "dem.tif", "data": dem_b64()})).unwrap();
+        let dem = s.map().layers.iter().find(|l| l.is_raster()).map(|l| l.name.clone()).unwrap();
+        s.run("layer.addDataBytes", &json!({"fileName": "solos.geojson", "data": soils})).unwrap();
+        let (id, name) = s.map().layers.iter().find(|l| !l.is_raster()).map(|l| (l.id, l.name.clone())).unwrap();
+        s.run("map.terrain", &json!({"layer": dem, "block": {"walls": {"layer": name, "top": {"layer": name, "thickness": 150}}}}))
+            .unwrap();
+        // The layers of that name that stay, added and renamed to it.
+        let files: &[&str] = if left == "a raster" { &["outro.tif"] } else { &["b.geojson", "c.geojson"] };
+        for file in files {
+            let data = if file.ends_with(".tif") { dem_b64() } else { soils.clone() };
+            let before: Vec<u32> = s.map().layers.iter().map(|l| l.id).collect();
+            s.run("layer.addDataBytes", &json!({"fileName": file, "data": data})).unwrap();
+            let added = s.map().layers.iter().map(|l| l.id).find(|i| !before.contains(i)).unwrap();
+            s.run("layer.rename", &json!({"layer": added, "name": name})).unwrap();
+        }
+        assert_eq!(s.map().layers.iter().filter(|l| l.name.eq_ignore_ascii_case(&name)).count(), 1 + files.len(), "{left}");
+        let mark = s.notice_mark();
+        s.run("layer.remove", &json!({"layer": id})).unwrap();
+        assert!(s.map().layers.iter().all(|l| l.id != id), "{left}: the first polygon layer is gone");
+        let said: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).collect();
+        assert!(said.iter().any(|t| t.contains(&format!("walls layer '{name}' was removed"))), "{left}: {said:?}");
+        assert!(said.iter().any(|t| t.contains(&format!("walls' top layer '{name}' was removed"))), "{left}: {said:?}");
+    }
+}
+
+#[test]
 fn terrain_block_walls_top_band_follows_its_layer() {
     use base64::Engine;
     let mut s = Session::new(Project::default());
@@ -18478,7 +18515,7 @@ fn terrain_block_walls_top_band_follows_its_layer() {
     saved.maps[0].layers.retain(|l| l.name != "pedologia");
     let mut opened = Session::new(Project::default());
     crate::cmd::project::reset_to(&mut opened, saved);
-    assert!(opened.notices.iter().any(|n| n.text.contains("walls' top layer that is missing")), "{:?}", opened.notices);
+    assert!(opened.notices.iter().any(|n| n.text.contains("the block diagram's walls' top layer is missing")), "{:?}", opened.notices);
     assert_eq!(top(&opened).as_deref(), Some("pedologia"));
     let mut clean = Session::new(Project::default());
     crate::cmd::project::reset_to(&mut clean, s.project.clone());
