@@ -415,7 +415,9 @@ pub(in crate::cmd::layout) fn chart_update(
 /// to draw (an existing loss made said) and whether its box is too small for it. It reads each
 /// feature of the chart's layer once, on the command's thread, as drawing the chart does on every
 /// draw of the page: run when a chart is added, told what to draw or coloured by classes; resized
-/// or restyled, it reads them too, for [`say_chart_crowded`] to say the last alone. An export
+/// or restyled, it reads them too, for [`say_chart_crowded`] to say the last alone: whether the
+/// box is too small depends on the bars, and the Layout view reads them on this thread as well
+/// when it draws the edited page. An export
 /// says [`chart_notices`] of what its pages drew.
 pub(in crate::cmd::layout) fn say_chart_losses(s: &mut Session, li: usize, id: u32) {
     say_chart(s, li, id, false);

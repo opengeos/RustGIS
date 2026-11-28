@@ -156,7 +156,11 @@ pub fn chart_crowded(data: &rustgis_map::layout::ChartData, look: &ChartLook, w:
         }
         Orientation::Vertical => {
             let room = bars.column_room(labelled);
-            if room.plot_h <= 0.0 { Some(Crowded::Columns) } else { (room.slot * BAR_SHARE < POINT).then_some(Crowded::Thin) }
+            if room.plot_h <= 0.0 {
+                Some(Crowded::Columns)
+            } else {
+                (room.plot_h < POINT || room.slot * BAR_SHARE < POINT).then_some(Crowded::Thin)
+            }
         }
     }
 }

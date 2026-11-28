@@ -289,6 +289,8 @@ fn stacked_bars_draw_their_stretches_and_key() {
     assert_eq!(chart_crowded(&plain, &valued(Orientation::Vertical), w, 20.0 / PT_PER_MM), Some(Crowded::Columns));
     assert_eq!(chart_crowded(&plain, &valued(Orientation::Vertical), 1.0 / PT_PER_MM, h * 2.0), Some(Crowded::Thin));
     assert_eq!(chart_crowded(&plain, &valued(Orientation::Horizontal), w, 1.0 / PT_PER_MM), Some(Crowded::Thin));
+    // Columns left some height, under a point of it.
+    assert_eq!(chart_crowded(&plain, &valued(Orientation::Vertical), w, 28.5 / PT_PER_MM), Some(Crowded::Thin));
     plain.bars = vec![(0.0, String::new())];
     assert_eq!(chart_crowded(&plain, &valued(Orientation::Vertical), w, 1.0 / PT_PER_MM), None);
     // A box narrower than a swatch draws the placeholder too, nothing past its right.

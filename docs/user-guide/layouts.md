@@ -741,7 +741,7 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
   are drawn whole. Features of a hidden class, or points drawn as an image, show none and
   leave the bar to the others. A bar whose features have several colours or show none,
   and an Other bar, keep the bar colour, and the chart says how many bars do, and why, when it
-  is added or changed, and when the layout is exported. The bars follow the symbology when it
+  is added, told what to draw or colored by class, and when the layout is exported. The bars follow the symbology when it
   changes. The bars take the layer's colours whether the frame draws the layer or not: a layer
   turned off, or outside its visible scale range, still colours them.
   **Labels** puts the labels of bars running across at the left of their column, or **By the
