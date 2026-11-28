@@ -101,6 +101,7 @@ fn renderer_style(node: Node, pipe: Node, r: Node, kind: &str, layer: &str, repo
                 ambient: None,
                 balanced: false,
                 shadow_softness: None,
+                aerial: 0.0,
             };
             (renderer, Stretch::None)
         }

@@ -7877,6 +7877,56 @@ fn shaded_relief_keeps_its_shadow_softness() {
     assert_eq!(serde_json::to_value(&fixture).unwrap()["requires"], json!(["shaded-relief-effects", "shaded-relief-shadow-softness"]));
 }
 
+/// Shaded Relief's aerial perspective (#3141) is set, kept when left out, refused by name outside 0
+/// to 1 (never brought into it), saved only when set, and back when the project is opened again;
+/// null or 0 is none again, which saves nothing new.
+#[test]
+fn shaded_relief_keeps_its_aerial_perspective() {
+    let mut s = with_raster();
+    let aerial = |s: &Session| match s.map().layers.iter().find_map(|l| l.raster.as_ref()).map(|r| &r.style.renderer) {
+        Some(rustgis_map::RasterRenderer::ShadedRelief { aerial, .. }) => *aerial,
+        other => panic!("{other:?}"),
+    };
+    let saved = |s: &mut Session| s.project.saved_text(None).unwrap().0;
+    s.run("raster.symbology", &json!({"type": "shadedRelief", "shadow": 0.8})).unwrap();
+    assert_eq!(aerial(&s), 0.0);
+    assert!(!saved(&mut s).contains("\"aerial\":"), "none saves nothing new");
+    s.run("raster.symbology", &json!({"type": "shadedRelief", "aerial": 0.6})).unwrap();
+    s.run("raster.symbology", &json!({"type": "shadedRelief", "azimuth": 200})).unwrap();
+    assert_eq!(aerial(&s), 0.6, "left out, kept");
+    for refused in [json!(-0.1), json!(1.5), json!("haze"), json!(true)] {
+        let e = s.run("raster.symbology", &json!({"type": "shadedRelief", "aerial": refused})).unwrap_err();
+        assert!(e.contains("\"aerial\"") && e.contains("0 to 1"), "{refused}: {e}");
+        assert_eq!(aerial(&s), 0.6, "{refused}: refused, nothing changed");
+    }
+    s.run("raster.symbology", &json!({"type": "shadedRelief", "aerial": 1})).unwrap();
+    assert_eq!(aerial(&s), 1.0);
+    let text = saved(&mut s);
+    assert!(text.contains("\"aerial\":1.0") && text.contains("shaded-relief-aerial"), "saved, and required by name");
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+    let dir = std::env::temp_dir().join(format!("rustgis-aerial-{}-{nanos}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("aerial.rgis");
+    s.run("project.saveAs", &json!({"path": path.display().to_string()})).unwrap();
+    let mut t = Session::new(Project::default());
+    t.run("project.open", &json!({"path": path.display().to_string()})).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(aerial(&t), 1.0, "back when opened");
+    for none in [json!(null), json!(0)] {
+        s.run("raster.symbology", &json!({"type": "shadedRelief", "aerial": 0.3})).unwrap();
+        s.run("raster.symbology", &json!({"type": "shadedRelief", "aerial": none})).unwrap();
+        assert_eq!(aerial(&s), 0.0, "{none}: none");
+    }
+    s.run("raster.symbology", &json!({"type": "shadedRelief", "aerial": 0.3})).unwrap();
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(aerial(&s), 0.0, "undone");
+    assert!(!saved(&mut s).contains("\"aerial\":"), "none saves nothing new");
+    // The fixture reads back as saved, requiring what it sets by name.
+    let fixture = Project::from_json(include_str!("../../../schema/fixtures/shaded_relief_aerial.rgis")).unwrap();
+    assert_eq!(aerial(&Session::new(fixture.clone())), 0.6);
+    assert_eq!(serde_json::to_value(&fixture).unwrap()["requires"], json!(["shaded-relief-aerial"]));
+}
+
 /// Shaded Relief's rock on steep slopes (#1913): an object turns it on, its missing keys from the
 /// current rock or the defaults; kept when left out; `false` removes it; a `from` not below `to`
 /// or a bad colour is refused; saved with the project only when set.

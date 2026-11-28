@@ -1392,6 +1392,7 @@ mod tests {
                 ambient: None,
                 balanced: false,
                 shadow_softness: None,
+                aerial: 0.0,
             };
         };
         let camera = rustgis_map::Camera { center: lonlat_to_merc(Coord::new(0.35, -0.05)), res: 300.0, bearing: 0.0, pitch: 0.0 };
@@ -1448,6 +1449,7 @@ mod tests {
             ambient: None,
             balanced: false,
             shadow_softness: None,
+            aerial: 0.0,
         };
         camera.center = lonlat_to_merc(Coord::new(0.35, -0.3));
         let view = crate::View { width: 300.0, height: 200.0, pixels_per_point: 1.0, camera, sky: false };
@@ -1500,6 +1502,7 @@ mod tests {
             ambient: None,
             balanced: false,
             shadow_softness: None,
+            aerial: 0.0,
         };
         let camera = rustgis_map::Camera { center: lonlat_to_merc(Coord::new(0.25, -0.1)), res: 300.0, bearing: 0.0, pitch: 0.0 };
         let view = crate::View { width: 200.0, height: 200.0, pixels_per_point: 1.0, camera, sky: false };
@@ -1535,6 +1538,7 @@ mod tests {
             ambient: None,
             balanced: false,
             shadow_softness: None,
+            aerial: 0.0,
         };
         let camera = rustgis_map::Camera { center: lonlat_to_merc(Coord::new(0.35, -0.05)), res: 300.0, bearing: 0.0, pitch: 0.0 };
         let view = crate::View { width: 200.0, height: 200.0, pixels_per_point: 1.0, camera, sky: false };
@@ -1581,6 +1585,7 @@ mod tests {
             ambient: None,
             balanced: false,
             shadow_softness: None,
+            aerial: 0.0,
         };
         m.view.terrain.as_mut().unwrap().water.as_mut().unwrap().glint = glint;
         camera.center = lonlat_to_merc(Coord::new(0.35, -0.3));

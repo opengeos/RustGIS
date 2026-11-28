@@ -39,7 +39,7 @@ pub fn commands() -> Vec<C> {
         C::new("layer.addDataBytes", "Add Data (from file contents)", "Home › Add", add_bytes::<MAX_UPLOAD_BYTES>).roles(&[]).effects(crate::policy::Effects::NONE)
             .params(r#"{"fileName": "name.tif|.tiff|.asc|.grb|.grib|.grb2|.grib2 (GRIB)|.hgt|.dt0|.dt1|.dt2|.geojson|.csv|.zip|.kml|.kmz|.gpx|.parquet|.fgb|.gpkg|.mbtiles|.jp2|.j2k|.dxf|.pdf (JPEG 2000: desktop, through GDAL; PDF: desktop, command line and Python)", "data": base64, "zoom"?: bool, "layer"?: "one layer of a zip, KML or GPX by name, or a PDF's page number (the first when left out or blank)", "name"?: text, "x"?, "y"?, "wkt"?, "crs"?, "delimiter"?, "paperSpace"?, "blocks"?, "stream"?, "as"? (as layer.addData)}"#),
         C::new("raster.symbology", "Symbology", "Style › Rendering", symbology).when(need_raster).roles(&[]).effects(crate::policy::Effects::NONE).params(
-            r#"{"layer"?, "type": "stretch"|"rgb"|"classify"|"unique"|"colormap"|"shadedRelief", "band"?: 1.., "ramp"?, "invert"?: bool, "classes"?: 1..32, "method"?, "azimuth"?, "altitude"?, "zFactor"?, "shadow"?: 0..1 (shadedRelief: how dark the shadows the terrain casts are; left out, kept; 0 casts none), "sky"?: 0..1 (shadedRelief: how much the share of the sky each cell sees dims its ambient light; left out, kept; 0 leaves it whole), "fill"?: 0..1 (shadedRelief: a fill light from the side opposite the sun that lightens the slopes turned toward it; left out, kept; 0 has none), "ambient"?: 0..1|null (shadedRelief: the share of the colour a slope turned fully from the sun keeps; left out, kept; null, the default: 0.25, or 0.5 balanced), "balanced"?: bool (shadedRelief: flat ground keeps the ramp's colour and slopes facing the sun brighten, up to 1.3; left out, kept; false, the default, lights as before), "shadowSoftness"?: 0.5..15|null (shadedRelief: how soft the edges of its cast shadows are, as half the sun's apparent size in degrees; left out, kept; outside 0.5 to 15, refused; null, the default: 5), "rock"?: {"from"?: 0..90, "to"?: 0..90, "color"?: #RRGGBB} | false (shadedRelief: steep slopes tinted toward a rock colour before the light, from the ground's own slope in degrees, without the Z factor: the ramp below from, the colour above to, blended between; left out, kept; an object's missing keys keep the current rock's, or 25, 40 and #B2ACA4; false or null removes it), "grey"?: bool (shadedRelief without its colour ramp)}"#,
+            r#"{"layer"?, "type": "stretch"|"rgb"|"classify"|"unique"|"colormap"|"shadedRelief", "band"?: 1.., "ramp"?, "invert"?: bool, "classes"?: 1..32, "method"?, "azimuth"?, "altitude"?, "zFactor"?, "shadow"?: 0..1 (shadedRelief: how dark the shadows the terrain casts are; left out, kept; 0 casts none), "sky"?: 0..1 (shadedRelief: how much the share of the sky each cell sees dims its ambient light; left out, kept; 0 leaves it whole), "fill"?: 0..1 (shadedRelief: a fill light from the side opposite the sun that lightens the slopes turned toward it; left out, kept; 0 has none), "ambient"?: 0..1|null (shadedRelief: the share of the colour a slope turned fully from the sun keeps; left out, kept; null, the default: 0.25, or 0.5 balanced), "balanced"?: bool (shadedRelief: flat ground keeps the ramp's colour and slopes facing the sun brighten, up to 1.3; left out, kept; false, the default, lights as before), "shadowSoftness"?: 0.5..15|null (shadedRelief: how soft the edges of its cast shadows are, as half the sun's apparent size in degrees; left out, kept; outside 0.5 to 15, refused; null, the default: 5), "aerial"?: 0..1|null (shadedRelief: aerial perspective, low ground on the layer's stretch lit with less contrast and hazed toward #ECECEC, the more the lower; left out, kept; outside 0 to 1, refused; null or 0, the default: none), "rock"?: {"from"?: 0..90, "to"?: 0..90, "color"?: #RRGGBB} | false (shadedRelief: steep slopes tinted toward a rock colour before the light, from the ground's own slope in degrees, without the Z factor: the ramp below from, the colour above to, blended between; left out, kept; an object's missing keys keep the current rock's, or 25, 40 and #B2ACA4; false or null removes it), "grey"?: bool (shadedRelief without its colour ramp)}"#,
         ),
         C::new("raster.stretch", "Stretch Type", "Style › Rendering", stretch).inputs(stretch_inputs).roles(&[]).effects(crate::policy::Effects::NONE)
         .when(need_raster)
@@ -1035,12 +1035,14 @@ fn symbology(s: &mut Session, p: &Value) -> CmdResult {
             }
             "shadedrelief" | "hillshade" => {
                 // Left out, a Shaded Relief keeps its own shadows (and their softness), sky, fill
-                // light, rock, ambient and balanced light; a new one has none (and the defaults).
-                let (cur_shadow, cur_sky, cur_fill, cur_rock, cur_ambient, cur_balanced, cur_softness) = match rl.style.renderer {
-                    RasterRenderer::ShadedRelief { shadow, sky, fill, rock, ambient, balanced, shadow_softness, .. } => {
-                        (shadow, sky, fill, rock, ambient, balanced, shadow_softness)
+                // light, rock, ambient and balanced light and aerial perspective; a new one has none
+                // (and the defaults).
+                let (cur_shadow, cur_sky, cur_fill, cur_rock, cur_ambient, cur_balanced, cur_softness, cur_aerial) = match rl.style.renderer
+                {
+                    RasterRenderer::ShadedRelief { shadow, sky, fill, rock, ambient, balanced, shadow_softness, aerial, .. } => {
+                        (shadow, sky, fill, rock, ambient, balanced, shadow_softness, aerial)
                     }
-                    _ => (0.0, 0.0, 0.0, None, None, false, None),
+                    _ => (0.0, 0.0, 0.0, None, None, false, None, 0.0),
                 };
                 RasterRenderer::ShadedRelief {
                     band: bi,
@@ -1067,6 +1069,11 @@ fn symbology(s: &mut Session, p: &Value) -> CmdResult {
                         Some(Value::Null) => None,
                         Some(_) => relief_shadow_softness(f(p, "shadowSoftness"))?,
                     },
+                    aerial: match p.get("aerial") {
+                        None => cur_aerial,
+                        Some(Value::Null) => 0.0,
+                        Some(_) => relief_aerial(f(p, "aerial"))?,
+                    },
                 }
             }
             other => return Err(format!("unknown raster symbology '{other}'")),
@@ -1090,6 +1097,15 @@ fn relief_shadow_softness(v: Option<f64>) -> Result<Option<f64>, String> {
         _ => Err(format!(
             "\"shadowSoftness\" must be a number of degrees from {SOFT_EDGE_MIN} to {SOFT_EDGE_MAX}, or null for the default ({SOFT_EDGE})"
         )),
+    }
+}
+
+/// A Shaded Relief's `"aerial"` (see `raster.symbology`), `v` being the number given, if it is one:
+/// refused by name outside 0 to 1, never brought into it.
+fn relief_aerial(v: Option<f64>) -> Result<f64, String> {
+    match v {
+        Some(v) if (0.0..=1.0).contains(&v) => Ok(v),
+        _ => Err("\"aerial\" must be a number from 0 to 1, or null for none".into()),
     }
 }
 

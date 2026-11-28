@@ -119,6 +119,8 @@ diagram cut to a circle or to polygons), `terrain-block-polygon` (one cut to pol
 `shaded-relief-light` (a Shaded Relief's ambient or balanced light),
 `shaded-relief-shadow-softness` (a softness stored for a Shaded Relief's cast shadows, or set by a saved step;
 `raster.symbology` stores the default as none),
+`shaded-relief-aerial` (a Shaded Relief's aerial perspective, stored or set by a saved step; 0 and
+`null` are none),
 `blank-paper` (a blank basemap's paper colour) and
 `normalized-legend-urls` for normalized legend addresses. Project
 requirements include offline map snapshots. `table-export-order` protects saved task commands,

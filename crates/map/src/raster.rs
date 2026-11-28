@@ -1452,6 +1452,27 @@ pub fn relief_ambient(ambient: Option<f64>, balanced: bool) -> f64 {
 /// The most a balanced Shaded Relief light multiplies a colour by, on slopes facing the sun.
 const BALANCED_MAX: f64 = 1.3;
 
+/// The light haze a Shaded Relief's aerial perspective mixes low ground's colour toward (#3141):
+/// each channel of `#ECECEC`.
+pub const AERIAL_HAZE: f64 = 236.0;
+/// At a cell's full share of aerial perspective (see [`aerial_share`]), how far its light is pulled
+/// toward flat ground's ...
+const AERIAL_LIGHT: f64 = 0.7;
+/// ... and how far its colour is mixed toward [`AERIAL_HAZE`].
+const AERIAL_MIX: f64 = 0.45;
+
+/// The share of a Shaded Relief's aerial perspective a cell gets (#3141): `aerial` (0 to 1) times
+/// `(1 − t)^1.5`, `t` being the cell's height on the layer's stretch (0 at its low end, 1 at its high
+/// end). The power leaves most of the haze to the plains and most of their relief to the middle
+/// heights. 0 for a setting of 0 or less, or not a number; a setting past 1 counts as 1.
+pub fn aerial_share(aerial: f64, t: f64) -> f64 {
+    if aerial.is_nan() || aerial <= 0.0 {
+        return 0.0;
+    }
+    let low = 1.0 - if t.is_nan() { 0.0 } else { t.clamp(0.0, 1.0) };
+    (aerial.min(1.0) * low.powf(1.5)).clamp(0.0, 1.0)
+}
+
 fn is_no_light(v: &f64) -> bool {
     *v == 0.0
 }
@@ -1672,7 +1693,9 @@ pub enum RasterRenderer {
     /// lights as before. `shadow_softness` is half the sun's apparent size its cast shadows are
     /// traced with, in degrees ([`crate::shadow::SOFT_EDGE_MIN`] to
     /// [`crate::shadow::SOFT_EDGE_MAX`]): how soft their edges are (#3144); none, the default, is
-    /// [`crate::shadow::SOFT_EDGE`].
+    /// [`crate::shadow::SOFT_EDGE`]. `aerial` (0 to 1) is its aerial perspective (#3141): low ground,
+    /// by the cell's height on the layer's stretch, is lit with less contrast and hazed toward
+    /// [`AERIAL_HAZE`] (see [`aerial_share`]); 0, the default, draws it as before.
     ShadedRelief {
         band: usize,
         ramp: Option<Ramp>,
@@ -1693,6 +1716,8 @@ pub enum RasterRenderer {
         balanced: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         shadow_softness: Option<f64>,
+        #[serde(default, skip_serializing_if = "is_no_light")]
+        aerial: f64,
     },
 }
 
@@ -2285,10 +2310,22 @@ impl<'a> Colorizer<'a> {
     /// `fill` (0–255, a share of the colour) added for its fill light (its `fill`), and its colour
     /// moved `rock` (0–255) of the way to its rock colour (its `rock`, see [`Rock::share`]).
     pub fn color_lit(&self, vals: &[f32], hillshade: Option<u8>, sky: Option<u8>, fill: Option<u8>, rock: Option<u8>) -> Option<[u8; 4]> {
+        self.unmasked(vals, |vals| self.paint(vals, hillshade, sky, fill, rock, true))
+    }
+
+    /// The colour a colour bar shows for `vals` lit by `hillshade`: [`Colorizer::color`]'s, but a
+    /// Shaded Relief's aerial perspective (#3141) only hazes it, without pulling its light toward
+    /// flat ground's: that lowers the shading's contrast, it isn't a colour of the ramp.
+    pub fn key_color(&self, vals: &[f32], hillshade: Option<u8>) -> Option<[u8; 4]> {
+        self.unmasked(vals, |vals| self.paint(vals, hillshade, None, None, None, false))
+    }
+
+    /// `paint` of `vals`, its masked values as no data.
+    fn unmasked(&self, vals: &[f32], paint: impl Fn(&[f32]) -> Option<[u8; 4]>) -> Option<[u8; 4]> {
         // The renderer masks values as it samples them (they arrive as NaN); this is for other callers.
         let mask = &self.style.mask;
         if mask.is_empty() || !vals.iter().any(|v| mask.hides(*v)) {
-            return self.paint(vals, hillshade, sky, fill, rock);
+            return paint(vals);
         }
         // Masked values are no data. The renderer bands are at most three.
         let mut kept = [f32::NAN; 3];
@@ -2297,10 +2334,20 @@ impl<'a> Colorizer<'a> {
                 *k = *v;
             }
         }
-        self.paint(kept.get(..vals.len().min(3)).unwrap_or(&kept), hillshade, sky, fill, rock)
+        paint(kept.get(..vals.len().min(3)).unwrap_or(&kept))
     }
 
-    fn paint(&self, vals: &[f32], hillshade: Option<u8>, sky: Option<u8>, fill: Option<u8>, rock: Option<u8>) -> Option<[u8; 4]> {
+    /// `pull`: whether aerial perspective pulls the light toward flat ground's (see
+    /// [`Colorizer::key_color`]).
+    fn paint(
+        &self,
+        vals: &[f32],
+        hillshade: Option<u8>,
+        sky: Option<u8>,
+        fill: Option<u8>,
+        rock: Option<u8>,
+        pull: bool,
+    ) -> Option<[u8; 4]> {
         let v0 = *vals.first()?;
         let c = match &self.style.renderer {
             RasterRenderer::Rgb { .. } => {
@@ -2327,7 +2374,7 @@ impl<'a> Colorizer<'a> {
                 }
                 *self.palette.get(i as usize)?
             }
-            RasterRenderer::ShadedRelief { ramp, rock: steep, altitude, ambient: setting, balanced, .. } => {
+            RasterRenderer::ShadedRelief { ramp, rock: steep, altitude, ambient: setting, balanced, aerial, .. } => {
                 let h = hillshade.unwrap_or(180) as f64 / 255.0;
                 let base = if ramp.is_some() { *self.ramp_lut.get(self.byte(0, v0) as usize)? } else { [255, 255, 255, 255] };
                 // Steep ground first takes on the rock colour; the light then shades either.
@@ -2343,15 +2390,31 @@ impl<'a> Colorizer<'a> {
                 // Flat ground's hillshade, rounded as the hillshade is: 0 for a sun on the horizon,
                 // which lights no flat ground to balance against, so that is lit as unbalanced.
                 let flat = (255.0 * altitude.clamp(0.0, 90.0).to_radians().sin()).round();
-                let lit = if *balanced && flat > 0.0 {
-                    // The sun's light over its value on flat ground: flat ground keeps the ramp's
-                    // colour, slopes facing the sun brighten.
-                    (a + (1.0 - share) * h * 255.0 / flat).min(BALANCED_MAX)
-                } else {
-                    a + (1.0 - share) * h
+                let light = |h: f64| {
+                    if *balanced && flat > 0.0 {
+                        // The sun's light over its value on flat ground: flat ground keeps the
+                        // ramp's colour, slopes facing the sun brighten.
+                        (a + (1.0 - share) * h * 255.0 / flat).min(BALANCED_MAX)
+                    } else {
+                        a + (1.0 - share) * h
+                    }
                 };
-                let m = |c: u8| (c as f64 * (lit + f)).round().clamp(0.0, 255.0) as u8;
-                [m(base[0]), m(base[1]), m(base[2]), 255]
+                let lit = light(h);
+                // Aerial perspective (#3141): low ground's light is pulled toward flat ground's,
+                // which lowers its contrast, and its colour mixed toward a light haze.
+                let k = aerial_share(*aerial, f64::from(self.byte(0, v0)) / 255.0);
+                if k > 0.0 {
+                    let lit = if pull { lit + (light(flat / 255.0) - lit) * AERIAL_LIGHT * k } else { lit };
+                    let haze = AERIAL_MIX * k;
+                    let m = |c: u8| {
+                        let v = (c as f64 * (lit + f)).clamp(0.0, 255.0);
+                        (v + (AERIAL_HAZE - v) * haze).round().clamp(0.0, 255.0) as u8
+                    };
+                    [m(base[0]), m(base[1]), m(base[2]), 255]
+                } else {
+                    let m = |c: u8| (c as f64 * (lit + f)).round().clamp(0.0, 255.0) as u8;
+                    [m(base[0]), m(base[1]), m(base[2]), 255]
+                }
             }
         };
         (c[3] > 0).then(|| self.enhance(c))
@@ -2725,6 +2788,7 @@ mod tests {
             ambient: None,
             balanced: false,
             shadow_softness: None,
+            aerial: 0.0,
         }
     }
 
@@ -3316,6 +3380,7 @@ mod tests {
             ambient: None,
             balanced: false,
             shadow_softness: None,
+            aerial: 0.0,
         };
         let (mut rocky, mut plain) = (RasterStyle::default_for(&r), RasterStyle::default_for(&r));
         (rocky.renderer, plain.renderer) = (relief(Some(rock)), relief(None));
@@ -3372,6 +3437,7 @@ mod tests {
             ambient,
             balanced,
             shadow_softness: None,
+            aerial: 0.0,
         };
         let relief = |altitude, ambient, balanced| tinted_relief(None, altitude, ambient, balanced);
         // Grey relief: white shaded, so a channel is 255 times the light.
@@ -3423,6 +3489,153 @@ mod tests {
         let set = relief(45.0, Some(0.35), true);
         let saved = serde_json::to_string(&set).unwrap();
         assert_eq!(serde_json::from_str::<RasterRenderer>(&saved).unwrap(), set);
+    }
+
+    /// A Shaded Relief over heights 0 to 100 with the stretch on them, so a value is its height on
+    /// the stretch in hundredths.
+    fn heights_relief(renderer: RasterRenderer) -> (Raster, RasterStyle) {
+        let gt = GeoTransform { origin_x: 0.0, origin_y: 10.0, pixel_width: 1.0, pixel_height: -1.0 };
+        let data = (0..100).map(|i| i as f32).collect();
+        let r = Raster::new("dem", 10, 10, vec![data], gt, Crs::WebMercator, None, ColorHint::Gray, "Float32").unwrap();
+        let mut style = RasterStyle::default_for(&r);
+        style.stretch = Stretch::Custom { min: 0.0, max: 100.0, bands: None };
+        style.renderer = renderer;
+        (r, style)
+    }
+
+    /// A Shaded Relief with the lights asked for and the rest of the defaults.
+    fn lit_relief(
+        ramp: Option<Ramp>,
+        altitude: f64,
+        ambient: Option<f64>,
+        balanced: bool,
+        rock: Option<Rock>,
+        aerial: f64,
+    ) -> RasterRenderer {
+        RasterRenderer::ShadedRelief {
+            band: 0,
+            ramp,
+            azimuth: 315.0,
+            altitude,
+            z_factor: 1.0,
+            shadow: 0.0,
+            sky: 0.0,
+            fill: 0.0,
+            rock,
+            ambient,
+            balanced,
+            shadow_softness: None,
+            aerial,
+        }
+    }
+
+    /// Without aerial perspective (#3141), its default, a Shaded Relief is painted exactly as before
+    /// it existed: every pixel against the formula main drew with, copied here, over heights, every
+    /// hillshade, the sky, the fill light, rock, ambient, the balanced light, the sun's altitude and
+    /// the brightness. A project from before it reads as none.
+    #[test]
+    fn no_aerial_perspective_paints_as_before() {
+        // Main's Shaded Relief colour before #3141, as it was.
+        let before = |c: &Colorizer, v0: f32, hillshade: Option<u8>, sky: Option<u8>, fill: Option<u8>, rock: Option<u8>| {
+            let RasterRenderer::ShadedRelief { ramp, rock: steep, altitude, ambient: setting, balanced, .. } = &c.style.renderer else {
+                panic!("a relief")
+            };
+            let h = hillshade.unwrap_or(180) as f64 / 255.0;
+            let base = if ramp.is_some() { *c.ramp_lut.get(c.byte(0, v0) as usize).unwrap() } else { [255, 255, 255, 255] };
+            let base = match (steep, rock) {
+                (Some(steep), Some(share)) if share > 0 => Rgba(base).lerp(steep.color.with_alpha(255), f64::from(share) / 255.0).0,
+                _ => base,
+            };
+            let share = relief_ambient(*setting, *balanced);
+            let a = share * sky.map_or(1.0, |s| f64::from(s) / 255.0);
+            let f = fill.map_or(0.0, |f| f64::from(f) / 255.0);
+            let flat = (255.0 * altitude.clamp(0.0, 90.0).to_radians().sin()).round();
+            let lit =
+                if *balanced && flat > 0.0 { (a + (1.0 - share) * h * 255.0 / flat).min(BALANCED_MAX) } else { a + (1.0 - share) * h };
+            let m = |c: u8| (c as f64 * (lit + f)).round().clamp(0.0, 255.0) as u8;
+            c.enhance([m(base[0]), m(base[1]), m(base[2]), 255])
+        };
+        let (mut painted, lights) = (0, [(None, None, None), (Some(128), Some(40), Some(200)), (Some(0), Some(255), Some(0))]);
+        for ramp in [None, Some(Ramp::Terrain)] {
+            for (ambient, balanced) in [(None, false), (Some(0.4), false), (None, true), (Some(0.8), true)] {
+                for rock in [None, Some(Rock::DEFAULT)] {
+                    for altitude in [0.0, 30.0, 45.0, 89.0] {
+                        for brightness in [0.0, 20.0] {
+                            let (r, mut style) = heights_relief(lit_relief(ramp.clone(), altitude, ambient, balanced, rock, 0.0));
+                            style.brightness = brightness;
+                            let c = Colorizer::new(&style, &r, None);
+                            for v in [0.0, 12.0, 37.5, 50.0, 99.0, 100.0, 140.0, -5.0] {
+                                for h in (0..=255u8).step_by(15).chain([255]).map(Some).chain([None]) {
+                                    for (sky, fill, steep) in lights {
+                                        let want = Some(before(&c, v, h, sky, fill, steep));
+                                        assert_eq!(c.color_lit(&[v], h, sky, fill, steep), want, "{ramp:?} {altitude}° {v} {h:?}");
+                                        painted += 1;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(painted > 50_000, "{painted}");
+    }
+
+    /// Aerial perspective (#3141): low ground on the stretch is lit with less contrast, pulled
+    /// toward flat ground's light, and hazed toward #ECECEC, the more the lower, with a power of 1.5;
+    /// the top of the stretch keeps its relief. A colour bar shows the haze but not the pull.
+    #[test]
+    fn aerial_perspective_hazes_and_flattens_low_ground() {
+        // None for none or not a number, all of it at the bottom of the stretch, none at the top.
+        for (aerial, t, k) in [(0.0, 0.0, 0.0), (-1.0, 0.0, 0.0), (f64::NAN, 0.0, 0.0), (0.6, 0.0, 0.6), (0.6, 1.0, 0.0), (2.0, -1.0, 1.0)]
+        {
+            assert_eq!(aerial_share(aerial, t), k, "{aerial} {t}");
+        }
+        assert!((aerial_share(1.0, 0.5) - 0.5f64.powf(1.5)).abs() < 1e-12 && aerial_share(0.6, f64::NAN) == 0.6);
+
+        let grey = |aerial: f64, balanced: bool| {
+            let (r, style) = heights_relief(lit_relief(None, 45.0, None, balanced, None, aerial));
+            move |v: f32, h: u8| Colorizer::new(&style, &r, None).color_lit(&[v], Some(h), None, None, None).map(|c| c[0]).unwrap()
+        };
+        let (none, set) = (grey(0.0, false), grey(0.6, false));
+        // The summit, at the top of the stretch, is drawn as without it, whatever the light.
+        for h in [0u8, 90, 180, 255] {
+            assert_eq!(set(100.0, h), none(100.0, h), "{h}");
+        }
+        // The lowest ground, by the formula: the light pulled 0.7 × 0.6 toward flat ground's, then
+        // the colour 0.45 × 0.6 toward the haze.
+        let flat = (255.0 * 45f64.to_radians().sin()).round() / 255.0;
+        for h in [0u8, 90, 180, 255] {
+            let lit = 0.25 + 0.75 * f64::from(h) / 255.0;
+            let lit = lit + (0.25 + 0.75 * flat - lit) * 0.7 * 0.6;
+            let v = 255.0 * lit;
+            assert_eq!(set(0.0, h), (v + (236.0 - v) * 0.45 * 0.6).round() as u8, "{h}");
+        }
+        // Contrast, between a slope turned from the sun and one facing it, grows with the height,
+        // and is lower than without it everywhere below the top; the low ground is lighter.
+        let contrast = |paint: &dyn Fn(f32, u8) -> u8, v: f32| i32::from(paint(v, 255)) - i32::from(paint(v, 0));
+        let mut last = 0;
+        for v in [0.0, 25.0, 50.0, 75.0] {
+            let c = contrast(&set, v);
+            assert!(c > last && c < contrast(&none, v), "{v}: {c}");
+            assert!(set(v, 0) > none(v, 0), "{v}: lighter");
+            last = c;
+        }
+        // Balanced, flat ground's own hillshade is its light already: only the haze changes it.
+        let balanced = grey(1.0, true);
+        let flat_h = hillshade(&[0.0; 9], 1.0, 1.0, 315.0, 45.0, 1.0);
+        assert_eq!(balanced(0.0, flat_h), (255.0 + (236.0 - 255.0) * 0.45f64).round() as u8);
+
+        // A colour bar's key: the haze, not the pull toward flat ground's light.
+        let (r, style) = heights_relief(lit_relief(Some(Ramp::Terrain), 45.0, None, false, None, 0.6));
+        let c = Colorizer::new(&style, &r, None);
+        let ramp = |v: f32| *c.ramp_lut.get(c.byte(0, v) as usize).unwrap();
+        for v in [0.0f32, 30.0, 100.0] {
+            let k = aerial_share(0.6, f64::from(c.byte(0, v)) / 255.0) * 0.45;
+            let hazed = ramp(v).map(|x| (f64::from(x) + (236.0 - f64::from(x)) * k).round() as u8);
+            assert_eq!(c.key_color(&[v], Some(255)), Some([hazed[0], hazed[1], hazed[2], 255]), "{v}");
+        }
+        assert_eq!(c.key_color(&[100.0], Some(255)), Some(ramp(100.0)), "the top: the ramp itself");
     }
 
     /// A tower lit from the east, drawn as Shaded Relief with `shadow`.

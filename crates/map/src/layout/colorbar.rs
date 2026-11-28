@@ -86,7 +86,7 @@ pub fn color_scale(rl: &RasterLayer) -> Option<ColorScale> {
         RasterRenderer::ShadedRelief { .. } => Some(255),
         _ => None,
     };
-    let at = |v: f64| colorizer.color(&[v as f32], shade).map(Rgba);
+    let at = |v: f64| colorizer.key_color(&[v as f32], shade).map(Rgba);
     match &style.renderer {
         RasterRenderer::Stretch { .. } | RasterRenderer::ShadedRelief { ramp: Some(_), .. } => {
             let n = Normalizer::new(style.stretch, stats, &r.data_type);
