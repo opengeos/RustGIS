@@ -112,6 +112,22 @@ field changes the endpoint for providers other than ChatGPT; use the OpenAI-comp
 path (usually `/v1`) for local servers. Models that call tools well give the best results;
 small local models may stop early or skip steps.
 
+### OpenRouter private routing
+
+**Private routing** is on by default for OpenRouter. Every chat request, including summaries
+and subagent requests, sends `provider: {"data_collection": "deny"}` to exclude endpoints that
+collect request data. This uses [OpenRouter's routing policy](https://openrouter.ai/docs/guides/routing/provider-selection);
+it isn't a guarantee of upstream compliance or the separate zero data retention option.
+If no endpoint satisfies the policy, the refusal points to this checkbox. Turning it off
+allows more endpoints under your OpenRouter account settings; some may keep or train on requests.
+The model list is unchanged, so a listed model may have no eligible endpoint.
+
+Changing this setting stops the current run, including a delegated subagent, so subsequent
+requests use the new policy. A request already sent may still finish at the provider.
+The setting is saved for OpenRouter alone. On the command line, set
+`RUSTGIS_OPENROUTER_DATA_COLLECTION=allow` to turn the filter off; other values keep it on.
+Other providers' requests are unaffected.
+
 ### Signing in with ChatGPT
 
 With a ChatGPT plan you can use the assistant without an API key, through OpenAI's
