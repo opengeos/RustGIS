@@ -62,6 +62,7 @@ impl Default for Elements {
 pub(super) enum Control {
     LegendBox,
     Context,
+    Colorbar,
     ScaleBar,
     Veil,
 }
@@ -109,10 +110,8 @@ impl Draft {
         }
     }
 
-    /// Whether a colorbar is drawn: ticked, with a raster whose colour scale is read (one still
-    /// reading has none to show). With pixels, [`colorbar_layer`] only gives a raster with a scale.
     fn draws_colorbar(&self, s: &Session) -> bool {
-        self.elements.colorbar && colorbar_layer(s.map(), None).is_some_and(|l| l.raster.as_ref().is_some_and(|r| r.data.is_some()))
+        self.elements.colorbar && self.usable(Control::Colorbar, s)
     }
 
     fn draws_scale_bar(&self, s: &Session) -> bool {
@@ -139,6 +138,9 @@ impl Draft {
         match control {
             Control::LegendBox => !self.column() && !self.cards() && self.draws_legend_place(s),
             Control::Context => self.elements.legend,
+            // A raster still reading has no scale to show yet. With pixels, [`colorbar_layer`]
+            // only gives a raster with one.
+            Control::Colorbar => colorbar_layer(s.map(), None).is_some_and(|l| l.raster.as_ref().is_some_and(|r| r.data.is_some())),
             Control::ScaleBar => !self.whole_globe(s),
             // The command veils only what is under surrounds over the map.
             Control::Veil => !self.column() && self.draws_legend_place(s),
@@ -167,7 +169,7 @@ impl Draft {
             ("legend", (!e.legend).then(|| "none".into())),
             ("legendBox", (e.legend_box && self.usable(Control::LegendBox, s)).then(|| "always".into())),
             ("contextInLegend", (e.context && self.usable(Control::Context, s)).then(|| true.into())),
-            ("colorbar", (!e.colorbar).then(|| "none".into())),
+            ("colorbar", (!e.colorbar && self.usable(Control::Colorbar, s)).then(|| "none".into())),
             ("scaleBar", (!e.scale_bar && self.usable(Control::ScaleBar, s)).then(|| "none".into())),
             ("veil", (!e.veil && self.usable(Control::Veil, s)).then(|| false.into())),
             ("decimal", e.comma.then(|| ",".into())),
@@ -232,26 +234,36 @@ pub(super) fn elements_step(ui: &mut egui::Ui, s: &Session, d: &mut Draft) {
     });
     ui.add_space(4.0);
     // A box the sheet has no use for is off, its tick kept for one that has.
-    let tick = |ui: &mut egui::Ui, usable: bool, on: &mut bool, label: &str| ui.add_enabled(usable, egui::Checkbox::new(on, label));
-    tick(ui, true, &mut d.elements.legend, tl!("Legend"));
+    let tick = |ui: &mut egui::Ui, usable: bool, on: &mut bool, label: &str, why: &str| {
+        ui.add_enabled(usable, egui::Checkbox::new(on, label)).on_disabled_hover_text(why)
+    };
+    ui.checkbox(&mut d.elements.legend, tl!("Legend"));
     ui.indent("publication_wizard_legend", |ui| {
+        let own_box = d.column() || d.cards();
         let usable = d.usable(Control::LegendBox, s);
-        tick(ui, usable, &mut d.elements.legend_box, tl!("Always on a box"));
+        let why =
+            if own_box { tl!("In this style the legend has a box of its own.") } else { tl!("There is no legend or colorbar to box.") };
+        tick(ui, usable, &mut d.elements.legend_box, tl!("Always on a box"), why);
         let usable = d.usable(Control::Context, s);
-        tick(ui, usable, &mut d.elements.context, tl!("List the context layers"));
-        if d.column() || d.cards() {
+        tick(ui, usable, &mut d.elements.context, tl!("List the context layers"), tl!("There is no legend to list them in."));
+        if own_box {
             let note = tl!("In this style the legend has a box of its own.");
             ui.label(egui::RichText::new(note).small().weak());
         }
     });
-    tick(ui, true, &mut d.elements.colorbar, tl!("Colorbar")).on_hover_text(tl!("Drawn when the map's top raster has a colour scale."));
+    let usable = d.usable(Control::Colorbar, s);
+    let why = tl!("The map has no raster with a colour scale.");
+    tick(ui, usable, &mut d.elements.colorbar, tl!("Colorbar"), why)
+        .on_hover_text(tl!("Drawn when the map's top raster has a colour scale."));
     let usable = d.usable(Control::ScaleBar, s);
-    tick(ui, usable, &mut d.elements.scale_bar, tl!("Scale bar"));
+    let why = tl!("A map of the whole globe draws no scale bar.");
+    tick(ui, usable, &mut d.elements.scale_bar, tl!("Scale bar"), why);
     if !usable {
-        ui.label(egui::RichText::new(tl!("A map of the whole globe draws no scale bar.")).small().weak());
+        ui.label(egui::RichText::new(why).small().weak());
     }
     let usable = d.usable(Control::Veil, s);
-    tick(ui, usable, &mut d.elements.veil, tl!("Veil the map outside the extent if the legend needs room"));
+    let why = if d.column() { tl!("In this style the map isn't veiled.") } else { tl!("There is no legend or colorbar to make room for.") };
+    tick(ui, usable, &mut d.elements.veil, tl!("Veil the map outside the extent if the legend needs room"), why);
     ui.add_space(4.0);
     ui.label(tl!("Decimal mark"));
     ui.horizontal_wrapped(|ui| {
@@ -400,6 +412,19 @@ mod tests {
         }
     }
 
+    /// With no raster colour scale to show, the colorbar is off and its answer isn't sent; the tick
+    /// is kept, and counts again once there is a raster.
+    #[test]
+    fn without_a_colour_scale_the_colorbar_is_off_and_not_sent() {
+        let mut h = step_of(|app| app.dialogs.publication.as_mut().unwrap().elements.colorbar = false);
+        assert!(off(&h, "Colorbar"), "a map of vectors");
+        assert_eq!(added(&h.state().session, draft(&h)), json!({}));
+        raster(h.state_mut());
+        h.run_steps(4);
+        assert!(!off(&h, "Colorbar"), "a raster added meanwhile");
+        assert_eq!(added(&h.state().session, draft(&h)), json!({"colorbar": "none"}));
+    }
+
     /// With nothing to make room for, the veil isn't sent.
     #[test]
     fn without_a_legend_or_colorbar_the_veil_isnt_sent() {
@@ -444,7 +469,7 @@ mod tests {
     /// Each control sets its answer.
     #[test]
     fn the_controls_set_the_answers() {
-        let mut h = step_of(|_| {});
+        let mut h = step_of(raster);
         pick(&mut h, "Inset", 0);
         pick(&mut h, "None", 1);
         pick(&mut h, "Comma (1,5)", 0);

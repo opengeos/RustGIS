@@ -56,22 +56,22 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
     switched or the map renamed, is said and nothing is made); without a name the layout is
     `Publication`; the review says when a layout has that name, so the new one is numbered. The
     **elements** are what is drawn around the map: the locator (the default, named as what it will
-    be, a globe, an inset or none), the north arrow (auto, always or none), the legend or not, with
-    its box always and the context layers listed, the colorbar and the scale bar or not, whether the
-    map may be veiled for the legend's room, and the decimal mark; a choice the sheet can't use is
-    off and isn't sent. The **placement** is the arrangement (below): `best`, the favourite, one by
-    name or one saved, or **Custom**, a corner for each surround (a corner another has swaps the
-    two; on Panel, Editorial and Modular only the north arrow and scale bar take one, the locator
-    and legend sitting in the column; a surround left out in the elements takes none, as a figure's
-    locator unless asked for); a chosen one can be made the favourite, once the layout is made. A
-    saved one removed after it was picked is said at Create and nothing is made. A figure goes from
-    its size to its map, its elements, its placement, its reference (each line typed; with no
-    heading, and it can be left out) and the review, as it takes no style, accent or other text. A
-    field left empty is left out (for the credit line, the reference and the headings, the command's
-    default applies); the title is the exception: empty, it means no title. A layout the command
-    refuses is said, and the wizard stays open. The window can be resized. Its steps are listed on
-    the left, and a click goes to one; a narrow screen leaves the list out, and the heading still
-    says which step this is.
+    be, a globe, an inset or none), the north arrow (auto, always or none), the legend or not, which
+    can be set always on a box and to list the context layers, the colorbar and the scale bar or
+    not, whether the map may be veiled for the legend's room, and the decimal mark; a choice the
+    sheet can't use is off and isn't sent. The **placement** is the arrangement (below): `best`, the
+    favourite, one by name or one saved, or **Custom**, a corner for each surround (a corner another
+    has swaps the two; on Panel, Editorial and Modular only the north arrow and scale bar take one,
+    the locator and legend sitting in the column; a surround left out in the elements takes none, as
+    a figure's locator unless asked for); a chosen one can be made the favourite, once the layout is
+    made. A saved one removed after it was picked is said at Create and nothing is made. A figure
+    goes from its size to its map, its elements, its placement, its reference (each line typed; with
+    no heading, and it can be left out) and the review, as it takes no style, accent or other text.
+    A field left empty is left out (for the credit line, the reference and the headings, the
+    command's default applies); the title is the exception: empty, it means no title. A layout the
+    command refuses is said, and the wizard stays open. The window can be resized. Its steps are
+    listed on the left, and a click goes to one; a narrow screen leaves the list out, and the
+    heading still says which step this is.
   - **The map**: the `extent` given (or the view) fitted north-up, without tilt, at a round scale,
     two significant figures, rounded up so it still fits within the strips the graticule's labels
     take inside the frame. A graticule's step follows the extent (2° for a state, 15′ for a city),
