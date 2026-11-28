@@ -660,6 +660,43 @@ fn file_cases() -> Vec<(&'static str, Value, &'static str, bool)> {
     ]
 }
 
+/// Two writes of a file whose ids or times differ hold the same: a zip the same entries, JSON the
+/// same members and as many items, and anything else as many bytes.
+fn assert_same_shape(a: &[u8], b: &[u8], what: &str) {
+    fn same(a: &Value, b: &Value) -> bool {
+        match (a, b) {
+            (Value::Object(a), Value::Object(b)) => a.len() == b.len() && a.iter().all(|(k, v)| b.get(k).is_some_and(|w| same(v, w))),
+            (Value::Array(a), Value::Array(b)) => a.len() == b.len() && a.iter().zip(b).all(|(v, w)| same(v, w)),
+            (a, b) => std::mem::discriminant(a) == std::mem::discriminant(b),
+        }
+    }
+    if b.starts_with(b"PK") {
+        let (a, b) = (rustgis_data::zip::read(a).unwrap(), rustgis_data::zip::read(b).unwrap());
+        let names = |z: &[(String, Vec<u8>)]| z.iter().map(|(name, _)| name.clone()).collect::<Vec<_>>();
+        assert_eq!(names(&a), names(&b), "{what}");
+        for ((name, a), (_, b)) in a.iter().zip(&b) {
+            assert_same_shape(a, b, &format!("{what}: {name}"));
+        }
+    } else if let Ok(b) = serde_json::from_slice::<Value>(b) {
+        assert!(same(&serde_json::from_slice(a).unwrap(), &b), "{what}");
+    } else {
+        assert_eq!(a.len(), b.len(), "{what}");
+    }
+}
+
+/// What is said while a file is made counts in full however much of it there is: the queue keeps
+/// the latest 200 and counts the rest.
+#[test]
+fn every_notice_held_for_a_download_is_relayed() {
+    let mut s = Session::new(Project::default());
+    let ((), held) = s.holding_notices(|s| (0..250).for_each(|k| s.notify(format!("note {k}"), false)));
+    let mark = s.notice_mark();
+    for notice in held {
+        s.relay_notice(notice);
+    }
+    assert_eq!(s.notice_mark() - mark, 250);
+}
+
 /// Each command that saves, packages or shares a file downloads, under the path's name, the file
 /// the desktop writes, and says of it what the desktop says, once the download is taken.
 #[test]
@@ -693,7 +730,7 @@ fn a_browser_file_command_downloads_the_desktops_file_and_says_the_same() {
         if same_bytes {
             assert!(bytes == written, "{command} {file}: {} bytes downloaded, {} written", bytes.len(), written.len());
         } else {
-            assert_eq!(bytes.get(..4), written.get(..4), "{command} {file}");
+            assert_same_shape(&bytes, &written, &format!("{command} {file}"));
         }
         let (out, mut rest): (Vec<_>, Vec<_>) = said(&browser, mark).into_iter().partition(|n| says_it_is_out(n));
         rest.sort();
@@ -712,7 +749,7 @@ fn a_browser_file_command_downloads_the_desktops_file_and_says_the_same() {
 
 /// Every command that saves, packages or shares a file, over the limit (a stand-in of ten
 /// bytes), is stopped as the file is made: nothing waits to be downloaded, and the refusal says
-/// what to do. A picture and a bookmarks file, each of a bounded size, are refused once made.
+/// what to do. A bookmarks file, of a bounded size, is refused once made.
 /// Under the limit, each downloads.
 #[test]
 fn a_browser_file_command_over_the_limit_is_stopped_as_it_is_made() {
@@ -727,7 +764,7 @@ fn a_browser_file_command_over_the_limit_is_stopped_as_it_is_made() {
         ("project.exportLog", json!({}), "log.csv", false),
     ]);
     for (command, params, file, _) in cases {
-        let refusal = if file == "s.png" || command == "bookmark.save" { MADE } else { STOPPED };
+        let refusal = if command == "bookmark.save" { MADE } else { STOPPED };
         s.download_cap = Some(10);
         let e = s.run(command, &to(&params, file)).unwrap_err();
         assert!(e.contains(file) && e.contains(refusal) && e.contains("make a smaller file"), "{command} {file}: {e}");

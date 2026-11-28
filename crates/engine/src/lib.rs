@@ -3811,11 +3811,8 @@ impl Session {
         }
         let error = severity == rustgis_data::diagnostics::Severity::Error;
         if let Some(held) = &mut self.held_notices {
+            // Every one: the queue cuts what it keeps when they are relayed, after it has counted them.
             held.push(Notice { text: text.into_string(), error, localized, severity, written, loss });
-            // As many as the queue keeps.
-            if held.len() > 200 {
-                held.remove(0);
-            }
             return;
         }
         let record = self.diagnostics.push_redacted(severity, source.unwrap_or("Application"), &text, loss, self.run.clone());

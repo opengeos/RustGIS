@@ -525,7 +525,10 @@ fn export_within(s: &mut Session, i: usize, format: &str, dpi: f64, out: super::
     };
     let before = revision(s);
     let result = super::share::saying_shadows(s, "The presentation", |s| export_bytes_inner(s, i, format, dpi, out));
-    before.finish_revision(revision(s), Some(result), "could not draw the presentation")?
+    let (bytes, pages) = before.finish_revision(revision(s), Some(result), "could not draw the presentation")??;
+    // With what a PDF or a slideshow holds around its pages.
+    out.check(bytes.len())?;
+    Ok((bytes, pages))
 }
 
 fn export_bytes_inner(
