@@ -3,7 +3,7 @@ use super::arrange::{LOCATOR, NORTH_ARROW, SCALE_BAR, surround_labels};
 use super::*;
 use rustgis_engine::cmd::layout::{publication_style_cards, publication_style_has_column};
 use rustgis_engine::map::layout::{ArrowStyle, MAX_LEGEND_COLUMNS, ScaleBarStyle, ScaleUnits, colorbar_layer};
-use rustgis_engine::render::layout::legend_lists;
+use rustgis_engine::render::layout::{legend_lists, tile_listed};
 
 /// The longest legend title `layout.publication` takes, in characters.
 const MAX_LEGEND_TITLE: usize = 200;
@@ -251,12 +251,12 @@ fn object<const N: usize>(options: [(&str, Option<Value>); N]) -> Option<Value> 
     (!given.is_empty()).then(|| given.into())
 }
 
-/// Whether the active map has a layer a legend gives rows to: one it shows and can list, as the
-/// command picks them, or a web layer drawn with a legend picture.
+/// Whether the active map has a layer a legend can give rows to: one it shows and can list, or a
+/// web layer it lists by its picture. The sheet's scale and context layers, which can still leave
+/// the legend empty, are known only to the command.
 fn legend_lists_rows(s: &Session) -> bool {
     let map = s.map();
-    map.layers.iter().any(|l| map.shows(l) && legend_lists(l))
-        || map.tiles.iter().any(|t| t.draws() && t.opacity > 0.0 && !t.legends.is_empty())
+    map.layers.iter().any(|l| map.shows(l) && legend_lists(l)) || map.tiles.iter().any(tile_listed)
 }
 
 /// Why the colorbar's box is off: [`colorbar_layer`] also gives a raster whose pixels, and so
