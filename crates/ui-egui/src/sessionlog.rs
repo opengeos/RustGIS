@@ -37,7 +37,7 @@ struct Row {
 impl Row {
     fn of(e: LogEntry, registry: &rustgis_engine::Registry) -> Row {
         let scriptable = registry.get(&e.command).is_some() && !rustgis_engine::cmd::workflows::refused_in_script(&e.command);
-        let params = params_text(&e);
+        let params = e.params_text();
         // One line in the list; the whole of it (up to the log's 4 KB) on hover.
         let mut line: String = params.chars().take(120).collect();
         if line.len() < params.len() {
@@ -204,16 +204,6 @@ pub fn pane(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     });
 }
 
-/// An entry's parameters as one line of JSON: none for no parameters.
-fn params_text(e: &LogEntry) -> String {
-    e.params_text()
-}
-
-/// A Script pane line for entry `e` ([`LogEntry::script_line`]).
-fn command_line(e: &LogEntry) -> String {
-    e.script_line()
-}
-
 /// The script a `script.run` entry ran, as the log kept it.
 fn script_of(e: &LogEntry) -> Option<&str> {
     if e.command == "script.run" { e.params.get("script").and_then(Value::as_str) } else { None }
@@ -291,7 +281,7 @@ fn row(ui: &mut Ui, item: &Row, t: &Tokens, running: bool) -> Option<Picked> {
         } else {
             let copy = ui.add_enabled(item.scriptable, egui::Button::new(tl!("Copy Command")));
             if copy.on_hover_text(tl!("A line for the Script pane")).on_disabled_hover_text(tl!("It can't run in a script")).clicked() {
-                ui.ctx().copy_text(command_line(e));
+                ui.ctx().copy_text(e.script_line());
                 picked = e.partial.then_some(Picked::CopiedPartial);
                 ui.close();
             }

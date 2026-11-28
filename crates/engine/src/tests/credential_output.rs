@@ -1095,7 +1095,8 @@ fn the_problem_report_masks_a_login_in_use_with_a_quote_in_it() {
     )
     .unwrap();
     let report = s.problem_report(&crate::problem_report::About::default());
-    assert!(logins::deactivate(&binding) && logins::deactivate(&number));
+    let (quoted, numeric) = (logins::deactivate(&binding), logins::deactivate(&number));
+    assert!(quoted && numeric);
     assert!(!report.contains("ass-X7-synthetic") && !report.contains("9073640215"), "{report}");
     assert!(report.contains("may not run as it ran\nmap.new"), "{report}");
 }

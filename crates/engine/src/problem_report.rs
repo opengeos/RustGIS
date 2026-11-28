@@ -80,7 +80,13 @@ impl Session {
             out.push_str("None this session.\n");
         }
         for incident in &incidents {
-            let _ = writeln!(out, "\n{}", redacted(&incident.details()));
+            // The reference and version as they are (the reference is six hexadecimal digits), so a
+            // message past the redaction's bound, which puts all of it out, doesn't take them too.
+            let _ = writeln!(out, "\nIncident {} in RustGIS {}", incident.id, env!("CARGO_PKG_VERSION"));
+            let _ = writeln!(out, "{}", redacted(&incident.message));
+            if let Some(at) = &incident.location {
+                let _ = writeln!(out, "at {}", redacted(at));
+            }
         }
         out
     }
@@ -162,7 +168,8 @@ pub fn issue_address(about: &About) -> String {
         let _ = write!(system, ", {}", about.front_end);
     }
     if let Some(graphics) = &about.graphics {
-        let _ = write!(system, ", {graphics}");
+        // Redacted as the report's own line is.
+        let _ = write!(system, ", {}", Session::redacted(graphics).as_str());
     }
     let logs = "Paste the diagnostics from Help › Report a Problem here: Report on GitHub put them on the clipboard.";
     let fields = [("template", "bug_report.yml"), ("version", env!("CARGO_PKG_VERSION")), ("os", system.as_str()), ("screenshots", logs)];
@@ -242,7 +249,9 @@ mod tests {
         let s = Session::new(Project::default());
         let ids: Vec<String> = (0..6)
             .map(|i| {
-                let payload = std::panic::catch_unwind(move || panic!("long bug {i} {}", "x".repeat(4000))).unwrap_err();
+                // The last past the redaction's whole bound, which puts its message out.
+                let long = if i == 5 { 20_000 } else { 4000 };
+                let payload = std::panic::catch_unwind(move || panic!("long bug {i} {}", "x".repeat(long))).unwrap_err();
                 rustgis_data::incident::caught(payload.as_ref()).id
             })
             .collect();
