@@ -5457,3 +5457,80 @@ fn openrouter_data_policy_refusal_names_the_privacy_checkbox() {
     assert!(matches!(a.receive(generation, Ok(response), &mut session), Step::Done));
     assert!(a.transcript.iter().any(|e| matches!(e, Entry::Note(n) if n.template.contains("Check Private routing"))));
 }
+
+#[test]
+fn mistral_rewrites_native_and_cross_provider_tool_call_ids_without_collisions() {
+    let turns = vec![
+        Turn::User("hello".into(), vec![]),
+        Turn::Assistant {
+            text: String::new(),
+            calls: vec![],
+            native: Some((
+                Api::OpenAi,
+                json!({
+                    "role":"assistant", "content":null, "tool_calls":[
+                        {"id":"call_from_another_provider", "type":"function", "function":{"name":"map_zoom", "arguments":"{}"}},
+                        {"id":"000000000", "type":"function", "function":{"name":"map_zoom", "arguments":"{}"}}
+                    ]
+                }),
+            )),
+        },
+        Turn::Results(vec![
+            ToolResult {
+                id: "call_from_another_provider".into(),
+                name: "map_zoom".into(),
+                content: "done".into(),
+                error: false,
+                images: vec![],
+            },
+            ToolResult { id: "000000000".into(), name: "map_zoom".into(), content: "done".into(), error: false, images: vec![] },
+        ]),
+    ];
+    let request = chat_request(&cfg("mistral"), "system", &turns, &[]);
+    let body: Value = serde_json::from_str(&request.body.unwrap()).unwrap();
+    assert_eq!(request.url, "https://api.mistral.ai/v1/chat/completions");
+    assert_eq!(body["messages"][2]["tool_calls"][0]["id"], "000000000");
+    assert_eq!(body["messages"][2]["tool_calls"][1]["id"], "000000001");
+    assert_eq!(body["messages"][3]["tool_call_id"], "000000000");
+    assert_eq!(body["messages"][4]["tool_call_id"], "000000001");
+    let original: Value = serde_json::from_str(&chat_request(&cfg("openai"), "system", &turns, &[]).body.unwrap()).unwrap();
+    assert_eq!(original["messages"][2]["tool_calls"][0]["id"], "call_from_another_provider");
+}
+
+#[test]
+fn mistral_lists_models_with_a_bearer_key() {
+    let req = models_request(&cfg("mistral"));
+    assert_eq!(req.url, "https://api.mistral.ai/v1/models");
+    assert!(req.headers.contains(&("Authorization".into(), "Bearer k".into())));
+}
+
+#[test]
+fn mistral_typed_stream_preserves_visible_text_thinking_and_signatures_for_replay() {
+    let thinking = json!({"type":"thinking", "thinking":[{"type":"text","text":"private thought"}], "signature":"signed"});
+    let chunks = [
+        json!({"choices":[{"delta":{"content":"Before "}}]}),
+        json!({"choices":[{"delta":{"content":[thinking.clone(), {"type":"text","text":"Hello"}]}}]}),
+        json!({"choices":[{"delta":{"content":" world"},"finish_reason":"stop"}]}),
+    ];
+    let response = streamed(&chunks);
+    let reply = parse_reply(Api::OpenAi, &response).unwrap();
+    assert_eq!(reply.text, "Before Hello world");
+    assert_eq!(reply.native["content"][1], thinking);
+    let replay = Turn::Assistant { text: reply.text.clone(), calls: vec![], native: Some((Api::OpenAi, reply.native.clone())) };
+    let request = chat_request(&cfg("openai"), "system", &[replay.clone()], &[]);
+    let body: Value = serde_json::from_str(&request.body.unwrap()).unwrap();
+    assert_eq!(body["messages"][1]["content"], "Before Hello world");
+    let request = chat_request(&cfg("mistral"), "system", &[replay], &[]);
+    let body: Value = serde_json::from_str(&request.body.unwrap()).unwrap();
+    assert_eq!(body["messages"][1]["content"][1], thinking);
+
+    let mut preview = StreamPreview::new(Api::OpenAi);
+    preview.feed(&response.body);
+    assert_eq!(preview.text(), "Before Hello world");
+    let whole = HttpResponse {
+        status: 200,
+        headers: vec![],
+        body: json!({"choices":[{"message":reply.native, "finish_reason":"stop"}]}).to_string().into_bytes(),
+    };
+    assert_eq!(parse_reply(Api::OpenAi, &whole).unwrap().text, "Before Hello world");
+}
