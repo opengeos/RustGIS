@@ -1821,9 +1821,10 @@ pub(crate) fn draw_walls(
         // The top band (#2607): each of its stretches from the ground's edge down its thickness,
         // a quad a stretch as the wall's (a hair longer each way), outlined along the ground and
         // its foot, and across it at its ends: a contact with another class or the bare rock. At
-        // the ends of a round or polygon block's side, only where its neighbour's band isn't there
-        // in its colour and thickness; at a box's, always: the band's fill would hide the corner's
-        // outline, drawn before it.
+        // the ends of a side, where the walls' outline goes down the corner (a box's corners, a
+        // polygon block's sharp ones, round 5), always: the band's fill would hide that line,
+        // drawn before it; elsewhere only where the neighbour's band isn't there in its colour and
+        // thickness.
         let ((lo_end, hi_end), (prev, next)) = (side_ends(s), b.neighbours(s));
         let (before_band, after_band) = (bands.get(prev).and_then(|r| r.last()), bands.get(next).and_then(|r| r.first()));
         let goes_on = |o: Option<&BandRun>, run: &BandRun, at_end: bool| {
@@ -1833,11 +1834,13 @@ pub(crate) fn draw_walls(
                     && if at_end { (p.lo - lo).abs() < SEAM } else { (p.hi - hi).abs() < SEAM }
             })
         };
+        // Where the walls' outline goes down a corner (`down`), at the side's low and high end.
+        let (down_lo, down_hi) = if b.along(side, a) <= b.along(side, z) { (down_a, down_z) } else { (down_z, down_a) };
         let mut lines = PathBuilder::new();
         for run in bands.get(s).into_iter().flatten() {
             let ends_across = [
-                (run.lo, (run.lo - lo_end).abs() >= SEAM || !closed || !goes_on(before_band, run, false)),
-                (run.hi, (run.hi - hi_end).abs() >= SEAM || !closed || !goes_on(after_band, run, true)),
+                (run.lo, (run.lo - lo_end).abs() >= SEAM || down_lo || !goes_on(before_band, run, false)),
+                (run.hi, (run.hi - hi_end).abs() >= SEAM || down_hi || !goes_on(after_band, run, true)),
             ];
             let mut fill = PathBuilder::new();
             for (ends, _, [ta, tz]) in &quads {
@@ -1857,19 +1860,6 @@ pub(crate) fn draw_walls(
                     (u, v, ground.up_px(m, &cam))
                 };
                 let (ra, rz) = (raised(ends[0]), raised(ends[1]));
-                // The band's foot under that line at `t` along the stretch, never below the base:
-                // under the line, not under the ground read there, which can rise over the line by
-                // more than the band's thickness and stand the foot over the top (round 4).
-                let mut under = |t: f64| {
-                    let m = Coord::new(ends[0].x + (ends[1].x - ends[0].x) * t, ends[0].y + (ends[1].y - ends[0].y) * t);
-                    let (gu, gv) = cam.ground_px(m);
-                    let per = ground.per_unit(m) * res;
-                    let (up, base) = (ra.2 + (rz.2 - ra.2) * t - run.thickness / per, b.base / per);
-                    band_at_base |= up < base;
-                    let up = up.max(base).clamp(-1e7, 1e7);
-                    cam.project_raised(gu, gv, up, w, h).map(|(x, y)| (x * k, y * k)).filter(|p| p.0.is_finite() && p.1.is_finite())
-                };
-                let (Some(ba), Some(bz)) = (under(t0), under(t1)) else { continue };
                 // The ground's edge over `t`, on the screen line from `ta` to `tz` the wall is drawn
                 // to: in a turned view the stretch's ends lie at different depths, so the ground's
                 // point `t` along the stretch is not `t` along that line, and the band's contacts
@@ -1890,6 +1880,30 @@ pub(crate) fn draw_walls(
                     };
                     lerp(*ta, *tz, along.clamp(0.0, 1.0))
                 };
+                // The band's foot `t` along the stretch: its thickness under the ground's edge
+                // drawn there, never below the base. That edge is the mesh's (`ta` to `tz`), which
+                // can stand off the ground read at the stretch's ends, and the ground inside the
+                // stretch off both (rounds 4 and 5): its height is the line's between the ends there,
+                // plus how far the edge shows from that line over how far a pixel of height moves.
+                let mut under = |t: f64| {
+                    let m = Coord::new(ends[0].x + (ends[1].x - ends[0].x) * t, ends[0].y + (ends[1].y - ends[0].y) * t);
+                    let (gu, gv) = cam.ground_px(m);
+                    let per = ground.per_unit(m) * res;
+                    let seen_up = |up: f64| {
+                        cam.project_raised(gu, gv, up.clamp(-1e7, 1e7), w, h)
+                            .map(|(x, y)| (x * k, y * k))
+                            .filter(|p| p.0.is_finite() && p.1.is_finite())
+                    };
+                    let line = ra.2 + (rz.2 - ra.2) * t;
+                    let (Some(p), Some(q)) = (seen_up(line), seen_up(line - 1.0)) else { return None };
+                    let (dx, dy, top) = (p.0 - q.0, p.1 - q.1, top_at(t));
+                    let len = dx * dx + dy * dy;
+                    let edge = if len > 1e-18 { line + ((top.0 - p.0) * dx + (top.1 - p.1) * dy) / len } else { line };
+                    let (foot, base) = (edge - run.thickness / per, b.base / per);
+                    band_at_base |= foot < base;
+                    seen_up(foot.max(base))
+                };
+                let (Some(ba), Some(bz)) = (under(t0), under(t1)) else { continue };
                 let (ta2, tz2) = (top_at(t0), top_at(t1));
                 for (i, p) in [grow(ta2, tz2), grow(tz2, ta2), grow(bz, ba), grow(ba, bz)].iter().enumerate() {
                     if i == 0 { fill.move_to(p.0, p.1) } else { fill.line_to(p.0, p.1) }
@@ -3271,10 +3285,13 @@ mod tests {
     /// The south wall of `b` as stretches 100 m long, seen as [`a_wall_in_pieces_keeps_its_water_to_each_piece`]
     /// sees it, drawn with `water`, and where on screen `metres` (exaggerated) at `x` lands.
     fn south_wall(m: &Map, b: &Block, g: &Ground, res: f64, water: &WaterRuns) -> (Pixmap, impl Fn(f64, f64) -> (u32, u32)) {
-        south_wall_seen(m, b, g, res, water, 0.0, 20)
+        south_wall_seen(m, b, g, res, water, 0.0, 20, None)
     }
 
-    /// [`south_wall`] seen from `bearing`, its wall in `count` stretches of equal length.
+    /// [`south_wall`] seen from `bearing`, its wall in `count` stretches of equal length, the
+    /// ground's edge over them at the heights `mesh` gives (metres, exaggerated) as a mesh's
+    /// vertices would put it, else at the ground's own. A polygon block's south side is the side
+    /// along y −1000.
     fn south_wall_seen(
         m: &Map,
         b: &Block,
@@ -3283,6 +3300,7 @@ mod tests {
         water: &WaterRuns,
         bearing: f64,
         count: u16,
+        mesh: Option<f64>,
     ) -> (Pixmap, impl Fn(f64, f64) -> (u32, u32)) {
         let camera = rustgis_map::Camera { center: Coord::new(0.0, 0.0), res, bearing, pitch: 60.0 };
         let view = View { width: 600.0, height: 500.0, pixels_per_point: 1.0, camera, sky: false };
@@ -3291,17 +3309,24 @@ mod tests {
             let (u, v) = camera.ground_px(Coord::new(x, -1000.0));
             camera.project_raised(u, v, up, w, h).expect("in view")
         };
-        let top = |x: f64| raised(x, g.up_px(Coord::new(x, -1000.0), &camera));
+        let top = |x: f64| {
+            let m = Coord::new(x, -1000.0);
+            raised(x, mesh.map_or_else(|| g.up_px(m, &camera), |metres| metres / g.per_unit(m) / res))
+        };
+        let south = match &b.outline {
+            Some(_) => (0..b.sides())
+                .find(|&k| {
+                    let (_, a, z) = b.side(k);
+                    (a.y + 1000.0).abs() < 1.0 && (z.y + 1000.0).abs() < 1.0
+                })
+                .expect("a south side") as u16,
+            None => u16::from(SOUTH),
+        };
         let step = 2000.0 / f64::from(count);
         let edges: Vec<Edge> = (0..count)
             .map(|i| {
                 let (x0, x1) = (-1000.0 + step * f64::from(i), -1000.0 + step * f64::from(i + 1));
-                Edge {
-                    side: u16::from(SOUTH),
-                    ends: [Coord::new(x0, -1000.0), Coord::new(x1, -1000.0)],
-                    top: [top(x0), top(x1)],
-                    depth: 1.0,
-                }
+                Edge { side: south, ends: [Coord::new(x0, -1000.0), Coord::new(x1, -1000.0)], top: [top(x0), top(x1)], depth: 1.0 }
             })
             .collect();
         let mut pm = Pixmap::new(600, 500).unwrap();
@@ -3554,8 +3579,17 @@ mod tests {
         soils: &[([f64; 4], &str, Rgba, Option<f64>)],
         thickness: rustgis_map::view::BandThickness,
     ) -> (Map, Block, Ground, f64) {
+        with_soils(block_over_lakes(&[], None), soils, thickness)
+    }
+
+    /// The block `base` with [`block_under_soils_by`]'s soils as its walls' top band.
+    fn with_soils(
+        base: (Map, Block, Ground, f64),
+        soils: &[([f64; 4], &str, Rgba, Option<f64>)],
+        thickness: rustgis_map::view::BandThickness,
+    ) -> (Map, Block, Ground, f64) {
         use rustgis_data::{Dataset, Field, FieldType, GeometryType, Value};
-        let (mut m, b, g, res) = block_over_lakes(&[], None);
+        let (mut m, b, g, res) = base;
         let deg = |x: f64, y: f64| merc_to_lonlat(Coord::new(x, y));
         let fields = vec![Field::new("classe", FieldType::Text), Field::new("espessura", FieldType::Double)];
         let mut d = Dataset::new("solos", GeometryType::Polygon, fields);
@@ -3752,7 +3786,7 @@ mod tests {
         let soils = [([-3000.0, -1500.0, 0.0, 0.0], "argissolo", red), ([0.0, -1500.0, 3000.0, 0.0], "latossolo", green)];
         let (m, b, g, res) = block_under_soils(&soils, 30.0);
         let dry: WaterRuns = (0..b.sides()).map(|_| Vec::new()).collect();
-        let (pm, at) = south_wall_seen(&m, &b, &g, res, &dry, 40.0, 1);
+        let (pm, at) = south_wall_seen(&m, &b, &g, res, &dry, 40.0, 1, None);
         let hue = |x: f64, metres: f64| {
             let (px, py) = at(x, metres);
             let c = pm.pixel(px, py).expect("in the picture").demultiply();
@@ -3792,7 +3826,7 @@ mod tests {
         let b = g.block(&m).unwrap();
         assert!((g.up_px(Coord::new(0.0, -1000.0), &camera) * res * g.per_unit(Coord::new(0.0, -1000.0)) - 1400.0).abs() < 25.0);
         let dry: WaterRuns = (0..b.sides()).map(|_| Vec::new()).collect();
-        let (pm, at) = south_wall_seen(&m, &b, &g, res, &dry, 0.0, 1);
+        let (pm, at) = south_wall_seen(&m, &b, &g, res, &dry, 0.0, 1, None);
         let band = |c: tiny_skia::ColorU8| {
             let (r, g) = (u16::from(c.red()), u16::from(c.green()));
             c.alpha() > 0 && (r > 2 * g || g > r + 60)
@@ -3812,6 +3846,82 @@ mod tests {
         };
         let (w, e) = (hue(-500.0), hue(500.0));
         assert!(u16::from(w.red()) > 2 * u16::from(w.green()) && u16::from(e.green()) > u16::from(e.red()) + 60, "{w:?} {e:?}");
+    }
+
+    #[test]
+    fn a_band_reaching_a_polygon_blocks_corner_keeps_the_corners_outline() {
+        // #2607, round 5: a square polygon block under one soil all round. The band goes on
+        // round the south-west corner in the same colour and thickness, but the outline turns
+        // 90° there, so the walls' outline goes down the corner: that line shows across the band
+        // too, not under its fill.
+        use rustgis_map::view::{BandThickness, BlockShape};
+        let red = Rgba::rgb(220, 30, 30);
+        let square: [(&[[f64; 4]], _); 1] = [(&[[-1000.0, -1000.0, 1000.0, 1000.0]], None)];
+        let base = block_over_lakes_shaped(&square, None, BlockShape::Polygon { layer: "lagos".into(), filter: None });
+        let soil = [([-3000.0, -1500.0, 3000.0, 3000.0], "argissolo", red, None)];
+        let (m, b, g, res) = with_soils(base, &soil, BandThickness::Metres(30.0));
+        assert!(b.outline.is_some());
+        let bands = band_runs(&m, &b, &g, 1.0, &Default::default());
+        assert!(bands.iter().all(|r| r.len() == 1), "one run a side, all round: {bands:?}");
+        let dry: WaterRuns = (0..b.sides()).map(|_| Vec::new()).collect();
+        let (pm, at) = south_wall_seen(&m, &b, &g, res, &dry, 0.0, 8, None);
+        let line = b.walls.shade(0.45);
+        let apart = |c: tiny_skia::ColorU8| {
+            c.red().abs_diff(line.r()) as u16 + c.green().abs_diff(line.g()) as u16 + c.blue().abs_diff(line.b()) as u16
+        };
+        let near_line = |metres: f64| {
+            let (px, py) = at(-1000.0, metres);
+            (px.saturating_sub(1)..=px + 1).filter_map(|x| pm.pixel(x, py)).filter(|c| c.alpha() > 0).map(|c| apart(c.demultiply())).min()
+        };
+        let fill = {
+            let (px, py) = at(-900.0, 970.0);
+            apart(pm.pixel(px, py).expect("in the picture").demultiply())
+        };
+        // Halfway down the band, the corner's line: well nearer the line's colour than the band's
+        // fill 100 m in from the corner is (without it, about as far: the fill hid it). The
+        // band's fill reaches a hair past the corner, so the line's anti-aliased half lies on it.
+        assert!(fill > 120, "{fill}");
+        assert!(near_line(970.0).is_some_and(|d| d + 40 < fill), "{:?} vs {fill}", near_line(970.0));
+    }
+
+    #[test]
+    fn a_band_hangs_from_the_meshs_edge_where_the_ground_reads_higher() {
+        // #2607, round 5: the mesh puts the ground's edge along the south wall at 500 m (1000
+        // doubled), but the DEM reads 700 m (1400) there. The band hangs its 30 m (60) from the
+        // edge drawn, so its foot is at 940, not at 1340 over the top: no band above the top
+        // line, and the band under it.
+        use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster};
+        let red = Rgba::rgb(220, 30, 30);
+        let (mut m, _, _, res) = block_under_soils(&[([-3000.0, -1500.0, 3000.0, 0.0], "argissolo", red)], 30.0);
+        let gt = GeoTransform { origin_x: -5000.0, origin_y: 5000.0, pixel_width: 20.0, pixel_height: -20.0 };
+        let dem =
+            Raster::new("dem", 500, 500, vec![vec![700.0; 500 * 500]], gt, Crs::WebMercator, None, ColorHint::Gray, "Float32").unwrap();
+        if let Some(l) = m.layers.iter_mut().find(|l| l.name == "dem") {
+            l.raster = Some(rustgis_map::RasterLayer::from_path(dem, "dem.tif"));
+        }
+        if let Some(block) = m.view.terrain.as_mut().and_then(|t| t.block.as_mut()) {
+            block.depth = Some(1000.0);
+        }
+        let camera = rustgis_map::Camera { center: Coord::new(0.0, 0.0), res, bearing: 0.0, pitch: 60.0 };
+        let g = Ground::of(&m, &camera).unwrap();
+        let b = g.block(&m).unwrap();
+        let dry: WaterRuns = (0..b.sides()).map(|_| Vec::new()).collect();
+        let (pm, at) = south_wall_seen(&m, &b, &g, res, &dry, 0.0, 4, Some(1000.0));
+        let band = |c: tiny_skia::ColorU8| c.alpha() > 0 && u16::from(c.red()) > 2 * u16::from(c.green());
+        let above: Vec<_> = (-18..=18)
+            .flat_map(|i| (0..20).map(move |j| (50.0 * f64::from(i), 1030.0 + 20.0 * f64::from(j))))
+            .filter(|&(x, metres)| {
+                let (px, py) = at(x, metres);
+                pm.pixel(px, py).is_some_and(|c| band(c.demultiply()))
+            })
+            .collect();
+        assert!(above.is_empty(), "band over the top line at {above:?}");
+        let pixel = |metres: f64| {
+            let (px, py) = at(-500.0, metres);
+            pm.pixel(px, py).expect("in the picture").demultiply()
+        };
+        assert!(band(pixel(970.0)), "the band under the top: {:?}", pixel(970.0));
+        assert!(!band(pixel(900.0)), "the rock under its foot: {:?}", pixel(900.0));
     }
 
     /// The band's thickness reads and saves as a number, or as `{"field": name}` (#2607).
