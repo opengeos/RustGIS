@@ -8,6 +8,7 @@ use super::{Batch, Family, FeatureSource, Reproject, Request, SourceInfo, clamp_
 use crate::{DataError, Feature, Field, FieldType, GeometryType, Result, Value, wkb};
 use rustgis_geom::Extent;
 use std::collections::{HashMap, HashSet};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::{Arc, LazyLock, Mutex, OnceLock, Weak};
 use std::time::Duration;
@@ -212,6 +213,135 @@ fn auth_method(login: &Login, password: Option<&str>) -> Result<tiberius::AuthMe
     }
 }
 
+fn lookup_routing_host(host: &str) -> &str {
+    let trimmed = host.trim();
+    trimmed.strip_prefix('[').and_then(|s| s.strip_suffix(']')).unwrap_or(trimmed)
+}
+
+fn normalize_routing_host(host: &str) -> &str {
+    lookup_routing_host(host).trim_end_matches('.')
+}
+
+fn unmap_ipv4(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V6(v6) => v6.to_ipv4_mapped().map_or(IpAddr::V6(v6), IpAddr::V4),
+        IpAddr::V4(v4) => IpAddr::V4(v4),
+    }
+}
+
+fn same_routing_host(initial: &str, routed: &str) -> bool {
+    let a = normalize_routing_host(initial);
+    let b = normalize_routing_host(routed);
+    if let (Ok(ip_a), Ok(ip_b)) = (a.parse::<IpAddr>(), b.parse::<IpAddr>()) {
+        return unmap_ipv4(ip_a) == unmap_ipv4(ip_b);
+    }
+    a.eq_ignore_ascii_case(b)
+}
+
+fn is_forbidden_routing_ip(ip: IpAddr) -> bool {
+    match unmap_ipv4(ip) {
+        IpAddr::V4(v4) => {
+            v4.is_unspecified()
+                || v4.is_link_local()
+                || v4.is_multicast()
+                || v4.is_broadcast()
+                // Alibaba Cloud instance metadata endpoint.
+                || v4 == Ipv4Addr::new(100, 100, 100, 200)
+        }
+        IpAddr::V6(v6) => {
+            v6.is_unspecified()
+                || v6.is_multicast()
+                // IPv6 link-local (fe80::/10)
+                || (v6.segments()[0] & 0xffc0) == 0xfe80
+                // AWS EC2 IPv6 instance metadata endpoint (fd00:ec2::254).
+                || v6 == Ipv6Addr::new(0xfd00, 0x0ec2, 0, 0, 0, 0, 0, 0x0254)
+        }
+    }
+}
+
+fn is_private_or_loopback_ip(ip: IpAddr) -> bool {
+    match unmap_ipv4(ip) {
+        IpAddr::V4(v4) => {
+            let [a, b, ..] = v4.octets();
+            v4.is_loopback()
+                || v4.is_private()
+                // Shared address space / CGNAT (100.64.0.0/10) is not globally routable.
+                || (a == 100 && (b & 0xc0) == 64)
+        }
+        IpAddr::V6(v6) => {
+            v6.is_loopback()
+                // Unique local IPv6 unicast (fc00::/7).
+                || (v6.segments()[0] & 0xfe00) == 0xfc00
+        }
+    }
+}
+
+fn is_public_ip(ip: IpAddr) -> bool {
+    !is_forbidden_routing_ip(ip) && !is_private_or_loopback_ip(ip)
+}
+
+fn validate_routing_policy(config: &Config, routed_host: &str, routed_port: u16) -> std::result::Result<(), tiberius::error::Error> {
+    if normalize_routing_host(routed_host).is_empty() || routed_port == 0 {
+        return Err(tiberius::error::Error::Conversion("refusing SQL Server routing redirect with empty host or zero port".into()));
+    }
+    let same_host = same_routing_host(&config.host, routed_host);
+    if !same_host && (config.encrypt == Encrypt::Off || config.trust_cert) {
+        return Err(tiberius::error::Error::Conversion(
+            "refusing cross-host SQL Server routing redirect when encryption is off or trust-server-certificate is enabled".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_routing_addrs(
+    initial_peer_ip: Option<IpAddr>,
+    addrs: Vec<SocketAddr>,
+) -> std::result::Result<Vec<SocketAddr>, tiberius::error::Error> {
+    if addrs.is_empty() {
+        return Err(tiberius::error::Error::Conversion("SQL Server routing host resolved to no addresses".into()));
+    }
+    let initial_is_public = initial_peer_ip.is_some_and(is_public_ip);
+    for addr in &addrs {
+        let ip = addr.ip();
+        if is_forbidden_routing_ip(ip) {
+            return Err(tiberius::error::Error::Conversion(
+                format!("refusing SQL Server routing redirect to forbidden address {ip}").into(),
+            ));
+        }
+        if initial_is_public && is_private_or_loopback_ip(ip) {
+            return Err(tiberius::error::Error::Conversion(
+                format!("refusing SQL Server routing redirect from public host to private or loopback address {ip}").into(),
+            ));
+        }
+    }
+    Ok(addrs)
+}
+
+async fn resolve_validated_routing_addrs(
+    initial_peer_ip: Option<IpAddr>,
+    host: &str,
+    port: u16,
+) -> std::result::Result<Vec<SocketAddr>, tiberius::error::Error> {
+    // Preserve any terminating DNS dot so the system resolver does not expand search domains.
+    let lookup_host = lookup_routing_host(host);
+    let resolved: Vec<SocketAddr> = tokio::net::lookup_host((lookup_host, port)).await?.collect();
+    validate_routing_addrs(initial_peer_ip, resolved)
+}
+
+async fn connect_routed_tcp(
+    config: &Config,
+    initial_peer_ip: Option<IpAddr>,
+    host: &str,
+    port: u16,
+) -> std::result::Result<(tokio::net::TcpStream, String), tiberius::error::Error> {
+    validate_routing_policy(config, host, port)?;
+    let validated_addrs = resolve_validated_routing_addrs(initial_peer_ip, host, port).await?;
+    // Connect to the pre-validated SocketAddrs directly to prevent DNS rebinding (TOCTOU).
+    let tcp = tokio::net::TcpStream::connect(validated_addrs.as_slice()).await?;
+    tcp.set_nodelay(true)?;
+    Ok((tcp, normalize_routing_host(host).to_string()))
+}
+
 async fn open_client(config: &Config, password: Option<&str>) -> std::result::Result<Client, tiberius::error::Error> {
     let mut cfg = tiberius::Config::new();
     cfg.host(&config.host);
@@ -249,12 +379,16 @@ async fn open_client(config: &Config, password: Option<&str>) -> std::result::Re
         tokio::net::TcpStream::connect(cfg.get_addr()).await?
     };
     tcp.set_nodelay(true)?;
+    let initial_peer_ip = tcp.peer_addr().ok().map(|a| a.ip());
     match Client::connect(cfg.clone(), tcp.compat_write()).await {
         Err(tiberius::error::Error::Routing { host, port }) => {
-            cfg.host(&host);
+            let (tcp, routed_host) = connect_routed_tcp(config, initial_peer_ip, &host, port).await?;
+            // Updating `cfg.host` sets tiberius's SNI and certificate hostname expectation to the
+            // routed node (as Azure SQL gateway and multi-node AG redirects expect), unless the
+            // caller pinned `hostname_in_certificate`. Cross-host redirects with `Encrypt::Off` or
+            // `trust_cert` were already rejected above, so credentials only follow verified TLS.
+            cfg.host(routed_host);
             cfg.port(port);
-            let tcp = tokio::net::TcpStream::connect((host.as_str(), port)).await?;
-            tcp.set_nodelay(true)?;
             Client::connect(cfg, tcp.compat_write()).await
         }
         result => result,
@@ -1620,5 +1754,124 @@ mod tests {
         run(&format!("DROP TABLE dbo.{zm_name}; DROP TABLE dbo.{flat_name}"));
         assert!(zm.zm_dropped && zm.notes.says(&crate::zm_note(Some(2))), "{:?}", zm.notes);
         assert!(!flat.zm_dropped && !flat.notes.iter().any(|n| n.contains("Z or M")), "{:?}", flat.notes);
+    }
+
+    #[test]
+    fn routing_policy_allows_same_host_and_verified_cross_host_and_rejects_insecure_cross_host() {
+        let mut cfg = config("mssql://user@sql.example.com/db").unwrap();
+        // Verified TLS cross-host redirect is permitted at policy stage.
+        assert!(validate_routing_policy(&cfg, "node2.example.com", 1433).is_ok());
+        // Same-host redirect (case/trailing-dot/bracket insensitive) stays permitted even with Encrypt::Off or trust_cert.
+        cfg.encrypt = Encrypt::Off;
+        assert!(validate_routing_policy(&cfg, "SQL.EXAMPLE.COM.", 1434).is_ok());
+        // Cross-host with Encrypt::Off must be refused.
+        assert!(validate_routing_policy(&cfg, "other.example.com", 1433).is_err());
+
+        cfg.encrypt = Encrypt::Required;
+        cfg.trust_cert = true;
+        assert!(validate_routing_policy(&cfg, "other.example.com", 1433).is_err());
+
+        // Empty host or zero port is always rejected.
+        cfg.trust_cert = false;
+        assert!(validate_routing_policy(&cfg, "", 1433).is_err());
+        assert!(validate_routing_policy(&cfg, "   ", 1433).is_err());
+        assert!(validate_routing_policy(&cfg, "node2.example.com", 0).is_err());
+
+        // IPv6 bracketed vs canonical comparison for same-host check.
+        let mut v6_cfg = config("mssql://user@[::1]/db?encrypt=false").unwrap();
+        assert!(validate_routing_policy(&v6_cfg, "::1", 1434).is_ok());
+        assert!(validate_routing_policy(&v6_cfg, "[::1]", 1434).is_ok());
+        v6_cfg.host = "::ffff:127.0.0.1".into();
+        assert!(validate_routing_policy(&v6_cfg, "127.0.0.1", 1434).is_ok());
+
+        // DNS lookup input must preserve terminating dot while stripping brackets/whitespace.
+        assert_eq!(lookup_routing_host(" sql.example.com. "), "sql.example.com.");
+        assert_eq!(lookup_routing_host("[::1]"), "::1");
+    }
+
+    #[test]
+    fn routing_addrs_reject_forbidden_and_public_to_private_targets() {
+        let public_peer: Option<IpAddr> = Some("203.0.113.10".parse().unwrap());
+        let private_peer: Option<IpAddr> = Some("10.0.0.5".parse().unwrap());
+        let loopback_peer: Option<IpAddr> = Some("127.0.0.1".parse().unwrap());
+        let sa = |s: &str| SocketAddr::new(s.parse().unwrap(), 1433);
+
+        // Allowed: public -> public, loopback -> loopback, private -> private.
+        assert!(validate_routing_addrs(public_peer, vec![sa("198.51.100.20")]).is_ok());
+        assert!(validate_routing_addrs(loopback_peer, vec![sa("127.0.0.1")]).is_ok());
+        assert!(validate_routing_addrs(private_peer, vec![sa("10.0.0.8")]).is_ok());
+
+        // Always forbidden regardless of initial peer.
+        for peer in [public_peer, private_peer, loopback_peer] {
+            for bad in [
+                "0.0.0.0",
+                "::",
+                "169.254.169.254",
+                "169.254.1.10",
+                "fe80::1",
+                "100.100.100.200",
+                "fd00:ec2::254",
+                "::ffff:169.254.169.254",
+                "224.0.0.1",
+                "ff02::1",
+                "255.255.255.255",
+            ] {
+                assert!(validate_routing_addrs(peer, vec![sa(bad)]).is_err(), "expected {bad} to be rejected for peer {peer:?}");
+            }
+        }
+
+        // Public initial host must not route to loopback, private, CGNAT, or ULA (even mixed with a public IP).
+        for private_target in
+            ["127.0.0.1", "::1", "::ffff:127.0.0.1", "10.0.0.1", "172.16.0.1", "192.168.1.1", "100.64.0.1", "fc00::1", "::ffff:10.0.0.1"]
+        {
+            assert!(validate_routing_addrs(public_peer, vec![sa(private_target)]).is_err(), "expected {private_target} rejected");
+            assert!(
+                validate_routing_addrs(public_peer, vec![sa("198.51.100.20"), sa(private_target)]).is_err(),
+                "expected mixed DNS containing {private_target} rejected"
+            );
+        }
+
+        // Empty resolution list is rejected.
+        assert!(validate_routing_addrs(public_peer, vec![]).is_err());
+    }
+
+    #[test]
+    fn connect_routed_tcp_allows_same_host_and_blocks_disallowed_destinations() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_io().enable_time().build().unwrap();
+        rt.block_on(async {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let loopback_peer: Option<IpAddr> = Some("127.0.0.1".parse().unwrap());
+            let public_peer: Option<IpAddr> = Some("203.0.113.10".parse().unwrap());
+
+            // Allowed: same-host/port (or same-host different-port) loopback redirect connects.
+            let cfg_same = config(&format!("mssql://user@127.0.0.1:{port}/db")).unwrap();
+            let accept_task = tokio::spawn(async move { listener.accept().await.is_ok() });
+            let (stream, routed_host) = connect_routed_tcp(&cfg_same, loopback_peer, "127.0.0.1", port).await.unwrap();
+            assert_eq!(routed_host, "127.0.0.1");
+            drop(stream);
+            assert!(accept_task.await.unwrap());
+
+            // Rejected before TCP connect: public initial host redirected to loopback.
+            let listener2 = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port2 = listener2.local_addr().unwrap().port();
+            let cfg_public = config("mssql://user@sql.example.com/db").unwrap();
+            let err = connect_routed_tcp(&cfg_public, public_peer, "127.0.0.1", port2).await.unwrap_err();
+            assert!(err.to_string().contains("refusing"), "unexpected error: {err}");
+            assert!(tokio::time::timeout(Duration::from_millis(50), listener2.accept()).await.is_err());
+
+            // Rejected before TCP connect: cross-host redirect with Encrypt::Off or trust_cert.
+            let cfg_plain = config("mssql://user@sql.example.com/db?encrypt=false").unwrap();
+            let err_plain = connect_routed_tcp(&cfg_plain, public_peer, "other.example.com", 1433).await.unwrap_err();
+            assert!(err_plain.to_string().contains("refusing"), "unexpected error: {err_plain}");
+
+            let cfg_untrusted = config("mssql://user@sql.example.com/db?trust-server-certificate=true").unwrap();
+            let err_untrusted = connect_routed_tcp(&cfg_untrusted, public_peer, "other.example.com", 1433).await.unwrap_err();
+            assert!(err_untrusted.to_string().contains("refusing"), "unexpected error: {err_untrusted}");
+
+            // Rejected before TCP connect: cloud metadata IP.
+            let err_meta = connect_routed_tcp(&cfg_public, public_peer, "169.254.169.254", 1433).await.unwrap_err();
+            assert!(err_meta.to_string().contains("refusing"), "unexpected error: {err_meta}");
+        });
     }
 }
