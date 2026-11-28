@@ -855,10 +855,13 @@ fn aggregated(
         return canvas.finish(r, g, bands, if mode { Method::Mode } else { Method::Average }, name);
     }
     let x_at = |i: usize| g.min_x + i as f64 * g.cell_x;
-    // A source that spans -180° to 180° wraps at ±180°: its width in pixels is one turn of longitude.
+    // A source that spans -180° to 180° wraps at ±180°. One turn of longitude is `360 / pixel`
+    // columns: the image's width when it spans exactly that, a little more or less when its edges
+    // are a pixel short of ±180° or past it.
     let pixel = r.transform.pixel_width.abs();
     let (west, east) = (r.transform.origin_x, r.transform.origin_x + w as f64 * r.transform.pixel_width);
-    let wrap = (r.crs.is_geographic() && pixel > 0.0 && (west + 180.0).abs() <= pixel && (east - 180.0).abs() <= pixel).then_some(w as f64);
+    let wrap =
+        (r.crs.is_geographic() && pixel > 0.0 && (west + 180.0).abs() <= pixel && (east - 180.0).abs() <= pixel).then_some(360.0 / pixel);
     let each = Aggregate { r, canvas: &canvas, nearest, mode, round, wrap };
     // A cell's work in `MIN_ROW_WORK`'s units (some 30 ns): its corners, and the pixels it takes
     // per band (the source's pixels, shared among the cells that cover them).
@@ -921,7 +924,7 @@ struct Aggregate<'a> {
     nearest: Sampler<'a>,
     mode: bool,
     round: bool,
-    /// The width in pixels of a source that spans the globe, where a cell across ±180° wraps.
+    /// One turn of longitude in columns, for a source that spans the globe, where a cell across ±180° wraps.
     wrap: Option<f64>,
 }
 
@@ -941,8 +944,8 @@ impl Aggregate<'_> {
             // A cell across ±180° has its west corners at columns near the east end of the image
             // and its east corners near the west end: going east along an edge, the column drops by
             // more than half the image. The pixels between are the far side of the globe. Its
-            // corners in the west go on past the east edge instead, and the pixels past it are the
-            // west's again (`i % w`). A cell wide enough to take in the whole image, or one whose
+            // corners in the west go on past the east edge instead (by one turn of longitude, not
+            // always the image's width), and the pixels past it are the west's again. A cell wide enough to take in the whole image, or one whose
             // columns grow eastward as they do in an ordinary cell, is not across the seam. (An
             // output that runs east to west, or a cell over half the globe wide in one, cannot be
             // told from one across it and is read as before.)
@@ -960,44 +963,51 @@ impl Aggregate<'_> {
             }
             let (c0, c1) = span;
             let (r0, r1) = quad.iter().fold((f64::MAX, f64::MIN), |(lo, hi), p| (lo.min(p.1), hi.max(p.1)));
-            if c1 <= 0.0 || r1 <= 0.0 || c0 >= if wrapped { 2.0 } else { 1.0 } * w as f64 || r0 >= h as f64 {
+            let turn = if wrapped { self.wrap.unwrap_or(0.0) } else { 0.0 };
+            if c1 <= 0.0 || r1 <= 0.0 || c0 >= w as f64 + turn || r0 >= h as f64 {
                 continue;
             }
             // The pixels whose centres (at half integers) may be inside.
             let first = |lo: f64| (lo - 0.5).ceil().max(0.0) as usize;
             let past = |hi: f64, n: usize| ((hi - 0.5).floor() + 1.0).clamp(0.0, n as f64) as usize;
-            let (i0, i1, j0, j1) = (first(c0), past(c1, if wrapped { 2 * w } else { w }), first(r0), past(r1, h));
-            // The pixels of a wide cell take long on their own: Cancel is looked at between cells.
-            if pace.stop(i1.saturating_sub(i0).saturating_mul(j1.saturating_sub(j0))) {
-                return;
-            }
+            let (j0, j1) = (first(r0), past(r1, h));
+            // The columns of the image the cell takes: its own, and for a wrapped one the west's
+            // again, `turn` columns on.
+            let columns: Vec<(usize, usize, f64)> =
+                [0.0, turn].into_iter().take(if wrapped { 2 } else { 1 }).map(|off| (first(c0 - off), past(c1 - off, w), off)).collect();
             values.iter_mut().for_each(Vec::clear);
             weights.iter_mut().for_each(Vec::clear);
             // The mean is summed as the pixels come (no copy of the cell's values); mode keeps them.
             sums.iter_mut().for_each(|s| *s = (0.0, 0.0));
             let mut inside = false;
             for j in j0..j1 {
-                for i in i0..i1 {
-                    if !holds(&quad, (i as f64 + 0.5, j as f64 + 0.5)) {
-                        continue;
-                    }
-                    inside = true;
-                    let idx = j * w + i % w;
-                    // An alpha with no value (the raster's no-data) or below 0 weighs nothing.
-                    let opacity = alpha
-                        .and_then(|a| r.bands.get(a))
-                        .and_then(|band| band.data.get(idx))
-                        .copied()
-                        .filter(|a| r.is_valid(*a) && *a > 0.0)
-                        .unwrap_or(0.0);
-                    for (b, ((v, k), sum)) in values.iter_mut().zip(weights.iter_mut()).zip(sums.iter_mut()).enumerate() {
-                        if let Some(x) = r.bands.get(b).and_then(|band| band.data.get(idx)).filter(|x| r.is_valid(**x)) {
-                            let weight = if alpha.is_some_and(|a| a != b) { opacity } else { 1.0 };
-                            if mode {
-                                v.push(*x);
-                                k.push(weight);
-                            } else {
-                                *sum = (sum.0 + f64::from(*x) * f64::from(weight), sum.1 + f64::from(weight));
+                // The pixels of a wide cell take long on their own: Cancel is looked at by the row.
+                if pace.stop(columns.iter().map(|(a, b, _)| b.saturating_sub(*a)).sum()) {
+                    return;
+                }
+                for &(i0, i1, off) in &columns {
+                    for i in i0..i1 {
+                        if !holds(&quad, (i as f64 + 0.5 + off, j as f64 + 0.5)) {
+                            continue;
+                        }
+                        inside = true;
+                        let idx = j * w + i;
+                        // An alpha with no value (the raster's no-data) or below 0 weighs nothing.
+                        let opacity = alpha
+                            .and_then(|a| r.bands.get(a))
+                            .and_then(|band| band.data.get(idx))
+                            .copied()
+                            .filter(|a| r.is_valid(*a) && *a > 0.0)
+                            .unwrap_or(0.0);
+                        for (b, ((v, k), sum)) in values.iter_mut().zip(weights.iter_mut()).zip(sums.iter_mut()).enumerate() {
+                            if let Some(x) = r.bands.get(b).and_then(|band| band.data.get(idx)).filter(|x| r.is_valid(**x)) {
+                                let weight = if alpha.is_some_and(|a| a != b) { opacity } else { 1.0 };
+                                if mode {
+                                    v.push(*x);
+                                    k.push(weight);
+                                } else {
+                                    *sum = (sum.0 + f64::from(*x) * f64::from(weight), sum.1 + f64::from(weight));
+                                }
                             }
                         }
                     }
@@ -1025,7 +1035,7 @@ impl Aggregate<'_> {
             } else {
                 // A grid finer than the raster: the pixel under the cell's centre.
                 let (cx, cy) = (quad.iter().map(|p| p.0).sum::<f64>() / 4.0, quad.iter().map(|p| p.1).sum::<f64>() / 4.0);
-                let cx = if wrapped && cx >= w as f64 { cx - w as f64 } else { cx };
+                let cx = if wrapped && cx >= turn { cx - turn } else { cx };
                 if !(cx >= 0.0 && cy >= 0.0 && cx < w as f64 && cy < h as f64) {
                     continue;
                 }
@@ -1834,6 +1844,18 @@ mod tests {
         }
     }
 
+    /// A source whose columns stop short of a whole turn (8 of 44° end at 172°) isn't wrapped: a
+    /// cell across ±180° keeps its corners' columns, and takes nothing from the far side for the part
+    /// of the globe the source doesn't cover.
+    #[test]
+    fn a_source_short_of_a_whole_turn_does_not_wrap() {
+        let r = globe(352.0);
+        // Longitudes folded into -180..180, as the output system centred on 180° gives them.
+        let folded = |x: f64, y: f64| Some((((x + 180.0).rem_euclid(360.0)) / 44.0, (90.0 - y) / 90.0));
+        // 160°..190° has its centre (175°) in the uncovered 172°..180°: no data, not column 7 or 0.
+        assert_eq!(one_cell(&r, 160.0, 190.0, false, &folded), None);
+    }
+
     /// A cell that takes millions of pixels looks at Cancel as it goes: one cancelled at its second
     /// look (the row's was the first) is left empty, not computed.
     #[test]
@@ -1849,5 +1871,22 @@ mod tests {
         let out = aggregated(Some(1), &r, &g, Canvas::of(&r, false), false, &source, "big".into()).unwrap();
         assert_eq!(out.value(0, 0, 0), None);
         assert_eq!(run.looked(), 2);
+    }
+
+    /// A cell of several times the pixels between two looks looks within its rows: cancelled at the
+    /// third look (the row's was the first), it is left empty rather than finished.
+    #[test]
+    fn a_cell_looks_at_cancel_again_after_its_traversal_starts() {
+        let n = 3000;
+        let gt = GeoTransform { origin_x: 0.0, origin_y: f64::from(n), pixel_width: 1.0, pixel_height: -1.0 };
+        let r =
+            Raster::new("big", n, n, vec![vec![100.0; (n * n) as usize]], gt, Crs::Epsg(32613), None, ColorHint::Gray, "Float32").unwrap();
+        let g = Grid { crs: r.crs, min_x: 0.0, max_y: f64::from(n), cell_x: f64::from(n), cell_y: f64::from(n), width: 1, height: 1 };
+        let source = |x: f64, y: f64| Some((x, f64::from(n) - y));
+        let run = crate::control::Control::cancelled_at_look(3);
+        let _installed = crate::control::install(Some(run.clone()));
+        let out = aggregated(Some(1), &r, &g, Canvas::of(&r, false), false, &source, "big".into()).unwrap();
+        assert_eq!(out.value(0, 0, 0), None);
+        assert_eq!(run.looked(), 3);
     }
 }
