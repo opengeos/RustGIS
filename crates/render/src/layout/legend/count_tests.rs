@@ -60,9 +60,10 @@ struct Reads {
     streams: bool,
     visits: bool,
     fails: bool,
+    format: &'static str,
 }
 
-const FILE: Reads = Reads { streams: false, visits: true, fails: false };
+const FILE: Reads = Reads { streams: false, visits: true, fails: false, format: "test" };
 
 /// `layer` read in place from a source holding all its features, holding the first alone, and the
 /// source's count of whole reads.
@@ -70,7 +71,7 @@ fn in_place(layer: &mut Layer, reads: Reads) -> Arc<AtomicUsize> {
     let ds = layer.dataset.clone();
     let info = SourceInfo {
         name: ds.name.clone(),
-        format: "test",
+        format: reads.format,
         geometry_type: ds.geometry_type,
         fields: ds.fields.clone(),
         extent: ds.extent(),
@@ -81,7 +82,7 @@ fn in_place(layer: &mut Layer, reads: Reads) -> Arc<AtomicUsize> {
         zm_dropped: false,
     };
     let passes = Arc::new(AtomicUsize::new(0));
-    let Reads { streams, visits, fails } = reads;
+    let Reads { streams, visits, fails, .. } = reads;
     layer.dataset.features = ds.features.iter().take(1).cloned().collect::<Vec<_>>().into();
     layer.dataset.windowed = true;
     let source = Whole { info, ds, streams, visits, fails, passes: passes.clone() };
@@ -175,10 +176,10 @@ fn a_streamed_layer_of_one_symbol_counts_the_whole_source() {
     assert_eq!(counted(&mut map, true, false), ["pts (6)"]);
 }
 
-#[test]
-fn a_streamed_layers_ranges_and_missing_values_are_counted() {
+/// Points `"g"` with these values of `v`, in two ranges of Graduated Colors.
+fn graduated(values: &[Value]) -> Map {
     let mut ds = Dataset::new("g", GeometryType::Point, vec![Field::new("v", FieldType::Double)]);
-    for v in [Value::Float(1.0), Value::Float(2.0), Value::Null, Value::Float(9.0), Value::Null] {
+    for v in values.iter().cloned() {
         ds.push(Some(Geometry::Point(Coord::new(0.0, 0.0))), vec![v]);
     }
     let mut map = Map::new("m");
@@ -196,6 +197,12 @@ fn a_streamed_layers_ranges_and_missing_values_are_counted() {
         class_strokes: Default::default(),
         class_fills: Default::default(),
     };
+    map
+}
+
+#[test]
+fn a_streamed_layers_ranges_and_missing_values_are_counted() {
+    let mut map = graduated(&[Value::Float(1.0), Value::Float(2.0), Value::Null, Value::Float(9.0), Value::Null]);
     in_place(&mut map.layers[0], FILE);
     assert_eq!(counted(&mut map, false, true), ["g", "Low (2)", "High (1)", "No data (2)"]);
 }
@@ -291,6 +298,25 @@ fn a_streamed_layers_diagram_rows_have_no_counts() {
     });
     in_place(&mut map.layers[0], FILE);
     assert_eq!(counted(&mut map, false, false), ["pts (3)", "n"]);
+}
+
+/// A live service is read a view at a time, whatever it can give a tool or an export.
+#[test]
+fn a_live_service_is_not_read_for_counts() {
+    let mut map = classed(&VALUES);
+    let passes = in_place(&mut map.layers[0], Reads { format: rustgis_data::source::arcgis::FORMAT, ..FILE });
+    assert_eq!(counted(&mut map, false, false), ["pts", "a"]);
+    assert_eq!(passes.load(Ordering::Relaxed), 0);
+}
+
+#[test]
+fn a_streamed_layer_of_no_features_counts_none_in_every_class() {
+    let mut map = classed(&[]);
+    in_place(&mut map.layers[0], FILE);
+    assert_eq!(counted(&mut map, true, false), ["pts", "a (0)", "b (0)", "c (0)", "<all other values> (0)"]);
+    let mut map = graduated(&[]);
+    in_place(&mut map.layers[0], FILE);
+    assert_eq!(counted(&mut map, true, true), ["g", "Low (0)", "High (0)", "No data (0)"]);
 }
 
 /// A legend's size is measured on the rows as drawn, numbers included.

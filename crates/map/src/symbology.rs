@@ -1926,8 +1926,10 @@ impl Renderer {
                 }
             }
             Renderer::Graduated { .. } => {
-                for (e, n) in entries.iter_mut().zip(counts.unwrap_or_default()) {
-                    e.count = Some(*n);
+                if let Some(counts) = counts {
+                    for (slot, e) in entries.iter_mut().enumerate() {
+                        e.count = Some(counts.get(slot).copied().unwrap_or(0));
+                    }
                 }
             }
             Renderer::Single(_) | Renderer::Proportional { .. } => {}
