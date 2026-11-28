@@ -61,7 +61,7 @@ fn deleting_a_map_a_page_shows_says_so_and_the_page_keeps_the_name() {
     assert_eq!(
         missing(&mut s, "map.remove", json!({"name": "Other"})),
         [
-            "Presentation 'Tour': 1 map page shows 'Other', which the project doesn't have, so it is drawn over the active map until a map of that name comes back"
+            "1 map page shows 'Other', which the project doesn't have, so it is drawn over the active map until a map of that name comes back: presentation 'Tour', page 2"
         ]
     );
     assert_eq!(drawn_over(&s, 1), s.map().name);
@@ -92,7 +92,7 @@ fn pages_of_two_presentations_are_said_once() {
     assert_eq!(
         missing(&mut s, "map.remove", json!({"name": "Other"})),
         [
-            "2 presentations: 2 map pages show 'Other', which the project doesn't have, so they are drawn over the active map until a map of that name comes back"
+            "2 map pages show 'Other', which the project doesn't have, so they are drawn over the active map until a map of that name comes back: presentation 'Tour', page 2; presentation 'Second', page 2"
         ]
     );
 }
@@ -106,7 +106,7 @@ fn a_page_that_spells_its_map_in_another_case_is_counted() {
     assert_eq!(
         missing(&mut s, "map.remove", json!({"name": "Other"})),
         [
-            "Presentation 'Tour': 1 map page shows 'oTHER', which the project doesn't have, so it is drawn over the active map until a map of that name comes back"
+            "1 map page shows 'oTHER', which the project doesn't have, so it is drawn over the active map until a map of that name comes back: presentation 'Tour', page 2"
         ]
     );
 }
@@ -146,7 +146,7 @@ fn removing_an_offline_area_says_the_pages_that_showed_its_map() {
     assert_eq!(
         missing(&mut s, "offline.remove", json!({"name": "Crew"})),
         [
-            "Presentation 'Tour': 1 map page shows 'Crew (offline)', which the project doesn't have, so it is drawn over the active map until a map of that name comes back"
+            "1 map page shows 'Crew (offline)', which the project doesn't have, so it is drawn over the active map until a map of that name comes back: presentation 'Tour', page 2"
         ]
     );
 }
@@ -169,7 +169,7 @@ fn importing_a_presentation_says_the_pages_whose_map_is_missing() {
     assert_eq!(
         missing(&mut s, "presentation.import", file_showing(&["Missing", &home, "missing"])),
         [
-            "Presentation 'Filed': 2 map pages show 'Missing', which the project doesn't have, so they are drawn over the active map until a map of that name comes back"
+            "2 map pages show 'Missing', which the project doesn't have, so they are drawn over the active map until a map of that name comes back: presentation 'Filed', pages 1, 3"
         ]
     );
 }
@@ -187,7 +187,26 @@ fn many_missing_maps_are_named_up_to_three() {
     assert_eq!(
         missing(&mut s, "presentation.import", file_showing(&["A", "B", "A", "C", "D", "E"])),
         [
-            "Presentation 'Filed': 6 map pages show 'A', 'B', 'C', …, which the project doesn't have, so they are drawn over the active map until maps of those names come back"
+            "6 map pages show 'A', 'B', 'C', …, which the project doesn't have, so they are drawn over the active map until maps of those names come back: presentation 'Filed', pages 1, 2, 3, 4, 5, …"
+        ]
+    );
+}
+
+#[test]
+fn pages_past_three_presentations_are_counted_and_not_listed() {
+    let mut s = with_tour();
+    // Five pages in the first presentation, all listed; one in each of three more.
+    for _ in 0..5 {
+        page(&mut s, "Other");
+    }
+    for name in ["Second", "Third", "Fourth"] {
+        s.run("presentation.new", &json!({"name": name})).unwrap();
+        page(&mut s, "Other");
+    }
+    assert_eq!(
+        missing(&mut s, "map.remove", json!({"name": "Other"})),
+        [
+            "8 map pages show 'Other', which the project doesn't have, so they are drawn over the active map until a map of that name comes back: presentation 'Tour', pages 2, 3, 4, 5, 6; presentation 'Second', page 2; presentation 'Third', page 2; …"
         ]
     );
 }

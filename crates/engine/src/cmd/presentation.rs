@@ -633,8 +633,11 @@ fn page_map<'a>(input: &'a impl super::InputSource, name: &str) -> &'a rustgis_m
     s.project.maps.iter().find(|m| m.name.eq_ignore_ascii_case(name)).unwrap_or_else(|| s.map())
 }
 
-/// Most map names [`say_pages_without_their_map`] lists: an imported file may name one a page.
+/// Most map names, presentations and page numbers [`say_pages_without_their_map`] lists: an
+/// imported file may hold hundreds of pages, each naming another map.
 const MISSING_MAPS_NAMED: usize = 3;
+const PRESENTATIONS_LISTED: usize = 3;
+const PAGES_LISTED: usize = 5;
 
 /// The map pages [`say_pages_without_their_map`] looks at.
 pub(crate) enum PagesOf<'a> {
@@ -644,57 +647,85 @@ pub(crate) enum PagesOf<'a> {
     Presentation(usize),
 }
 
-/// Says, once, how many of the map pages `which` name a map the project doesn't have, which
-/// [`page_map`] draws over the active map (#3047). The pages keep the name.
+/// Says, once, which of the map pages `which` name a map the project doesn't have, which
+/// [`page_map`] draws over the active map (#3047). Pages are numbered from 1, as the Presentation
+/// pane shows them. The pages keep the name.
 pub(crate) fn say_pages_without_their_map(s: &mut Session, which: PagesOf<'_>) {
     use crate::notice_text::NoticeText;
 
-    let (mut pages, mut presentations) = (0usize, Vec::new());
-    let (mut named, mut more) = (Vec::<&str>::new(), false);
+    /// A presentation listed: where it is, its name, its first pages and how many it has.
+    struct Place<'a> {
+        at: usize,
+        name: &'a str,
+        numbers: Vec<String>,
+        pages: usize,
+    }
+
+    let (mut pages, mut places) = (0usize, Vec::<Place<'_>>::new());
+    let (mut named, mut more_maps, mut more_places) = (Vec::<&str>::new(), false, false);
     for (i, pres) in s.project.presentations.iter().enumerate() {
-        for page in &pres.pages {
+        for (k, page) in pres.pages.iter().enumerate() {
             let PageKind::Map { map, .. } = &page.kind else { continue };
             let looked_at = match which {
                 PagesOf::Map(gone) => map.eq_ignore_ascii_case(gone),
-                PagesOf::Presentation(k) => i == k,
+                PagesOf::Presentation(own) => i == own,
             };
             if !looked_at || s.project.maps.iter().any(|m| m.name.eq_ignore_ascii_case(map)) {
                 continue;
             }
             pages += 1;
-            if presentations.last().is_none_or(|&(last, _)| last != i) {
-                presentations.push((i, &pres.name));
-            }
             if !named.iter().any(|n| n.eq_ignore_ascii_case(map)) {
                 if named.len() < MISSING_MAPS_NAMED {
                     named.push(map);
                 } else {
-                    more = true;
+                    more_maps = true;
+                }
+            }
+            if places.last().is_none_or(|place| place.at != i) {
+                if places.len() == PRESENTATIONS_LISTED {
+                    more_places = true;
+                    continue;
+                }
+                places.push(Place { at: i, name: &pres.name, numbers: Vec::new(), pages: 0 });
+            }
+            if let Some(place) = places.last_mut() {
+                place.pages += 1;
+                if place.numbers.len() < PAGES_LISTED {
+                    place.numbers.push((k + 1).to_string());
                 }
             }
         }
     }
-    let whose = match presentations.as_slice() {
-        [] => return,
-        [(_, name)] => NoticeText::format("Presentation '{name}'", [("name", (*name).clone().into())]),
-        several => NoticeText::format("{count} presentations", [("count", several.len().to_string().into())]),
+    let listed = places.into_iter().map(|place| {
+        let key = if place.pages == 1 { "presentation '{name}', page {numbers}" } else { "presentation '{name}', pages {numbers}" };
+        let mut numbers = place.numbers.join(", ");
+        if place.pages > PAGES_LISTED {
+            numbers.push_str(", …");
+        }
+        NoticeText::format(key, [("name", place.name.to_string().into()), ("numbers", numbers.into())])
+    });
+    let Some(mut places) = listed.reduce(|first, next| NoticeText::format("{first}; {next}", [("first", first), ("next", next)])) else {
+        return;
     };
+    if more_places {
+        places = NoticeText::format("{first}; {next}", [("first", places), ("next", "…".to_string().into())]);
+    }
     let key = match (pages, named.len()) {
         (1, _) => {
-            "{whose}: {count} map page shows {names}, which the project doesn't have, so it is drawn over the active map until a map of that name comes back"
+            "{count} map page shows {names}, which the project doesn't have, so it is drawn over the active map until a map of that name comes back: {places}"
         }
         (_, 1) => {
-            "{whose}: {count} map pages show {names}, which the project doesn't have, so they are drawn over the active map until a map of that name comes back"
+            "{count} map pages show {names}, which the project doesn't have, so they are drawn over the active map until a map of that name comes back: {places}"
         }
         _ => {
-            "{whose}: {count} map pages show {names}, which the project doesn't have, so they are drawn over the active map until maps of those names come back"
+            "{count} map pages show {names}, which the project doesn't have, so they are drawn over the active map until maps of those names come back: {places}"
         }
     };
     let mut names = named.iter().map(|n| format!("'{n}'")).collect::<Vec<_>>().join(", ");
-    if more {
+    if more_maps {
         names.push_str(", …");
     }
-    let notice = NoticeText::format(key, [("whose", whose), ("count", pages.to_string().into()), ("names", names.into())]);
+    let notice = NoticeText::format(key, [("count", pages.to_string().into()), ("names", names.into()), ("places", places)]);
     s.notify_text(notice, false);
 }
 
