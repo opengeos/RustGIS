@@ -238,8 +238,10 @@ fn a_table_or_chart_layer_field_or_rows_of_the_wrong_type_is_refused() {
     let (mut s, table, chart) = with_data();
     for (kind, element, key) in [("table", table, "layer"), ("table", table, "rows"), ("chart", chart, "layer"), ("chart", chart, "field")]
     {
-        // A number is what rows takes: one that isn't whole stands in for it, and so does text.
-        let bad = if key == "rows" { vec![json!(2.5), json!("many"), json!(true), json!([]), json!({})] } else { wrong().to_vec() };
+        // A number is what rows takes: ones that aren't whole or are below 0 stand in for it, and so
+        // does text.
+        let bad =
+            if key == "rows" { vec![json!(2.5), json!(-3), json!("many"), json!(true), json!([]), json!({})] } else { wrong().to_vec() };
         for v in bad {
             let mut add = json!({"kind": kind});
             add[key] = v.clone();
@@ -252,7 +254,7 @@ fn a_table_or_chart_layer_field_or_rows_of_the_wrong_type_is_refused() {
 }
 
 #[test]
-fn a_null_or_valid_table_or_chart_value_is_read_as_before() {
+fn a_null_or_valid_table_or_chart_value_is_taken() {
     let (mut s, table, chart) = with_data();
     let kept = serde_json::to_value(elements(&s)).unwrap();
     s.run("layout.update", &json!({"element": table, "layer": null, "rows": null})).unwrap();
@@ -264,7 +266,7 @@ fn a_null_or_valid_table_or_chart_value_is_read_as_before() {
     s.run("layout.addElement", &json!({"kind": "table", "layer": null, "rows": null})).unwrap();
     assert_eq!(rows(&s), 12);
     s.run("layout.addElement", &json!({"kind": "chart", "layer": null, "field": null})).unwrap();
-    for (given, taken) in [(json!(5), 5), (json!("7"), 7), (json!(0), 1), (json!(-3), 1), (json!(900), 500)] {
+    for (given, taken) in [(json!(5), 5), (json!("7"), 7), (json!(0), 1), (json!(900), 500)] {
         s.run("layout.addElement", &json!({"kind": "table", "rows": given})).unwrap();
         assert_eq!(rows(&s), taken, "add {given}");
         let table = id(&s, |k| matches!(k, ElementKind::Table { .. }));

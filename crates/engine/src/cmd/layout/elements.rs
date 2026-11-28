@@ -52,11 +52,11 @@ pub(in crate::cmd::layout) fn given_num(p: &Value, k: &str, what: &str) -> Resul
 }
 
 /// A table's "rows", when it's given (and not null), held to 1 to 500: an error when it's not a
-/// whole number.
+/// whole number of 0 or more.
 pub(in crate::cmd::layout) fn table_rows(p: &Value) -> Result<Option<usize>, String> {
-    let what = "a whole number";
+    let what = "a whole number of 0 or more";
     match given_num(p, "rows", what)? {
-        Some(n) if n.fract() == 0.0 => Ok(Some(n.clamp(1.0, 500.0) as usize)),
+        Some(n) if n >= 0.0 && n.fract() == 0.0 => Ok(Some(n.clamp(1.0, 500.0) as usize)),
         Some(_) => Err(format!("rows is {what}")),
         None => Ok(None),
     }
