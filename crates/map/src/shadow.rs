@@ -269,8 +269,8 @@ impl Way {
 /// The sun as each cell's trace needs it.
 struct Sun {
     way: Way,
-    /// The tangents of the disc's lower and upper edges, the upper one infinite when the disc
-    /// reaches the zenith.
+    /// The tangents of the disc's lower and upper edges. A softness set has the upper one infinite
+    /// when the disc reaches the zenith; the default disc's are held under 90°, as they always were.
     low: f64,
     high: f64,
     altitude: f64,
@@ -282,14 +282,21 @@ impl Sun {
     fn new(r: &Raster, azimuth: f64, altitude: f64, soft: f64) -> Self {
         let altitude = altitude.clamp(0.0, 90.0);
         let soft = soft_edge(Some(soft));
-        // The altitude is 0° to 90° and the half disc 0.5° to 15°, so the lower edge lies from 15°
-        // below the horizon to 89.5° and an upper edge short of the zenith has a finite tangent:
-        // neither is held under 90°, which would hide the whole of a disc nearer the zenith.
-        // A disc reaching the zenith has no upper edge any terrain hides it past: the share above
-        // the terrain is still lit, however steep that is.
-        let edge = |a: f64| a.to_radians().tan();
-        let high = if altitude + soft >= 90.0 { f64::INFINITY } else { edge(altitude + soft) };
-        Sun { way: Way::new(r, azimuth), low: edge(altitude - soft), high, altitude, soft }
+        let (low, high) = if soft == SOFT_EDGE {
+            // The default disc keeps the edges it was traced with before a softness could be set,
+            // held under 90°, so a layer that sets none draws the pixels it did (#3144).
+            let held = |a: f64| a.clamp(-89.9, 89.9).to_radians().tan();
+            (held(altitude - soft), held(altitude + soft))
+        } else {
+            // The altitude is 0° to 90° and the half disc 0.5° to 15°, so the lower edge lies from
+            // 15° below the horizon to 89.5° and an upper edge short of the zenith has a finite
+            // tangent: neither is held under 90°, which would hide the whole of a disc nearer the
+            // zenith. A disc reaching the zenith has no upper edge any terrain hides it past: the
+            // share above the terrain is still lit, however steep that is.
+            let edge = |a: f64| a.to_radians().tan();
+            (edge(altitude - soft), if altitude + soft >= 90.0 { f64::INFINITY } else { edge(altitude + soft) })
+        };
+        Sun { way: Way::new(r, azimuth), low, high, altitude, soft }
     }
 
     /// The share of the disc above the steepest tangent `t` seen toward it, 0 to 255.
@@ -620,17 +627,48 @@ mod tests {
         }
     }
 
-    /// A disc reaching past the zenith (a high sun, a wide disc), or just short of it, keeps the
-    /// share of it above the terrain seen, however steep: none of it is hidden whole at an edge
-    /// held under 90°.
+    /// A disc of a softness set reaching past the zenith (a high sun, a wide disc), or just short
+    /// of it, keeps the share of it above the terrain seen, however steep: none of it is hidden
+    /// whole at an edge held under 90°. The default disc is traced as it was (see
+    /// `the_default_disc_is_traced_as_it_was`).
     #[test]
     fn a_disc_past_the_zenith_keeps_its_share_above_steep_terrain() {
         let r = dem(3, 3, |_, _| 0.0);
-        for (altitude, soft, t) in [(80.0, 15.0, 1000.0), (88.0, SOFT_EDGE, 1000.0), (89.45, 0.5, f64::to_radians(89.92).tan())] {
+        for (altitude, soft, t) in [(80.0, 15.0, 1000.0), (88.0, 3.0, 1000.0), (89.45, 0.5, f64::to_radians(89.92).tan())] {
             let share = (altitude + soft - t.atan().to_degrees()) / (2.0 * soft);
             let lit = Sun::new(&r, 315.0, altitude, soft).lit(t);
             assert_eq!(lit, (share * 255.0).round() as u8, "{altitude}° ± {soft}°");
             assert!(lit > 0, "{altitude}° ± {soft}°");
+        }
+    }
+
+    /// The default disc is traced as it was before a softness could be set (#3144), its edges held
+    /// under 90° even near the zenith, so a layer that sets none draws the pixels it did: the
+    /// same edges (where the trace stops) and the same light, at every altitude from 80° to 90°
+    /// and every tangent up to 89.95°'s.
+    #[test]
+    fn the_default_disc_is_traced_as_it_was() {
+        let r = dem(3, 3, |_, _| 0.0);
+        let held = |a: f64| a.clamp(-89.9, 89.9).to_radians().tan();
+        for a in 0..=100 {
+            let altitude = 80.0 + f64::from(a) / 10.0;
+            let (low, high) = (held(altitude - SOFT_EDGE), held(altitude + SOFT_EDGE));
+            let was = |t: f64| {
+                if t <= low {
+                    255
+                } else if t >= high {
+                    0
+                } else {
+                    let share = (altitude + SOFT_EDGE - t.atan().to_degrees()) / (2.0 * SOFT_EDGE);
+                    (share.clamp(0.0, 1.0) * 255.0).round() as u8
+                }
+            };
+            let sun = Sun::new(&r, 315.0, altitude, SOFT_EDGE);
+            assert_eq!((sun.low.to_bits(), sun.high.to_bits()), (low.to_bits(), high.to_bits()), "edges at {altitude}°");
+            for d in 0..=2000 {
+                let t = f64::to_radians(70.0 + f64::from(d) * 0.00995).tan();
+                assert_eq!(sun.lit(t), was(t), "{altitude}° seeing {t}");
+            }
         }
     }
 }
