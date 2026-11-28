@@ -117,7 +117,7 @@ mod tests {
     }
 
     /// A credit line typed and then switched off is said not to be used, as reference lines are;
-    /// with none typed there is nothing to say.
+    /// with none typed, the row says "(none)" and nothing more.
     #[test]
     fn the_review_says_a_credit_line_switched_off_isnt_used() {
         let default = "Made with RustGIS · today's date";
