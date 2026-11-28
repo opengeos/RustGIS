@@ -58,6 +58,7 @@ pub(super) fn complete_shown_legends(
     map: &mut Map,
     scale: f64,
     show_no_data: bool,
+    exclude: &[String],
     failed_source: &mut Option<u64>,
     env: &Env,
 ) -> Option<Vec<(u32, Vec<LegendEntry>)>> {
@@ -66,8 +67,15 @@ pub(super) fn complete_shown_legends(
         return Some(shown_legends(map, scale, show_no_data, env));
     }
     let style_env = env.at_scale(Some(scale));
-    let wanted: Vec<usize> =
-        map.layers.iter().enumerate().filter(|(_, l)| map.draws_at(l, scale) && legend_lists(l)).map(|(i, _)| i).collect();
+    // A layer left out is not read: its rows aren't listed, and its failure doesn't stop the rest.
+    let excluded = |name: &str| exclude.iter().any(|n| n.eq_ignore_ascii_case(name));
+    let wanted: Vec<usize> = map
+        .layers
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| map.draws_at(l, scale) && legend_lists(l) && !excluded(&l.name))
+        .map(|(i, _)| i)
+        .collect();
     let mut out = Vec::new();
     for index in wanted {
         let layer = map.layers.get_mut(index)?;
@@ -1291,7 +1299,8 @@ pub struct LegendFitted {
 /// drawing makes them, given to `with`. `None` when a complete source can't be read.
 fn asked_rows<T>(map: &mut Map, scale: f64, asked: &LegendAsked, with: impl FnOnce(&[LegendRow]) -> T) -> Option<T> {
     let LegendAsked { all_classes, hide_other, show_no_data, layer_names, text_size, exclude, labels, class_labels } = *asked;
-    let drawn = if all_classes { None } else { Some(complete_shown_legends(map, scale, show_no_data, &mut None, &Env::default())?) };
+    let drawn =
+        if all_classes { None } else { Some(complete_shown_legends(map, scale, show_no_data, exclude, &mut None, &Env::default())?) };
     let size = legend_size(text_size);
     let opts = LegendOptions { show_no_data, hide_other, names: layer_names, exclude, labels, class_labels, scale, size, text_size };
     Some(with(&legend_rows(map, drawn.as_deref(), &opts)))

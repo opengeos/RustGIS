@@ -1163,12 +1163,18 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
             (fw * 0.3, fh * 0.25)
         }
     };
-    // Whether a layer the legend isn't asked to leave out may have rows in it.
-    let listed = legend.as_ref().is_some_and(|legend| {
-        let asked_out = |name: &str| legend.exclude.iter().any(|n| n.eq_ignore_ascii_case(name));
-        s.map().layers.iter().any(|l| s.map().shows(l) && crate::render::layout::legend_lists(l) && !asked_out(&l.name))
+    // Whether a layer the legend lists is one of those still reading: one it leaves out, asked or
+    // as context, gives it no rows to wait for.
+    let listed_reading = legend.as_ref().is_some_and(|legend| {
+        let out = legend.left_out(&context);
+        s.map().layers.iter().any(|l| {
+            s.map().draws_at(l, render_scale)
+                && crate::render::layout::legend_lists(l)
+                && !out.iter().any(|n| n.eq_ignore_ascii_case(&l.name))
+                && (l.raster.as_ref().is_some_and(|r| r.is_reading()) || l.source.as_ref().is_some_and(|s| s.is_pending()))
+        })
     });
-    if reading && listed {
+    if reading && listed_reading {
         (cw, ch) = (cw.max(fw * 0.3), ch.max(fh * 0.25));
         sizes = None;
         warnings.push("the legend's classes aren't known yet (a layer still reading): it has a fixed size to fit by hand".into());
