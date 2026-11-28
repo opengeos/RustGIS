@@ -26,7 +26,7 @@ description: Make a printable page layout — map frame, title, legend, north ar
    (`"auto"`, the default, or 0–3 fixed with the thousands set apart, as a chart's), `"textSize"` (4–100 pt, its
    labels' size) and `"fit"` (`"adjustDivisionValue"`, `"adjustDivision"`, `"adjustWidth"`). A `"legend"` can take
    `"columns"` (1–6), `"fit"` (`"manual"`, `"adjustSize"`, `"adjustColumns"`, `"adjustColumnsAndSize"`: shrink its
-   text or add columns to fit its box), `"showCounts": true` (each class row ends in its number of features),
+   text or add columns to fit its box), `"showCounts": true` (each class row ends in its number of features; none for a database or web layer),
    `"showLayerNames": false` and `"classLabels"` (`{"<layer>": {"<class label>": "<text>"}}`: its own text for a
    class, the layer keeping its label).
    A `"text"` or `"dynamicText"` can take

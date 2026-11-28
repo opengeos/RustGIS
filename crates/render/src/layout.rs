@@ -373,10 +373,14 @@ fn draw_page(
     // What each legend's frame draws, worked out before any element is drawn: its map is synced
     // to that frame's view first, so a streamed layer holds that frame's features whichever order
     // the frames and legends come in, and whichever other frame showed the map last.
+    // A legend that counts features reads its streamed layers whole here too (#3238).
     let mut shown = Vec::new();
+    let mut counted = Vec::new();
     for e in layout.elements.iter().filter(visible) {
-        if let ElementKind::Legend { frame: f, all_classes: false, show_no_data, .. } = &e.kind
+        if let ElementKind::Legend { frame: f, all_classes, show_no_data, show_counts, exclude, .. } = &e.kind
+            && let classes = !*all_classes
             && !shown.iter().any(|(id, no_data, _)| id == f && no_data == show_no_data)
+            && (classes || show_counts.shown())
             && let Some(&(_, mi, cam, fw, fh)) = frame(*f)
             && let Some(map) = maps.get_mut(mi)
         {
@@ -386,13 +390,23 @@ fn draw_page(
             let scale = map.ground_res_at(&cam) / rustgis_geom::PIXEL_M;
             map.sync_sources_in(&lonlat, own.as_ref(), scale, true, env);
             let mut failed_source = None;
-            // Every layer, those a legend leaves out too: the frame draws them, and the legends of
-            // a frame share this read, each leaving out its own as it lists its rows.
-            let Some(entries) = complete_shown_legends(map, scale, *show_no_data, &[], &mut failed_source, env) else {
-                *source_error = failed_source_error(map, failed_source);
-                return None;
-            };
-            shown.push((*f, *show_no_data, entries));
+            if classes {
+                // Every layer, those a legend leaves out too: the frame draws them, and the legends
+                // of a frame share this read, each leaving out its own as it lists its rows.
+                let Some(entries) = complete_shown_legends(map, scale, *show_no_data, &[], &mut failed_source, env) else {
+                    *source_error = failed_source_error(map, failed_source);
+                    return None;
+                };
+                shown.push((*f, *show_no_data, entries));
+            }
+            if show_counts.shown() {
+                let asked = (*all_classes, *show_no_data);
+                let Some(counts) = complete_counted_legends(map, scale, asked, exclude, &mut failed_source, env) else {
+                    *source_error = failed_source_error(map, failed_source);
+                    return None;
+                };
+                counted.push((e.id, counts));
+            }
         }
     }
     for e in layout.elements.iter().filter(visible) {
@@ -557,7 +571,10 @@ fn draw_page(
                         exclude,
                         labels,
                         class_labels,
-                        counts: show_counts.shown().then_some(env),
+                        counts: show_counts.shown().then(|| Counts {
+                            env,
+                            streamed: counted.iter().find(|(id, _)| *id == e.id).map_or(&[][..], |(_, c)| c.as_slice()),
+                        }),
                         scale,
                         size,
                         text_size: *text_size,

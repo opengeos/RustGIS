@@ -86,7 +86,9 @@ pub(super) fn complete_shown_legends(
             }
             continue;
         };
-        let unique = match &layer.renderer {
+        // Its own copy: the read below holds the layer.
+        let renderer = layer.renderer.clone();
+        let unique = match &renderer {
             rustgis_map::Renderer::Unique { field, classes, .. } => Some((field, classes)),
             _ => None,
         };
@@ -104,13 +106,7 @@ pub(super) fn complete_shown_legends(
         let mut used = std::collections::HashSet::new();
         let mut any = false;
         let mut no_data = None;
-        let mut chunk = layer.clone();
-        chunk.source = None;
-        // Its chunks come in the source's own system.
-        chunk.dataset.held_in = source.coord_crs();
-        chunk.clear_cache();
-        let result = crate::visit_complete(source.as_ref(), &mut |features| {
-            chunk.dataset.features = features.into();
+        read_whole(layer, source.as_ref(), failed_source, &mut |chunk| {
             let rows = chunk.drawn_rows_with(scale, env);
             if show_no_data && no_data.is_none() {
                 no_data = chunk.renderer.no_data_legend(&chunk.dataset, Some(&rows));
@@ -136,19 +132,7 @@ pub(super) fn complete_shown_legends(
                     }
                 }
             }
-            chunk.dataset.features = Vec::new().into();
-            Ok(())
-        });
-        if let Err(e) = result {
-            if let Some(source) = &mut layer.source {
-                source.error = Some(e.to_string());
-            }
-            *failed_source = Some(layer.instance_id());
-            return None;
-        }
-        if let Some(source) = &mut layer.source {
-            source.clear_error();
-        }
+        })?;
         if any {
             // (A sample of the classes seen: classed again at this scale, by expression.)
             let mut entries = layer.with_size_legend(layer.renderer.legend_with(&sample, &[], style_env.clone()));
@@ -157,6 +141,86 @@ pub(super) fn complete_shown_legends(
         }
     }
     Some(out)
+}
+
+/// Gives `visit` each chunk of `layer`'s `source` read whole, as a copy of the layer holding it. A
+/// failed traversal leaves the layer's error, gives its live identity for the page's source-error
+/// report and returns `None`.
+fn read_whole(
+    layer: &mut rustgis_map::Layer,
+    source: &dyn rustgis_data::source::FeatureSource,
+    failed_source: &mut Option<u64>,
+    visit: &mut dyn FnMut(&rustgis_map::Layer),
+) -> Option<()> {
+    let mut chunk = layer.clone();
+    chunk.source = None;
+    // Its chunks come in the source's own system.
+    chunk.dataset.held_in = source.coord_crs();
+    chunk.clear_cache();
+    let result = crate::visit_complete(source, &mut |features| {
+        chunk.dataset.features = features.into();
+        visit(&chunk);
+        chunk.dataset.features = Vec::new().into();
+        Ok(())
+    });
+    if let Err(e) = result {
+        if let Some(source) = &mut layer.source {
+            source.error = Some(e.to_string());
+        }
+        *failed_source = Some(layer.instance_id());
+        return None;
+    }
+    if let Some(source) = &mut layer.source {
+        source.clear_error();
+    }
+    Some(())
+}
+
+/// What a streamed layer's legend shows from its whole source: its rows with their numbers and its
+/// number of drawn features; `None` for one a legend of what its frame draws leaves out.
+pub(super) type StreamedCount = (u32, Option<(Vec<LegendEntry>, u64)>);
+
+/// Counts the features of a legend's streamed layers (#3238), whose own features are the view's:
+/// one whole read of each source that offers one (a local file). A layer read from a database or
+/// over the web has no entry here, and shows no numbers. With `all`, every visible layer and class;
+/// without, what the frame draws at 1:`scale`. A layer named in `exclude` isn't read.
+pub(super) fn complete_counted_legends(
+    map: &mut Map,
+    scale: f64,
+    (all, show_no_data): (bool, bool),
+    exclude: &[String],
+    failed_source: &mut Option<u64>,
+    env: &Env,
+) -> Option<Vec<StreamedCount>> {
+    let excluded = |name: &str| exclude.iter().any(|n| n.eq_ignore_ascii_case(name));
+    let wanted: Vec<usize> = map
+        .layers
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| {
+            let listed = if all { map.shows(l) } else { map.draws_at(l, scale) };
+            l.dataset.windowed && !l.is_raster() && listed && legend_lists(l) && !excluded(&l.name)
+        })
+        .map(|(i, _)| i)
+        .collect();
+    let mut out = Vec::new();
+    for index in wanted {
+        let layer = map.layers.get_mut(index)?;
+        let Some(source) = layer.source.as_ref().and_then(|s| s.count_source()) else { continue };
+        let mut count = rustgis_map::LegendCount::default();
+        read_whole(layer, source.as_ref(), failed_source, &mut |chunk| chunk.count_for_legend(scale, env, &mut count))?;
+        let shown = (all || count.total() > 0).then(|| layer.legend_of_count(&count, all, show_no_data));
+        out.push((layer.id, shown));
+    }
+    Some(out)
+}
+
+/// The features a legend counts (#3237): those of the layers holding all of theirs, on the page
+/// `env`, and the streamed layers' from [`complete_counted_legends`].
+#[derive(Clone, Copy)]
+pub(super) struct Counts<'a> {
+    pub(super) env: &'a Env,
+    pub(super) streamed: &'a [StreamedCount],
 }
 
 /// What a legend leaves out: `<all other values>`, layers' names over their classes and pictures
@@ -172,8 +236,8 @@ pub(super) struct LegendOptions<'a> {
     pub(super) exclude: &'a [String],
     pub(super) labels: &'a BTreeMap<String, String>,
     pub(super) class_labels: &'a ClassLabels,
-    /// The page its features are counted on (#3237); none, no numbers.
-    pub(super) counts: Option<&'a Env>,
+    /// Its features' numbers (#3237); none, no numbers.
+    pub(super) counts: Option<Counts<'a>>,
     pub(super) scale: f64,
     pub(super) size: f32,
     pub(super) text_size: f64,
@@ -967,27 +1031,34 @@ pub(super) fn legend_rows_missing<'a>(
         if !(map.shows(l) && legend_lists(l) && !excluded(&l.name)) {
             continue;
         }
-        let listed = match drawn {
-            Some(d) => match d.iter().find(|(id, _)| *id == l.id) {
-                Some((_, entries)) => Some(entries),
-                None => continue,
-            },
-            None => None,
-        };
-        // Counted from the features themselves, so only a vector layer holding all of them: a
-        // streamed one holds the view's (#3237, #3238).
-        let counted = opts
-            .counts
-            .filter(|_| !l.is_raster() && !l.dataset.windowed)
-            .map(|env| l.counted_legend(opts.scale, env, listed.is_none(), opts.show_no_data));
-        let (mut entries, total) = match counted {
-            Some((entries, total)) => (entries, Some(total)),
-            None => {
-                let mut entries = listed.map_or_else(|| every_class(l), Clone::clone);
-                if listed.is_none() && opts.show_no_data {
-                    entries.extend(l.renderer.no_data_legend(&l.dataset, None));
+        // A streamed layer read whole for its numbers lists what the whole source gives.
+        let streamed = opts.counts.and_then(|c| c.streamed.iter().find(|(id, _)| *id == l.id));
+        let (mut entries, total) = if let Some((_, shown)) = streamed {
+            let Some((entries, total)) = shown else { continue };
+            (entries.clone(), Some(*total))
+        } else {
+            let listed = match drawn {
+                Some(d) => match d.iter().find(|(id, _)| *id == l.id) {
+                    Some((_, entries)) => Some(entries),
+                    None => continue,
+                },
+                None => None,
+            };
+            // Counted from the features themselves, so only a vector layer holding all of them: a
+            // streamed one holds the view's (#3237).
+            let counted = opts
+                .counts
+                .filter(|_| !l.is_raster() && !l.dataset.windowed)
+                .map(|c| l.counted_legend(opts.scale, c.env, listed.is_none(), opts.show_no_data));
+            match counted {
+                Some((entries, total)) => (entries, Some(total)),
+                None => {
+                    let mut entries = listed.map_or_else(|| every_class(l), Clone::clone);
+                    if listed.is_none() && opts.show_no_data {
+                        entries.extend(l.renderer.no_data_legend(&l.dataset, None));
+                    }
+                    (entries, None)
                 }
-                (entries, None)
             }
         };
         // The fallback row only (a class that happens to bear its name stays).
@@ -1340,10 +1411,11 @@ pub struct LegendFitted {
 fn asked_rows<T>(map: &mut Map, scale: f64, asked: &LegendAsked, with: impl FnOnce(&[LegendRow]) -> T) -> Option<T> {
     let LegendAsked { all_classes, hide_other, show_no_data, layer_names, text_size, exclude, labels, class_labels, show_counts } = *asked;
     let env = Env::default();
-    let drawn =
-        if all_classes { None } else { Some(complete_shown_legends(map, scale, show_no_data, exclude, &mut None, &Env::default())?) };
+    let drawn = if all_classes { None } else { Some(complete_shown_legends(map, scale, show_no_data, exclude, &mut None, &env)?) };
     let size = legend_size(text_size);
-    let counts = show_counts.then_some(&env);
+    let streamed =
+        if show_counts { complete_counted_legends(map, scale, (all_classes, show_no_data), exclude, &mut None, &env)? } else { Vec::new() };
+    let counts = show_counts.then_some(Counts { env: &env, streamed: &streamed });
     let opts =
         LegendOptions { show_no_data, hide_other, names: layer_names, exclude, labels, class_labels, counts, scale, size, text_size };
     Some(with(&legend_rows(map, drawn.as_deref(), &opts)))
@@ -1415,3 +1487,6 @@ pub fn legend_title_width_mm(title: &str, text_size: f64) -> f64 {
 pub fn legend_title_mm(text_size: f64) -> f64 {
     f64::from(LEGEND_ROW * legend_size(text_size)) * f64::from(LEGEND_TITLE_ROWS) * 25.4 / 96.0
 }
+
+#[cfg(test)]
+mod count_tests;

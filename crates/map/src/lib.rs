@@ -169,6 +169,27 @@ pub struct Unreadable {
     pub zm_noted: bool,
 }
 
+/// What a legend counts of a layer's features (#3237), added to as they are read
+/// ([`Layer::count_for_legend`]).
+#[derive(Debug, Default)]
+pub struct LegendCount {
+    /// Every feature read, drawn or not.
+    features: usize,
+    /// Those drawn.
+    total: u64,
+    /// Those drawn in each class, as [`Renderer`] counts them.
+    classes: Vec<u64>,
+    /// Those drawn with no value for Graduated Colors.
+    missing: u64,
+}
+
+impl LegendCount {
+    /// The number of features drawn.
+    pub fn total(&self) -> u64 {
+        self.total
+    }
+}
+
 /// A layer: a dataset drawn with a renderer and labels.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Layer {
@@ -1892,7 +1913,7 @@ impl Layer {
     /// [`Layer::shown_legend_with`] for a legend that counts features (#3237): its rows at 1:`scale`
     /// with their numbers (with `all`, every class), and the number of rows the layer draws, which
     /// a layer of one symbol shows beside its name. With `no_data`, Graduated Colors' missing-value
-    /// row after the classes, counted.
+    /// row after the classes, counted. For a layer that holds all its features.
     pub fn counted_legend(
         &self,
         scale: f64,
@@ -1900,21 +1921,42 @@ impl Layer {
         all: bool,
         no_data: bool,
     ) -> (Vec<symbology::LegendEntry>, u64) {
+        let mut count = LegendCount::default();
+        self.count_for_legend(scale, env, &mut count);
+        self.legend_of_count(&count, all, no_data)
+    }
+
+    /// Adds the features this layer holds and draws at 1:`scale` to a legend's `count`: a layer's
+    /// own, or each chunk of a source read whole (#3238).
+    pub fn count_for_legend(&self, scale: f64, env: &rustgis_data::query::Env, count: &mut LegendCount) {
         let rows = self.drawn_rows_with(scale, env);
-        let total = rows.iter().filter(|r| **r).count() as u64;
-        let mut entries = self.with_size_legend(self.renderer.legend_counted(&self.dataset, &rows, env.at_scale(Some(scale)), all));
-        let missing = (!all).then_some(rows.as_slice());
-        if no_data && let Some(mut entry) = self.renderer.no_data_legend(&self.dataset, missing) {
-            if let Renderer::Graduated { field, .. } = &self.renderer {
-                let fi = self.dataset.field_index(field);
-                let n = (0..rows.len())
-                    .filter(|r| rows.get(*r) == Some(&true) && fi.and_then(|fi| self.dataset.value(*r, fi).as_f64()).is_none())
-                    .count();
-                entry.count = Some(n as u64);
-            }
+        count.total += rows.iter().filter(|r| **r).count() as u64;
+        // Bounded over every feature counted, however many chunks they come in.
+        count.features = count.features.saturating_add(self.dataset.features.len());
+        if !self.renderer.too_many_to_class(count.features) {
+            self.renderer.count_classes(&self.dataset, &rows, env.at_scale(Some(scale)), &mut count.classes);
+        }
+        if let Renderer::Graduated { field, .. } = &self.renderer {
+            let fi = self.dataset.field_index(field);
+            let missing = (0..rows.len())
+                .filter(|r| rows.get(*r) == Some(&true) && fi.and_then(|fi| self.dataset.value(*r, fi).as_f64()).is_none())
+                .count();
+            count.missing += missing as u64;
+        }
+    }
+
+    /// The legend rows and number of drawn features ([`Layer::counted_legend`]) of `count`.
+    pub fn legend_of_count(&self, count: &LegendCount, all: bool, no_data: bool) -> (Vec<symbology::LegendEntry>, u64) {
+        let classes = (!self.renderer.too_many_to_class(count.features)).then_some(count.classes.as_slice());
+        let mut entries = self.with_size_legend(self.renderer.counted_entries(&self.dataset, classes, all));
+        if no_data
+            && (all || count.missing > 0)
+            && let Some(mut entry) = self.renderer.no_data_legend(&self.dataset, None)
+        {
+            entry.count = Some(count.missing);
             entries.push(entry);
         }
-        (entries, total)
+        (entries, count.total)
     }
 
     /// A legend's colour classes with the sizes of [`Layer::size_by`] after them, where it applies:

@@ -1309,6 +1309,12 @@ impl SourceLayer {
         self.handle.as_ref().filter(|h| h.visits_chunks()).cloned()
     }
 
+    /// [`SourceLayer::visit_source`] for a legend's counts: an incompatible schema must not bypass
+    /// its refusal.
+    pub fn count_source(&self) -> Option<Arc<dyn FeatureSource>> {
+        self.visit_source().filter(|_| !self.schema_refused)
+    }
+
     /// A source that can provide all features in an extent a chunk at a time.
     pub(super) fn visit_extent_source(&self) -> Option<Arc<dyn FeatureSource>> {
         self.handle.as_ref().filter(|h| h.visits_extent_chunks()).cloned()
