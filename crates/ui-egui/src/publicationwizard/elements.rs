@@ -1031,6 +1031,20 @@ mod tests {
         assert_eq!(added(&app.session, &d), json!({}), "another map");
     }
 
+    /// A web layer is ticked by its name: renamed, it is offered unticked, and the tick counts
+    /// again under the old name.
+    #[test]
+    fn a_web_layer_left_out_is_followed_by_its_name() {
+        let mut app = app();
+        web(&mut app, "Parcels");
+        let mut d = Draft::new(&app.session);
+        d.elements.legend_exclude = out_of(&app, &["Parcels"]);
+        app.session.map_mut().tiles.last_mut().unwrap().name = "Lots".into();
+        assert_eq!(added(&app.session, &d), json!({}), "renamed");
+        app.session.map_mut().tiles.last_mut().unwrap().name = "Parcels".into();
+        assert_eq!(added(&app.session, &d), json!({"legend": {"exclude": ["Parcels"]}}), "its name again");
+    }
+
     /// With no legend the list is off and nothing is sent; the ticks are kept.
     #[test]
     fn without_a_legend_nothing_is_left_out() {
