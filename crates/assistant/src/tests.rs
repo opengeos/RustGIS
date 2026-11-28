@@ -5517,7 +5517,7 @@ fn mistral_typed_stream_preserves_visible_text_thinking_and_signatures_for_repla
     assert_eq!(reply.text, "Before Hello world");
     assert_eq!(reply.native["content"][1], thinking);
     let replay = Turn::Assistant { text: reply.text.clone(), calls: vec![], native: Some((Api::OpenAi, reply.native.clone())) };
-    let request = chat_request(&cfg("openai"), "system", &[replay.clone()], &[]);
+    let request = chat_request(&cfg("openai"), "system", std::slice::from_ref(&replay), &[]);
     let body: Value = serde_json::from_str(&request.body.unwrap()).unwrap();
     assert_eq!(body["messages"][1]["content"], "Before Hello world");
     let request = chat_request(&cfg("mistral"), "system", &[replay], &[]);
