@@ -2728,7 +2728,8 @@ pub struct LabelClass {
     #[serde(default)]
     pub placement: LabelPlacement,
     /// A label taken by another tries nearby positions before it is left out (#1011):
-    /// round a point ([`LabelPlacement::alternatives`]), or along a non-repeated line.
+    /// round a point ([`LabelPlacement::alternatives`]), or along a non-repeated line. A polygon's
+    /// goes first to the point inside it farthest from its edges (#3268).
     /// Off by default: placed
     /// elsewhere, a label may take the place another has today.
     #[serde(default, deserialize_with = "de_flag", skip_serializing_if = "std::ops::Not::not")]

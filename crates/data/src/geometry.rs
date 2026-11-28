@@ -310,6 +310,15 @@ impl Geometry {
         false
     }
 
+    /// The part of a polygon [`label_point`](Self::label_point) places its point in: the largest
+    /// valid one. `None` for other geometries.
+    pub fn label_part(&self) -> Option<&Vec<Vec<Coord>>> {
+        match self {
+            Geometry::Polygon(polys) => largest_part(polys),
+            _ => None,
+        }
+    }
+
     /// A point for a label or a pop-up: the point itself, the middle vertex of the longest line
     /// part, or the centroid of the largest valid polygon (moved inside it if the centroid falls out).
     ///

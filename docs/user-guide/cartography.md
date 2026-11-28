@@ -764,6 +764,15 @@ Turn labels on per layer (Labeling › Labels › **Label**), then:
   take the place a less important one had. The class's offset applies to every place, and Lock
   keeps the place each label took
   (`labels.placement={"layer": "Cities", "otherPositions": true}`).
+- **Other places inside polygons**: a polygon's label goes to the point inside it farthest from
+  its edges, as seen on the screen, so a name sits in the body of a lake or bay rather than against
+  a shore. Where another label takes that point, it goes where it goes without this setting, and
+  is left out if that is taken too (Labeling pane › Position › **Try other places inside the
+  polygon**, for polygon layers). With that point out of view, the label stays where it goes
+  without this. Not for Curved labels or labels along a guide, where the box is hidden and the
+  setting does nothing. Off by default, as round points; the class's offset applies to both places,
+  and Lock keeps the place each label took
+  (`labels.placement={"layer": "Lakes", "otherPositions": true}`).
 - **Other places along lines**: a Parallel or Curved label whose place at the middle is taken, or
   (curved) where the line bends too sharply, tries up to seven others along the same stretch,
   nearest the middle first, and goes to the first that will do (Labeling pane › Position › Along

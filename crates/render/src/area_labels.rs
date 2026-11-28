@@ -337,6 +337,14 @@ pub(super) fn screen_rings(ctx: &super::Ctx<'_>, polys: &[Vec<Vec<Coord>>]) -> O
         .collect()
 }
 
+/// The point of `g`'s label part farthest from its edges on the screen (#3268), to about a point,
+/// from its rings thinned as [`screen_rings`] thins them. `None` for no polygon, one with no area
+/// near the view or one with a place behind the globe.
+pub(super) fn pole(ctx: &super::Ctx<'_>, g: &rustgis_data::Geometry) -> Option<(f32, f32)> {
+    let rings = screen_rings(ctx, std::slice::from_ref(g.label_part()?))?;
+    rustgis_tiles::symbols::pole_of_inaccessibility(&rings, 1.0)
+}
+
 /// [`glyphs`]' characters `advances` wide and `height` tall, as [`Line::curved`] takes them.
 fn curved(
     ctx: &super::Ctx<'_>,

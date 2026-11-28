@@ -275,7 +275,8 @@ pub fn commands() -> Vec<C> {
             // `to: null`: this call takes the line away.
             let clears = matches!(to, Some(None));
             let id = s.layer_id(p)?;
-            let (points, lines) = points_and_lines(s.map().layer(id).ok_or("no such layer")?);
+            let held = held_geometries(s.map().layer(id).ok_or("no such layer")?);
+            let lines = held.1;
             let guide = label_guide(s, p, s.map().layer(id).ok_or("no such layer")?)?;
             // A repeat or line offset given where it does nothing (not along a line), kept for
             // when the class is placed along one, and said (#2639).
@@ -344,8 +345,8 @@ pub fn commands() -> Vec<C> {
                 }
                 // Asked of the class as this call leaves it, so a position or a repeat given with
                 // it counts. On where it would do nothing is refused; off is taken anywhere.
-                if others == Some(true) && !tries_other_places(points, lines, c) {
-                    return Err("otherPositions is for points, and for lines placed parallel or curved without a repeat".into());
+                if others == Some(true) && !tries_other_places(held, c) {
+                    return Err("otherPositions is for points, for polygons whose labels aren't curved or along a guide, and for lines placed parallel or curved without a repeat".into());
                 }
                 if !(lines && c.placement.along_line()) {
                     if repeat.is_some_and(|r| r.is_some()) {
@@ -429,7 +430,7 @@ pub fn commands() -> Vec<C> {
         .inputs(super::Inputs::single_layer)
         .when(need_feature_layer)
         .params(
-            r#"{"layer"?, "class"?: name (none: the Default class, by whatever name it has), "position"?: "auto"|"center"|"above"|"below"|"left"|"right"|"aboveRight"|"aboveLeft"|"belowRight"|"belowLeft"|"parallel" (along a line, straight)|"curved" (along a line, following its bends)|"perpendicular" (a point's, square to the nearest line of `to`, starting at the point; none that near: as auto) (required without offset, repeat, lineOffset, otherPositions, showAll, weight, clearance, removeDuplicates, callout, to, side, fit, abbreviations or guide), "to"?: {"layer": a line or polygon layer's name, "within"?: points (1 to 500; 20)} | null, "side"?: "away" (the side of the line the point isn't on; the default)|"left"|"right" (as the line runs), "offset"?: [right, down] points (-200 to 200 each) the label moves from where its position puts it ([0, 0]: none; perpendicular: [out along the normal, down as the text reads]; a label along a line isn't moved), "repeat"?: points (10 to 10000) between a line's labels, spaced out from the one at its middle, at most 32 a line (0 or null: the one at its middle; parallel and curved only), "lineOffset"?: points (-200 to 200) between a line and its label's nearest edge, above the line as the text reads, negative below it (0 or null: on the line; parallel and curved only), "otherPositions"?: bool (a label whose place is taken tries others: a point's round the point, corners first; a line's along the line, nearest its middle first, placed parallel or curved without a repeat; true is refused for any other line label and on polygons), "fit"?: "auto"|"off" (curved along a line: "auto" abbreviates a name that can't follow the line, sets one longer than a third of it on its straightest stretch, and spreads one over labels.style's stretch of a line more than three times its length; "off" or null: as placed), "abbreviations"?: {word: abbreviation} (whole words a fitted label puts short, ignoring case, over the built-in English, Portuguese and Spanish list, as {"Creek": "Cr.", "Córrego": "Cór."}; null or {}: the built-in list alone), "showAll"?: bool (every label drawn, over the others where they crowd), "weight"?: 0 to 10 (where labels compete for a place, the heavier class's wins, whatever its layer's place; equal weights: the layer above, then the class listed first; a fraction rounded; null: 5), "clearance"?: points (0 to 100: the room the class's labels keep free of other labels, two labels keeping both their clearances apart; null: 2), "removeDuplicates"?: points (1 to 2000: a label is left out within this distance of one placed before it for another feature of its layer and class with the same text; a label moved by hand always shows; false or null: off), "callout"?: true|false|points (5 to 500: a label crowded off its spot moves to a free one nearby, a line drawn back to its feature at most this long; true keeps its length, or 40; false, 0 or null: none; not labels along a line or with an icon), "guide"?: {"layer": a line layer's name (as ridge or valley lines; not drawn by this), "field"?: a field both layers have} | null (points and polygons, not perpendicular ones: each label curved along its guide line, the one with the feature's value in field, else the longest in view under the label inside its polygon, or the nearest to its point within the text's width; a feature with none its text fits along is labelled as without a guide; null: none)}"#,
+            r#"{"layer"?, "class"?: name (none: the Default class, by whatever name it has), "position"?: "auto"|"center"|"above"|"below"|"left"|"right"|"aboveRight"|"aboveLeft"|"belowRight"|"belowLeft"|"parallel" (along a line, straight)|"curved" (along a line, following its bends)|"perpendicular" (a point's, square to the nearest line of `to`, starting at the point; none that near: as auto) (required without offset, repeat, lineOffset, otherPositions, showAll, weight, clearance, removeDuplicates, callout, to, side, fit, abbreviations or guide), "to"?: {"layer": a line or polygon layer's name, "within"?: points (1 to 500; 20)} | null, "side"?: "away" (the side of the line the point isn't on; the default)|"left"|"right" (as the line runs), "offset"?: [right, down] points (-200 to 200 each) the label moves from where its position puts it ([0, 0]: none; perpendicular: [out along the normal, down as the text reads]; a label along a line isn't moved), "repeat"?: points (10 to 10000) between a line's labels, spaced out from the one at its middle, at most 32 a line (0 or null: the one at its middle; parallel and curved only), "lineOffset"?: points (-200 to 200) between a line and its label's nearest edge, above the line as the text reads, negative below it (0 or null: on the line; parallel and curved only), "otherPositions"?: bool (a label whose place is taken tries others: a point's round the point, corners first; a line's along the line, nearest its middle first, placed parallel or curved without a repeat; a polygon's goes first to the point inside it farthest from its edges, then where it goes without this; true is refused for any other line label, and on polygons for a curved label or one along a guide), "fit"?: "auto"|"off" (curved along a line: "auto" abbreviates a name that can't follow the line, sets one longer than a third of it on its straightest stretch, and spreads one over labels.style's stretch of a line more than three times its length; "off" or null: as placed), "abbreviations"?: {word: abbreviation} (whole words a fitted label puts short, ignoring case, over the built-in English, Portuguese and Spanish list, as {"Creek": "Cr.", "Córrego": "Cór."}; null or {}: the built-in list alone), "showAll"?: bool (every label drawn, over the others where they crowd), "weight"?: 0 to 10 (where labels compete for a place, the heavier class's wins, whatever its layer's place; equal weights: the layer above, then the class listed first; a fraction rounded; null: 5), "clearance"?: points (0 to 100: the room the class's labels keep free of other labels, two labels keeping both their clearances apart; null: 2), "removeDuplicates"?: points (1 to 2000: a label is left out within this distance of one placed before it for another feature of its layer and class with the same text; a label moved by hand always shows; false or null: off), "callout"?: true|false|points (5 to 500: a label crowded off its spot moves to a free one nearby, a line drawn back to its feature at most this long; true keeps its length, or 40; false, 0 or null: none; not labels along a line or with an icon), "guide"?: {"layer": a line layer's name (as ridge or valley lines; not drawn by this), "field"?: a field both layers have} | null (points and polygons, not perpendicular ones: each label curved along its guide line, the one with the feature's value in field, else the longest in view under the label inside its polygon, or the nearest to its point within the text's width; a feature with none its text fits along is labelled as without a guide; null: none)}"#,
         ),
         // Labels moved by hand (the Move Label tool, as QGIS's): kept by their feature's id.
         C::new("labels.move", "Move Label", "Labeling › Label Placement", |s, p| {
@@ -598,10 +599,10 @@ pub fn commands() -> Vec<C> {
     ]
 }
 
-/// Whether the layer holds points and lines: declared so, or among its features, as the renderer
+/// Whether the layer holds points, lines and polygons: declared so, or among its features, as the renderer
 /// goes by each feature's geometry.
-fn points_and_lines(l: &Layer) -> (bool, bool) {
-    (l.has_geometry(GeometryType::Point), l.has_geometry(GeometryType::Polyline))
+fn held_geometries(l: &Layer) -> (bool, bool, bool) {
+    (l.has_geometry(GeometryType::Point), l.has_geometry(GeometryType::Polyline), l.has_geometry(GeometryType::Polygon))
 }
 
 /// `labels.placement`'s `to`: the line or polygon layer a perpendicular label is square to, by
@@ -665,11 +666,14 @@ fn label_guide(s: &Session, p: &Value, labelled: &Layer) -> Result<Option<Option
     Ok(Some(Some(LabelGuide { layer: layer.name.clone(), field })))
 }
 
-/// Whether a class on a layer holding these has other places to try when its label's own is taken:
-/// round a point at any position (#1011), or along a line for a label at its middle (#1187). Each
+/// Whether a class on a layer holding these (points, lines, polygons) has other places to try when
+/// its label's own is taken: round a point at any position (#1011), along a line for a label at its
+/// middle (#1187), or inside a polygon for a label neither curved nor along a guide (#3268). Each
 /// repeat is already a place of its own, so repeats get none.
-fn tries_other_places(points: bool, lines: bool, c: &LabelClass) -> bool {
-    points || (lines && c.placement.along_line() && c.repeat.is_none())
+fn tries_other_places((points, lines, polygons): (bool, bool, bool), c: &LabelClass) -> bool {
+    points
+        || (lines && c.placement.along_line() && c.repeat.is_none())
+        || (polygons && c.placement != LabelPlacement::Curved && c.guide.is_none())
 }
 
 /// `labels.by`: sets a label class's expressions, each checked against the layer's fields.
@@ -776,16 +780,17 @@ pub(crate) fn lock_holds(l: &Layer, b: &Labeling) -> bool {
 
 /// Whether the layer's classes and those of `b` (listed alike) put their labels in the same places.
 /// A lock names the place round its point or along its line a label took by its number among its
-/// class's (#1011, #1187), so another position, or trying the others turned on or off, locks the
+/// class's (#1011, #1187, #3268), so another position, or trying the others turned on or off, locks the
 /// labels again; with no class trying them a new position keeps the lock, as before. The flag only
 /// counts where it has an effect: kept on a line's class at a position off the line, or with a
 /// repeat, it does nothing ([`tries_other_places`]). Along a line, off it, each place is tried on
 /// both sides, the label's own first: its number says which, so the other side, or a distance
 /// where there was none, locks the labels again too; another distance on the same side doesn't.
 fn same_places(l: &Layer, b: &Labeling) -> bool {
-    let (points, lines) = points_and_lines(l);
+    let held = held_geometries(l);
+    let lines = held.1;
     let classes = |labels: &Labeling| {
-        let tries = |c: &LabelClass| c.other_positions && tries_other_places(points, lines, c);
+        let tries = |c: &LabelClass| c.other_positions && tries_other_places(held, c);
         // -1 below, 1 above, 0 on the line (-0.0 too).
         let side = |c: &LabelClass| {
             if lines && c.placement.along_line() { i8::from(c.line_offset > 0.0) - i8::from(c.line_offset < 0.0) } else { 0 }

@@ -6173,15 +6173,17 @@ fn render_frame(
                         let (bw, bh) = (text::spaced_block_width(&text, csize, face, class.spacing), text::block_height(&text, csize));
                         // Where a placement puts it, moved as its class says (points, as the
                         // text's size), unless along a line.
-                        let place = |p: LabelPlacement| {
+                        let place_at = |(x, y): (f32, f32), p: LabelPlacement| {
                             let (dx, dy) = p.offset(bw, bh, marker, is_point);
                             let (dx, dy) = ((dx + class.offset[0] * 1.33) * label_factor, (dy + class.offset[1] * 1.33) * label_factor);
-                            (x as f32 + dx, y as f32 + dy)
+                            (x + dx, y + dy)
                         };
+                        let place = |p: LabelPlacement| place_at((x as f32, y as f32), p);
                         // Where it goes, each with its repeat's index: by its feature (0), or along
                         // a line at its middle and, repeated, every so far either side.
                         let mut places: Vec<(usize, f32, f32, Option<f32>, Vec<LabelGlyph>)> = Vec::new();
                         let mut curves = None;
+                        // (A polygon's too: its label point, after its pole.)
                         let mut line_alternatives = Vec::new();
                         let mut line_places = None;
                         // Turned square to a line: no other places round its point.
@@ -6521,7 +6523,28 @@ fn render_frame(
                                 .filter(|a| *a != 0.0)
                                 .map(|a| rustgis_tiles::symbols::upright(a.to_radians()))
                                 .filter(|a| *a != 0.0);
-                            places.push((0, lx, ly, turned, Vec::new()));
+                            // A polygon's label trying other places (#3268) goes to its pole of
+                            // inaccessibility first, then here. A curved or guided one has its own
+                            // course, which this is only what's left of.
+                            let pole = (class.other_positions
+                                && moved.is_none()
+                                && class.guide.is_none()
+                                && class.placement != LabelPlacement::Curved)
+                                .then(|| area_labels::pole(ctx, g))
+                                .flatten()
+                                // Out of view it isn't tried, so View Unplaced shows the label here.
+                                // Locked, it is: the lock names a place by its number, the pole's
+                                // first, and an unseen place is passed over as the lock is taken.
+                                .filter(|&(px, py)| {
+                                    display.locked || ((0.0..=vw).contains(&f64::from(px)) && (0.0..=vh).contains(&f64::from(py)))
+                                });
+                            if let Some(pole) = pole {
+                                let (px, py) = place_at(pole, class.placement);
+                                places.push((0, px, py, turned, Vec::new()));
+                                line_alternatives.push(LabelPlace { x: lx, y: ly, angle: turned, glyphs: Vec::new() });
+                            } else {
+                                places.push((0, lx, ly, turned, Vec::new()));
+                            }
                         }
                         // Heavier classes first (#2803; labels moved by hand before all of them,
                         // so the others keep off them), then, among equals, layers above, the
@@ -16756,3 +16779,6 @@ mod lod_tests;
 
 #[cfg(test)]
 mod line_positions_tests;
+
+#[cfg(test)]
+mod polygon_labels_tests;
