@@ -3394,10 +3394,10 @@ impl RustGisApp {
     /// [`background_busy`]: RustGisApp::background_busy
     pub fn work_under_way(&self) -> bool {
         #[cfg(not(target_arch = "wasm32"))]
-        if self.gp.tool_run.is_some() {
+        if self.gp.tool_run.is_some() || self.workflow.job.is_some() {
             return true;
         }
-        self.background_busy() || self.workflow.job.is_some()
+        self.background_busy()
     }
 
     /// Draws that work's progress and Cancel into `ui`, as the desktop's status bar does; with a
