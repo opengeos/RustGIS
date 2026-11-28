@@ -507,7 +507,7 @@ fn a_publication_legend_is_sized_while_only_a_layer_it_leaves_out_reads() {
     let listed = said(json!({}));
     assert!(listed.contains("classes aren't known yet"), "{listed}");
     let left_out = said(json!({"exclude": ["depth"]}));
-    assert!(!left_out.contains("classes aren't known yet"), "{left_out}");
+    assert!(!left_out.contains("classes aren't known yet") && !left_out.contains("fixed size"), "{left_out}");
     let _ = std::fs::remove_file(points);
 }
 

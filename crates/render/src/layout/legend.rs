@@ -52,8 +52,9 @@ pub(super) fn failed_source_error(map: &Map, failed_source: Option<u64>) -> Opti
     layer.source.as_ref()?.read_error().map(|why| format!("{}: {why}", layer.name))
 }
 
-/// Complete-source legends retain one minimal value per used class, never its geometry.
-/// A failed traversal returns its live layer identity for the page's source-error report.
+/// Complete-source legends retain one minimal value per used class, never its geometry. A layer
+/// named in `exclude` isn't read from its source. A failed traversal returns its live layer
+/// identity for the page's source-error report.
 pub(super) fn complete_shown_legends(
     map: &mut Map,
     scale: f64,
