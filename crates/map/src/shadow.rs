@@ -282,9 +282,12 @@ impl Sun {
     fn new(r: &Raster, azimuth: f64, altitude: f64, soft: f64) -> Self {
         let altitude = altitude.clamp(0.0, 90.0);
         let soft = soft_edge(Some(soft));
-        let edge = |a: f64| a.clamp(-89.9, 89.9).to_radians().tan();
+        // The altitude is 0° to 90° and the half disc 0.5° to 15°, so the lower edge lies from 15°
+        // below the horizon to 89.5° and an upper edge short of the zenith has a finite tangent:
+        // neither is held under 90°, which would hide the whole of a disc nearer the zenith.
         // A disc reaching the zenith has no upper edge any terrain hides it past: the share above
         // the terrain is still lit, however steep that is.
+        let edge = |a: f64| a.to_radians().tan();
         let high = if altitude + soft >= 90.0 { f64::INFINITY } else { edge(altitude + soft) };
         Sun { way: Way::new(r, azimuth), low: edge(altitude - soft), high, altitude, soft }
     }
@@ -617,13 +620,13 @@ mod tests {
         }
     }
 
-    /// A disc reaching past the zenith (a high sun, a wide disc) keeps the share of it above the
-    /// terrain seen, however steep: none of it is hidden whole at the upper edge's 89.9°.
+    /// A disc reaching past the zenith (a high sun, a wide disc), or just short of it, keeps the
+    /// share of it above the terrain seen, however steep: none of it is hidden whole at an edge
+    /// held under 90°.
     #[test]
     fn a_disc_past_the_zenith_keeps_its_share_above_steep_terrain() {
         let r = dem(3, 3, |_, _| 0.0);
-        let t: f64 = 1000.0;
-        for (altitude, soft) in [(80.0, 15.0), (88.0, SOFT_EDGE)] {
+        for (altitude, soft, t) in [(80.0, 15.0, 1000.0), (88.0, SOFT_EDGE, 1000.0), (89.45, 0.5, f64::to_radians(89.92).tan())] {
             let share = (altitude + soft - t.atan().to_degrees()) / (2.0 * soft);
             let lit = Sun::new(&r, 315.0, altitude, soft).lit(t);
             assert_eq!(lit, (share * 255.0).round() as u8, "{altitude}° ± {soft}°");
