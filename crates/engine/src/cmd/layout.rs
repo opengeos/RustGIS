@@ -403,11 +403,10 @@ pub fn commands() -> Vec<C> {
             .view()
             .params(r#"{"layout"?, "path": "*.png|*.pdf|*.svg" (PNG/SVG: current page; SVG: each element a group of its own; text and shapes as SVG, map frames and surrounds as vectors, rasters and tiles in them as pictures at dpi), "dpi"?: 72..600, "allPages"?: bool (PDF only; default true: every map series page, up to 500; false: the current page), "georeference"?: bool (PDF only; default true: map frames carry their coordinates, a GeoPDF; false: none), "pdf"?: {"layers"?: bool (default true: each element, and in a map frame each layer and its labels, a PDF layer that vector editors open as a layer; false: none), "text"?: "fonts" (default: text in its faces, embedded as subsets, editable in a vector editor; a face that can't be is set in outlines, and said)|"outlines" (glyphs as outlines, as print shops ask)}}"#),
         C::new("layout.save", "Save Layout File", "Publish › Save As", |s, p| {
-            let path = ps(p, "path").ok_or("path is required")?;
-            let l = active(s, p)?.clone();
-            let bytes = crate::project::layout_file_bytes(&l)?;
-            rustgis_data::io::write_atomic(Path::new(path), &bytes).map_err(|e| format!("{path}: {e}"))?;
-            Ok(json!({"path": path}))
+            super::exports::file_command(s, "layout.save", p, |s, out| {
+                let l = active(s, p)?.clone();
+                Ok(super::exports::Made::new(crate::project::layout_file_within(&l, out)?, json!({"path": out.path})))
+            })
         }).inputs(object_inputs).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files))
         .view()
         .params(r#"{"layout"?, "path": "*.rgislayout"}"#),

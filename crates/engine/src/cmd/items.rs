@@ -3,7 +3,6 @@
 //! Package, Save As and Output; Command Search for map/template imports).
 
 use std::borrow::Cow;
-use std::fmt::Write as _;
 use std::path::Path;
 
 use rustgis_data::{Dataset, Field, FieldType, Geometry, GeometryType};
@@ -12,6 +11,7 @@ use rustgis_map::palette::{RampFormat, read_ramps};
 use rustgis_map::{Layer, Map, Ramp};
 use serde_json::{Value, json};
 
+use super::exports::Output;
 use super::{b, f, need_feature_layer, need_layer, ps};
 use crate::project::{StyleItem, Task, TaskStep};
 use crate::{CmdResult, CommandSpec as C, Project, Session};
@@ -66,11 +66,11 @@ pub fn commands() -> Vec<C> {
         }).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files))
         .view(),
         // Map and layer files.
-        C::new("map.save", "Save Map File", "Publish › Save As", |s, p| save_item(s, "map", p)).inputs(map_save_inputs).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files))
+        C::new("map.save", "Save Map File", "Publish › Save As", |s, p| save_item(s, "map.save", "map", p)).inputs(map_save_inputs).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files))
         .view()
         .params(r#"{"path": "*.rgismap", "map"?: name}"#),
         C::new("map.import", "Import", "Command Search", import_maps).roles(&[crate::ParamRole { key: "text", role: crate::Role::Document(crate::Document::Map) }]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files)).params(r#"{"path": "*.rgismap|*.rgis|*.rgispkg" | "text": map file JSON | "data": base64 file}"#),
-        C::new("layer.save", "Save Layer File", "Publish › Save As", |s, p| save_item(s, "layer", p)).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files))
+        C::new("layer.save", "Save Layer File", "Publish › Save As", |s, p| save_item(s, "layer.save", "layer", p)).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files))
         .view()
         .when(need_layer)
         .params(r#"{"layer"?, "path": "*.rgislyr"}"#),
@@ -168,7 +168,7 @@ pub fn commands() -> Vec<C> {
             if s.project.styles.len() == before { Err(format!("no style '{name}'")) } else { Ok(Value::Null) }
         }).roles(&[]).effects(crate::policy::Effects::NONE)
         .params(r#"{"name": style}"#),
-        C::new("style.save", "Save Style Items", "Publish › Save As", |s, p| save_item(s, "styles", p)).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files))
+        C::new("style.save", "Save Style Items", "Publish › Save As", |s, p| save_item(s, "style.save", "styles", p)).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files))
         .view()
         .params(r#"{"path": "*.rgisstyle"}"#),
         // Custom colour ramps.
@@ -212,14 +212,14 @@ pub fn commands() -> Vec<C> {
             if s.project.ramps.len() == before { Err(format!("no colour ramp '{name}'")) } else { Ok(Value::Null) }
         }).roles(&[]).effects(crate::policy::Effects::NONE)
         .params(r#"{"name": colour ramp}"#),
-        C::new("ramp.save", "Save Color Ramps", "Publish › Save As", |s, p| save_item(s, "ramps", p)).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files))
+        C::new("ramp.save", "Save Color Ramps", "Publish › Save As", |s, p| save_item(s, "ramp.save", "ramps", p)).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files))
         .view()
         .params(r#"{"path": "*.rgisramp"}"#),
         // Project templates.
-        C::new("project.saveTemplate", "Save Project Template", "Publish › Save As", |s, p| save_item(s, "template", p)).inputs(project_inputs).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files))
+        C::new("project.saveTemplate", "Save Project Template", "Publish › Save As", |s, p| save_item(s, "project.saveTemplate", "template", p)).inputs(project_inputs).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files))
         .view()
         .params(r#"{"path": "*.rgistemplate", "name"?: template name}"#),
-        C::new("project.newTemplate", "New Custom Template", "Publish › Save As", |s, p| save_item(s, "template", p)).inputs(project_inputs).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files))
+        C::new("project.newTemplate", "New Custom Template", "Publish › Save As", |s, p| save_item(s, "project.newTemplate", "template", p)).inputs(project_inputs).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files))
         .view()
         .params(r#"{"path": "*.rgistemplate", "name"?: template name}"#),
         C::new("project.fromTemplate", "Open Custom Template", "Command Search", |s, p| {
@@ -247,13 +247,13 @@ pub fn commands() -> Vec<C> {
         .view()
         .params(r#"{"path"?: "*.rgistemplate", "text"?: template JSON, "data"?: base64 file, "name"?: new project name}"#),
         // Packages.
-        C::new("project.package", "Package Project", "Publish › Package", |s, p| save_item(s, "projectPackage", p)).inputs(project_inputs).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files))
+        C::new("project.package", "Package Project", "Publish › Package", |s, p| save_item(s, "project.package", "projectPackage", p)).inputs(project_inputs).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files))
         .view()
         .params(r#"{"path": "*.rgispkg"}"#),
-        C::new("map.package", "Package Map", "Publish › Package", |s, p| save_item(s, if b(p, "mobile").unwrap_or(false) { "mobilePackage" } else { "mapPackage" }, p)).inputs(map_package_inputs).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files))
+        C::new("map.package", "Package Map", "Publish › Package", |s, p| save_item(s, "map.package", if b(p, "mobile").unwrap_or(false) { "mobilePackage" } else { "mapPackage" }, p)).inputs(map_package_inputs).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files))
         .view()
         .params(r#"{"path": "*.rgismpk", "mobile"?: bool (simplify geometry and drop hidden layers, for phones and tablets), "tolerance"?: degrees}"#),
-        C::new("gp.package", "Package Results", "Publish › Package", |s, p| save_item(s, "gpPackage", p)).inputs(gp_package_inputs).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files))
+        C::new("gp.package", "Package Results", "Publish › Package", |s, p| save_item(s, "gp.package", "gpPackage", p)).inputs(gp_package_inputs).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files))
         .view()
         .params(r#"{"path": "*.rgisgpk"}"#),
         // Layer templates.
@@ -403,7 +403,7 @@ pub fn commands() -> Vec<C> {
             if s.project.tasks.len() == before { Err(format!("no task '{name}'")) } else { Ok(Value::Null) }
         }).roles(&[]).effects(crate::policy::Effects::NONE)
         .params(r#"{"task": name}"#),
-        C::new("task.save", "Save Task Item", "Publish › Save As", |s, p| save_item(s, "task", p)).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files))
+        C::new("task.save", "Save Task Item", "Publish › Save As", |s, p| save_item(s, "task.save", "task", p)).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files))
         .view()
         .params(r#"{"task"?: name, "path": "*.rgistask"}"#),
         C::new("task.import", "Import Task", "Analyze › Tasks", |s, p| {
@@ -429,14 +429,10 @@ pub fn commands() -> Vec<C> {
     ]
 }
 
-fn to_json<T: serde::Serialize>(v: &T) -> Result<Vec<u8>, String> {
-    serde_json::to_vec(v).map_err(|e| e.to_string())
-}
-
 /// A task's file: the task, with `requires` listing what its steps need when they need anything
 /// (as a model's file does). A RustGIS that checks `requires` (#2867 on) refuses what it would run
 /// without; one that doesn't ignores the key, as it does for any task file today (#2818).
-fn task_json(t: &Task) -> Result<Vec<u8>, String> {
+fn task_json(t: &Task, out: Output<'_>) -> Result<Vec<u8>, String> {
     // A struct, not a `serde_json::Value`, which would sort the task's keys.
     #[derive(serde::Serialize)]
     struct TaskFile<'a> {
@@ -446,7 +442,7 @@ fn task_json(t: &Task) -> Result<Vec<u8>, String> {
         requires: Vec<&'static str>,
     }
     let requires = crate::project::task_capabilities(&t.steps);
-    serde_json::to_vec(&TaskFile { task: t, requires }).map_err(|e| e.to_string())
+    out.json(&TaskFile { task: t, requires })
 }
 
 /// Whether command `id` can be added as a task's step (`task.addStep`): a built-in command, and
@@ -872,7 +868,7 @@ fn template(p: &Project) -> (Project, TemplateLosses) {
 
 /// Packages only completed imports; runtime download reservations cannot be reopened.
 /// Refuses JSON beyond the project or ZIP inflation limit before creating the archive.
-fn package_project(s: &mut Session, notes: &mut rustgis_data::loss::Notes) -> Result<Vec<u8>, String> {
+fn package_project(s: &mut Session, notes: &mut rustgis_data::loss::Notes, out: Output<'_>) -> Result<Vec<u8>, String> {
     s.project.ensure_imports_complete()?;
     let mut p = s.project.clone();
     let mut budget = MAX_EMBED;
@@ -887,13 +883,16 @@ fn package_project(s: &mut Session, notes: &mut rustgis_data::loss::Notes) -> Re
     let limit = crate::project::max_bytes().min(rustgis_data::zip::MAX_TOTAL as u64);
     let room = limit.saturating_sub(readme.len() as u64);
     let package_too_large = || format!("the project is too large to package (maximum {} MiB)", limit >> 20);
-    let (text, report) = crate::durable::output_owned(p, |p| crate::project::json_within(p, room)?.ok_or_else(package_too_large))?;
+    let most = usize::try_from(room).unwrap_or(usize::MAX);
+    let (text, report) = crate::durable::output_owned(p, |p| {
+        out.file_up_to(most, package_too_large, |w| serde_json::to_writer(w, p).map_err(|e| e.to_string()))
+    })?;
     crate::durable::notify(s, &report);
     notes.extend(linked);
-    rustgis_data::zip::write(&[
-        (format!("{}.{}", safe(&name), crate::project::EXTENSION), text.into_bytes()),
-        ("README.txt".into(), readme.into_bytes()),
-    ])
+    let mut parts = out.parts();
+    parts.push(format!("{}.{}", safe(&name), crate::project::EXTENSION), text)?;
+    parts.push("README.txt".into(), readme.into_bytes())?;
+    parts.zip()
 }
 
 pub(crate) fn safe(name: &str) -> String {
@@ -919,7 +918,13 @@ fn mobile_map(mut m: Map) -> Map {
 }
 
 /// A package of the active map; `mobile` drops hidden layers and simplifies geometry.
-fn package_map(s: &mut Session, mobile: bool, tol: f64, linked: &mut rustgis_data::loss::Notes) -> Result<Vec<u8>, String> {
+fn package_map(
+    s: &mut Session,
+    mobile: bool,
+    tol: f64,
+    linked: &mut rustgis_data::loss::Notes,
+    out: Output<'_>,
+) -> Result<Vec<u8>, String> {
     let mut m = embedded_map(s.map(), &mut MAX_EMBED.clone());
     if mobile {
         m = mobile_map(m);
@@ -961,11 +966,14 @@ fn package_map(s: &mut Session, mobile: bool, tol: f64, linked: &mut rustgis_dat
     linked.extend(left_linked("Package Map", [&m]));
     let name = m.name.clone();
     // With the map file's header, so an older reader refuses what it can't draw.
-    let (bytes, report) = crate::durable::output_owned(m, crate::project::map_file_bytes)?;
+    let (bytes, report) = crate::durable::output_owned(m, |m| crate::project::map_file_within(m, out))?;
     crate::durable::notify(s, &report);
     let kind = if mobile { "mobile map package" } else { "map package" };
     let readme = format!("{} — a RustGIS {kind}.\nAdd it to a project with Data › Import.\n", name);
-    let archive = rustgis_data::zip::write(&[(format!("{}.rgismap", safe(&name)), bytes), ("README.txt".into(), readme.into_bytes())])?;
+    let mut parts = out.parts();
+    parts.push(format!("{}.rgismap", safe(&name)), bytes)?;
+    parts.push("README.txt".into(), readme.into_bytes())?;
+    let archive = parts.zip()?;
     for said in notes.without_polar().messages("Mobile map package, simplifying") {
         s.notify(said, false);
     }
@@ -976,14 +984,14 @@ fn package_map(s: &mut Session, mobile: bool, tol: f64, linked: &mut rustgis_dat
 }
 
 /// The geoprocessing history with the layers its runs made, as GeoJSON.
-fn package_gp(s: &mut Session) -> Result<Vec<u8>, String> {
+fn package_gp(s: &mut Session, out: Output<'_>) -> Result<Vec<u8>, String> {
     if s.project.gp_history.is_empty() {
         return Err("no geoprocessing has been run yet".into());
     }
-    let (history, report) =
-        crate::durable::output(&mut s.project.gp_history, None, |h| serde_json::to_vec_pretty(h).map_err(|e| e.to_string()))?;
+    let (history, report) = crate::durable::output(&mut s.project.gp_history, None, |h| out.json_pretty(h))?;
     crate::durable::notify(s, &report);
-    let mut entries = vec![("history.json".to_string(), history)];
+    let mut parts = out.parts();
+    parts.push("history.json".to_string(), history)?;
     let mut files = std::collections::HashSet::new();
     let mut unplaced = (0usize, Vec::new());
     for (_, l) in gp_result_layers(s) {
@@ -1002,9 +1010,9 @@ fn package_gp(s: &mut Session) -> Result<Vec<u8>, String> {
             unplaced.0 += lost;
             unplaced.1.push(l.name.clone());
         }
-        entries.push((file, rustgis_data::io::to_geojson(&ds).to_string().into_bytes()));
+        parts.make(file, |w| rustgis_data::io::write_geojson(&ds, w).map_err(|e| e.to_string()))?;
     }
-    let archive = rustgis_data::zip::write(&entries)?;
+    let archive = parts.zip()?;
     if let Some(said) = rustgis_data::unplaced_note("Geoprocessing package", &unplaced.1.join(", "), unplaced.0) {
         s.say(said);
     }
@@ -1228,29 +1236,22 @@ pub(crate) fn names_place(v: &Value, keys: &[&str], depth: usize) -> bool {
 /// are extruded to a height, lines are polylines (OBJ only), points are small cubes. Coordinates
 /// are metres east and north of the layer's south-west corner.
 fn export_3d(s: &mut Session, p: &Value) -> CmdResult {
-    let written = s.notice_mark();
-    let path = ps(p, "path").ok_or("path is required")?.to_string();
-    if path.to_ascii_lowercase().ends_with(".stl") {
-        let (bytes, report, construction_notes) = stl_bytes(s, p)?;
-        rustgis_data::io::write_atomic(Path::new(&path), &bytes).map_err(|e| format!("{path}: {e}"))?;
-        for note in construction_notes {
-            s.say(note);
-        }
-        s.retain_written_notices(written);
-        s.notify_written(format!("Exported {path}"));
-        return Ok(json!({
-            "path": path, "bytes": bytes.len(), "triangles": report.triangles,
-            "skippedDegenerate": report.degenerate, "linesDropped": report.lines, "capsFanned": report.fanned,
-        }));
-    }
-    let (obj, construction_notes) = obj_text(s, p)?;
-    rustgis_data::io::write_atomic(Path::new(&path), obj.as_bytes()).map_err(|e| format!("{path}: {e}"))?;
-    for note in construction_notes {
-        s.say(note);
-    }
-    s.retain_written_notices(written);
-    s.notify_written(format!("Exported {path}"));
-    Ok(json!({"path": path, "bytes": obj.len()}))
+    super::exports::file_command(s, "share.export3d", p, |s, out| {
+        let path = out.path;
+        let (bytes, answer, notes) = if path.to_ascii_lowercase().ends_with(".stl") {
+            let (bytes, report, notes) = stl_bytes(s, p, out)?;
+            let answer = json!({
+                "path": path, "bytes": bytes.len(), "triangles": report.triangles,
+                "skippedDegenerate": report.degenerate, "linesDropped": report.lines, "capsFanned": report.fanned,
+            });
+            (bytes, answer, notes)
+        } else {
+            let (obj, notes) = obj_text(s, p, out)?;
+            let answer = json!({"path": path, "bytes": obj.len()});
+            (obj, answer, notes)
+        };
+        Ok(super::exports::Made { notes: notes.into(), done: Some(format!("Exported {path}")), ..super::exports::Made::new(bytes, answer) })
+    })
 }
 
 /// Largest OBJ text or STL file written (512 MiB).
@@ -1298,6 +1299,8 @@ struct Mesh {
     fanned: usize,
     /// Whether polylines are kept (OBJ) or only counted (STL, which can't hold them).
     keep_lines: bool,
+    /// The estimated size it stops at, and why.
+    most: (usize, String),
     /// Polygons left out because their outer ring has fewer than 3 vertices.
     skipped: usize,
     /// Holes left out because they have fewer than 3 vertices, so their areas stay solid.
@@ -1356,14 +1359,10 @@ impl Mesh {
         Ok(())
     }
 
+    /// Counts `bytes` more of the file's estimated size, refused past what the mesh may come to.
     fn grow(&mut self, bytes: usize) -> Result<(), String> {
         self.bytes += bytes;
-        // STL's estimate is its exact size, so it stops where the writer would.
-        if self.bytes > if self.keep_lines { MAX_MESH } else { MAX_OBJ } {
-            Err("the 3D file would be too large; export fewer features".into())
-        } else {
-            Ok(())
-        }
+        if self.bytes > self.most.0 { Err(self.most.1.clone()) } else { Ok(()) }
     }
 }
 
@@ -1392,8 +1391,11 @@ fn placed_extent(ds: &Dataset, to: &rustgis_data::raster::Reprojection) -> Resul
     Ok(left_out.then_some(kept))
 }
 
-/// A feature layer as a mesh.
-fn layer_mesh(s: &Session, p: &Value, keep_lines: bool) -> Result<Mesh, String> {
+/// Why a 3D export past its own limits is refused.
+const TOO_LARGE_3D: &str = "the 3D file would be too large; export fewer features";
+
+/// A feature layer as a mesh, for the file `out`: a downloaded OBJ stops at twice its room.
+fn layer_mesh(s: &Session, p: &Value, keep_lines: bool, out: Output<'_>) -> Result<Mesh, String> {
     let id = s.layer_id(p)?;
     let l = s.map().layer(id).ok_or("no such layer")?;
     let hf = ps(p, "heightField").map(|n| l.dataset.field_index(n).ok_or_else(|| format!("no field '{n}'"))).transpose()?;
@@ -1419,7 +1421,16 @@ fn layer_mesh(s: &Session, p: &Value, keep_lines: bool) -> Result<Mesh, String> 
         let m = rustgis_geom::lonlat_to_merc(c);
         ((m.x - origin.x) * k, (m.y - origin.y) * k)
     };
-    let mut mesh = Mesh { keep_lines, layer: l.name.clone(), ..Mesh::default() };
+    // The mesh is held to twice the file's room, and at least 16 MiB, so a download far
+    // past it is refused before much is built; the writer then holds the file to the room itself.
+    // Both estimates run over: STL's counts triangles its writer leaves out as zero-area, so a
+    // file that fits can be estimated at any multiple of its size; the floor keeps such a small
+    // one from being refused.
+    const FLOOR: usize = 16 << 20;
+    let own = if keep_lines { MAX_MESH } else { MAX_OBJ };
+    let room = out.most().saturating_mul(2).max(FLOOR);
+    let most = if room < own { (room, out.refusal()) } else { (own, TOO_LARGE_3D.to_string()) };
+    let mut mesh = Mesh { keep_lines, most, layer: l.name.clone(), ..Mesh::default() };
     let rows = l.visible_rows();
     for (row, ft) in l.dataset.features.iter().enumerate() {
         if row.is_multiple_of(256) {
@@ -1619,45 +1630,38 @@ fn ring_area(r: &[(f64, f64)]) -> f64 {
     a / 2.0
 }
 
-/// A feature layer as Wavefront OBJ text.
-fn obj_text(s: &mut Session, p: &Value) -> Result<(String, Vec<rustgis_data::loss::Note>), String> {
-    let mesh = layer_mesh(s, p, true)?;
+/// A feature layer as Wavefront OBJ text, written for the file `out`.
+fn obj_text(s: &mut Session, p: &Value, out: Output<'_>) -> Result<(Vec<u8>, Vec<rustgis_data::loss::Note>), String> {
+    let mesh = layer_mesh(s, p, true, out)?;
     mesh_notices(s, &mesh);
-    let mut obj = String::new();
     let l = s.layer_id(p).ok().and_then(|id| s.map().layer(id));
     let name = l.map(|l| l.name.replace(char::is_whitespace, "_")).unwrap_or_default();
-    let _ = write!(obj, "# {name} exported by RustGIS\no {name}\n");
+    let too_large = || TOO_LARGE_3D.to_string();
+    let obj = out.file_up_to(MAX_OBJ, too_large, |w| write_obj(w, &name, &mesh).map_err(|e| e.to_string()))?;
+    Ok((obj, mesh.constructions.notes()))
+}
+
+/// `mesh` as the OBJ object `name`, written to `w` a line at a time.
+fn write_obj(w: &mut dyn std::io::Write, name: &str, mesh: &Mesh) -> std::io::Result<()> {
+    write!(w, "# {name} exported by RustGIS\no {name}\n")?;
     let ids = |v: &[usize]| v.iter().map(|i| (i + 1).to_string()).collect::<Vec<_>>().join(" ");
     for item in &mesh.items {
         match item {
-            Item::Vertex([x, y, z], false) => {
-                let _ = writeln!(obj, "v {x:.2} {y:.2} {z:.2}");
-            }
+            Item::Vertex([x, y, z], false) => writeln!(w, "v {x:.2} {y:.2} {z:.2}")?,
             Item::Vertex([x, y, z], true) => {
                 if *y == 0.0 {
-                    let _ = writeln!(obj, "v {x:.2} 0 {z:.2}");
+                    writeln!(w, "v {x:.2} 0 {z:.2}")?;
                 } else {
-                    let _ = writeln!(obj, "v {x:.2} {y:.2} {z:.2}");
+                    writeln!(w, "v {x:.2} {y:.2} {z:.2}")?;
                 }
             }
-            Item::Tri(v, _) => {
-                let _ = writeln!(obj, "f {}", ids(v));
-            }
-            Item::Quad(v, _) => {
-                let _ = writeln!(obj, "f {}", ids(v));
-            }
-            Item::Poly(v, _) => {
-                let _ = writeln!(obj, "f {}", ids(v));
-            }
-            Item::Polyline(v) => {
-                let _ = writeln!(obj, "l {}", ids(v));
-            }
-        }
-        if obj.len() > MAX_OBJ {
-            return Err("the 3D file would be too large; export fewer features".into());
+            Item::Tri(v, _) => writeln!(w, "f {}", ids(v))?,
+            Item::Quad(v, _) => writeln!(w, "f {}", ids(v))?,
+            Item::Poly(v, _) => writeln!(w, "f {}", ids(v))?,
+            Item::Polyline(v) => writeln!(w, "l {}", ids(v))?,
         }
     }
-    Ok((obj, mesh.constructions.notes()))
+    Ok(())
 }
 
 /// What an STL export left out or approximated.
@@ -1677,7 +1681,7 @@ const MAX_STL_TRIANGLES: usize = (MAX_OBJ - 84) / 50;
 /// [`stl_bytes`] with a smaller triangle cap, to test the size guard.
 #[cfg(test)]
 pub(crate) fn stl_with_cap(s: &Session, p: &Value, cap: usize) -> Result<usize, String> {
-    mesh_stl(&layer_mesh(s, p, false)?, cap).map(|(_, r)| r.triangles)
+    mesh_stl(&layer_mesh(s, p, false, Output::UNLIMITED)?, cap, Output::UNLIMITED).map(|(_, r)| r.triangles)
 }
 
 /// Says what a layer's mesh left out, or used in place of a feature's own value.
@@ -1713,9 +1717,9 @@ pub(crate) fn fanned_caps_note(n: usize) -> String {
 }
 
 /// A feature layer as binary STL, noting what it leaves out.
-fn stl_bytes(s: &mut Session, p: &Value) -> Result<(Vec<u8>, StlReport, Vec<rustgis_data::loss::Note>), String> {
-    let mesh = layer_mesh(s, p, false)?;
-    let (bytes, report) = mesh_stl(&mesh, MAX_STL_TRIANGLES)?;
+fn stl_bytes(s: &mut Session, p: &Value, out: Output<'_>) -> Result<(Vec<u8>, StlReport, Vec<rustgis_data::loss::Note>), String> {
+    let mesh = layer_mesh(s, p, false, out)?;
+    let (bytes, report) = mesh_stl(&mesh, MAX_STL_TRIANGLES, out)?;
     mesh_notices(s, &mesh);
     if mesh.flat > 0 {
         s.say(rustgis_data::loss::Note::loss(
@@ -1744,8 +1748,9 @@ fn stl_bytes(s: &mut Session, p: &Value) -> Result<(Vec<u8>, StlReport, Vec<rust
 }
 
 /// A mesh as binary STL: an 80-byte header, the triangle count, then per triangle a normal and
-/// three vertices as little-endian f32 and a zero attribute.
-fn mesh_stl(mesh: &Mesh, max_triangles: usize) -> Result<(Vec<u8>, StlReport), String> {
+/// three vertices as little-endian f32 and a zero attribute. Written for the file `out`: it stops
+/// at the first triangle kept that would pass its room.
+fn mesh_stl(mesh: &Mesh, max_triangles: usize, out: Output<'_>) -> Result<(Vec<u8>, StlReport), String> {
     // The mesh is east, up and south; STL is written east, north and up, as slicers expect.
     let mut verts: Vec<[f64; 3]> =
         mesh.items.iter().filter_map(|it| if let Item::Vertex([x, y, z], _) = it { Some([*x, -*z, *y]) } else { None }).collect();
@@ -1758,8 +1763,8 @@ fn mesh_stl(mesh: &Mesh, max_triangles: usize) -> Result<(Vec<u8>, StlReport), S
     }
     let at = |n: usize| verts.get(n).copied();
     // Each triangle is written as it comes (50 bytes), and the count filled in at the end.
-    let mut out = b"RustGIS binary STL, metres, Z up".to_vec();
-    out.resize(84, 0);
+    let mut file = b"RustGIS binary STL, metres, Z up".to_vec();
+    file.resize(84, 0);
     let mut count = 0usize;
     let mut degenerate = 0;
     let mut add = |ids: [usize; 3], orient: Orient| -> Result<(), String> {
@@ -1787,16 +1792,17 @@ fn mesh_stl(mesh: &Mesh, max_triangles: usize) -> Result<(Vec<u8>, StlReport), S
         if count > max_triangles || count > u32::MAX as usize {
             return Err("the STL file would be too large; export fewer features".into());
         }
+        out.check(file.len() + 50)?;
         let (b, c, n) = if flip { (c, b, [-n[0], -n[1], -n[2]]) } else { (b, c, n) };
         for x in n {
-            out.extend_from_slice(&((x / len) as f32).to_le_bytes());
+            file.extend_from_slice(&((x / len) as f32).to_le_bytes());
         }
         for v in [a, b, c] {
             for x in v {
-                out.extend_from_slice(&(x as f32).to_le_bytes());
+                file.extend_from_slice(&(x as f32).to_le_bytes());
             }
         }
-        out.extend_from_slice(&0u16.to_le_bytes());
+        file.extend_from_slice(&0u16.to_le_bytes());
         Ok(())
     };
     for item in &mesh.items {
@@ -1826,11 +1832,11 @@ fn mesh_stl(mesh: &Mesh, max_triangles: usize) -> Result<(Vec<u8>, StlReport), S
         });
     }
     let n = u32::try_from(count).map_err(|_| "the STL file would be too large; export fewer features".to_string())?;
-    if let Some(slot) = out.get_mut(80..84) {
+    if let Some(slot) = file.get_mut(80..84) {
         slot.copy_from_slice(&n.to_le_bytes());
     }
     let report = StlReport { triangles: count, degenerate, lines: mesh.lines, fanned: mesh.fanned };
-    Ok((out, report))
+    Ok((file, report))
 }
 
 /// The (unnormalised) normal of a triangle, counter-clockwise from the side it faces.
@@ -1883,6 +1889,16 @@ pub fn item_bytes(s: &mut Session, kind: &str, p: &Value) -> Result<(String, Vec
 
 /// Builds an item and returns construction-loss notes for publication only after delivery.
 pub fn item_output(s: &mut Session, kind: &str, p: &Value) -> Result<(String, Vec<u8>, rustgis_data::loss::Notes), String> {
+    item_output_within(s, kind, p, Output::UNLIMITED)
+}
+
+/// [`item_output`] for the file `out` describes: a downloaded one is stopped as it passes its room.
+fn item_output_within(
+    s: &mut Session,
+    kind: &str,
+    p: &Value,
+    out: Output<'_>,
+) -> Result<(String, Vec<u8>, rustgis_data::loss::Notes), String> {
     let mut construction_notes: rustgis_data::loss::Notes = (match kind {
         "map" => {
             let m = saved_map(s, p)?;
@@ -1908,7 +1924,7 @@ pub fn item_output(s: &mut Session, kind: &str, p: &Value) -> Result<(String, Ve
             crate::project::ensure_map_imports_complete(map)?;
             let map = embedded_map(map, &mut MAX_EMBED.clone());
             let name = map.name.clone();
-            (name, durable_bytes_with(s, map, crate::project::map_file_bytes)?)
+            (name, durable_bytes_with(s, map, |map| crate::project::map_file_within(map, out))?)
         }
         "layer" => {
             let id = s.layer_id(p)?;
@@ -1918,19 +1934,19 @@ pub fn item_output(s: &mut Session, kind: &str, p: &Value) -> Result<(String, Ve
             }
             let layer = embed_layer(l, &mut MAX_EMBED.clone());
             let name = layer.name.clone();
-            (name, durable_bytes_with(s, layer, crate::project::layer_file_bytes)?)
+            (name, durable_bytes_with(s, layer, |layer| crate::project::layer_file_within(layer, out))?)
         }
         "styles" => {
             if s.project.styles.is_empty() {
                 return Err("the project has no styles; make one with New Style".into());
             }
-            ("styles".to_string(), to_json(&s.project.styles)?)
+            ("styles".to_string(), out.json(&s.project.styles)?)
         }
         "ramps" => {
             if s.project.ramps.is_empty() {
                 return Err("the project has no custom colour ramps; add some with Add Color Ramp File".into());
             }
-            ("ramps".to_string(), to_json(&s.project.ramps)?)
+            ("ramps".to_string(), out.json(&s.project.ramps)?)
         }
         "template" => {
             s.project.ensure_imports_complete()?;
@@ -1939,7 +1955,7 @@ pub fn item_output(s: &mut Session, kind: &str, p: &Value) -> Result<(String, Ve
                 t.name = super::within("name", "a template's name", n, 200)?;
             }
             let name = t.name.clone();
-            let bytes = durable_bytes(s, t)?;
+            let bytes = durable_bytes_with(s, t, |t| out.json(t))?;
             if source_references > 0 {
                 s.notify(format!("{source_references} data source reference(s) left out of the template, which keeps no features"), false);
             }
@@ -1954,7 +1970,7 @@ pub fn item_output(s: &mut Session, kind: &str, p: &Value) -> Result<(String, Ve
             }
             (name, bytes)
         }
-        "projectPackage" => (s.project.name.clone(), package_project(s, &mut construction_notes)?),
+        "projectPackage" => (s.project.name.clone(), package_project(s, &mut construction_notes, out)?),
         "fieldPackage" => {
             let (name, bytes, notes) = super::field::package_output(s, p)?;
             construction_notes.extend(notes);
@@ -1962,59 +1978,59 @@ pub fn item_output(s: &mut Session, kind: &str, p: &Value) -> Result<(String, Ve
         }
         "mapPackage" | "mobilePackage" => {
             let tol = f(p, "tolerance").unwrap_or(0.001).clamp(0.0, 1.0);
-            (s.map().name.clone(), package_map(s, kind == "mobilePackage", tol, &mut construction_notes)?)
+            (s.map().name.clone(), package_map(s, kind == "mobilePackage", tol, &mut construction_notes, out)?)
         }
-        "gpPackage" => ("results".to_string(), package_gp(s)?),
+        "gpPackage" => ("results".to_string(), package_gp(s, out)?),
         "bookmarks" => (format!("{} bookmarks", s.map().name), super::navigate::bookmarks_file(s.map())?),
         "task" => {
             let t = task_mut(s, p)?;
             let name = t.name.clone();
-            let (bytes, report) = crate::durable::output(t, None, task_json)?;
+            let (bytes, report) = crate::durable::output(t, None, |t| task_json(t, out))?;
             crate::durable::notify(s, &report);
             (name, bytes)
         }
         "obj" => {
             let id = s.layer_id(p)?;
             let name = s.map().layer(id).map(|l| l.name.clone()).unwrap_or_default();
-            let (text, notes) = obj_text(s, p)?;
+            let (bytes, notes) = obj_text(s, p, out)?;
             construction_notes = notes.into();
-            (name, text.into_bytes())
+            (name, bytes)
         }
         "stl" => {
             let id = s.layer_id(p)?;
             let name = s.map().layer(id).map(|l| l.name.clone()).unwrap_or_default();
-            let (bytes, _, notes) = stl_bytes(s, p)?;
+            let (bytes, _, notes) = stl_bytes(s, p, out)?;
             construction_notes = notes.into();
             (name, bytes)
         }
         "report" | "reportTemplate" => {
             let i = super::report::index(s, p)?;
             let name = s.project.reports.get(i).map(|r| r.name.clone()).unwrap_or_default();
-            (name, super::report::report_file(s, i, kind == "reportTemplate")?)
+            (name, super::report::report_within(s, i, kind == "reportTemplate", out)?)
         }
         "presentation" => {
             let i = super::presentation::index(s, p)?;
             let name = s.project.presentations.get(i).map(|r| r.name.clone()).unwrap_or_default();
-            (name, super::presentation::presentation_file(s, i)?)
+            (name, super::presentation::presentation_within(s, i, out)?)
         }
         "notebook" | "jupyter" => {
             let i = super::notebook::index(s, p)?;
             let name = s.project.notebooks.get(i).map(|r| r.name.clone()).unwrap_or_default();
-            (name, super::notebook::notebook_file(s, i, kind == "jupyter")?)
+            (name, super::notebook::notebook_within(s, i, kind == "jupyter", out)?)
         }
         "dlPackage" => {
             let name = match ps(p, "model") {
                 Some(n) => n.to_string(),
                 None => s.project.dl_models.last().map(|m| m.name.clone()).ok_or("train a model first")?,
             };
-            (name.clone(), super::deeplearning::package(s, &json!({"model": name}))?)
+            (name.clone(), super::deeplearning::package_within(s, &json!({"model": name}), out)?)
         }
         "hostedImagery" => {
             let name = ps(p, "layer").unwrap_or("tiles").to_string();
-            (format!("{name}_tiles"), super::deeplearning::hosted_bytes(s, p)?.0)
+            (format!("{name}_tiles"), super::deeplearning::hosted_within(s, p, out)?.0)
         }
         k if super::sharing::KINDS.iter().any(|x| x.0 == k) => {
-            let (name, bytes, _, notes) = super::sharing::share_output(s, k, p)?;
+            let (name, bytes, _, notes) = super::sharing::share_output(s, k, p, out)?;
             construction_notes = notes.into();
             super::sharing::note_label_classes(s, k, p);
             super::sharing::note_export(s, k, p, &name);
@@ -2026,22 +2042,13 @@ pub fn item_output(s: &mut Session, kind: &str, p: &Value) -> Result<(String, Ve
     Ok((format!("{}.{ext}", safe(&name)), bytes, construction_notes))
 }
 
-/// Writes an item to `path`.
-pub(crate) fn save_item(s: &mut Session, kind: &str, p: &Value) -> CmdResult {
-    let written = s.notice_mark();
-    let path = ps(p, "path").ok_or("path is required")?.to_string();
-    let (_, bytes, notes) = item_output(s, kind, p)?;
-    rustgis_data::io::write_atomic(Path::new(&path), &bytes).map_err(|e| format!("{path}: {e}"))?;
-    for note in notes {
-        s.say(note);
-    }
-    s.retain_written_notices(written);
-    Ok(json!({"path": path, "bytes": bytes.len()}))
-}
-
-/// Consumes the existing item draft, emitting losses after serialization has completed.
-fn durable_bytes<T: crate::durable::Durable + serde::Serialize>(s: &mut Session, value: T) -> Result<Vec<u8>, String> {
-    durable_bytes_with(s, value, to_json)
+/// Writes an item to `path`, or downloads it in the browser, as `command`.
+pub(crate) fn save_item(s: &mut Session, command: &str, kind: &str, p: &Value) -> CmdResult {
+    super::exports::file_command(s, command, p, |s, out| {
+        let (_, bytes, notes) = item_output_within(s, kind, p, out)?;
+        let answer = json!({"path": out.path, "bytes": bytes.len()});
+        Ok(super::exports::Made { notes, ..super::exports::Made::new(bytes, answer) })
+    })
 }
 
 /// Serializes an item through its document writer, after the same durable-field transaction.

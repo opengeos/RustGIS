@@ -1114,7 +1114,7 @@ fn projected_bytes_within(ds: &Dataset, ext: &str, crs: Crs, limit: &Limit) -> R
             "kmz" => {
                 crate::interop::write_kml(ds, name_field(ds), &mut out)?;
                 let kml = out.into_inner();
-                (zipped(&[("doc.kml".to_string(), kml)], limit)?, without_geometry(ds))
+                (crate::zip::write_within(&[("doc.kml".to_string(), kml)], limit)?, without_geometry(ds))
             }
             "gpx" => {
                 crate::interop::write_gpx(ds, name_field(ds), &mut out)?;
@@ -1126,23 +1126,12 @@ fn projected_bytes_within(ds: &Dataset, ext: &str, crs: Crs, limit: &Limit) -> R
                     ds.name.chars().map(|c| if c.is_alphanumeric() || matches!(c, '-' | '_' | ' ') { c } else { '_' }).collect();
                 let base = if base.trim().is_empty() { "layer".to_string() } else { base };
                 let entries: Vec<(String, Vec<u8>)> = parts.into_iter().map(|(e, b)| (format!("{base}.{e}"), b)).collect();
-                (zipped(&entries, limit)?, left_out)
+                (crate::zip::write_within(&entries, limit)?, left_out)
             }
             other => return Err(DataError::Unsupported(other.to_string())),
         })
     })();
     limit.whole(made)
-}
-
-/// A zip of `entries`, which were held to `limit` as they were made: they stay counted against it
-/// while the archive is made, and the archive is written within what they leave, so the two
-/// together never pass it (besides one entry's compressed bytes at a time).
-fn zipped(entries: &[(String, Vec<u8>)], limit: &Limit) -> Result<Vec<u8>> {
-    let parts: usize = entries.iter().map(|(_, bytes)| bytes.capacity()).sum();
-    let _parts = limit.hold(parts)?;
-    let mut out = limit.buffer();
-    let made = crate::zip::write_to(entries, &mut out).map_err(DataError::Format);
-    limit.whole(made.map(|()| out.into_inner()))
 }
 
 /// The text `data.convert` makes of a dataset in longitude/latitude, in `format` (`geojson`,
@@ -2443,11 +2432,21 @@ pub fn to_geojson_text(ds: &Dataset) -> Result<String> {
 }
 
 /// [`to_geojson_text`]'s collection, written to `out`, buffered: its serializer writes a few
-/// bytes at a time.
-fn write_geojson(ds: &Dataset, out: &mut impl std::io::Write) -> Result<()> {
+/// bytes at a time. The features are written as they are walked, so a sink that refuses a write
+/// ([`crate::capped::Limit::file`]) stops it there.
+pub fn write_geojson(ds: &Dataset, out: &mut (impl std::io::Write + ?Sized)) -> Result<()> {
     let mut writer = GeoJsonWriter::new(std::io::BufWriter::new(out), &ds.name, &ds.fields)?;
     writer.write(&ds.features)?;
     std::io::Write::flush(&mut writer.finish()?)?;
+    Ok(())
+}
+
+/// [`write_geojson`] for an OGC API Features `items` document, which also says how many features
+/// it returns (`numberReturned`).
+pub fn write_geojson_items(ds: &Dataset, out: &mut (impl std::io::Write + ?Sized)) -> Result<()> {
+    let mut writer = GeoJsonWriter::new(std::io::BufWriter::new(out), &ds.name, &ds.fields)?;
+    writer.write(&ds.features)?;
+    std::io::Write::flush(&mut writer.finish_returning(ds.features.len())?)?;
     Ok(())
 }
 
@@ -2534,6 +2533,12 @@ impl<W: std::io::Write> GeoJsonWriter<W> {
     /// Closes the collection and gives the writer back.
     pub(crate) fn finish(mut self) -> Result<W> {
         self.out.write_all(b"]}")?;
+        Ok(self.out)
+    }
+
+    /// [`GeoJsonWriter::finish`] with a `numberReturned` member of `returned`.
+    fn finish_returning(mut self, returned: usize) -> Result<W> {
+        write!(self.out, r#"],"numberReturned":{returned}}}"#)?;
         Ok(self.out)
     }
 }

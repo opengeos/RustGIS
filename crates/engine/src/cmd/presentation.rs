@@ -1,8 +1,6 @@
 //! Publish › Presentation (New and Import Presentation), Publish › Page (Map, Blank, Image, Video), and
 //! Publish › Save As (Presentation File) and Output (Export Presentation): presentations.
 
-use std::path::Path;
-
 use base64::Engine;
 use rustgis_geom::Coord;
 use rustgis_map::Rgba;
@@ -167,36 +165,33 @@ pub fn commands() -> Vec<C> {
         .when(need_presentation)
         .params(r#"{"presentation"?, "page": index}"#),
         C::new("presentation.save", "Presentation File", "Publish › Save As", |s, p| {
-            let written = s.notice_mark();
-            let path = ps(p, "path").ok_or("path is required")?;
-            let i = index(s, p)?;
-            let bytes = presentation_file(s, i)?;
-            rustgis_data::io::write_atomic(Path::new(path), &bytes).map_err(|e| format!("{path}: {e}"))?;
-            s.retain_written_notices(written);
-            Ok(json!({"path": path}))
+            super::exports::file_command(s, "presentation.save", p, |s, out| {
+                let i = index(s, p)?;
+                Ok(super::exports::Made::new(presentation_within(s, i, out)?, json!({"path": out.path})))
+            })
         }).inputs(object_inputs).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files))
         .view()
         .when(need_presentation)
         .params(r#"{"presentation"?, "path": "*.rgispres"}"#),
         C::new("presentation.export", "Export Presentation", "Publish › Output", |s, p| {
-            let written = s.notice_mark();
-            let path = ps(p, "path").ok_or("path is required")?.to_string();
-            let i = index(s, p)?;
-            let dpi = f(p, "dpi").unwrap_or(120.0).clamp(48.0, 300.0);
-            let lower = path.to_ascii_lowercase();
-            let format = if lower.ends_with(".html") || lower.ends_with(".htm") {
-                "html"
-            } else if lower.ends_with(".png") {
-                "png"
-            } else if lower.ends_with(".pdf") {
-                "pdf"
-            } else {
-                return Err("export to a .pdf, .html or .png file".into());
-            };
-            let (bytes, pages) = export_bytes(s, i, format, dpi)?;
-            rustgis_data::io::write_atomic(Path::new(&path), &bytes).map_err(|e| format!("{path}: {e}"))?;
-            s.retain_written_notices(written);
-            Ok(json!({"path": path, "pages": pages, "bytes": bytes.len()}))
+            super::exports::file_command(s, "presentation.export", p, |s, out| {
+                let path = out.path;
+                let i = index(s, p)?;
+                let dpi = f(p, "dpi").unwrap_or(120.0).clamp(48.0, 300.0);
+                let lower = path.to_ascii_lowercase();
+                let format = if lower.ends_with(".html") || lower.ends_with(".htm") {
+                    "html"
+                } else if lower.ends_with(".png") {
+                    "png"
+                } else if lower.ends_with(".pdf") {
+                    "pdf"
+                } else {
+                    return Err("export to a .pdf, .html or .png file".into());
+                };
+                let (bytes, pages) = export_within(s, i, format, dpi, out)?;
+                let answer = json!({"path": path, "pages": pages, "bytes": bytes.len()});
+                Ok(super::exports::Made::new(bytes, answer))
+            })
         }).inputs(export_inputs).roles(&[]).effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files))
         .view()
         .when(need_presentation)
@@ -358,8 +353,13 @@ fn say_title_statistics(s: &mut Session, i: usize, k: usize) {
 
 /// A presentation file.
 pub fn presentation_file(s: &mut Session, i: usize) -> Result<Vec<u8>, String> {
+    presentation_within(s, i, super::exports::Output::UNLIMITED)
+}
+
+/// [`presentation_file`] for the file `out` describes.
+pub(super) fn presentation_within(s: &mut Session, i: usize, out: super::exports::Output<'_>) -> Result<Vec<u8>, String> {
     let pres = s.project.presentations.get_mut(i).ok_or("no presentation")?;
-    let (bytes, report) = crate::durable::output(pres, None, |p| serde_json::to_vec_pretty(p).map_err(|e| e.to_string()))?;
+    let (bytes, report) = crate::durable::output(pres, None, |p| out.json_pretty(p))?;
     crate::durable::notify(s, &report);
     Ok(bytes)
 }
@@ -509,6 +509,12 @@ pub(crate) fn playable(source: &str) -> &str {
 /// The presentation as a PDF, a self-contained HTML slideshow or a PNG of its first page, and
 /// the number of pages written.
 pub fn export_bytes(s: &mut Session, i: usize, format: &str, dpi: f64) -> Result<(Vec<u8>, usize), String> {
+    export_within(s, i, format, dpi, super::exports::Output::UNLIMITED)
+}
+
+/// [`export_bytes`] for the file `out` describes: a downloaded PDF or slideshow stops at the page
+/// that passes its room.
+fn export_within(s: &mut Session, i: usize, format: &str, dpi: f64, out: super::exports::Output<'_>) -> Result<(Vec<u8>, usize), String> {
     let revision = |s: &Session| {
         rustgis_render::archive_revisions(s.project.presentations.get(i).into_iter().flat_map(|p| {
             p.pages
@@ -518,11 +524,20 @@ pub fn export_bytes(s: &mut Session, i: usize, format: &str, dpi: f64) -> Result
         }))
     };
     let before = revision(s);
-    let result = super::share::saying_shadows(s, "The presentation", |s| export_bytes_inner(s, i, format, dpi));
-    before.finish_revision(revision(s), Some(result), "could not draw the presentation")?
+    let result = super::share::saying_shadows(s, "The presentation", |s| export_bytes_inner(s, i, format, dpi, out));
+    let (bytes, pages) = before.finish_revision(revision(s), Some(result), "could not draw the presentation")??;
+    // With what a PDF or a slideshow holds around its pages.
+    out.check(bytes.len())?;
+    Ok((bytes, pages))
 }
 
-fn export_bytes_inner(s: &mut Session, i: usize, format: &str, dpi: f64) -> Result<(Vec<u8>, usize), String> {
+fn export_bytes_inner(
+    s: &mut Session,
+    i: usize,
+    format: &str,
+    dpi: f64,
+    out: super::exports::Output<'_>,
+) -> Result<(Vec<u8>, usize), String> {
     // Only the size and name are copied: the pages can hold many megabytes of pictures, so each
     // is read in place after it's drawn.
     let (name, width, height, n) =
@@ -583,6 +598,8 @@ fn export_bytes_inner(s: &mut Session, i: usize, format: &str, dpi: f64) -> Resu
             let notes = if page.notes.is_empty() { String::new() } else { format!("<aside>{}</aside>", html_escape(&page.notes)) };
             slides.push_str(&format!("<section data-seconds=\"{}\">{body}{notes}</section>\n", page.seconds));
         }
+        // Where the file is downloaded, what it holds so far is held to the room it has too.
+        out.check(if format == "pdf" { held } else { slides.len() })?;
         if held > BUDGET {
             return Err(format!("the export passed {} MB at page {}; export at a lower dpi", BUDGET >> 20, k + 1));
         }

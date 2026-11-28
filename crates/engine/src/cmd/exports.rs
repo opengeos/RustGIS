@@ -9,13 +9,17 @@
 //! The browser has no filesystem to write a path in ([`Session::downloads_files`]): there
 //! [`write_here`] names the export after the path's file, its work gives the bytes back instead
 //! of writing them ([`place`]), and the front end offers them as a download, as it does a tool's
-//! file output (`gp.fileDelivered`).
+//! file output (`gp.fileDelivered`). A command that saves, packages or shares a file at once
+//! ([`file_command`], [`download_command`]) is downloaded the same way, and one that needs the
+//! file to stay where it is refuses.
 
 use std::borrow::Cow;
+use std::io::Write;
 use std::sync::Arc;
 
-use rustgis_data::Dataset;
 use rustgis_data::capped::Limit;
+use rustgis_data::{DataError, Dataset};
+use serde::Serialize;
 use serde_json::Value;
 
 use crate::{CmdResult, Session};
@@ -121,12 +125,11 @@ impl Room {
     /// Why `path`'s file, stopped as it passed the room, can't be downloaded, and what to do.
     pub(crate) fn refusal(self, path: &str) -> String {
         let cap = mib(self.bytes.saturating_add(self.waiting));
-        let ways = "export less (a selection of features, a smaller size or fewer pages), use the Export buttons, or use the desktop app";
         if self.waiting == 0 {
-            format!("{path}: stopped once the file passed the {cap} MiB a command can download in the browser; {ways}")
+            format!("{path}: stopped once the file passed the {cap} MiB a command can download in the browser; {SMALLER}")
         } else {
             format!(
-                "{path}: stopped once the file passed what is left of the {cap} MiB that downloads can hold in the browser, {} MiB of it taken by those already waiting; split the task, model, or script into smaller runs, {ways}",
+                "{path}: stopped once the file passed what is left of the {cap} MiB that downloads can hold in the browser, {} MiB of it taken by those already waiting; split the task, model, or script into smaller runs, {SMALLER}",
                 mib(self.waiting)
             )
         }
@@ -137,6 +140,129 @@ impl Room {
     pub(crate) fn encode<T>(self, path: &str, make: impl FnOnce(&Limit) -> rustgis_data::Result<T>) -> Result<T, String> {
         let limit = Limit::new(self.bytes);
         make(&limit).map_err(|e| if limit.passed() { self.refusal(path) } else { format!("{path}: {e}") })
+    }
+}
+
+/// What to do about a file too large to download.
+pub(crate) const SMALLER: &str =
+    "make a smaller file (fewer features or layers, a smaller size or fewer pages), use the ribbon's buttons, or use the desktop app";
+
+/// The file a command makes at once ([`file_command`]): the path it is for, and, where it is
+/// downloaded, the room it has. A file that is written has no limit here but memory.
+#[derive(Clone, Copy)]
+pub(crate) struct Output<'a> {
+    pub(crate) path: &'a str,
+    room: Option<Room>,
+}
+
+impl<'a> Output<'a> {
+    /// A file that is written, or kept in the session: nothing limits it here.
+    pub(crate) const UNLIMITED: Output<'static> = Output { path: "", room: None };
+
+    /// Whether it is made to be downloaded.
+    pub(crate) fn downloads(self) -> bool {
+        self.room.is_some()
+    }
+
+    /// The most bytes it may come to.
+    pub(crate) fn most(self) -> usize {
+        self.room.map_or(usize::MAX, |room| room.bytes)
+    }
+
+    /// Why it can't be downloaded, having passed the room.
+    pub(crate) fn refusal(self) -> String {
+        self.room.map_or_else(|| format!("{}: the file would be too large", self.path), |room| room.refusal(self.path))
+    }
+
+    /// Refuses once `held` bytes of the file, or of what it is made of, pass the room.
+    pub(crate) fn check(self, held: usize) -> Result<(), String> {
+        if held > self.most() { Err(self.refusal()) } else { Ok(()) }
+    }
+
+    /// The file `write` makes, stopped as soon as it passes the room.
+    pub(crate) fn file(self, write: impl FnOnce(&mut dyn Write) -> Result<(), String>) -> Result<Vec<u8>, String> {
+        self.file_up_to(usize::MAX, || self.refusal(), write)
+    }
+
+    /// [`Output::file`] for a kind of file that holds `most` bytes, refused past them with
+    /// `too_large`; where the room is less, past that, with its refusal.
+    pub(crate) fn file_up_to(
+        self,
+        most: usize,
+        too_large: impl FnOnce() -> String,
+        write: impl FnOnce(&mut dyn Write) -> Result<(), String>,
+    ) -> Result<Vec<u8>, String> {
+        let limit = Limit::new(most.min(self.most()));
+        let made = made_within(&limit, write);
+        if limit.passed() {
+            return Err(if self.most() < most { self.refusal() } else { too_large() });
+        }
+        made
+    }
+
+    /// `value` as compact JSON, stopped at the room.
+    pub(crate) fn json<T: Serialize + ?Sized>(self, value: &T) -> Result<Vec<u8>, String> {
+        self.file(|out| serde_json::to_writer(out, value).map_err(|e| e.to_string()))
+    }
+
+    /// `value` as indented JSON, stopped at the room.
+    pub(crate) fn json_pretty<T: Serialize + ?Sized>(self, value: &T) -> Result<Vec<u8>, String> {
+        self.file(|out| serde_json::to_writer_pretty(out, value).map_err(|e| e.to_string()))
+    }
+
+    /// A zip archive whose entries are made one at a time ([`Parts`]).
+    pub(crate) fn parts(self) -> Parts<'a> {
+        Parts { out: self, held: 0, entries: Vec::new() }
+    }
+}
+
+/// The file `write` makes within `limit` ([`Limit::file`]), or why it didn't, in its own words.
+fn made_within(limit: &Limit, write: impl FnOnce(&mut dyn Write) -> Result<(), String>) -> Result<Vec<u8>, String> {
+    let mut failed = None;
+    let made = limit.file(|out| {
+        write(out).map_err(|why| {
+            failed = Some(why);
+            DataError::Format(String::new())
+        })
+    });
+    made.map_err(|e| failed.unwrap_or_else(|| e.to_string()))
+}
+
+/// The entries of a zip archive as they are made, together held to its file's room, then the
+/// archive made within what they leave of it ([`rustgis_data::zip::write_within`]).
+pub(crate) struct Parts<'a> {
+    out: Output<'a>,
+    held: usize,
+    entries: Vec<(String, Vec<u8>)>,
+}
+
+impl Parts<'_> {
+    /// Adds the entry `name` that `write` makes, stopped as the entries pass the room.
+    pub(crate) fn make(&mut self, name: String, write: impl FnOnce(&mut dyn Write) -> Result<(), String>) -> Result<(), String> {
+        let limit = Limit::new(self.out.most().saturating_sub(self.held));
+        let made = made_within(&limit, write);
+        if limit.passed() {
+            return Err(self.out.refusal());
+        }
+        self.push(name, made?)
+    }
+
+    /// Adds the entry `name`, made already, refused once the entries pass the room.
+    pub(crate) fn push(&mut self, name: String, mut bytes: Vec<u8>) -> Result<(), String> {
+        // Spare room counts against the archive's limit while it is made.
+        bytes.shrink_to_fit();
+        self.held = self.held.saturating_add(bytes.len());
+        self.out.check(self.held)?;
+        self.entries.push((name, bytes));
+        Ok(())
+    }
+
+    /// The archive of the entries.
+    pub(crate) fn zip(self) -> Result<Vec<u8>, String> {
+        match self.out.room {
+            None => rustgis_data::zip::write(&self.entries),
+            Some(room) => room.encode(self.out.path, |limit| rustgis_data::zip::write_within(&self.entries, limit)),
+        }
     }
 }
 
@@ -155,12 +281,19 @@ pub(crate) const MAX_DOWNLOAD_BYTES: usize = 256 << 20;
 /// past [`MAX_DOWNLOAD_BYTES`] of features, before any is read when the source's count alone says
 /// so. A definition query is applied after the read, so it doesn't make the read smaller.
 pub(super) fn read_for_download(l: &rustgis_map::Layer) -> Result<(Dataset, rustgis_map::Unreadable), String> {
+    read_for_download_after(l, 0)
+}
+
+/// [`read_for_download`] for a file made of several layers, `held` bytes of whose features were
+/// read before this one's: together they are held to [`MAX_DOWNLOAD_BYTES`].
+pub(super) fn read_for_download_after(l: &rustgis_map::Layer, held: usize) -> Result<(Dataset, rustgis_map::Unreadable), String> {
+    let needs = if held == 0 { "the layer needs" } else { "with the layers read before it, the layer needs" };
     let refusal = format!(
-        "{}: the layer needs more than the {} MiB of features the web app reads for a download; zoom in, select the features you need, use Make Layer From Selected Features and export that layer, or use the desktop app",
+        "{}: {needs} more than the {} MiB of features the web app reads for a download; zoom in, select the features you need, use Make Layer From Selected Features and export that layer, or use the desktop app",
         l.name,
         MAX_DOWNLOAD_BYTES >> 20
     );
-    l.load_all_counted_up_to(MAX_DOWNLOAD_BYTES as u64, &refusal)
+    l.load_all_counted_up_to(MAX_DOWNLOAD_BYTES.saturating_sub(held) as u64, &refusal)
 }
 
 /// Export `command`'s parameters when its file is downloaded: `path` cut to the download's name,
@@ -173,7 +306,7 @@ fn for_download<'a>(command: &str, p: &'a Value) -> Result<(Cow<'a, Value>, Vec<
     let mut name = path.rsplit(['/', '\\']).next().unwrap_or_default().to_string();
     if matches!(name.as_str(), "" | "." | "..") {
         return Err(format!(
-            "{path}: the browser downloads an export under the file name its path ends in, and this one has none; end it in a name such as map.png"
+            "{path}: the browser downloads a file under the name its path ends in, and this one has none; end it in a file name, such as map.png"
         ));
     }
     let folder = name != path;
@@ -203,10 +336,16 @@ fn for_download<'a>(command: &str, p: &'a Value) -> Result<(Cow<'a, Value>, Vec<
     Ok((Cow::Owned(p), notes))
 }
 
-/// Background exports that render map, layout, report, or scene text with installed fonts.
+/// Exports that render map, layout, report, presentation or scene text with installed fonts.
 fn uses_fonts(command: &str) -> bool {
-    matches!(command, "share.exportMap" | "layout.export" | "report.export" | "map.exportOrbit" | "map.exportBlock")
+    matches!(command, "share.exportMap" | "layout.export" | "report.export" | "presentation.export" | "map.exportOrbit" | "map.exportBlock")
 }
+
+/// Why a font-drawing export is refused while the CJK font folders are still being scanned.
+const CJK_PENDING: &str = "CJK font folder scan is still running; try exporting again in a moment";
+
+/// What is said of an export during which that scan started.
+const CJK_STARTED: &str = "CJK font folder scan started during this export; re-run it once the scan finishes if CJK text is missing.";
 
 #[cfg(test)]
 thread_local! {
@@ -227,7 +366,7 @@ fn cjk_scan_pending() -> bool {
 pub(crate) fn write_here(s: &mut Session, p: &Value, command: &str) -> CmdResult {
     let &(_, name, start) = IN_BACKGROUND.iter().find(|(c, ..)| *c == command).ok_or_else(|| format!("{command} isn't an export"))?;
     if uses_fonts(command) && cjk_scan_pending() {
-        return Err("CJK font folder scan is still running; try exporting again in a moment".into());
+        return Err(CJK_PENDING.into());
     }
     // Only an export that takes a path is named after it (Publish to Source writes the layer's
     // own source, and says itself what the browser can't do).
@@ -249,10 +388,7 @@ pub(crate) fn write_here(s: &mut Session, p: &Value, command: &str) -> CmdResult
         }
     })?;
     if pending_cjk {
-        wrote.diagnostics.push((
-            rustgis_data::diagnostics::Severity::Warning,
-            "CJK font folder scan started during this export; re-run it once the scan finishes if CJK text is missing.".into(),
-        ));
+        wrote.diagnostics.push((rustgis_data::diagnostics::Severity::Warning, CJK_STARTED.into()));
     }
     s.check_continuation(&owner).map_err(|why| {
         // A download not yet offered wrote nothing.
@@ -266,6 +402,161 @@ pub(crate) fn write_here(s: &mut Session, p: &Value, command: &str) -> CmdResult
         return super::gp::queue_export(s, wrote);
     }
     said(s, wrote)
+}
+
+/// A file a command makes at once, on the thread that runs it ([`file_command`]).
+pub(crate) struct Made {
+    pub(crate) bytes: Vec<u8>,
+    /// What the command answers once the file is written, or its download is taken.
+    pub(crate) answer: Value,
+    /// What it says once the file is out, after what making it said.
+    pub(crate) notes: rustgis_data::loss::Notes,
+    /// The line saying the file is out. Without one, a download says it was offered.
+    pub(crate) done: Option<String>,
+    /// What a download does to the session once taken.
+    pub(crate) taken: Option<Box<dyn FnOnce(&mut Session) + Send>>,
+}
+
+impl Made {
+    /// `bytes`, answered with `answer`, with nothing more to say of them.
+    pub(crate) fn new(bytes: Vec<u8>, answer: Value) -> Self {
+        Made { bytes, answer, notes: Default::default(), done: None, taken: None }
+    }
+}
+
+/// `command`'s file, made by `build` for the path it is given: written there, or, where files are
+/// downloaded ([`Session::downloads_files`]), offered as a download ([`download_command`]).
+pub(crate) fn file_command(
+    s: &mut Session,
+    command: &str,
+    p: &Value,
+    build: impl FnOnce(&mut Session, Output<'_>) -> Result<Made, String>,
+) -> CmdResult {
+    if s.downloads_files() {
+        return download_command(s, command, p, build);
+    }
+    // A file drawn with installed fonts waits for their folders to be read, as the downloaded
+    // one does, and says when a scan started while it was drawn.
+    if uses_fonts(command) && cjk_scan_pending() {
+        return Err(CJK_PENDING.into());
+    }
+    let mark = s.notice_mark();
+    let path = super::ps(p, "path").ok_or("path is required")?;
+    let out = Output { path, room: None };
+    let (made, pending_cjk) =
+        if uses_fonts(command) { rustgis_render::fonts::track_pending_cjk(|| build(s, out)) } else { (build(s, out), false) };
+    let made = made?;
+    rustgis_data::io::write_atomic(std::path::Path::new(path), &made.bytes).map_err(|e| format!("{path}: {e}"))?;
+    for note in made.notes {
+        s.say(note);
+    }
+    if pending_cjk {
+        s.warn(CJK_STARTED);
+    }
+    s.retain_written_notices(mark);
+    if let Some(done) = made.done {
+        s.notify_written(done);
+    }
+    Ok(made.answer)
+}
+
+/// Queues the file `build` makes for the front end to offer as a download, under the file name
+/// `p`'s path ends in. `build` is given that name and the room the downloads waiting leave
+/// ([`Session::download_room`], refused before anything is made when no more can wait), and
+/// makes the file within it. The answer says it is pending, with what will be said of it; that
+/// is said, and `command`'s answer given, once the front end has taken the download
+/// (`gp.fileDelivered`). A download not taken says only why.
+pub(crate) fn download_command(
+    s: &mut Session,
+    command: &str,
+    p: &Value,
+    build: impl FnOnce(&mut Session, Output<'_>) -> Result<Made, String>,
+) -> CmdResult {
+    if uses_fonts(command) && cjk_scan_pending() {
+        return Err(CJK_PENDING.into());
+    }
+    let (p, renamed) = for_download(command, p)?;
+    let name = super::ps(&p, "path").ok_or("path is required")?.to_string();
+    let owner = s.continuation()?;
+    owner.check()?;
+    let out = Output { path: &name, room: s.download_room()? };
+    // What making the file says waits with it.
+    let (made, held) = s.holding_notices(|s| {
+        let (made, pending_cjk) =
+            if uses_fonts(command) { rustgis_render::fonts::track_pending_cjk(|| build(s, out)) } else { (build(s, out), false) };
+        let mut made = made?;
+        for note in std::mem::take(&mut made.notes) {
+            s.say(note);
+        }
+        if pending_cjk {
+            s.warn(CJK_STARTED);
+        }
+        Ok::<_, String>(made)
+    });
+    let made = match made.and_then(|made| s.check_continuation(&owner).map(|()| made)) {
+        Ok(made) => made,
+        // No file: said as a command that fails says it.
+        Err(why) => {
+            for notice in held {
+                s.relay_notice(notice);
+            }
+            return Err(why);
+        }
+    };
+    let said: Vec<String> = held.iter().map(|notice| notice.text.clone()).collect();
+    // Said if the queue refuses the file, as when it isn't made.
+    let unsent = held.clone();
+    let Made { bytes, answer, done, taken, .. } = made;
+    let done = done.unwrap_or_else(|| format!("Download offered: {name}"));
+    let then: Then = Box::new(move |s: &mut Session, _: &mut Value| {
+        if let Some(taken) = taken {
+            taken(s);
+        }
+        s.notify_written(done);
+        let mark = s.notice_mark();
+        for notice in held {
+            s.relay_notice(notice);
+        }
+        s.retain_written_notices(mark);
+        Ok(())
+    });
+    let wrote = Wrote {
+        answer,
+        notes: renamed.into_iter().collect(),
+        diagnostics: Vec::new(),
+        refused_notes: Vec::new(),
+        written_path: Some(name),
+        download: Some(Arc::new(bytes)),
+        then: Some(then),
+        #[cfg(not(target_arch = "wasm32"))]
+        owner: None,
+        #[cfg(not(target_arch = "wasm32"))]
+        crs_used: Vec::new(),
+    };
+    let mut out = match super::gp::queue_export(s, wrote) {
+        Ok(out) => out,
+        Err(why) => {
+            for notice in unsent {
+                s.relay_notice(notice);
+            }
+            return Err(why);
+        }
+    };
+    if let Some(messages) = out["messages"].as_array_mut() {
+        messages.extend(said.into_iter().map(Value::String));
+    }
+    Ok(out)
+}
+
+/// Refuses, where files are downloaded, a `path` a command would write for a layer to read its
+/// pixels from: a download can't be read back.
+pub(crate) fn no_layer_file(s: &Session, p: &Value) -> Result<(), String> {
+    match super::ps(p, "path").map(str::trim).filter(|path| !path.is_empty()) {
+        Some(path) if s.downloads_files() => Err(format!(
+            "{path}: the web app can't write a file for the layer to read; leave out path (the project keeps the result), then download it with share.exportRaster"
+        )),
+        _ => Ok(()),
+    }
 }
 
 /// Keeps a completed file visible when its result cannot be delivered to the session.
@@ -732,5 +1023,37 @@ mod tests {
         let table_err =
             write_here(&mut s, &serde_json::json!({"layer": "NoSuchLayer", "path": "out.csv"}), "share.exportTable").unwrap_err();
         assert!(!table_err.contains("CJK font folder scan"), "{table_err}");
+
+        // A file command that draws with fonts waits on the desktop too, before anything is made.
+        let made = std::cell::Cell::new(false);
+        let build = |_: &mut Session, _: Output<'_>| {
+            made.set(true);
+            Err::<Made, String>("not reached".into())
+        };
+        let err = file_command(&mut s, "presentation.export", &serde_json::json!({"path": "deck.pdf"}), build).unwrap_err();
+        assert!(err.contains("CJK font folder scan is still running"), "{err}");
+        assert!(!made.get());
+    }
+
+    /// A download the queue refuses (a file not made within the room, past the limit) says what
+    /// making it said, as one that isn't made does. The command here only reads the project, so
+    /// its failure withdraws no warnings.
+    #[test]
+    fn a_download_the_queue_refuses_says_what_making_it_said() {
+        let mut s = Session::new(crate::Project::default());
+        s.queue_gp_files = true;
+        s.download_cap = Some(10);
+        let big_file = crate::CommandSpec::new("test.bigFile", "Big file", "Test", |s, p| {
+            download_command(s, "test.bigFile", p, |s, _| {
+                s.warn("made it with a note");
+                Ok(Made::new(vec![0; 100], serde_json::Value::Null))
+            })
+        });
+        s.registry.commands.push(big_file.view());
+        let mark = s.notice_mark();
+        let err = s.run("test.bigFile", &serde_json::json!({"path": "big.bin"})).unwrap_err();
+        assert!(err.contains("big.bin"), "{err}");
+        assert!(s.notices_since(mark).iter().any(|n| n.text == "made it with a note"), "{:?}", s.notices_since(mark));
+        assert!(s.take_gp_files().is_empty());
     }
 }

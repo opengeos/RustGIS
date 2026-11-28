@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::{FORMAT, ModelGraph, ModelNodeKind, ModelStep, Project};
+use crate::cmd::exports::Output;
 
 impl Serialize for Project {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
@@ -1267,20 +1268,31 @@ struct Item<'a, T> {
 }
 
 /// A map file has its own header, independent of the project it came from.
+#[cfg(test)]
 pub(crate) fn map_file_bytes(map: &Map) -> Result<Vec<u8>, String> {
+    map_file_within(map, Output::UNLIMITED)
+}
+
+/// The map file of `map`, with its own header, for the file `out` describes.
+pub(crate) fn map_file_within(map: &Map, out: Output<'_>) -> Result<Vec<u8>, String> {
     let mut requires = map_capabilities([map]);
     if map.needs_wkt() {
         requires.push("crs-wkt");
     }
-    serde_json::to_vec(&Item { format: FORMAT, requires, value: map }).map_err(|e| e.to_string())
+    out.json(&Item { format: FORMAT, requires, value: map })
 }
 
 /// A layout file has its own header, as a map file has: what its elements use, as the project
 /// holding it requires for them (#2277). Indented, as layout files have always been written. No
 /// `crs-wkt`: a layout holds no coordinate system, only a measured grid's as text.
 pub fn layout_file_bytes(layout: &rustgis_map::layout::Layout) -> Result<Vec<u8>, String> {
+    layout_file_within(layout, Output::UNLIMITED)
+}
+
+/// [`layout_file_bytes`] for the file `out` describes.
+pub(crate) fn layout_file_within(layout: &rustgis_map::layout::Layout, out: Output<'_>) -> Result<Vec<u8>, String> {
     let requires = layout_capabilities(std::slice::from_ref(layout));
-    serde_json::to_vec_pretty(&Item { format: FORMAT, requires, value: layout }).map_err(|e| e.to_string())
+    out.json_pretty(&Item { format: FORMAT, requires, value: layout })
 }
 
 /// What the elements of `layouts` use that an older reader would draw without and save again
@@ -1314,12 +1326,19 @@ fn layout_capabilities(layouts: &[rustgis_map::layout::Layout]) -> Vec<&'static 
 }
 
 /// A layer file keeps the same renderer capabilities as the layer saved inside a project.
+#[cfg(test)]
 pub(crate) fn layer_file_bytes(layer: &Layer) -> Result<Vec<u8>, String> {
+    layer_file_within(layer, Output::UNLIMITED)
+}
+
+/// The layer file of `layer`, with the same renderer capabilities as the layer saved inside a
+/// project, for the file `out` describes.
+pub(crate) fn layer_file_within(layer: &Layer, out: Output<'_>) -> Result<Vec<u8>, String> {
     let mut requires = layer_capabilities(layer);
     if layer.needs_wkt() {
         requires.push("crs-wkt");
     }
-    serde_json::to_vec(&Item { format: FORMAT, requires, value: layer }).map_err(|e| e.to_string())
+    out.json(&Item { format: FORMAT, requires, value: layer })
 }
 
 /// Only executable export options require the capability, not fields in unrelated data.

@@ -235,11 +235,11 @@ pub fn commands() -> Vec<C> {
             .when(need_notebook)
             .params(r#"{"notebook"?, "cell"?: index (default: every command cell, stopping at an error)}"#),
         C::new("notebook.save", "Save Notebook", "Notebook", |s, p| {
-            let path = ps(p, "path").ok_or("path is required")?;
-            let i = index(s, p)?;
-            let bytes = notebook_file(s, i, path.to_ascii_lowercase().ends_with(".ipynb"))?;
-            rustgis_data::io::write_atomic(Path::new(path), &bytes).map_err(|e| format!("{path}: {e}"))?;
-            Ok(json!({"path": path}))
+            super::exports::file_command(s, "notebook.save", p, |s, out| {
+                let i = index(s, p)?;
+                let bytes = notebook_within(s, i, out.path.to_ascii_lowercase().ends_with(".ipynb"), out)?;
+                Ok(super::exports::Made::new(bytes, json!({"path": out.path})))
+            })
         })
         .roles(&[])
         .effects(crate::policy::Effects::NONE.with(crate::policy::Effect::Files))
@@ -624,10 +624,15 @@ fn jupyter_file(nb: &Notebook) -> Value {
 
 /// The notebook as a RustGIS notebook or (nbformat 4) Jupyter notebook.
 pub fn notebook_file(s: &mut Session, i: usize, jupyter: bool) -> Result<Vec<u8>, String> {
+    notebook_within(s, i, jupyter, super::exports::Output::UNLIMITED)
+}
+
+/// [`notebook_file`] for the file `out` describes.
+pub(super) fn notebook_within(s: &mut Session, i: usize, jupyter: bool, out: super::exports::Output<'_>) -> Result<Vec<u8>, String> {
     let nb = s.project.notebooks.get_mut(i).ok_or("no notebook")?;
     let (bytes, report) = crate::durable::output(nb, None, |nb| {
         let v = if jupyter { jupyter_file(nb) } else { serde_json::to_value(nb).map_err(|e| e.to_string())? };
-        serde_json::to_vec_pretty(&v).map_err(|e| e.to_string())
+        out.json_pretty(&v)
     })?;
     crate::durable::notify(s, &report);
     Ok(bytes)

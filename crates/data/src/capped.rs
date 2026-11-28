@@ -30,6 +30,14 @@ impl Limit {
         self.passed.load(Ordering::Relaxed)
     }
 
+    /// The file `write` makes in a buffer held to this limit: refused as soon as it would pass
+    /// it, whatever `write` makes of the refused write.
+    pub fn file(&self, write: impl FnOnce(&mut dyn Write) -> Result<()>) -> Result<Vec<u8>> {
+        let mut out = self.buffer();
+        let made = write(&mut out);
+        self.whole(made.map(|()| out.into_inner()))
+    }
+
     /// An empty buffer counted against this limit.
     pub(crate) fn buffer(&self) -> Buffer<'_> {
         Buffer { file: Vec::new(), at: 0, limit: self, charged: 0 }

@@ -84,24 +84,51 @@ the formats above that can hold it: for a table without geometry, CSV, GeoJSON, 
 (no GeoPackage in the web app, which downloads the file). Scripts and the command line use
 `share.exportTable`.
 
-The browser can't write to a folder, so in the web app an export command with a `path` (from the
-Script pane, the Assistant or a plugin) downloads the file under the name the path ends in, once
-the commands finish: `share.exportLayer`, `share.exportTable`, `share.exportMap`,
-`share.exportRaster` (a raster layer), `layout.export`, `report.export` and `data.convert`. A
-folder in the path isn't used, and a `.shp` path downloads a `.zip` of the Shapefile's files; a
-notice says each. At most 8 files, 256 MiB in all, can wait to be downloaded (a geoprocessing
-tool's file output waits the same way), and those of a script that then fails, or of a project
-replaced before they are offered, are dropped with a notice. A tool output dropped this way leaves
-its run out of the geoprocessing history. An export is refused once its file passes what is left of
-the 256 MiB, as it is made where the format allows, and for a Shapefile's `.zip` or a KMZ counting
-its files before they are zipped: export a selection of features, a smaller size or fewer pages,
-or use the desktop app.
-`share.exportLayer` and `data.convert` read a layer read in place whole for such a download, up to
-256 MiB of features; past that, select the features you need and export a layer made from them with
-**Make Layer From Selected Features**, or use the desktop app. They don't read a layer added by its
-web address this way: download the file and add it, or use the desktop app.
-GeoPackage and FlatGeobuf, a tile layer as a raster, an orbit, a block and publishing to a source
-need the desktop app; for a field package, use **Package for the Field** on the ribbon.
+The browser can't write to a folder, so in the web app a command given a `path` (from the Script
+pane, the Assistant or a plugin) downloads the file under the name the path ends in, once the
+commands finish:
+
+- exports: `share.exportLayer`, `share.exportTable`, `share.exportMap`, `share.exportRaster` (a
+  raster layer), `share.export3d`, `layout.export`, `report.export`, `presentation.export`,
+  `data.convert`, `model.export`, `project.exportLog`, `imagery.mesh` and
+  `imagery.hostedImagery`;
+- saves and packages: `project.save`, `project.saveAs`, `project.saveTemplate`,
+  `project.newTemplate`, `project.package`, `map.save`, `map.package`, `layer.save`,
+  `style.save`, `ramp.save`, `task.save`, `bookmark.save`, `layout.save`, `report.save`,
+  `report.saveTemplate`, `presentation.save`, `notebook.save`, `gp.package` and `dl.package`;
+- shares: `share.webMap` and the other **Share As** commands.
+
+A folder in the path isn't used, and a `.shp` path downloads a `.zip` of the Shapefile's files; a
+notice says each. What a command says of its file, losses included, is said once the download is
+taken. At most 8 files, 256 MiB in all, can wait to be downloaded (a geoprocessing tool's file
+output waits the same way), and those of a script that then fails, or of a project replaced before
+they are offered, are dropped with a notice. A tool output dropped this way leaves its run out of
+the geoprocessing history. A command is refused once its file passes what is left of the 256 MiB,
+as it is made where the format allows, and for a zipped format (a package, a zipped Shapefile, a
+KMZ) counting its files before they are zipped: choose fewer features or layers, a smaller size or
+fewer pages, or use the desktop app.
+
+`share.exportLayer`, `data.convert`, `share.webMap`, `share.webLayer`, `share.geodataService`
+and `share.webScene` read a layer read in place whole for such a download, up to 256 MiB of
+features (a share's layers together); past that, select the features you need and make a layer
+from them with **Make Layer From Selected Features**, or use the desktop app. They don't read a
+layer added by its web address this way: download the file and add it, or use the desktop app.
+
+A downloaded file can't be written again, so:
+
+- `project.save` and `project.saveAs` don't mark the project saved, as the browser doesn't say
+  whether it saved the file; `project.saveAs` names the project after the file once the download
+  is taken, and a project it renames is unsaved.
+- A download isn't listed under **Jobs**, and the **Manage** commands that update a shared file
+  (`share.saveWebMap`, `share.replaceWebLayer`, `share.saveWebScene`,
+  `share.saveWebLinkChart`) are refused: share it again instead. A share needs a `path`, as there
+  are no data stores (`share.dataStore`) or uploads (`share.upload`).
+- `raster.project`, `raster.rasterize`, `raster.mosaic` and `raster.georeference` refuse a
+  `path`, which the new layer would read: leave it out, then export the layer.
+
+GeoPackage and FlatGeobuf, a tile layer as a raster, an orbit, a block, animations, the time
+slider's steps, `layout.publication`'s `coverage` image and publishing to a source need the
+desktop app; for a field package, use **Package for the Field** on the ribbon.
 
 To export the largest rows of a Summary Statistics result, give `share.exportTable` an optional
 `sort` list and `limit`. Each sort key names a stored field; `descending` defaults to `false`.
@@ -166,8 +193,10 @@ Packages and project item files are described under [Project items](data.md#proj
 ## Sharing as open formats
 
 **Publish › Share As** writes open-format files to a chosen file on desktop, or downloads them
-in the browser. The Share As commands accept a `path`; without one they use the first
-**data store** (a folder added with **Add Data Store…** in the Shared Items pane).
+in the browser. The Share As commands accept a `path`. On the desktop, one run without a `path`
+writes to the first **data store** (a folder added with **Add Data Store…** in the Shared Items
+pane), or the one `store` names. The browser has no data stores: a Share As command needs a
+`path` there and is refused without one.
 
 - **Web Map** (`share.webMap`): an HTML page of visible layers (rasters as embedded images),
   pan and zoom, a layer list and pop-ups. It uses a flat Mercator view, not the project's

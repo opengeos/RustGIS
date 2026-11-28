@@ -446,6 +446,7 @@ fn warp_to_fit(s: &mut Session, p: &Value, layer: &str, r: &Raster) -> CmdResult
         None | Some(Value::Null) => None,
         Some(v) => Some(v.as_f64().filter(|c| c.is_finite() && *c > 0.0).ok_or("cellSize is a positive number, in the output's units")?),
     };
+    super::exports::no_layer_file(s, p)?;
     let path = match p.get("path") {
         None | Some(Value::Null) => None,
         Some(v) => Some(v.as_str().filter(|t| is_tif(t)).ok_or("path is a *.tif or *.tiff file")?.to_string()),
@@ -505,6 +506,7 @@ const EXTENT: &str = "extent is a polygon layer's name, [west, south, east, nort
 /// extent, or on another raster's grid, each cell sampled at its centre or taken from every
 /// pixel whose centre falls in it (see `rustgis_analysis::warp::project`). A new layer.
 fn project_raster(s: &mut Session, p: &Value) -> CmdResult {
+    super::exports::no_layer_file(s, p)?;
     let r = raster(s, p)?;
     r.require_coordinates()?;
     let method = match p.get("resampling") {
@@ -574,6 +576,7 @@ fn rasterize(s: &mut Session, p: &Value) -> CmdResult {
 /// `path` when given and makes the layer; once it is added, its notices are said and a text
 /// field's class table is added.
 pub(crate) fn rasterize_work(s: &Session, p: &Value) -> Result<super::workflows::Work, String> {
+    super::exports::no_layer_file(s, p)?;
     let ln = rasterize_name(p)?;
     let l = s.map().layer_by_name(ln).filter(|l| l.raster.is_none()).ok_or_else(|| format!("no vector layer '{ln}'"))?;
     let ds = &l.dataset;
@@ -2541,6 +2544,7 @@ const MOSAIC_PIECE: usize = 1 << 20;
 /// and where a file format's reader and the GeoTIFF writer look: some formats are read without a
 /// look.
 pub(crate) fn mosaic_rasters_work(s: &Session, p: &Value) -> Result<super::workflows::Work, String> {
+    super::exports::no_layer_file(s, p)?;
     let inputs = p.get("inputs").and_then(Value::as_array).ok_or("inputs is a list of raster layers or file paths")?;
     if inputs.len() < 2 {
         return Err("a mosaic needs two or more rasters".into());
@@ -3398,12 +3402,43 @@ fn mesh(s: &mut Session, p: &Value) -> CmdResult {
     // The mesh is laid out in metres on the ground, which a scan has none of.
     r.require_coordinates()?;
     let step = uint(p, "step").unwrap_or(((r.width.max(r.height) / 300).max(1)) as u64).clamp(1, 1000) as i64;
-    let (cx, cy) = r.cell_size_m();
     let (nc, nr) = ((r.width as i64 - 1) / step + 1, (r.height as i64 - 1) / step + 1);
     if nc * nr > 1_000_000 {
         return Err("the mesh would be too large; use a larger step".into());
     }
-    let mut obj = format!("# {} surface mesh exported by RustGIS\no {}\n", r.name, r.name.replace(char::is_whitespace, "_"));
+    match ps(p, "path") {
+        Some(_) if s.downloads_files() => super::exports::download_command(s, "imagery.mesh", p, |_, out| {
+            let mut counts = (0, 0);
+            let obj = out.file(|w| {
+                counts = write_surface(w, &r, step)?;
+                Ok(())
+            })?;
+            let answer = json!({"path": out.path, "vertices": counts.0, "faces": counts.1});
+            Ok(super::exports::Made::new(obj, answer))
+        }),
+        Some(path) => {
+            let mut obj = Vec::new();
+            let (v, faces) = write_surface(&mut obj, &r, step)?;
+            rustgis_data::io::write_atomic(std::path::Path::new(path), &obj).map_err(|e| format!("{path}: {e}"))?;
+            s.retain_written_notices(written);
+            Ok(json!({"path": path, "vertices": v, "faces": faces}))
+        }
+        None => {
+            let mut obj = Vec::new();
+            let (v, faces) = write_surface(&mut obj, &r, step)?;
+            let text = String::from_utf8(obj).map_err(|e| e.to_string())?;
+            Ok(json!({"text": text, "vertices": v, "faces": faces}))
+        }
+    }
+}
+
+/// Writes surface model `r`, every `step`th cell, to `w` as an OBJ mesh, a line at a time: how
+/// many vertices and faces it has. A raster with no surface to mesh is refused.
+fn write_surface(w: &mut dyn std::io::Write, r: &Raster, step: i64) -> Result<(usize, usize), String> {
+    let (cx, cy) = r.cell_size_m();
+    let (nc, nr) = ((r.width as i64 - 1) / step + 1, (r.height as i64 - 1) / step + 1);
+    let failed = |e: std::io::Error| e.to_string();
+    writeln!(w, "# {} surface mesh exported by RustGIS\no {}", r.name, r.name.replace(char::is_whitespace, "_")).map_err(failed)?;
     let mut ids = vec![0usize; (nc * nr) as usize];
     let mut v = 0usize;
     for j in 0..nr {
@@ -3413,7 +3448,7 @@ fn mesh(s: &mut Session, p: &Value) -> CmdResult {
                 if let Some(slot) = ids.get_mut((j * nc + i) as usize) {
                     *slot = v;
                 }
-                obj.push_str(&format!("v {:.2} {:.2} {:.2}\n", i as f64 * step as f64 * cx, z, j as f64 * step as f64 * cy));
+                writeln!(w, "v {:.2} {:.2} {:.2}", i as f64 * step as f64 * cx, z, j as f64 * step as f64 * cy).map_err(failed)?;
             }
         }
     }
@@ -3423,11 +3458,11 @@ fn mesh(s: &mut Session, p: &Value) -> CmdResult {
         for i in 0..nc - 1 {
             let (a, b2, c, d) = (id(i, j), id(i + 1, j), id(i + 1, j + 1), id(i, j + 1));
             if a > 0 && b2 > 0 && c > 0 {
-                obj.push_str(&format!("f {a} {c} {b2}\n"));
+                writeln!(w, "f {a} {c} {b2}").map_err(failed)?;
                 faces += 1;
             }
             if a > 0 && c > 0 && d > 0 {
-                obj.push_str(&format!("f {a} {d} {c}\n"));
+                writeln!(w, "f {a} {d} {c}").map_err(failed)?;
                 faces += 1;
             }
         }
@@ -3435,14 +3470,7 @@ fn mesh(s: &mut Session, p: &Value) -> CmdResult {
     if faces == 0 {
         return Err("the raster has no surface to mesh".into());
     }
-    match ps(p, "path") {
-        Some(path) => {
-            rustgis_data::io::write_atomic(std::path::Path::new(path), obj.as_bytes()).map_err(|e| format!("{path}: {e}"))?;
-            s.retain_written_notices(written);
-            Ok(json!({"path": path, "vertices": v, "faces": faces}))
-        }
-        None => Ok(json!({"text": obj, "vertices": v, "faces": faces})),
-    }
+    Ok((v, faces))
 }
 
 /// The literal raster/secondary inputs used by this module, without reading any pixels/files.

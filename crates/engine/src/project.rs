@@ -15,7 +15,9 @@ mod capabilities;
 #[path = "project_label_losses.rs"]
 pub(crate) mod label_losses;
 pub use capabilities::layout_file_bytes;
-pub(crate) use capabilities::{layer_file_bytes, map_file_bytes, model_capabilities, task_capabilities};
+#[cfg(test)]
+pub(crate) use capabilities::{layer_file_bytes, map_file_bytes};
+pub(crate) use capabilities::{layer_file_within, layout_file_within, map_file_within, model_capabilities, task_capabilities};
 
 /// A map export cannot keep runtime-only download reservations, even in a larger project.
 pub(crate) fn ensure_map_imports_complete(map: &Map) -> Result<(), String> {
@@ -1887,9 +1889,19 @@ impl Project {
     /// Writes controlled durable fields and relative paths in one guarded transaction. Live
     /// fields are restored on every return and native unwind; only explicit saves are remembered.
     pub fn saved_text(&mut self, dir: Option<&Path>) -> Result<(String, crate::durable::Report), String> {
+        self.saved_with(dir, project_text)
+    }
+
+    /// [`Self::saved_text`] with the text made by `write`, for a save held to less than a project
+    /// file may come to, such as a download.
+    pub(crate) fn saved_with(
+        &mut self,
+        dir: Option<&Path>,
+        write: impl FnOnce(&Project) -> Result<String, String>,
+    ) -> Result<(String, crate::durable::Report), String> {
         self.ensure_imports_complete()?;
         let unrecorded = self.bound_address_losses(false);
-        let (text, mut report) = crate::durable::output_remembered(self, dir.and_then(Path::to_str), project_text)?;
+        let (text, mut report) = crate::durable::output_remembered(self, dir.and_then(Path::to_str), write)?;
         report.addresses = report.addresses.saturating_add(u32::try_from(unrecorded).unwrap_or(u32::MAX));
         Ok((text, report))
     }
@@ -3055,7 +3067,12 @@ impl Durable for ModelGraph {
 /// Enforces the opening bound inside the formatter, before any destination is replaced.
 fn project_text(p: &Project) -> Result<String, String> {
     let max = max_bytes();
-    json_within(p, max)?.ok_or_else(|| format!("the project is too large to save (maximum {})", limit_said(max)))
+    json_within(p, max)?.ok_or_else(|| too_large_to_save(max))
+}
+
+/// Why a project whose text passes `max` bytes isn't saved.
+pub(crate) fn too_large_to_save(max: u64) -> String {
+    format!("the project is too large to save (maximum {})", limit_said(max))
 }
 
 #[cfg(test)]

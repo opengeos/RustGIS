@@ -165,6 +165,9 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
         Some(Value::String(path)) if path.trim().to_ascii_lowercase().ends_with(".png") => Some(path.trim().to_string()),
         Some(_) => return Err("coverage is the path of a .png file to write the coverage grid to".into()),
     };
+    if let Some(path) = coverage_path.as_deref().filter(|_| s.downloads_files()) {
+        return Err(format!("{path}: the web app can't write the coverage image to a path; leave out coverage, or use the desktop app"));
+    }
     // No orientation asked: the one the area's map comes out larger on, from its extents east to
     // west and north to south on the map's projection and the room the style leaves the map.
     let profile = match &auto {
