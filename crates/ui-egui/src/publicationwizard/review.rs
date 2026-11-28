@@ -126,13 +126,15 @@ mod tests {
         open(&mut app);
         app.dialogs.publication.as_mut().unwrap().step = Step::Review;
         let mut h = harness(app);
+        // Other empty rows say "(none)" too: the credit row's is the one more.
+        let others = h.query_all_by_label("(none)").count();
         for (author, no_author, listed) in [
             ("", false, default),
             ("J. G.", false, "J. G."),
             ("   ", false, default),
             ("J. G.", true, unused),
-            ("", true, ""),
-            ("   ", true, ""),
+            ("", true, "(none)"),
+            ("   ", true, "(none)"),
         ] {
             let d = h.state_mut().dialogs.publication.as_mut().unwrap();
             (d.author, d.no_author) = (author.into(), no_author);
@@ -140,6 +142,8 @@ mod tests {
             for text in [default, "J. G.", unused] {
                 assert_eq!(h.query_by_label(text).is_some(), text == listed, "{text}: {author:?}, off {no_author}");
             }
+            let none = h.query_all_by_label("(none)").count();
+            assert_eq!(none, others + usize::from(listed == "(none)"), "(none): {author:?}, off {no_author}");
         }
     }
 }
