@@ -263,6 +263,12 @@ impl RasterLayer {
         self.opening.is_some()
     }
 
+    /// Whether its style is a placeholder until its pixels land: how it draws, by classes or not,
+    /// isn't known yet.
+    pub fn awaits_style(&self) -> bool {
+        self.restyle
+    }
+
     /// Detaches a fully read replacement from the prior opening's pending reads and notices.
     pub fn reset_replacement_read(&mut self) {
         self.read_generation = next_read_generation();
