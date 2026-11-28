@@ -88,6 +88,7 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<Layer>> {
     };
     r.collect_styles(doc.root());
     r.walk(doc.root(), &mut Vec::new(), 0);
+    r.collect_fields(doc.root());
     Ok(r.layers(&name))
 }
 
@@ -192,6 +193,7 @@ fn ground_overlays_within(file_name: &str, bytes: &[u8], budget: usize) -> Resul
 /// One placemark, before it's put in a layer.
 struct Row {
     geometry: Geometry,
+    id: Option<String>,
     name: Option<String>,
     description: Option<String>,
     folder: String,
@@ -528,6 +530,23 @@ impl Reader {
         }
     }
 
+    /// Adds declared headers after populated keys, so empty declarations cannot displace
+    /// fields with values at the column cap. It retains only the existing bounded key list.
+    fn collect_fields(&mut self, root: Node) {
+        for schema in root.descendants().filter(|n| n.is_element() && local(n) == "Schema") {
+            for field in schema.children().filter(|f| f.is_element() && local(f) == "SimpleField") {
+                let Some(name) = field.attribute("name").filter(|n| !n.trim().is_empty()) else { continue };
+                if !self.keys.iter().any(|k| k == name) {
+                    if self.keys.len() >= MAX_KEYS {
+                        self.dropped_keys += 1;
+                    } else {
+                        self.keys.push(name.to_string());
+                    }
+                }
+            }
+        }
+    }
+
     /// The style id a placemark draws with: its inline style, else its styleUrl (through a style
     /// map). Only ids defined in this document count.
     fn style_for(&mut self, pm: &Node) -> Option<String> {
@@ -632,6 +651,7 @@ impl Reader {
             any = true;
             rows.push(Row {
                 geometry,
+                id: pm.attribute("id").map(str::to_string),
                 name: name.clone(),
                 description: description.clone(),
                 folder: folder.clone(),
@@ -672,6 +692,11 @@ impl Reader {
             Field::new("folder", FieldType::Text),
             Field::new("style", FieldType::Text),
         ];
+        let has_ids = self.rows.iter().any(|r| r.id.is_some());
+        if has_ids {
+            fields.push(Field::new("id", FieldType::Text));
+        }
+        let fixed_fields = fields.len();
         // Each extended data key's column, as (key, column name). A key named like one of those,
         // ignoring case, is left out when it only repeats that column (an exported name field
         // does), else kept under a free name.
@@ -689,7 +714,8 @@ impl Reader {
                     0 => r.name.as_deref(),
                     1 => r.description.as_deref(),
                     2 => Some(r.folder.as_str()),
-                    _ => r.style.as_deref(),
+                    3 => r.style.as_deref(),
+                    _ => r.id.as_deref(),
                 };
                 r.data.iter().find(|(dk, _)| dk == k).is_none_or(|(_, v)| v == fixed.unwrap_or_default())
             };
@@ -702,6 +728,7 @@ impl Reader {
             keys.push((k.clone(), column));
         }
         fields.extend(keys.iter().map(|(_, c)| Field::new(c.clone(), FieldType::Text)));
+        let keep: Vec<&str> = fields.iter().take(fixed_fields).map(|f| f.name.as_str()).collect();
         let mut out = Vec::new();
         for (i, (kind, label)) in present.iter().enumerate() {
             let title = if present.len() == 1 { name.to_string() } else { format!("{name} {label}") };
@@ -715,6 +742,9 @@ impl Reader {
                     if r.folder.is_empty() { Value::Null } else { Value::Text(r.folder.clone()) },
                     r.style.clone().map(Value::Text).unwrap_or_default(),
                 ];
+                if has_ids {
+                    attrs.push(r.id.clone().map(Value::Text).unwrap_or_default());
+                }
                 attrs.extend(
                     keys.iter()
                         .map(|(k, _)| r.data.iter().find(|(dk, _)| dk == k).map(|(_, v)| Value::Text(v.clone())).unwrap_or_default()),
@@ -728,7 +758,7 @@ impl Reader {
                 zm_rows += usize::from(r.zm);
             }
             // Extended data is typed; names, descriptions, folders and style ids stay text.
-            crate::io::type_text_columns(&mut ds, &["name", "description", "folder", "style"]);
+            crate::io::type_text_columns(&mut ds, &keep);
             let mut report = ReadReport::default();
             // The notes go with the first layer only.
             if i == 0 {
@@ -767,8 +797,9 @@ impl Reader {
                     } else {
                         format!("{} extended data names were", renamed.len())
                     };
+                    let columns = if has_ids { "name, description, folder, style and id" } else { "name, description, folder and style" };
                     report.messages.push(format!(
-                        "{name}: {count} renamed, as RustGIS gives every placemark a name, description, folder and style column: {}{more}",
+                        "{name}: {count} renamed, as RustGIS gives every placemark a {columns} column: {}{more}",
                         listed.join(", ")
                     ));
                 }
@@ -1019,6 +1050,21 @@ mod tests {
         assert!(messages.iter().any(|m| m.contains("distinct names")), "{messages:?}");
     }
 
+    /// Schema-only headers fill remaining capacity after populated data, regardless of their
+    /// earlier position in the document; the omitted headers are still reported.
+    #[test]
+    fn declared_empty_headers_do_not_displace_populated_kml_keys() {
+        let fields = (0..=MAX_KEYS).map(|i| format!("<SimpleField name=\"empty{i}\" type=\"string\"/>")).collect::<String>();
+        let xml = format!(
+            "<kml><Document><Schema id=\"fields\">{fields}</Schema><Placemark><ExtendedData><Data name=\"important\"><value>7</value></Data></ExtendedData><Point><coordinates>1,2</coordinates></Point></Placemark></Document></kml>"
+        );
+        let layer = read("capped.kml", xml.as_bytes()).unwrap().remove(0);
+        let column = layer.dataset.field_index("important").unwrap();
+        assert_eq!(layer.dataset.value(0, column), &Value::Int(7));
+        assert_eq!(layer.dataset.fields.len(), 4 + MAX_KEYS);
+        assert!(layer.report.messages.iter().any(|n| n.contains("distinct names")), "{:?}", layer.report.messages);
+    }
+
     #[test]
     fn distinct_extended_data_keys_across_placemarks_are_clean() {
         let xml = r#"<kml><Document><Placemark><ExtendedData><Data name="n"><value>0</value></Data>
@@ -1038,6 +1084,38 @@ mod tests {
         let ds = &layers[0].dataset;
         let id = ds.field_index("id").unwrap();
         assert_eq!(ds.value(0, id), &Value::Text("12345678901234567891".into()));
+    }
+
+    #[test]
+    fn source_ids_and_declared_empty_columns_survive_kml_round_trips() {
+        let xml = r##"<kml><Document><Schema id="fields"><SimpleField name="empty" type="string"/></Schema>
+          <Placemark id="Permits.001"><ExtendedData><SchemaData schemaUrl="#fields"/></ExtendedData><Point><coordinates>1,2</coordinates></Point></Placemark>
+          <Placemark id="Permits.002"><Point><coordinates>3,4</coordinates></Point></Placemark></Document></kml>"##;
+        let layer = read("permits.kml", xml.as_bytes()).unwrap().remove(0);
+        let ds = &layer.dataset;
+        let id = ds.field_index("id").expect("keep the original opaque identifier");
+        assert_eq!(ds.fields[id].ty, FieldType::Text);
+        assert_eq!(ds.value(0, id), &Value::Text("Permits.001".into()));
+        assert_eq!(ds.value(1, id), &Value::Text("Permits.002".into()));
+        let empty = ds.field_index("empty").expect("keep a declared field with no populated values");
+        assert_eq!(ds.value(0, empty), &Value::Null);
+        assert_eq!(ds.value(1, empty), &Value::Null);
+        assert!(layer.report.messages.is_empty());
+        let exported = crate::interop::to_kml(ds, None).unwrap();
+        let back = read("again.kml", exported.as_bytes()).unwrap().remove(0);
+        assert!(back.dataset.field_index("id_1").is_none());
+        assert_eq!(back.dataset.value(0, back.dataset.field_index("id").unwrap()), &Value::Text("Permits.001".into()));
+        assert!(back.dataset.field_index("empty").is_some());
+    }
+
+    #[test]
+    fn source_id_collision_keeps_both_distinct_values_and_names_the_rename() {
+        let xml = br#"<kml><Placemark id="Permits.001"><ExtendedData><Data name="id"><value>different</value></Data></ExtendedData><Point><coordinates>1,2</coordinates></Point></Placemark></kml>"#;
+        let layer = read("permits.kml", xml).unwrap().remove(0);
+        assert_eq!(layer.dataset.value(0, layer.dataset.field_index("id").unwrap()), &Value::Text("Permits.001".into()));
+        assert_eq!(layer.dataset.value(0, layer.dataset.field_index("id_1").unwrap()), &Value::Text("different".into()));
+        assert_eq!(layer.report.messages.len(), 1);
+        assert!(layer.report.messages[0].contains("'id' → 'id_1'"));
     }
 
     #[test]

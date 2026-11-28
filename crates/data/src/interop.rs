@@ -81,6 +81,18 @@ pub fn to_kml(ds: &Dataset, name_field: Option<usize>) -> crate::Result<String> 
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<kml xmlns=\"http://www.opengis.net/kml/2.2\"><Document><name>{}</name>\n",
         xml(&ds.name, "KML", || "layer name".to_string())?
     );
+    // Declare columns independently of populated values, so all-null columns survive a read.
+    out.push_str("<Schema id=\"fields\">");
+    for field in &ds.fields {
+        let name = xml(&field.name, "KML", || format!("{}, field name '{}'", ds.name, field.name.escape_debug()))?
+            .replace('\t', "&#9;")
+            .replace('\n', "&#10;");
+        // ExtendedData's Data/value entries are text. Keep their inferred-reader behavior;
+        // a 64-bit integer must not be mislabeled as KML's 32-bit int type.
+        let ty = "string";
+        out.push_str(&format!("<SimpleField name=\"{name}\" type=\"{ty}\"/>"));
+    }
+    out.push_str("</Schema>\n");
     // KML's description is text. Other types and differently-cased columns stay in
     // ExtendedData, where the reader preserves their values and reports name collisions.
     let description = ds.fields.iter().position(|f| f.name == "description" && f.ty == crate::FieldType::Text);

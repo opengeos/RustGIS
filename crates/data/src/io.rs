@@ -5430,9 +5430,8 @@ impl std::ops::AddAssign for CsvLosses {
 ///   ([`read_dbf`]).
 /// - KML and GPX trim each value; a blank name reads as null, and a blank KML extended data
 ///   value too in a column read as numbers ([`type_text_columns`], for each kind of geometry's
-///   layer). A KML description is kept as it is. KML writes no null value, so a field without one
-///   has no column, which [`export_losses_notes`] says; GPX writes only names, which
-///   [`gpx_notes`] says.
+///   layer). A KML description is kept as it is. KML declares even all-null columns in its
+///   Schema; GPX writes only names, which [`gpx_notes`] says.
 ///
 /// A streamed export adds up its chunks' (`+=`): whether reading takes a column as numbers, which
 /// decides what its blanks become, is settled over all of them.
@@ -5729,7 +5728,7 @@ impl std::ops::AddAssign for TextLosses {
 }
 
 /// What a CSV, Shapefile, KML, KMZ or GPX file (extension `ext`) of the whole dataset `ds`
-/// changes when written to `target`: [`CsvLosses`]' notices, KML's fields without a value,
+/// changes when written to `target`: [`CsvLosses`]' notices, KML's unusable field names,
 /// [`gpx_notes`] with each feature named from `name_field`, and [`TextLosses`]' (a Shapefile's
 /// other values are [`shapefile_values_notes`]). A streamed export counts CSV's changes a chunk
 /// at a time instead.
@@ -5841,8 +5840,8 @@ fn written_with_geometry(ds: &Dataset) -> Result<Vec<bool>> {
         .collect()
 }
 
-/// KML writes ExtendedData only for non-null values of placemarks it writes. Report every
-/// field absent from that output, even when an unwritten feature has a value for it.
+/// KML declares all columns. Blank names and empty columns coalesced into fixed columns
+/// still cannot retain their original definition; populated blank names are counted separately.
 fn kml_empty_fields_note(ds: &Dataset, placed: &[bool], target: &str) -> Result<Option<crate::loss::Note>> {
     let mut written = vec![false; ds.fields.len()];
     for (f, placemark) in ds.features.iter().zip(placed) {
@@ -5857,7 +5856,13 @@ fn kml_empty_fields_note(ds: &Dataset, placed: &[bool], target: &str) -> Result<
         .fields
         .iter()
         .zip(written)
-        .filter(|(_, written)| !written)
+        .filter(|(field, written)| {
+            let coalesced = ["name", "folder", "style"]
+                .iter()
+                .any(|name| field.name.eq_ignore_ascii_case(name) && (field.name != *name || field.ty != FieldType::Text))
+                || field.name == "description" && field.ty != FieldType::Text;
+            !written && (field.name.trim().is_empty() || coalesced)
+        })
         .map(|(field, _)| format!("'{}'", dbf_notice_name(&field.name)))
         .collect();
     let target: String = target.chars().map(dbf_notice_char).collect();
@@ -8335,7 +8340,7 @@ mod tests {
         assert_eq!(column("name"), Some(vec![text("a"), Value::Null, text("b")]));
         assert_eq!(column("note"), Some(vec![text("padded"), text(""), text("")]));
         assert_eq!(column("code"), Some(vec![Value::Int(1), Value::Null, Value::Int(2)]));
-        assert_eq!(column("gone"), None);
+        assert_eq!(column("gone"), Some(vec![Value::Null; 3]));
         assert_eq!(column("description"), Some(vec![text(" kept "), text(""), Value::Null]));
         let clean = text_layer(&["name", "note"], &[&[Some("a"), Some("")], &[None, Some("x")]]);
         assert!(text_notes(&clean, "kml").is_empty());
@@ -8635,7 +8640,7 @@ mod tests {
     }
 
     #[test]
-    fn kml_and_kmz_name_fields_missing_from_exported_placemarks() {
+    fn kml_and_kmz_keep_fields_without_values_in_exported_placemarks() {
         let mut ds =
             Dataset::new("parcels", GeometryType::Point, vec![Field::new("a", FieldType::Integer), Field::new("empty", FieldType::Text)]);
         ds.push(Some(Geometry::Point(Coord::new(1.0, 2.0))), vec![Value::Int(1), Value::Null]);
@@ -8645,10 +8650,18 @@ mod tests {
             let (bytes, _) = write_bytes(&ds, ext).unwrap();
             let back = &crate::kml::read(&target, &bytes).unwrap()[0].dataset;
             assert!(back.field_index("a").is_some());
-            assert!(back.field_index("empty").is_none());
-            assert_eq!(
-                export_losses_notes(&ds, ext, None, &target).unwrap(),
-                [format!("{target}: KML omitted 1 field with no values in the placemarks written ('empty')")]
+            let empty = back.field_index("empty").unwrap();
+            assert_eq!(back.features.value(0, empty), &Value::Null);
+            assert!(export_losses_notes(&ds, ext, None, &target).unwrap().is_empty());
+        }
+        // An empty declaration that coalesces with a fixed KML column still needs its notice.
+        for name in ["NAME", "Folder", "STYLE", "folder", "description"] {
+            let mut reserved = Dataset::new("reserved", GeometryType::Point, vec![Field::new(name, FieldType::Integer)]);
+            reserved.push(Some(Geometry::Point(Coord::new(1.0, 2.0))), vec![Value::Null]);
+            let notes = export_losses_notes(&reserved, "kml", None, "reserved.kml").unwrap();
+            assert!(
+                notes.iter().any(|n| n.contains(&format!("KML omitted 1 field with no values in the placemarks written ('{name}')"))),
+                "{notes:?}"
             );
         }
         ds.push(Some(Geometry::Point(Coord::new(3.0, 4.0))), vec![Value::Int(3), Value::Text("present".into())]);
@@ -8661,12 +8674,11 @@ mod tests {
             let notes = export_losses_notes(&held, ext, None, &format!("parcels.{ext}")).unwrap();
             assert!(notes.iter().all(|n| n.loss != Some(crate::loss::LossCode::DroppedFeature)), "{ext}: {notes:?}");
         }
-        // A feature with no place in longitude/latitude is written without its geometry, so no
-        // placemark holds its value: 'empty' still has none in the placemarks written.
+        // Even when no placed feature has a value, its field declaration is retained.
         held.push(Some(Geometry::Point(Coord::new(1e12, 0.0))), vec![Value::Int(4), Value::Text("lost".into())]);
         held.features[2].attrs[1] = Value::Null;
         let notes = export_losses_notes(&held, "kml", None, "parcels.kml").unwrap();
-        assert!(notes.iter().any(|n| n.contains("KML omitted 1 field with no values in the placemarks written ('empty')")), "{notes:?}");
+        assert!(notes.iter().all(|n| !n.contains("KML omitted")), "{notes:?}");
     }
 
     /// A point layer's fields named like coordinates keep their values when its CSV is read back:
