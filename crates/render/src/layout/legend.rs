@@ -974,10 +974,11 @@ pub(super) fn legend_rows_missing<'a>(
             },
             None => None,
         };
-        // Counted from the features themselves, so only a vector layer holding them (#3237).
+        // Counted from the features themselves, so only a vector layer holding all of them: a
+        // streamed one holds the view's (#3237, #3238).
         let counted = opts
             .counts
-            .filter(|_| !l.is_raster() && l.source.as_ref().and_then(|s| s.chunk_source()).is_none())
+            .filter(|_| !l.is_raster() && !l.dataset.windowed)
             .map(|env| l.counted_legend(opts.scale, env, listed.is_none(), opts.show_no_data));
         let (mut entries, total) = match counted {
             Some((entries, total)) => (entries, Some(total)),

@@ -8443,6 +8443,11 @@ fn a_legend_counts_the_features_of_each_row() {
         });
     }
     assert_eq!(rows(&mut map, false, true, &ClassLabels::NONE), ["Cities (2)", "n", "pts", "c0 (3)", "c99 (1)", "n"]);
+    // A streamed layer holds only the view's features, which are no count of the layer.
+    for l in &mut map.layers {
+        l.dataset.windowed = true;
+    }
+    assert_eq!(rows(&mut map, false, true, &ClassLabels::NONE), ["Cities", "n", "pts", "c0", "c99", "n"]);
 }
 
 /// Graduated Colors counts each range and its missing values.
