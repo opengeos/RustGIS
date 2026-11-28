@@ -705,7 +705,7 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
   each as it is. Each change is one undo step. A project with a picture that remembers its file
   can't be opened by an older RustGIS, and a layout file with one lists it in its header. In the
   browser, which has no file paths, a picture is added from the file's contents and doesn't remember
-  the file.
+  the file, and a script's `"path"` is refused before anything is read: give its `"image"`.
 - **Map Series**: one page per feature of an index layer; see [Map series](#map-series) for setup,
   page names, scales and a locator.
 - Click an element to select it, drag to move, drag its handles to resize, and edit it in the

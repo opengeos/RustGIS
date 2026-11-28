@@ -12,6 +12,9 @@ pub(in crate::cmd::layout) const PICTURE_IMAGE: &str = "image is a PNG or JPEG i
 /// A `path` that is an address, which is never tried as a file nor fetched, and never repeated
 /// (it could carry a login).
 pub(in crate::cmd::layout) const PICTURE_ADDRESS: &str = "a picture is read from a file on this computer, not a web address";
+/// A `path` given in the browser.
+pub(in crate::cmd::layout) const PICTURE_PATH_IN_BROWSER: &str =
+    "a picture's path can't be read in the browser, which has no file paths: give its image";
 /// Both `image` and `path` given.
 pub(in crate::cmd::layout) const PICTURE_BOTH: &str = "give a picture an image or a path, not both";
 
@@ -53,11 +56,19 @@ pub(crate) struct GivenPicture {
 }
 
 /// A command's `path`: none when absent or null, as given when it is text that isn't blank and
-/// isn't an address ([`rustgis_map::layout::picture_path_is_address`]); refused otherwise.
+/// isn't an address ([`rustgis_map::layout::picture_path_is_address`]); refused otherwise, and
+/// in the browser, which has no file paths, refused before anything is read
+/// ([`PICTURE_PATH_IN_BROWSER`]).
 pub(crate) fn picture_path_param(p: &Value) -> Result<Option<&str>, String> {
+    picture_path_param_in(p, cfg!(target_arch = "wasm32"))
+}
+
+/// [`picture_path_param`] in the browser (`web`) or elsewhere.
+fn picture_path_param_in(p: &Value, web: bool) -> Result<Option<&str>, String> {
     match p.get("path") {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(path)) if path.trim().is_empty() => Err(PICTURE_PATH.into()),
+        Some(Value::String(_)) if web => Err(PICTURE_PATH_IN_BROWSER.into()),
         Some(Value::String(path)) if rustgis_map::layout::picture_path_is_address(path) => Err(PICTURE_ADDRESS.into()),
         Some(Value::String(path)) => Ok(Some(path)),
         Some(_) => Err(PICTURE_PATH.into()),
@@ -104,4 +115,28 @@ pub(in crate::cmd::layout) fn picture_given(p: &Value) -> Result<Option<GivenPic
         return Err(picture_undrawn());
     }
     Ok(Some(picture))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// In the browser a path is refused before anything is read, saying why and what to give
+    /// instead; elsewhere it is taken as given. Blank, null and the wrong kind answer as anywhere.
+    #[test]
+    fn a_path_is_refused_in_the_browser_before_it_is_read() {
+        let browser = "a picture's path can't be read in the browser, which has no file paths: give its image";
+        for path in ["logo.png", "/no/such/folder/logo.png", "https://example.invalid/logo.png"] {
+            let p = serde_json::json!({"path": path});
+            assert_eq!(picture_path_param_in(&p, true), Err(browser.to_string()), "{path}");
+        }
+        assert_eq!(picture_path_param_in(&serde_json::json!({"path": "logo.png"}), false), Ok(Some("logo.png")));
+        for web in [true, false] {
+            assert_eq!(picture_path_param_in(&serde_json::json!({"path": null}), web), Ok(None));
+            assert_eq!(picture_path_param_in(&serde_json::json!({}), web), Ok(None));
+            for blank in [serde_json::json!("  "), serde_json::json!(5)] {
+                assert_eq!(picture_path_param_in(&serde_json::json!({"path": blank}), web), Err(PICTURE_PATH.to_string()));
+            }
+        }
+    }
 }

@@ -226,7 +226,7 @@ pub fn commands() -> Vec<C> {
                 r##""angle"?: degrees anticlockwise from pointing right, centred on the page unless x or y is given (line, arrow; it sets the box and the direction, so w, h and dir are not used with it), "##,
                 r##""length"?: mm (line, arrow), "##,
                 r##""image"?: base64, "##,
-                r##""path"?: picture file (picture: read, and remembered as its file, so a picture whose image goes missing names it and layout.update can read it again; an address is refused, and image and path together; refused for other kinds), "##,
+                r##""path"?: picture file (picture: read, and remembered as its file, so a picture whose image goes missing names it and layout.update can read it again; an address is refused, and image and path together; refused in the browser, which has no file paths: give its image; refused for other kinds), "##,
                 r##""layer"?: (table, chart; colorbar: a raster layer, default the top visible raster with a colour scale, not drawn by classes, which a legend lists), "##,
                 r##""field"?: (chart: a numeric field, default the layer's first; any field when it groups and counts, default then the field it groups by), "##,
                 r##""label"?: a field (chart: each bar's label when not grouped), "##,
@@ -365,7 +365,7 @@ pub fn commands() -> Vec<C> {
                 r##""hideLabels"?: bool (chart, as in layout.addElement: null leaves each other one as it is; refused for other elements unless null), "##,
                 r##""rows"?, "##,
                 r##""image"?: base64 (picture: its new image, its file no longer remembered), "##,
-                r##""path"?: a PNG or JPEG file (picture: read again, its image replacing the one it has, and remembered as its file; a file missing, over 16 MB, not a PNG or JPEG, or one that can't be drawn is refused and the picture left as it was; image and path together are refused; null leaves each as it is; refused for other elements), "##,
+                r##""path"?: a PNG or JPEG file (picture: read again, its image replacing the one it has, and remembered as its file; a file missing, over 16 MB, not a PNG or JPEG, or one that can't be drawn is refused and the picture left as it was; image and path together are refused; refused in the browser, which has no file paths: give its image; null leaves each as it is; refused for other elements), "##,
                 r##""background"?: {"fill"?, "outline"?, "width"?, "radius"?, "padding"?, as in layout.addElement, the keys not given keeping theirs} | null (removes it); a map frame takes none}"##,
             ),
 
