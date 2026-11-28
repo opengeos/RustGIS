@@ -132,7 +132,22 @@ fn a_large_value_or_shape_is_not_copied_for_a_download() {
         check(name, grew);
     }
 
-    // So is a shape that would fit only if what the `.dbf` holds weren't counted: the peak grows
+    // A shape with no vertex to write is left out without copying its points, though the layer's
+    // other shape makes the file.
+    let nowhere = || vec![Coord::new(f64::NAN, 1.5); ITEM / 16];
+    for (name, empty, drawn) in [
+        ("empty Shapefile line", Geometry::Line(vec![nowhere()]), Geometry::Line(vec![vec![Coord::new(1.0, 2.0), Coord::new(3.0, 4.0)]])),
+        ("empty Shapefile multipoint", Geometry::MultiPoint(nowhere()), Geometry::MultiPoint(vec![Coord::new(1.0, 2.0)])),
+    ] {
+        let mut ds = layer(empty, "note", String::new());
+        ds.push(Some(drawn), vec![Value::Text(String::new())]);
+        let grew = growth(|| {
+            rustgis_data::io::write_bytes_noted_within(&ds, "shp", Crs::LonLat, "t", &Limit::new(ROOM)).unwrap();
+        });
+        check(name, grew);
+    }
+
+    // A shape is also refused early that would fit only if what the `.dbf` holds weren't counted: the peak grows
     // by little more than the table.
     let ds = large_shape_after_a_large_table(vertices());
     let limit = Limit::new(SHARED_ROOM);

@@ -6556,8 +6556,12 @@ fn shapefile_parts_within(
                 }
                 (Some(g @ (Geometry::Point(_) | Geometry::MultiPoint(_))), GeometryType::Point) => {
                     let mut pts = Vec::new();
-                    g.for_each_coord(|c| pts.push(c));
-                    let pts: Vec<shapefile::Point> = pts.iter().filter(finite).map(pt).collect();
+                    // The finite ones alone, whose record the limit has been checked for.
+                    g.for_each_coord(|c| {
+                        if finite(&&c) {
+                            pts.push(pt(&c));
+                        }
+                    });
                     if pts.is_empty() {
                         false
                     } else {
