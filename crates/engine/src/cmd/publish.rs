@@ -106,34 +106,26 @@ pub(crate) fn publish_work(s: &Session, p: &Value) -> Result<super::exports::Wor
             let publish =
                 if path.to_ascii_lowercase().ends_with(".shp") { rustgis_data::publish::shapefile } else { rustgis_data::publish::geojson };
             let published = publish(&dataset, std::path::Path::new(&path), &synced).map_err(|e| e.to_string())?;
-            // The layer as the file now reads it, its features keeping their ids: what the layer
-            // holds once published, and its record (the file reads so next time too).
-            let mut held = dataset.clone();
-            let ids: Vec<u64> = dataset.features.iter().map(|f| f.id).collect();
-            held.features = published
-                .read
-                .features
-                .iter()
-                .zip(&ids)
-                .map(|(f, id)| rustgis_data::Feature { id: *id, ..f.clone() })
-                .collect::<Vec<_>>()
-                .into();
-            held.fields = published.read.fields.clone();
-            for field in &mut held.fields {
-                if let Some(was) = dataset.fields.iter().find(|was| was.name == field.name) {
-                    field.alias = was.alias.clone();
-                }
-            }
-            held.crs = published.read.crs;
-            // In the system the file is read in, which a layer a project saved before RustGIS
-            // kept a file's own coordinates (held in longitude/latitude) takes with them.
-            held.held_in = published.read.coord_crs();
             // Already hashed before the files were placed: Cancel must not leave a successful
             // write without its sync record. Feature ids do not contribute to the digest.
             let new = rustgis_data::sync::Synced { files: published.files, rows: published.rows, native: published.native };
             // Unchanged when the file reads as the layer is: compared by the digest of the kind
             // the new record keeps, hashed above.
-            let held = (of_kind(new.native.is_some()) != Some(new.digest())).then_some(held);
+            let held = (of_kind(new.native.is_some()) != Some(new.digest())).then(|| {
+                // The layer as the file now reads it, its features keeping their ids: move the
+                // freshly read dataset in place rather than cloning every feature.
+                let mut read = published.read;
+                read.features.copy_ids_from(&dataset.features);
+                for field in &mut read.fields {
+                    if let Some(was) = dataset.fields.iter().find(|was| was.name == field.name) {
+                        field.alias = was.alias.clone();
+                    }
+                }
+                // In the system the file is read in, which a layer a project saved before RustGIS
+                // kept a file's own coordinates (held in longitude/latitude) takes with them.
+                read.held_in = read.coord_crs();
+                read
+            });
             let (said, written_path) = (path.clone(), Some(path.clone()));
             let then: Then = Box::new(move |s: &mut Session, _: &mut Value| {
                 let mark = s.notice_mark();

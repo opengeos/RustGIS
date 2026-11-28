@@ -1305,15 +1305,18 @@ fn kmeans_on(threads: Option<usize>, r: &Raster, bands: &[usize], k: usize, iter
         true
     };
     // Seeds spread across the value range of the first band.
-    let valid: Vec<usize> = (0..n).step_by((n / 20_000).max(1)).filter(|i| pixel(*i).is_some()).collect();
+    let is_valid_pixel = |i: usize| data.iter().all(|d| d.get(i).copied().is_some_and(|v| r.is_valid(v)));
+    let valid: Vec<usize> = (0..n).step_by((n / 20_000).max(1)).filter(|i| is_valid_pixel(*i)).collect();
     if valid.len() < k {
         return Err("too few valid pixels to classify".into());
     }
+    let band0 = data.first().copied().unwrap_or(&[]);
+    let norm = |v: f32| if v == 0.0 { 0.0 } else { v };
     let mut sorted = valid.clone();
     sorted.sort_by(|a, b| {
-        let (va, vb) =
-            (pixel(*a).and_then(|p| p.first().copied()).unwrap_or(0.0), pixel(*b).and_then(|p| p.first().copied()).unwrap_or(0.0));
-        va.partial_cmp(&vb).unwrap_or(std::cmp::Ordering::Equal)
+        let va = norm(band0.get(*a).copied().unwrap_or(0.0));
+        let vb = norm(band0.get(*b).copied().unwrap_or(0.0));
+        va.total_cmp(&vb)
     });
     let mut centres: Vec<Vec<f64>> =
         (0..k).filter_map(|i| sorted.get((i * 2 + 1) * sorted.len() / (2 * k)).and_then(|j| pixel(*j))).collect();
@@ -1324,10 +1327,15 @@ fn kmeans_on(threads: Option<usize>, r: &Raster, bands: &[usize], k: usize, iter
             .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
             .map_or(0, |x| x.0)
     };
+    let mut sums = vec![vec![0.0; data.len()]; centres.len()];
+    let mut counts = vec![0usize; centres.len()];
+    let mut p = Vec::with_capacity(data.len());
     for _ in 0..iterations.clamp(1, 50) {
-        let mut sums = vec![vec![0.0; data.len()]; centres.len()];
-        let mut counts = vec![0usize; centres.len()];
-        let mut p = Vec::with_capacity(data.len());
+        crate::control::check()?;
+        for s in &mut sums {
+            s.fill(0.0);
+        }
+        counts.fill(0);
         for i in &valid {
             if pixel_into(*i, &mut p) {
                 let c = nearest(&p, &centres);
@@ -1339,7 +1347,10 @@ fn kmeans_on(threads: Option<usize>, r: &Raster, bands: &[usize], k: usize, iter
         }
         for ((c, s), n) in centres.iter_mut().zip(&sums).zip(&counts) {
             if *n > 0 {
-                *c = s.iter().map(|v| v / *n as f64).collect();
+                let count = *n as f64;
+                for (cv, sv) in c.iter_mut().zip(s) {
+                    *cv = *sv / count;
+                }
             }
         }
     }
@@ -2744,6 +2755,22 @@ mod tests {
         run.cancel();
         let _installed = crate::control::install(Some(run));
         assert_eq!(kmeans_on(Some(4), &r, &[0, 1, 2], 7, 10).unwrap_err(), crate::control::CANCELLED);
+        drop(_installed);
+        // Cancellation inside the k-means iteration loop stops before assigning rows.
+        let mid = crate::control::Control::cancelled_at_look(3);
+        let _installed = crate::control::install(Some(mid.clone()));
+        assert_eq!(kmeans_on(Some(1), &r, &[0, 1, 2], 7, 10).unwrap_err(), crate::control::CANCELLED);
+        assert_eq!(mid.looked(), 3);
+    }
+
+    #[test]
+    fn kmeans_seed_sort_treats_negative_and_positive_zero_as_equal() {
+        let gt = GeoTransform { origin_x: 0.0, origin_y: 1.0, pixel_width: 1.0, pixel_height: -1.0 };
+        let band0 = vec![0.0, 0.0, 0.0, 0.0, 0.0, -0.0, -0.0, -0.0];
+        let band1 = vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0];
+        let r = Raster::new("zeros", 8, 1, vec![band0, band1], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
+        let classes = kmeans_on(Some(1), &r, &[0, 1], 2, 1).unwrap();
+        assert_eq!(classes, vec![1.0, 1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0]);
     }
 
     /// Zonal means test only the cells in their zone's window (#1252), and give what testing

@@ -260,6 +260,18 @@ impl Features {
         }
     }
 
+    /// Copies each row's id from the matching row of `other`, truncating to `other.len()` if
+    /// `self` has more rows. Updates in place when these rows aren't shared.
+    pub fn copy_ids_from(&mut self, other: &Features) {
+        let keep = self.rows.len().min(other.rows.len());
+        self.max_id = None;
+        let rows = self.rows_mut();
+        rows.truncate(keep);
+        for (dst, src) in rows.iter_mut().zip(other.rows.iter()) {
+            dst.id = src.id;
+        }
+    }
+
     /// A copy of every row as a [`Feature`]: for tests and for code that needs the rows as a list,
     /// at the cost of building it.
     pub fn to_rows(&self) -> Vec<Feature> {
@@ -428,6 +440,27 @@ mod tests {
         ds.features.push_row(Feature { id: 40, geometry: None, attrs: vec![Value::Null, Value::Null] });
         ds.push(None, vec![]);
         assert_eq!(ds.features.rows().map(|r| r.id()).collect::<Vec<_>>(), [1, 40, 41]);
+    }
+
+    #[test]
+    fn copy_ids_from_updates_in_place_when_unshared_and_truncates_to_source() {
+        let mut src = layer();
+        src.features.truncate_rows(2);
+        src.features.push_row(Feature { id: 99, geometry: None, attrs: vec![Value::Text("z".into()), Value::Int(9)] });
+        // `dst` is exclusively owned, so copying ids updates in place without firing the copy hook.
+        let mut dst = layer();
+        let (_, fired) = crate::before_rows_copy(Box::new(|| {}), || dst.features.copy_ids_from(&src.features));
+        assert!(!fired);
+        assert_eq!(dst.features.rows().map(|r| r.id()).collect::<Vec<_>>(), [1, 2, 99]);
+        // `max_id` was cleared, so a new push takes an id above 99.
+        dst.push(None, vec![Value::Text("d".into()), Value::Int(4)]);
+        assert_eq!(dst.features.rows().map(|r| r.id()).collect::<Vec<_>>(), [1, 2, 99, 100]);
+        // Shared `dst` copies on write and truncates when `src` has fewer rows.
+        let shared = dst.features.clone();
+        let (_, fired) = crate::before_rows_copy(Box::new(|| {}), || dst.features.copy_ids_from(&src.features));
+        assert!(fired);
+        assert_eq!(dst.features.len(), 3);
+        assert_eq!(shared.len(), 4);
     }
 }
 

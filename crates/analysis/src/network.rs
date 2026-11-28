@@ -382,24 +382,96 @@ fn snap_window(p: Coord, m: f64) -> Option<[f64; 4]> {
     (p.x - dlon > -180.0 && p.x + dlon < 180.0).then_some([p.x - dlon, p.x + dlon, p.y - dlat, p.y + dlat])
 }
 
-/// Runs the original search on a private copy, so endpoint attachments never leak across calls.
-/// Cloning the node and adjacency vectors is one step without a Cancel check inside it.
+/// Per-query endpoint attachments layered over the shared [`Network`] without cloning its node or
+/// adjacency vectors: at most two virtual snapped nodes (`base_n`, `base_n + 1`) and at most ten
+/// extra directed edges (four per interior snap, plus two for a direct same-segment link).
+struct ExtraGraph {
+    base_n: usize,
+    nodes: [Coord; 2],
+    node_len: usize,
+    edges: [(usize, Edge); 10],
+    edge_len: usize,
+    /// Base nodes (`< base_n`) that have at least one outgoing edge in `edges`.
+    base_sources: [usize; 6],
+    base_source_len: usize,
+}
+
+impl ExtraGraph {
+    fn new(base_n: usize) -> Self {
+        Self {
+            base_n,
+            nodes: [Coord::new(0.0, 0.0); 2],
+            node_len: 0,
+            edges: [(0, (0, 0.0, 0.0, 0)); 10],
+            edge_len: 0,
+            base_sources: [0; 6],
+            base_source_len: 0,
+        }
+    }
+
+    fn total_nodes(&self) -> usize {
+        self.base_n + self.node_len
+    }
+
+    fn push_node(&mut self, c: Coord) -> Option<usize> {
+        let slot = self.nodes.get_mut(self.node_len)?;
+        *slot = c;
+        let id = self.base_n + self.node_len;
+        self.node_len += 1;
+        Some(id)
+    }
+
+    fn push_edge(&mut self, from: usize, edge: Edge) {
+        if let Some(slot) = self.edges.get_mut(self.edge_len) {
+            *slot = (from, edge);
+            self.edge_len += 1;
+        }
+        if from < self.base_n
+            && let Some(seen) = self.base_sources.get(..self.base_source_len)
+            && !seen.contains(&from)
+            && let Some(slot) = self.base_sources.get_mut(self.base_source_len)
+        {
+            *slot = from;
+            self.base_source_len += 1;
+        }
+    }
+
+    fn coord(&self, graph: &Network, id: usize) -> Option<Coord> {
+        if id < self.base_n {
+            graph.nodes.get(id).copied()
+        } else {
+            let idx = id - self.base_n;
+            (idx < self.node_len).then(|| self.nodes.get(idx).copied()).flatten()
+        }
+    }
+
+    fn has_edges(&self, u: usize) -> bool {
+        u >= self.base_n || self.base_sources.get(..self.base_source_len).is_some_and(|s| s.contains(&u))
+    }
+
+    fn edges(&self) -> &[(usize, Edge)] {
+        self.edges.get(..self.edge_len).unwrap_or(&[])
+    }
+}
+
+/// Searches the shared graph directly with a tiny overlay for snapped endpoints, so endpoint
+/// attachments never leak across calls and the node and adjacency vectors are never cloned.
 fn route_on(graph: &Network, ds: &Dataset, from: Coord, to: Coord, snap_m: f64) -> Result<Route, String> {
     crate::control::check()?;
-    let mut nodes = graph.nodes.clone();
-    let mut adj = graph.adj.clone();
     let segs = &graph.segs;
     let skipped_segments = graph.skipped_segments;
     let route_error = |reason, skipped| route_error(ds, reason, skipped, graph.overflowing);
-    let nearest = |p: Coord, nodes: &[Coord]| nearest_segment(segs, nodes, p, None);
+    if segs.is_empty() {
+        return Err(route_error("the layer has no lines".into(), skipped_segments));
+    }
+    let too_far =
+        || route_error(format!("a route end is more than {} from the network", rustgis_geom::format_distance(snap_m)), skipped_segments);
+    let mut extra = ExtraGraph::new(graph.nodes.len());
     // Each end becomes a node on its segment, joined to the segment's two ends.
-    let attach = |p: Coord, nodes: &mut Vec<Coord>, adj: &mut Vec<Vec<Edge>>| -> Result<(usize, usize, f64), String> {
-        let (si, t, q, d) = nearest(p, nodes)?.ok_or_else(|| route_error("the layer has no lines".into(), skipped_segments))?;
+    let mut attach = |p: Coord| -> Result<(usize, usize, f64), String> {
+        let (si, t, q, d) = nearest_segment(segs, &graph.nodes, p, Some(snap_m))?.ok_or_else(too_far)?;
         if d > snap_m {
-            return Err(route_error(
-                format!("a route end is more than {} from the network", rustgis_geom::format_distance(snap_m)),
-                skipped_segments,
-            ));
+            return Err(too_far());
         }
         let &(a, b, weight, row) = segs.get(si).ok_or_else(|| route_error("the layer has no lines".into(), skipped_segments))?;
         if t <= 0.0 {
@@ -408,36 +480,26 @@ fn route_on(graph: &Network, ds: &Dataset, from: Coord, to: Coord, snap_m: f64) 
         if t >= 1.0 {
             return Ok((b, si, t));
         }
-        nodes.push(q);
-        adj.push(Vec::new());
-        let n = nodes.len() - 1;
+        let n = extra.push_node(q).ok_or_else(|| route_error("the layer has no lines".into(), skipped_segments))?;
         for end in [a, b] {
-            let len = wgs84_distance_m(q, nodes.get(end).copied().unwrap_or(q));
-            if let Some(v) = adj.get_mut(n) {
-                v.push((end, len * weight, len, row));
-            }
-            if let Some(v) = adj.get_mut(end) {
-                v.push((n, len * weight, len, row));
-            }
+            let len = wgs84_distance_m(q, graph.nodes.get(end).copied().unwrap_or(q));
+            extra.push_edge(n, (end, len * weight, len, row));
+            extra.push_edge(end, (n, len * weight, len, row));
         }
         Ok((n, si, t))
     };
-    let (s, s_seg, s_t) = attach(from, &mut nodes, &mut adj)?;
-    let (t, t_seg, t_t) = attach(to, &mut nodes, &mut adj)?;
+    let (s, s_seg, s_t) = attach(from)?;
+    let (t, t_seg, t_t) = attach(to)?;
     // Both ends on one segment: they're joined directly along it.
     if s_seg == t_seg && s != t && (0.0..=1.0).contains(&s_t) && (0.0..=1.0).contains(&t_t) {
-        let (Some(&(_, _, weight, row)), Some(a), Some(b)) = (segs.get(s_seg), nodes.get(s).copied(), nodes.get(t).copied()) else {
+        let (Some(&(_, _, weight, row)), Some(a), Some(b)) = (segs.get(s_seg), extra.coord(graph, s), extra.coord(graph, t)) else {
             return Err(route_error("the layer has no lines".into(), skipped_segments));
         };
         let len = wgs84_distance_m(a, b);
-        if let Some(v) = adj.get_mut(s) {
-            v.push((t, len * weight, len, row));
-        }
-        if let Some(v) = adj.get_mut(t) {
-            v.push((s, len * weight, len, row));
-        }
+        extra.push_edge(s, (t, len * weight, len, row));
+        extra.push_edge(t, (s, len * weight, len, row));
     }
-    let n = nodes.len();
+    let n = extra.total_nodes();
     let mut dist = vec![f64::INFINITY; n];
     let mut prev: Vec<Option<(usize, f64, usize)>> = vec![None; n];
     let mut heap = BinaryHeap::new();
@@ -446,7 +508,7 @@ fn route_on(graph: &Network, ds: &Dataset, from: Coord, to: Coord, snap_m: f64) 
         *d = 0.0;
     }
     heap.push(State(0.0, s));
-    crate::control::begin(nodes.len());
+    crate::control::begin(n);
     let mut visited = 0;
     let mut pace = crate::control::Pace::default();
     while let Some(State(d, u)) = heap.pop() {
@@ -459,7 +521,7 @@ fn route_on(graph: &Network, ds: &Dataset, from: Coord, to: Coord, snap_m: f64) 
         if d > dist.get(u).copied().unwrap_or(f64::INFINITY) {
             continue;
         }
-        for &(v, c, len, row) in adj.get(u).map(Vec::as_slice).unwrap_or(&[]) {
+        let mut relax = |(v, c, len, row): Edge| -> Result<(), String> {
             if pace.stop(4096) {
                 return Err(crate::control::Cancelled.into());
             }
@@ -475,6 +537,17 @@ fn route_on(graph: &Network, ds: &Dataset, from: Coord, to: Coord, snap_m: f64) 
                     *x = Some((u, len, row));
                 }
                 heap.push(State(nd, v));
+            }
+            Ok(())
+        };
+        for &edge in graph.adj.get(u).map(Vec::as_slice).unwrap_or(&[]) {
+            relax(edge)?;
+        }
+        if extra.has_edges(u) {
+            for &(src, edge) in extra.edges() {
+                if src == u {
+                    relax(edge)?;
+                }
             }
         }
     }
@@ -493,10 +566,10 @@ fn route_on(graph: &Network, ds: &Dataset, from: Coord, to: Coord, snap_m: f64) 
     let mut length = 0.0;
     let mut used = Vec::new();
     let mut at = t;
-    path.push(nodes.get(t).copied().unwrap_or(to));
+    path.push(extra.coord(graph, t).unwrap_or(to));
     while let Some(Some((p, len, row))) = prev.get(at) {
         crate::control::check()?;
-        path.push(nodes.get(*p).copied().unwrap_or(from));
+        path.push(extra.coord(graph, *p).unwrap_or(from));
         length += len;
         if used.last() != Some(row) {
             used.push(*row);
@@ -1899,5 +1972,33 @@ mod tests {
         let mut ds = Dataset::new("legacy prefilter", GeometryType::Point, vec![]);
         ds.push(Some(Geometry::Point(point)), vec![]);
         assert!(within(&ds, &[0], center, 100_000.0).is_empty());
+    }
+
+    #[test]
+    fn route_overlay_handles_empty_far_same_segment_and_endpoint_snaps() {
+        let cache = Mutex::new(None);
+        let empty = Dataset::new("empty", GeometryType::Polyline, vec![]);
+        let err = shortest_route_with(&cache, &empty, &[], Coord::new(0.0, 0.0), Coord::new(0.1, 0.0), None, 100.0).unwrap_err();
+        assert!(err.contains("the layer has no lines"), "{err}");
+
+        let mut ds = Dataset::new("roads", GeometryType::Polyline, vec![]);
+        ds.push(Some(Geometry::Line(vec![vec![Coord::new(0.0, 0.0), Coord::new(0.1, 0.0)]])), vec![]);
+        // Outside snap window: still reports the snap-distance error rather than "no lines".
+        let far = shortest_route_with(&cache, &ds, &[0], Coord::new(5.0, 5.0), Coord::new(0.05, 0.0), None, 50.0).unwrap_err();
+        assert!(far.contains("more than"), "{far}");
+
+        // Reverse direction along the same segment (interior to interior) and vertex-to-interior.
+        let rev = shortest_route_with(&cache, &ds, &[0], Coord::new(0.07, 0.0), Coord::new(0.02, 0.0), None, 50.0).unwrap();
+        let expected_rev = wgs84_distance_m(Coord::new(0.07, 0.0), Coord::new(0.02, 0.0));
+        assert!((rev.length_m - expected_rev).abs() < 1e-6 && rev.path.len() == 2, "{rev:?}");
+
+        let v2i = shortest_route_with(&cache, &ds, &[0], Coord::new(0.0, 0.0), Coord::new(0.04, 0.0), None, 50.0).unwrap();
+        let expected_v2i = wgs84_distance_m(Coord::new(0.0, 0.0), Coord::new(0.04, 0.0));
+        assert!((v2i.length_m - expected_v2i).abs() < 1e-6 && v2i.path.len() == 2, "{v2i:?}");
+
+        // Vertex to vertex on the same segment.
+        let v2v = shortest_route_with(&cache, &ds, &[0], Coord::new(0.0, 0.0), Coord::new(0.1, 0.0), None, 50.0).unwrap();
+        let expected_v2v = wgs84_distance_m(Coord::new(0.0, 0.0), Coord::new(0.1, 0.0));
+        assert!((v2v.length_m - expected_v2v).abs() < 1e-6 && v2v.path.len() == 2, "{v2v:?}");
     }
 }

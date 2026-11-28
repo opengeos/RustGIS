@@ -53,7 +53,7 @@ pub enum Expr {
     },
     Like {
         field: usize,
-        pattern: String,
+        pattern: LikePattern,
         negate: bool,
     },
     IsNull {
@@ -109,6 +109,32 @@ pub enum Op {
     Le,
     Gt,
     Ge,
+}
+
+/// Pre-lowercased `LIKE` pattern kept on [`Expr::Like`] so row evaluation avoids re-allocating
+/// and re-lowercasing the constant pattern on every row.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LikePattern {
+    kind: CompiledLike,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum CompiledLike {
+    /// Pure ASCII pattern, already lowercased to ASCII bytes.
+    Ascii(Vec<u8>),
+    /// Pattern containing non-ASCII characters, already lowercased to `char`s.
+    Unicode(Vec<char>),
+}
+
+impl LikePattern {
+    fn compile(pat: &str) -> Self {
+        let kind = if pat.is_ascii() {
+            CompiledLike::Ascii(pat.bytes().map(|b| b.to_ascii_lowercase()).collect())
+        } else {
+            CompiledLike::Unicode(pat.to_lowercase().chars().collect())
+        };
+        Self { kind }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1101,7 +1127,9 @@ impl Parser<'_> {
             self.note_compared_as(&l, true);
             let p = self.concat()?;
             return Ok(match (l, p) {
-                (Expr::Field(field), Expr::Lit(Value::Text(pattern))) => Expr::Like { field, pattern, negate },
+                (Expr::Field(field), Expr::Lit(Value::Text(pattern))) => {
+                    Expr::Like { field, pattern: LikePattern::compile(&pattern), negate }
+                }
                 (e, p) => Expr::LikeExpr { e: Box::new(e), pattern: Box::new(p), negate },
             });
         }
@@ -1600,11 +1628,15 @@ fn parse_expression(text: &str, ds: &Dataset, validate_areas: bool) -> Result<Ex
 /// SQL `=`: dates by instant (against dates or date text), numbers as numbers, otherwise text
 /// ignoring case.
 fn eq(a: &Value, b: &Value) -> bool {
-    if let Some((x, y)) = a.temporal_keys(b) {
-        return x == y;
+    // Fast paths for same-type text and integer values (neither is a date/date-time).
+    if let (Value::Text(x), Value::Text(y)) = (a, b) {
+        return x.eq_ignore_ascii_case(y);
     }
     // Whole numbers compare exactly: through f64, neighbours above 2^53 would be equal.
     if let (Value::Int(x), Value::Int(y)) = (a, b) {
+        return x == y;
+    }
+    if let Some((x, y)) = a.temporal_keys(b) {
         return x == y;
     }
     match (a.as_f64(), b.as_f64()) {
@@ -1668,10 +1700,41 @@ fn like_within(text: &str, pat: &str, budget: &Cell<usize>) -> Option<bool> {
     m
 }
 
+/// [`like_within`] against a pre-compiled [`LikePattern`].
+fn like_within_compiled(text: &str, pat: &LikePattern, budget: &Cell<usize>) -> Option<bool> {
+    let had = budget.get();
+    if had == 0 {
+        return None;
+    }
+    let mut left = had.min(MAX_LIKE_STEPS);
+    let start = left;
+    let m = match &pat.kind {
+        CompiledLike::Ascii(p) if text.is_ascii() => like_steps_ascii::<true>(text.as_bytes(), p, &mut left),
+        CompiledLike::Ascii(p) => {
+            let t: Vec<char> = text.to_lowercase().chars().collect();
+            like_steps_chars(&t, p, &mut left)
+        }
+        CompiledLike::Unicode(p) => {
+            let t: Vec<char> = text.to_lowercase().chars().collect();
+            like_steps_chars(&t, p, &mut left)
+        }
+    };
+    budget.set(had - (start - left));
+    m
+}
+
 /// [`like_within`], counting its steps down in `left`.
 fn like_steps(text: &str, pat: &str, left: &mut usize) -> Option<bool> {
+    if text.is_ascii() && pat.is_ascii() {
+        return like_steps_ascii::<false>(text.as_bytes(), pat.as_bytes(), left);
+    }
     let t: Vec<char> = text.to_lowercase().chars().collect();
     let p: Vec<char> = pat.to_lowercase().chars().collect();
+    like_steps_chars(&t, &p, left)
+}
+
+/// Zero-allocation ASCII `LIKE` matching with identical step accounting to [`like_steps_chars`].
+fn like_steps_ascii<const P_LOWERED: bool>(t: &[u8], p: &[u8], left: &mut usize) -> Option<bool> {
     // Iterative wildcard matching with backtracking on the last '%'.
     let (mut ti, mut pi) = (0usize, 0usize);
     let (mut star, mut mark) = (None::<usize>, 0usize);
@@ -1681,12 +1744,54 @@ fn like_steps(text: &str, pat: &str, left: &mut usize) -> Option<bool> {
         }
         *left -= 1;
         match p.get(pi) {
+            Some(&b'%') => {
+                star = Some(pi);
+                mark = ti;
+                pi += 1;
+            }
+            Some(&pc) => {
+                let pc = if P_LOWERED { pc } else { pc.to_ascii_lowercase() };
+                if pc == b'_' || t.get(ti).is_some_and(|tb| tb.to_ascii_lowercase() == pc) {
+                    ti += 1;
+                    pi += 1;
+                } else if let Some(s) = star {
+                    pi = s + 1;
+                    mark += 1;
+                    ti = mark;
+                } else {
+                    return Some(false);
+                }
+            }
+            None => match star {
+                Some(s) => {
+                    pi = s + 1;
+                    mark += 1;
+                    ti = mark;
+                }
+                None => return Some(false),
+            },
+        }
+    }
+    Some(p.get(pi..).is_some_and(|rest| rest.iter().all(|c| *c == b'%')))
+}
+
+/// Unicode `LIKE` matching over pre-lowercased character slices.
+fn like_steps_chars<P: Copy + Into<char>>(t: &[char], p: &[P], left: &mut usize) -> Option<bool> {
+    // Iterative wildcard matching with backtracking on the last '%'.
+    let (mut ti, mut pi) = (0usize, 0usize);
+    let (mut star, mut mark) = (None::<usize>, 0usize);
+    while ti < t.len() {
+        if *left == 0 {
+            return None;
+        }
+        *left -= 1;
+        match p.get(pi).map(|&c| c.into()) {
             Some('%') => {
                 star = Some(pi);
                 mark = ti;
                 pi += 1;
             }
-            Some(c) if *c == '_' || Some(c) == t.get(ti) => {
+            Some(c) if c == '_' || Some(&c) == t.get(ti) => {
                 ti += 1;
                 pi += 1;
             }
@@ -1700,7 +1805,7 @@ fn like_steps(text: &str, pat: &str, left: &mut usize) -> Option<bool> {
             },
         }
     }
-    Some(p.get(pi..).is_some_and(|rest| rest.iter().all(|c| *c == '%')))
+    Some(p.get(pi..).is_some_and(|rest| rest.iter().all(|&c| c.into() == '%')))
 }
 
 /// Whether any branch can read polygon area, including unit-converted area functions.
@@ -2002,7 +2107,15 @@ impl<'a> Eval<'a> {
                 if v.is_null() || self.like_steps.get() == 0 {
                     return None;
                 }
-                like_within(&v.to_string(), pattern, &self.like_steps).map(|m| m != *negate)
+                let owned;
+                let text = match v {
+                    Value::Text(s) => s.as_str(),
+                    other => {
+                        owned = other.to_string();
+                        owned.as_str()
+                    }
+                };
+                like_within_compiled(text, pattern, &self.like_steps).map(|m| m != *negate)
             }
             Expr::In { field, values, negate } => {
                 let v = ds.value(row, *field);
@@ -2024,12 +2137,27 @@ impl<'a> Eval<'a> {
                 if v.is_null() || p.is_null() {
                     return None;
                 }
-                let p = p.to_string();
+                let p_owned;
+                let p_str = match &*p {
+                    Value::Text(s) => s.as_str(),
+                    other => {
+                        p_owned = other.to_string();
+                        p_owned.as_str()
+                    }
+                };
                 // A longer pattern matches nothing, so NOT LIKE holds.
-                if p.chars().count() > MAX_LEN {
+                if p_str.chars().count() > MAX_LEN {
                     return Some(*negate);
                 }
-                like_within(&v.to_string(), &p, &self.like_steps).map(|m| m != *negate)
+                let v_owned;
+                let v_str = match &*v {
+                    Value::Text(s) => s.as_str(),
+                    other => {
+                        v_owned = other.to_string();
+                        v_owned.as_str()
+                    }
+                };
+                like_within(v_str, p_str, &self.like_steps).map(|m| m != *negate)
             }
             Expr::InExpr { e, list, negate } => {
                 let v = self.value(e);

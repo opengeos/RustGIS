@@ -943,3 +943,32 @@ fn errors_say_why_they_are_null() {
     }
     assert_eq!(why("sqrt(0)", 0), (Value::Float(0.0), None));
 }
+
+#[test]
+fn text_equality_and_like_preserve_unicode_and_numeric_semantics() {
+    let mut d = Dataset::new(
+        "places",
+        GeometryType::None,
+        vec![Field::new("name", FieldType::Text), Field::new("code", FieldType::Text), Field::new("pop", FieldType::Integer)],
+    );
+    d.push(None, vec![Value::Text("California".into()), Value::Text("1".into()), Value::Int(2100)]);
+    d.push(None, vec![Value::Text("İstanbul".into()), Value::Text("1.0".into()), Value::Int(500)]);
+    d.push(None, vec![Value::Text("München".into()), Value::Text("é".into()), Value::Int(230)]);
+    d.push(None, vec![Value::Text("New York".into()), Value::Text("2026-01-01".into()), Value::Null]);
+
+    // Text-to-text equality is case-insensitive ASCII and never parses numbers or dates.
+    assert_eq!(select("name = 'california'", &d).unwrap(), vec![0]);
+    assert_eq!(select("code = '1.0'", &d).unwrap(), vec![1]);
+    assert_eq!(select("code = '1'", &d).unwrap(), vec![0]);
+    assert_eq!(select("code = '2026-01-01T00:00:00Z'", &d).unwrap(), Vec::<usize>::new());
+    // Text against numeric literal still compares numerically.
+    assert_eq!(select("code = 1", &d).unwrap(), vec![0, 1]);
+
+    // LIKE handles ASCII fast-path, ASCII pattern against Unicode text, Unicode pattern, and non-text fields.
+    assert_eq!(select("name LIKE '%york%'", &d).unwrap(), vec![3]);
+    assert_eq!(select("name LIKE '%i%'", &d).unwrap(), vec![0, 1]);
+    assert_eq!(select("code LIKE '_'", &d).unwrap(), vec![0, 2]);
+    assert_eq!(select("name LIKE 'MÜ%'", &d).unwrap(), vec![2]);
+    assert_eq!(select("pop LIKE '21%'", &d).unwrap(), vec![0]);
+    assert_eq!(select("name NOT LIKE '%york%'", &d).unwrap(), vec![0, 1, 2]);
+}
