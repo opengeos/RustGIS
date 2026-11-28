@@ -459,14 +459,15 @@ fn a_bad_file_is_refused_and_the_picture_left_as_it_was() {
         assert_eq!(e, said);
         assert!(state(&s) == before, "{said}: the picture changed");
     }
-    // An address with one slash or with backslashes is refused by both commands, never echoed.
-    for path in [r"https:\\user:pw@host\x.png", "https:/user:pw@host/x.png"] {
+    // An address with one slash or with backslashes, or a login before a host and a colon, is
+    // refused by both commands, never echoed.
+    for path in [r"https:\\user:pw@host\x.png", "https:/user:pw@host/x.png", "user:secret@example.invalid:/logo.png"] {
         for (command, p) in
             [("layout.update", json!({"element": id, "path": path})), ("layout.addElement", json!({"kind": "picture", "path": path}))]
         {
             let e = s.run(command, &p).unwrap_err();
             assert_eq!(e, "a picture is read from a file on this computer, not a web address", "{command} {path}");
-            assert!(!e.contains("pw") && !e.contains("host"), "{command}: {e}");
+            assert!(["pw", "host", "secret", "example"].iter().all(|w| !e.contains(w)), "{command}: {e}");
             assert!(state(&s) == before, "{command} {path} changed the layout");
         }
     }

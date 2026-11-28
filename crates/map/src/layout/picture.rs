@@ -21,18 +21,29 @@ pub fn picture_source_kept(path: &str) -> bool {
         && path.chars().all(|c| rustgis_data::io::dbf_notice_char(c) == c)
 }
 
-/// Whether `path` reads as an address, not a file: it holds `://` anywhere, or begins (after
-/// leading blanks) with a scheme of two or more characters (a letter, then letters, digits, `+`,
-/// `-` or `.`), a colon and a `/` or `\`. One letter is a drive (`C:\a.png`), and a name with a
-/// colon and no separator after it (`a:b.png`) is a file. A relative path whose first folder
-/// ends in a colon reads as an address: give it as `./folder:/a.png`. `mailto:a@b`,
-/// `data:image/png;base64,…` and `user:pw@host:/a.png` are left as paths: no rule tells them from
-/// a file name holding a colon, and none opens as a file unless it is one.
+/// Whether `path` reads as an address, not a file. It does when it holds `://` anywhere, or when,
+/// after leading blanks, it begins with a scheme of two or more characters (a letter, then letters,
+/// digits, `+`, `-` or `.`), a colon and a `/` or `\` (`s3:/bucket/a.png`), or its first part
+/// (all before the first `/` or `\`) holds an `@` and, after that `@`, a colon: a login before a
+/// host (`user:pw@host:/a.png`, `git@host:logos/a.png`), which could carry a password.
+///
+/// These stay files: a drive (`C:\a.png`; one letter is never a scheme), a share
+/// (`\\server\share\a.png`), a name with a colon and no separator after it (`a:b.png`), and a
+/// name with an `@` and no colon after it in the first part (`logo@2x.png`, `me@corp/a.png`).
+/// `mailto:a@b` and `data:image/png;base64,…` are left as paths: no rule tells them from a file
+/// name holding a colon, and none opens as a file unless it is one. The cost: a relative path whose
+/// first folder ends in a colon, or whose first part holds an `@` followed by a colon, reads as an
+/// address; give it as `./…` (`./folder:/a.png`, `./me@host:/a.png`).
 pub fn picture_path_is_address(path: &str) -> bool {
     if path.contains("://") {
         return true;
     }
-    let Some((scheme, rest)) = path.trim_start().split_once(':') else { return false };
+    let path = path.trim_start();
+    let first = path.split(['/', '\\']).next().unwrap_or_default();
+    if first.split_once('@').is_some_and(|(_, host)| host.contains(':')) {
+        return true;
+    }
+    let Some((scheme, rest)) = path.split_once(':') else { return false };
     let mut chars = scheme.chars();
     scheme.len() >= 2
         && chars.next().is_some_and(|c| c.is_ascii_alphabetic())
@@ -163,7 +174,7 @@ mod tests {
     }
 
     /// Paths that read as an address.
-    const ADDRESSES: [&str; 9] = [
+    const ADDRESSES: [&str; 16] = [
         "https://user:pw@host/a.png",
         "file:///data/x.png",
         "/vsicurl/https://host/a.png",
@@ -173,11 +184,18 @@ mod tests {
         "file:/data/x.png",
         " s3:/bucket/a.png",
         "ab:/c.png",
+        "user:pw@host:/a.png",
+        "user@host:/a.png",
+        "user:pw@host:a.png",
+        "user@host:a.png",
+        "git@example.invalid:logos/a.png",
+        " user:pw@host:/a.png",
+        r"user:pw@host:\a.png",
     ];
 
-    /// An address is `://` anywhere, or a scheme of two or more characters, a colon and a
-    /// separator; a drive, a share, a name with a colon, and the forms no rule can tell from a
-    /// file name, are paths.
+    /// An address is `://` anywhere, a scheme of two or more characters, a colon and a separator,
+    /// or a login before a host and a colon in the first part; a drive, a share, a name with a
+    /// colon or an `@`, and the forms no rule can tell from a file name, are paths.
     #[test]
     fn an_address_is_told_from_a_path() {
         for path in ADDRESSES {
@@ -198,7 +216,14 @@ mod tests {
             "./folder:/a.png",
             "mailto:a@b",
             "data:image/png;base64,AAAA",
-            "user:pw@host:/a.png",
+            "logos/me@host:/a.png",
+            "/data/user@host:/a.png",
+            r"C:\Users\me@corp\a.png",
+            "C:/me@corp:x/a.png",
+            r"\\server\share\me@corp:x\a.png",
+            "./user@host:/a.png",
+            "me@corp/a.png",
+            "a:b@2x.png",
             "",
         ] {
             assert!(!picture_path_is_address(path), "{path:?}");
@@ -221,6 +246,7 @@ mod tests {
             Some(json!("a\u{7}b.png")),                               // 7: a control character, dropped and counted
             Some(serde_json::Value::Null),                            // 8: none, not counted
             None,                                                     // 9: absent, none, not counted
+            Some(json!("user:secret@example.invalid:/logo.png")),     // 10: an address
         ];
         let elements: Vec<_> = sources
             .iter()
@@ -240,10 +266,10 @@ mod tests {
             k => panic!("{k:?}"),
         };
         assert_eq!(source(1).as_deref(), Some("/data/logos/north.png"));
-        for id in 2..=9 {
+        for id in 2..=10 {
             assert_eq!(source(id), None, "{id}");
         }
-        assert_eq!((repairs.elements_adjusted, repairs.elements_cut), (6, 0));
+        assert_eq!((repairs.elements_adjusted, repairs.elements_cut), (7, 0));
         let saved = serde_json::to_string(&l).unwrap();
         assert!(saved.matches("\"source\"").count() == 1 && !saved.contains("secret"), "{saved}");
         // An unclamped junk source writes nothing.
