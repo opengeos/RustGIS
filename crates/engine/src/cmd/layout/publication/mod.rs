@@ -912,21 +912,25 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
             let area = (sheet && matches!(style, Style::Panel | Style::Editorial))
                 .then(|| aspect(s, &extent))
                 .flatten()
-                .map(|a| ((((lw - 2.0 * room_side).max(1.0) * a + 2.0 * room_end) * 1.15).max(40.0 * k), lw));
+                .map(|a| ((((lw - 2.0 * room_side).max(1.0) * a + 2.0 * room_end) * 1.15).max(40.0 * k), lw))
+                // Only a frame clearly too tall is cut; the least below only raises it.
+                .filter(|(cut, _)| *cut < 0.97 * lh);
             // The least a panel is cut to, the larger of two, each with 1·k to spare (a pass may land
             // 0.5 mm short). A shorter one fails the next pass and leaves the sheet uncut: its texts
             // down to the locator and the 30·k the panel's check asks for, or the 40·k the map's
             // frame needs, plus what moves under the map, which that pass has yet to give back. Or it
             // cuts the legend: those texts, then the locator and the whole legend.
             let least = area.zip(panel_head).map_or(0.0, |((cut, fw), (head, tw, moved))| {
-                // The legend as the cut frame lists it: the width sets the scale, cut or not.
+                // The legend as the frame cut to the area lists it: the width sets the scale, cut or
+                // not. A frame the least makes taller could keep other context layers; the legend
+                // would then say it doesn't fit.
                 let inner = ((fw - 2.0 * room_side).max(fw / 2.0), (lh - 2.0 * room_end).max(lh / 2.0));
                 let fitted = fit_scale(s.map(), &extent, inner.0, inner.1).filter(|_| !whole_globe);
                 let legend_h = fitted.map_or(0.0, |(center, scale)| {
                     let scale = round_scale(scale);
                     let at = crate::render::layout::frame_render_scale(s.map(), center, scale);
                     let context = context_at(s, center, scale, (fw, cut));
-                    // A legend whose size isn't known gets a fixed one, whatever its room.
+                    // A legend whose size isn't known isn't counted: it gets a fixed size, said.
                     let rows = legend_sizes(s, at, &context).map_or(0.0, |sizes| sizes[0].1);
                     let bar = colorbar
                         .then(|| rustgis_map::layout::colorbar_layer(s.map(), None))
