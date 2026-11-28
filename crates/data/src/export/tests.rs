@@ -482,7 +482,10 @@ fn a_streamed_export_into_an_existing_geopackage_starts_again_inside_its_transac
     let src = Runs::new(&both, 4);
     let (e, table) = write_chunks_to(&src, &layer, &county, Crs::LonLat, &add, 1, None).unwrap();
     assert_eq!(src.passes.load(std::sync::atomic::Ordering::Relaxed), 3, "written three times");
-    assert_eq!((e.written, table), (20, Some(GpkgWritten { table: "both".into(), replaced: false, dependents: vec![] })));
+    assert_eq!(
+        (e.written, table),
+        (20, Some(GpkgWritten { table: "both".into(), replaced: false, dependents: vec![], changed_columns: Vec::new() }))
+    );
     let whole = d.join("whole.gpkg");
     crate::io::write_path(&both, &whole).unwrap();
     let read = |p: &Path, t: &str| {

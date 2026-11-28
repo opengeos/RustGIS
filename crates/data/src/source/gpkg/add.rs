@@ -7,6 +7,7 @@ use crate::{DataError, Field, GeometryType, Result};
 use rusqlite::config::DbConfig;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior};
 use std::cell::Cell;
+use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
 
@@ -45,7 +46,7 @@ pub(super) fn write_features(
         check_geopackage(&tx, &file)?;
         // An attribute table has no spatial reference system.
         let srs_id = if geometry_type == GeometryType::None { 0 } else { srs_id(&tx, crs)? };
-        // The views and triggers naming a replaced table, when one is.
+        // The dependent objects and declarations of a replaced table, when one is.
         let replaced = Cell::new(None);
         // The replaced table's `last_change`, which the new one's moves past.
         let replaced_stamp = Cell::new(None);
@@ -74,12 +75,19 @@ pub(super) fn write_features(
             Err(Redo::Renumber) => keep_ids = false,
             Ok((layout, extent)) => {
                 register(&tx, &layout, extent, pinned, replaced_stamp.take().as_deref())?;
+                let previous = replaced.take();
+                let changed_columns = previous
+                    .as_ref()
+                    .and_then(|p| p.declarations.as_ref())
+                    .and_then(|before| changed_declarations(&tx, &layout.table, before))
+                    .unwrap_or_default();
                 // A cancel that came while it was written rolls it all back; the last look, as
                 // committing writes the table, and a Cancel after it finds it written.
                 crate::progress::check()?;
                 tx.commit().map_err(err)?;
-                let dependents = replaced.take();
-                return Ok(GpkgWritten { table: layout.table, replaced: dependents.is_some(), dependents: dependents.unwrap_or_default() });
+                let replace = previous.is_some();
+                let dependents = previous.map(|p| p.dependents).unwrap_or_default();
+                return Ok(GpkgWritten { table: layout.table, replaced: replace, dependents, changed_columns });
             }
         }
     }
@@ -166,12 +174,16 @@ fn srs_id(conn: &Connection, crs: Crs) -> Result<i32> {
     i32::try_from(id).map_err(|_| DataError::Format(format!("GeoPackage: spatial reference system id {id} is out of range")))
 }
 
+struct ReplacedTable {
+    dependents: Vec<String>,
+    declarations: Option<HashMap<String, String>>,
+}
+
 /// Clears the way for table `table`: nothing of that name, or (with `replace`, which needs one) a
 /// feature or attribute table of it, dropped with its spatial index and its GeoPackage records.
-/// For a table replaced, returns the views and other tables' triggers whose SQL names it (they
-/// read the new table, and break if a column they use is gone); anything else of the name is
-/// refused.
-fn make_room(conn: &Connection, file: &str, table: &str, replace: bool) -> Result<Option<Vec<String>>> {
+/// Returns the declarations and dependent views and triggers of a replaced table. Anything
+/// else of the name is refused.
+fn make_room(conn: &Connection, file: &str, table: &str, replace: bool) -> Result<Option<ReplacedTable>> {
     let registered: Option<(String, String)> = conn
         .query_row("SELECT table_name, data_type FROM gpkg_contents WHERE lower(table_name) = lower(?1)", [table], |r| {
             Ok((r.get(0)?, r.get(1)?))
@@ -207,8 +219,10 @@ fn make_room(conn: &Connection, file: &str, table: &str, replace: bool) -> Resul
                 )));
             }
             let dependents = dependents(conn, &old)?;
+            let declarations =
+                declarations(conn, &old).map(|cols| cols.into_iter().map(|(name, ty)| (name.to_ascii_lowercase(), ty)).collect());
             drop_table(conn, &old)?;
-            Ok(Some(dependents))
+            Ok(Some(ReplacedTable { dependents, declarations }))
         }
         (_, Some((old, data_type))) => Err(DataError::Format(format!(
             "{file}: {old} is a {data_type} table, which an export doesn't replace; choose another table name"
@@ -218,6 +232,24 @@ fn make_room(conn: &Connection, file: &str, table: &str, replace: bool) -> Resul
             with_article(kind)
         ))),
     }
+}
+
+/// Reads the declared types, including sizes such as `TEXT(10)`, without reading any rows.
+fn declarations(conn: &Connection, table: &str) -> Option<Vec<(String, String)>> {
+    let mut st = conn.prepare(&format!("PRAGMA main.table_xinfo({})", quote(table))).ok()?;
+    let columns = st.query_map([], |r| Ok((r.get(1)?, r.get(2)?))).ok()?;
+    columns.collect::<rusqlite::Result<_>>().ok()
+}
+
+/// Compares same-named columns in the replacement, ignoring case as SQLite does.
+fn changed_declarations(conn: &Connection, table: &str, before: &HashMap<String, String>) -> Option<Vec<String>> {
+    Some(
+        declarations(conn, table)?
+            .into_iter()
+            .filter(|(name, ty)| before.get(&name.to_ascii_lowercase()).is_some_and(|old| !old.eq_ignore_ascii_case(ty)))
+            .map(|(name, _)| name)
+            .collect(),
+    )
 }
 
 /// The other tables with a foreign key to `table`. Dropping it would delete or empty their rows

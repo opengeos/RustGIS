@@ -578,3 +578,94 @@ fn write_notices_keep_table_and_null_losses_in_refused_receipts() {
         }
     }
 }
+
+/// Replacing a Shapefile reports the columns with different physical declarations once.
+#[test]
+fn export_overwrite_shapefile_reports_changed_declarations() {
+    let dir = Files::new();
+    let path = dir.path().join("places.shp");
+    let params = json!({"layer": "Places", "path": path});
+    let mut s = places();
+    let layer = s.map_mut().layers.first_mut().unwrap();
+    layer.dataset.fields[0].name = "café".into();
+    let code = layer.dataset.ensure_field("code", FieldType::Integer);
+    layer.dataset.features[0].attrs[code] = Cell::Int(7);
+    let mark = s.notice_mark();
+    s.run("share.exportLayer", &params).unwrap();
+    assert!(s.notices_since(mark).iter().all(|n| !n.text.contains("column declaration")));
+
+    // Make an existing target with narrower columns and a legacy encoding for the name.
+    let dbf = path.with_extension("dbf");
+    let mut bytes = std::fs::read(&dbf).unwrap();
+    let header = usize::from(u16::from_le_bytes(bytes[8..10].try_into().unwrap()));
+    assert_eq!((bytes[48], bytes[80]), (4, 18));
+    bytes[80] = 5;
+    bytes[10..12].copy_from_slice(&8u16.to_le_bytes());
+    bytes[48] = 2;
+    bytes[32..43].fill(0);
+    bytes[32..36].copy_from_slice(b"caf\xe9");
+    bytes.truncate(header);
+    bytes.extend_from_slice(b" ke    7\x1a");
+    std::fs::write(&dbf, bytes).unwrap();
+    std::fs::write(path.with_extension("cpg"), "Windows-1252").unwrap();
+    let (existing, _) = rustgis_data::io::read_path(&path).unwrap();
+    assert_eq!(existing.fields[0].name, "café");
+    assert_eq!(existing.value(0, 1), &Cell::Int(7));
+
+    let mark = s.notice_mark();
+    s.run("share.exportLayer", &params).unwrap();
+    let notes: Vec<_> = s.notices_since(mark).iter().filter(|n| n.text.contains("column declaration")).collect();
+    assert_eq!(notes.len(), 1);
+    assert_eq!(notes[0].text, format!("{}: changed 2 column declarations (café, code)", path.display()));
+    assert!(notes[0].translated(|key, _| key.to_string()).is_some());
+
+    for unreadable in [false, true] {
+        if unreadable {
+            std::fs::write(&dbf, b"not a DBF header").unwrap();
+        }
+        let mark = s.notice_mark();
+        s.run("share.exportLayer", &params).unwrap();
+        assert!(s.notices_since(mark).iter().all(|n| !n.text.contains("column declaration")));
+    }
+}
+
+/// Replacing a GeoPackage feature table compares the declared types of matching columns.
+#[test]
+fn export_replace_geopackage_reports_changed_declarations() {
+    let dir = Files::new();
+    let path = dir.path().join("places.gpkg");
+    let mut s = places();
+    let layer = s.map_mut().layers.first_mut().unwrap();
+    layer.dataset.fields[0].name = "label".into();
+    let code = layer.dataset.ensure_field("code", FieldType::Integer);
+    layer.dataset.features[0].attrs[code] = Cell::Int(7);
+    s.run("share.exportLayer", &json!({"layer": "Places", "path": path})).unwrap();
+    {
+        let db = rusqlite::Connection::open(&path).unwrap();
+        db.execute_batch(
+            "ALTER TABLE Places DROP COLUMN label;
+             ALTER TABLE Places DROP COLUMN code;
+             ALTER TABLE Places ADD COLUMN label TEXT(10) DEFAULT 'kept';
+             ALTER TABLE Places ADD COLUMN code MEDIUMINT DEFAULT 7;",
+        )
+        .unwrap();
+    }
+
+    // Use a different GeoPackage as the streamed source so the command keeps chunked export.
+    let source = dir.path().join("source.gpkg");
+    s.run("share.exportLayer", &json!({"layer": "Places", "path": source})).unwrap();
+    s.run("layer.addData", &json!({"name": "Streamed", "path": source, "layer": "Places", "stream": true})).unwrap();
+    assert!(s.map().layer_by_name("Streamed").unwrap().is_streamed());
+
+    let params = json!({"layer": "Streamed", "path": path, "mode": "replaceTable", "tableName": "Places"});
+    let mark = s.notice_mark();
+    s.run("share.exportLayer", &params).unwrap();
+    let notes: Vec<_> = s.notices_since(mark).iter().filter(|n| n.text.contains("column declaration")).collect();
+    assert_eq!(notes.len(), 1);
+    assert_eq!(notes[0].text, format!("{} (Places): changed 2 column declarations (label, code)", path.display()));
+    assert!(notes[0].translated(|key, _| key.to_string()).is_some());
+
+    let mark = s.notice_mark();
+    s.run("share.exportLayer", &json!({"layer": "Places", "path": path, "mode": "replaceTable"})).unwrap();
+    assert!(s.notices_since(mark).iter().all(|n| !n.text.contains("column declaration")));
+}

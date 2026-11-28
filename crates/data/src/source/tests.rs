@@ -4515,7 +4515,10 @@ fn geopackage_export_adds_and_replaces_tables_and_keeps_the_others() {
     }
     let to = |mode, name: Option<&str>| GpkgTable { mode, name: name.map(String::from) };
     let written = write_path_to(&permits, &path, Crs::LonLat, &to(GpkgMode::AddTable, None)).unwrap();
-    assert_eq!(written, (0, Some(GpkgWritten { table: "permits".into(), replaced: false, dependents: vec![] }), Vec::new()));
+    assert_eq!(
+        written,
+        (0, Some(GpkgWritten { table: "permits".into(), replaced: false, dependents: vec![], changed_columns: Vec::new() }), Vec::new())
+    );
     rusqlite::Connection::open(&path).unwrap().execute_batch("INSERT INTO gpkg_ogr_contents VALUES ('permits', 3)").unwrap();
     assert_eq!(gpkg_tables(&path), ["owners", "parcels", "permits"]);
     // The file's own trigger on its contents didn't run.
@@ -4561,7 +4564,15 @@ fn geopackage_export_adds_and_replaces_tables_and_keeps_the_others() {
         .execute("UPDATE gpkg_contents SET last_change = '2999-01-01T00:00:00.000Z' WHERE table_name = 'permits'", [])
         .unwrap();
     let replaced = write_path_to(&fewer, &path, Crs::WebMercator, &to(GpkgMode::ReplaceTable, None)).unwrap();
-    assert_eq!(replaced.1, Some(GpkgWritten { table: "permits".into(), replaced: true, dependents: vec!["recent_permits".into()] }));
+    assert_eq!(
+        replaced.1,
+        Some(GpkgWritten {
+            table: "permits".into(),
+            replaced: true,
+            dependents: vec!["recent_permits".into()],
+            changed_columns: Vec::new()
+        })
+    );
     assert_eq!(stamp(&path), "2999-01-01T00:00:00.001Z");
     assert_eq!(gpkg_tables(&path), ["owners", "parcels", "permits"]);
     let s = open_path(&path, Some("permits")).unwrap();
@@ -4580,11 +4591,22 @@ fn geopackage_export_adds_and_replaces_tables_and_keeps_the_others() {
     drop(c);
     // A second table in that system reuses its entry.
     let more = write_path_to(&fewer, &path, Crs::WebMercator, &to(GpkgMode::AddTable, Some("permits_2027"))).unwrap();
-    assert_eq!(more.1, Some(GpkgWritten { table: "permits_2027".into(), replaced: false, dependents: vec![] }));
+    assert_eq!(
+        more.1,
+        Some(GpkgWritten { table: "permits_2027".into(), replaced: false, dependents: vec![], changed_columns: Vec::new() })
+    );
     // Its spatial index triggers mention `permits` within their own table's name, but don't use
     // it, so replacing `permits` again names only the view.
     let again = write_path_to(&fewer, &path, Crs::WebMercator, &to(GpkgMode::ReplaceTable, Some("permits"))).unwrap();
-    assert_eq!(again.1, Some(GpkgWritten { table: "permits".into(), replaced: true, dependents: vec!["recent_permits".into()] }));
+    assert_eq!(
+        again.1,
+        Some(GpkgWritten {
+            table: "permits".into(),
+            replaced: true,
+            dependents: vec!["recent_permits".into()],
+            changed_columns: Vec::new()
+        })
+    );
     // Replacing a table not there (a misspelt name) is refused rather than adding one.
     let e = write_path_to(&fewer, &path, Crs::LonLat, &to(GpkgMode::ReplaceTable, Some("permit"))).unwrap_err().to_string();
     assert!(e.contains("no table permit to replace"), "{e}");
