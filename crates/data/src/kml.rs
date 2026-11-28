@@ -83,6 +83,7 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<Layer>> {
         duplicate_placemarks: 0,
         rows: Vec::new(),
         keys: Vec::new(),
+        string_keys: HashSet::new(),
         skipped: 0,
         geometry_losses: GeometryLosses::default(),
     };
@@ -213,12 +214,23 @@ struct Reader {
     rows: Vec<Row>,
     /// Extended data keys, in the order first seen.
     keys: Vec<String>,
+    /// Keys whose accepted values explicitly use XML Schema string typing, bounded by MAX_KEYS.
+    string_keys: HashSet<String>,
     /// Extended data entries past the column cap.
     dropped_keys: usize,
     duplicate_entries: usize,
     duplicate_placemarks: usize,
     skipped: usize,
     geometry_losses: GeometryLosses,
+}
+
+/// Resolve an explicit XML Schema string type by namespace, independent of the chosen prefix.
+/// KML's value element is already a schema string; the explicit annotation preserves an opaque
+/// identifier through readers that would otherwise infer numbers from ExtendedData values.
+fn explicit_string(n: &Node) -> bool {
+    let Some(ty) = n.attribute(("http://www.w3.org/2001/XMLSchema-instance", "type")) else { return false };
+    let (prefix, name) = ty.trim().split_once(':').map_or((None, ty.trim()), |(prefix, name)| (Some(prefix), name));
+    name == "string" && n.lookup_namespace_uri(prefix) == Some("http://www.w3.org/2001/XMLSchema")
 }
 
 fn local<'a>(n: &Node<'a, '_>) -> &'a str {
@@ -614,13 +626,16 @@ impl Reader {
         if let Some(ext) = child(pm, "ExtendedData") {
             for d in ext.descendants().filter(|d| d.is_element()) {
                 let pair = match local(&d) {
-                    "Data" => {
-                        d.attribute("name").map(|k| (k.to_string(), child(&d, "value").map(|v| data_text(&v, k)).unwrap_or_default()))
-                    }
-                    "SimpleData" => d.attribute("name").map(|k| (k.to_string(), data_text(&d, k))),
+                    "Data" => d.attribute("name").map(|k| {
+                        let value = child(&d, "value");
+                        let string = value.as_ref().is_some_and(explicit_string);
+                        let text = value.map(|v| if string { raw_text_of(&v) } else { data_text(&v, k) }).unwrap_or_default();
+                        (k.to_string(), text, string)
+                    }),
+                    "SimpleData" => d.attribute("name").map(|k| (k.to_string(), data_text(&d, k), false)),
                     _ => None,
                 };
-                if let Some((k, v)) = pair.filter(|(k, _)| !k.trim().is_empty()) {
+                if let Some((k, v, string)) = pair.filter(|(k, _, _)| !k.trim().is_empty()) {
                     // The attribute reader uses the first entry for a key. Count and discard
                     // later entries here, including duplicates across Data and SimpleData and
                     // names past the column cap.
@@ -635,6 +650,9 @@ impl Reader {
                             continue;
                         }
                         self.keys.push(k.clone());
+                    }
+                    if string && !self.string_keys.contains(&k) {
+                        self.string_keys.insert(k.clone());
                     }
                     data.push((k, v));
                 }
@@ -728,7 +746,6 @@ impl Reader {
             keys.push((k.clone(), column));
         }
         fields.extend(keys.iter().map(|(_, c)| Field::new(c.clone(), FieldType::Text)));
-        let keep: Vec<&str> = fields.iter().take(fixed_fields).map(|f| f.name.as_str()).collect();
         let mut out = Vec::new();
         for (i, (kind, label)) in present.iter().enumerate() {
             let title = if present.len() == 1 { name.to_string() } else { format!("{name} {label}") };
@@ -757,8 +774,10 @@ impl Reader {
                 ds.push_next(Some(r.geometry.clone()), attrs);
                 zm_rows += usize::from(r.zm);
             }
-            // Extended data is typed; names, descriptions, folders and style ids stay text.
-            crate::io::type_text_columns(&mut ds, &keep);
+            // Fixed columns and explicitly typed strings stay text; other data is inferred.
+            crate::io::type_text_columns_keeping(&mut ds, |column, _| {
+                column < fixed_fields || keys.get(column - fixed_fields).is_some_and(|(key, _)| self.string_keys.contains(key))
+            });
             let mut report = ReadReport::default();
             // The notes go with the first layer only.
             if i == 0 {
@@ -1106,6 +1125,53 @@ mod tests {
         assert!(back.dataset.field_index("id_1").is_none());
         assert_eq!(back.dataset.value(0, back.dataset.field_index("id").unwrap()), &Value::Text("Permits.001".into()));
         assert!(back.dataset.field_index("empty").is_some());
+    }
+
+    /// Numeric-looking source identifiers are opaque text even when an accepted input id is
+    /// not an XML ID; exporting it as ordinary untyped Data must not change its spelling.
+    #[test]
+    fn numeric_source_identifiers_stay_text_in_kml_and_kmz_round_trips() {
+        let ids = ["123", "1e3", "-7", " 1e3 "];
+        let placemarks = ids
+            .iter()
+            .map(|id| format!("<Placemark id=\"{id}\"><Point><coordinates>1,2</coordinates></Point></Placemark>"))
+            .collect::<String>();
+        let source = format!("<kml>{placemarks}</kml>");
+        let layer = read("source.kml", source.as_bytes()).unwrap().remove(0);
+        let xml = crate::interop::to_kml(&layer.dataset, None).unwrap();
+        for ext in ["kml", "kmz"] {
+            let bytes = if ext == "kmz" {
+                crate::zip::write(&[("doc.kml".into(), xml.as_bytes().to_vec())]).unwrap()
+            } else {
+                xml.as_bytes().to_vec()
+            };
+            let back = read(&format!("again.{ext}"), &bytes).unwrap().remove(0);
+            let id = back.dataset.field_index("id").unwrap();
+            assert_eq!(back.dataset.fields[id].ty, FieldType::Text);
+            for (row, value) in ids.iter().enumerate() {
+                assert_eq!(back.dataset.value(row, id), &Value::Text((*value).into()));
+            }
+        }
+        let untyped = br#"<kml><Placemark><ExtendedData><Data name="id"><value>123</value></Data></ExtendedData><Point><coordinates>1,2</coordinates></Point></Placemark></kml>"#;
+        let plain = read("plain.kml", untyped).unwrap().remove(0);
+        assert_eq!(plain.dataset.value(0, plain.dataset.field_index("id").unwrap()), &Value::Int(123));
+    }
+
+    /// Type annotations use namespace identities, and apply to their exact data key rather
+    /// than every column sharing a case-insensitive spelling.
+    #[test]
+    fn explicit_kml_strings_resolve_namespaces_without_typing_other_keys() {
+        let xml =
+            br#"<kml xmlns:i="http://www.w3.org/2001/XMLSchema-instance" xmlns:t="http://www.w3.org/2001/XMLSchema" xmlns:fake="urn:other">
+          <Placemark><ExtendedData>
+            <Data name="id"><value i:type="t:string"> 1e3 </value></Data>
+            <Data name="ID"><value>7</value></Data>
+            <Data name="other"><value i:type="fake:string">9</value></Data>
+          </ExtendedData><Point><coordinates>1,2</coordinates></Point></Placemark></kml>"#;
+        let layer = read("typed.kml", xml).unwrap().remove(0);
+        assert_eq!(layer.dataset.value(0, layer.dataset.field_index("id").unwrap()), &Value::Text(" 1e3 ".into()));
+        assert_eq!(layer.dataset.value(0, layer.dataset.fields.iter().position(|f| f.name == "ID").unwrap()), &Value::Int(7));
+        assert_eq!(layer.dataset.value(0, layer.dataset.field_index("other").unwrap()), &Value::Int(9));
     }
 
     #[test]
