@@ -186,3 +186,23 @@ fn the_cut_counts_the_layers_the_final_frame_lists() {
         assert!(!warnings.contains(LEGEND_CUT), "half {half}: {warnings}");
     }
 }
+
+#[test]
+fn the_cut_counts_a_streamed_layers_classes() {
+    let features: Vec<Value> = (0..200)
+        .map(|i| {
+            let at = [-58.0 + f64::from(i % 25), -15.0 + f64::from(i / 25)];
+            json!({"type": "Feature", "properties": {"k": format!("class {}", i % 6)}, "geometry": {"type": "Point", "coordinates": at}})
+        })
+        .collect();
+    let path = std::env::temp_dir().join(format!("rustgis-3266-{}-streamed.geojson", std::process::id()));
+    std::fs::write(&path, json!({"type": "FeatureCollection", "features": features}).to_string()).unwrap();
+    for south in [-20.0, -16.0, -3.0] {
+        let mut s = world();
+        s.run("layer.addData", &json!({"path": path.display().to_string(), "stream": true, "name": "Streamed"})).unwrap();
+        s.run("layer.symbology", &json!({"layer": "Streamed", "type": "unique", "field": "k"})).unwrap();
+        let (_, warnings) = panel_of(s, json!({"extent": area(south)})).unwrap();
+        assert!(!warnings.contains(LEGEND_CUT), "south {south}: {warnings}");
+    }
+    let _ = std::fs::remove_file(path);
+}

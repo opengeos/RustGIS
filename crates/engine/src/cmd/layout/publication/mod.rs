@@ -319,16 +319,16 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
     // judges it there, and the legend takes the one at the scale settled on.
     // Those "legend" already asks to leave out aren't among them, so the warning doesn't offer to
     // list them; without a legend there are none.
-    let context_at = |s: &Session, center: Coord, scale: f64, frame: (f64, f64)| {
+    let context_at = |map: &rustgis_map::Map, center: Coord, scale: f64, frame: (f64, f64)| {
         let Some(legend) = legend.as_ref().filter(|_| !context_in_legend) else { return Vec::new() };
-        let mut context = legend_context(s.map(), center, scale, frame);
+        let mut context = legend_context(map, center, scale, frame);
         context.retain(|c| !legend.exclude.iter().any(|n| n.eq_ignore_ascii_case(c)));
         context
     };
     // The legend's sizes at a render scale: nothing without one.
-    let legend_sizes = |s: &mut Session, scale: f64, context: &[String]| match &legend {
+    let legend_sizes = |map: &mut rustgis_map::Map, scale: f64, context: &[String]| match &legend {
         None => Some([(0.0, 0.0); PUBLICATION_LEGEND_COLUMNS]),
-        Some(legend) => legend.sizes(s.map_mut(), scale, context, legend_pt),
+        Some(legend) => legend.sizes(map, scale, context, legend_pt),
     };
     // The room inside the legend's box, round its rows and colorbar.
     let legend_pad = 2.0;
@@ -921,10 +921,14 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
             // frame needs, plus what moves under the map, which that pass has yet to give back. Or it
             // cuts the legend: those texts, then the locator and the whole legend.
             let least = area.zip(panel_head).map_or(0.0, |((cut, fw), (head, tw, moved))| {
+                // A streamed layer is measured on a copy of the map read as the frame would read it:
+                // the session's is only changed after the last refusal.
+                let mut copy = s.map().layers.iter().any(|l| l.is_streamed()).then(|| s.map().clone());
                 // A frame the legend makes taller can take context layers whole, and its legend
-                // lists them: measured again at that height, until it asks for no taller one.
+                // lists them: measured again at that height, until it asks for no taller one. Each
+                // taller frame takes another layer in, so the layers bound the rounds.
                 let mut judged = cut;
-                for _ in 0..3 {
+                for _ in 0..=s.map().layers.len() {
                     let least = {
                         // The legend as a frame `judged` tall lists it: the width sets the scale, cut or not.
                         let inner = ((fw - 2.0 * room_side).max(fw / 2.0), (lh - 2.0 * room_end).max(lh / 2.0));
@@ -932,12 +936,19 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
                         let legend_h = fitted.map_or(0.0, |(center, scale)| {
                             let scale = round_scale(scale);
                             let at = crate::render::layout::frame_render_scale(s.map(), center, scale);
-                            let context = context_at(s, center, scale, (fw, judged));
+                            if let Some(copy) = &mut copy {
+                                sync_to_frame(copy, center, scale, (fw, judged), at);
+                            }
+                            let map = match &mut copy {
+                                Some(copy) => copy,
+                                None => s.map_mut(),
+                            };
+                            let context = context_at(map, center, scale, (fw, judged));
                             // A legend whose size isn't known yet (a layer or picture still loading) counts as no
                             // rows here; the placement later gives it a fixed size and warns if that doesn't fit.
-                            let rows = legend_sizes(s, at, &context).map_or(0.0, |sizes| sizes[0].1);
+                            let rows = legend_sizes(map, at, &context).map_or(0.0, |sizes| sizes[0].1);
                             let bar = colorbar
-                                .then(|| rustgis_map::layout::colorbar_layer(s.map(), None))
+                                .then(|| rustgis_map::layout::colorbar_layer(map, None))
                                 .flatten()
                                 .filter(|l| l.raster.as_ref().is_some_and(|r| rustgis_map::layout::color_scale(r).is_some()))
                                 .map_or(0.0, |l| colorbar_mm(&l.name, tw - 2.0 * legend_pad) + if rows > 0.0 { 2.0 } else { 0.0 });
@@ -1225,21 +1236,12 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
     // classes can't be known: the legend gets a fixed size, to fit by hand. Nothing drawn in the
     // frame, no legend.
     let render_scale = crate::render::layout::frame_render_scale(s.map(), center, scale);
-    let view = crate::render::View {
-        width: fw * rustgis_map::layout::PT_PER_MM,
-        height: fh * rustgis_map::layout::PT_PER_MM,
-        pixels_per_point: 1.0,
-        camera: rustgis_map::layout::frame_camera(s.map(), center, scale, 0.0, 0.0),
-        sky: false,
-    };
-    let lonlat = crate::render::view_lonlat(s.map(), &view);
-    let own = crate::render::view_own(s.map(), &view);
-    let reading = s.map_mut().sync_sources_in(&lonlat, own.as_ref(), render_scale, true, &rustgis_data::query::Env::default());
+    let reading = sync_to_frame(s.map_mut(), center, scale, (fw, fh), render_scale);
     // Whether a legend picture still loading keeps its size at a render scale unknown.
     let pictures_pending =
         |s: &Session, scale: f64| legend.as_ref().is_some_and(|l| crate::render::layout::tile_legends_pending(s.map(), scale, &l.exclude));
-    let mut context = context_at(s, center, scale, (fw, fh));
-    let mut sizes = legend_sizes(s, render_scale, &context);
+    let mut context = context_at(s.map(), center, scale, (fw, fh));
+    let mut sizes = legend_sizes(s.map_mut(), render_scale, &context);
     let (mut cw, mut ch) = match sizes {
         Some(sizes) => sizes[0],
         None => {
@@ -1532,7 +1534,7 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
                     let own = crate::render::view_own(s.map(), &view);
                     let reading =
                         s.map_mut().sync_sources_in(&lonlat, own.as_ref(), render_scale, true, &rustgis_data::query::Env::default());
-                    let here_context = if tried == asked_scale { context.clone() } else { context_at(s, centred, tried, (fw, fh)) };
+                    let here_context = if tried == asked_scale { context.clone() } else { context_at(s.map(), centred, tried, (fw, fh)) };
                     let here = if reading || (tried != asked_scale && pictures_pending(s, render_scale)) {
                         unknown_at.get_or_insert(tried);
                         None
@@ -1541,7 +1543,7 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
                     } else {
                         // A legend that can't be measured there (a source that can't be read
                         // through) leaves that scale untried too, which is said.
-                        let measured = legend_sizes(s, render_scale, &here_context);
+                        let measured = legend_sizes(s.map_mut(), render_scale, &here_context);
                         if measured.is_none() {
                             unknown_at.get_or_insert(tried);
                         }
@@ -1622,12 +1624,12 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
                         (own.clone(), *own_sizes, own_context.clone())
                     } else {
                         let Some(own) = crate::render::layout::frame_coverage(s.map_mut(), there, tried, fw, fh, 384) else { continue };
-                        let own_context = context_at(s, there, tried, (fw, fh));
+                        let own_context = context_at(s.map(), there, tried, (fw, fh));
                         let own_sizes = if own_context == *here_context {
                             *here
                         } else {
                             let at_there = crate::render::layout::frame_render_scale(s.map(), there, tried);
-                            let measured = legend_sizes(s, at_there, &own_context);
+                            let measured = legend_sizes(s.map_mut(), at_there, &own_context);
                             // A legend that can't be measured there leaves that move untried, which is
                             // said, as at a scale.
                             let Some(measured) = measured else {
@@ -2189,6 +2191,21 @@ pub(in crate::cmd::layout) fn publication(s: &mut Session, p: &Value) -> CmdResu
     Ok(
         json!({"layout": i, "name": name, "profile": profile.id, "page": [w, h], "scale": scale, "grid": step, "locator": locator, "style": style.code(), "arrangement": arrangement_used, "legendColumns": legend.as_ref().map(|_| legend_cols), "mapShift": [map_shift.0, map_shift.1], "veiled": veiled.is_some(), "legendBox": legend_rect.is_some() && !legend_bare, "elements": elements, "moved": moved, "coverage": coverage_written, "warnings": warnings}),
     )
+}
+
+/// Reads `map`'s streamed layers as a frame `size` (mm) at 1:`scale` around `center` draws them,
+/// waiting for them as an export does; whether a read is still running.
+fn sync_to_frame(map: &mut rustgis_map::Map, center: Coord, scale: f64, (w, h): (f64, f64), render_scale: f64) -> bool {
+    let view = crate::render::View {
+        width: w * rustgis_map::layout::PT_PER_MM,
+        height: h * rustgis_map::layout::PT_PER_MM,
+        pixels_per_point: 1.0,
+        camera: rustgis_map::layout::frame_camera(map, center, scale, 0.0, 0.0),
+        sky: false,
+    };
+    let lonlat = crate::render::view_lonlat(map, &view);
+    let own = crate::render::view_own(map, &view);
+    map.sync_sources_in(&lonlat, own.as_ref(), render_scale, true, &rustgis_data::query::Env::default())
 }
 
 /// Whether the publication gives the top shown raster with a colour scale a colorbar: `"auto"` (the
