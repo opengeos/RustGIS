@@ -8,14 +8,15 @@ engine scriptable and the front end swappable.
 | L0 | `rustgis-geom` | Coordinates, extents, Web Mercator, geodesic distance/area, scale |
 | L1 | `rustgis-data` | Features, typed attributes, vector and spreadsheet I/O, SQL where clauses, LiDAR, rasters and EPSG reprojection; indexed file and remote data providers; live PostGIS, MySQL/MariaDB and SQL Server providers on the desktop; optional GDAL and DuckDB programs (see [Data formats](user-guide/data-formats.md)) |
 | L2 | `rustgis-map`, `rustgis-analysis` | Layers, symbology, labeling, camera, basemaps and web tile layers; geoprocessing tools |
-| L2 | `rustgis-tiles` | Web map tiles: XYZ/TMS/WMS raster tiles, Mapbox Vector Tiles, PMTiles and MBTiles archives and a subset of MapLibre styles; a cache that fetches in the background (worker threads natively, the browser's `fetch` on the web) |
+| L2 | `rustgis-tiles`, `rustgis-keychain` | Web map tiles: XYZ/TMS/WMS raster tiles, Mapbox Vector Tiles, PMTiles and MBTiles archives and a subset of MapLibre styles; a cache that fetches in the background (worker threads natively, the browser's `fetch` on the web); the system's secret store |
 | L3 | `rustgis-render` | tiny-skia renderer, label placement, font discovery, map and layout export, and UI-independent GPU scene preparation |
 | L3 | `rustgis-geolibre` | The [GeoLibre tools](user-guide/analysis.md#geolibre-tools) as geoprocessing tools: run by the optional `geolibre` program natively, by geolibre-rust's WASI runner in the browser |
 | L3 | `rustgis-plugins` | [Plugins](plugins.md): sandboxed WebAssembly modules, desktop process plugins and assistant skills packages; `.rgplugin` packages and the plugin registry |
 | L4 | `rustgis-engine` | Session, undo, command registry, projects, sample project |
 | L5 | `rustgis-assistant` | The [AI Assistant](user-guide/assistant.md): provider request/response formats, conversation loop, command tools, skills and agent integration; native HTTP transport and local agent/MCP connections, with browser I/O supplied by the web app |
 | L6 | `rustgis-ui-egui` | Ribbon, panes, map view, dialogs and the optional wgpu map backend |
-| apps | `rustgis`, `rustgis-cli`, `rustgis-web`, `rustgis-python` | Desktop app, command line, browser (WebAssembly), and the PyO3-backed `rustgis` Python package |
+| L7 | `rustgis-ui-touch` | The phone interface around `rustgis-ui-egui`'s map view |
+| apps | `rustgis`, `rustgis-cli`, `rustgis-web`, `rustgis-python`, `rustgis-mobile` | Desktop app, command line, browser (WebAssembly), the PyO3-backed `rustgis` Python package, and Android and iOS |
 | tooling | `xtask` | Workspace checks, third-party licence notices and web service-worker generation |
 
 ## Everything is a command
@@ -175,7 +176,7 @@ model listing.
 ## Quality gates
 
 ```sh
-cargo xtask ci        # fmt, clippy -D warnings, tests, layering check
+cargo xtask ci        # fmt, clippy -D warnings, tests, layers, test-hygiene, attribution, rows, schema --check
 ```
 
 `cargo xtask layers` checks that workspace dependencies point to lower layers and that crates

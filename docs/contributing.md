@@ -69,8 +69,9 @@ destroy user data.
 ## Developer checks
 
 `cargo xtask ci` runs `cargo fmt --all --check`,
-`cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace -q` and
-`cargo xtask layers`. The pre-commit hooks also check TOML, YAML, JSON, whitespace and large files.
+`cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace -q`,
+`cargo xtask layers`, `cargo xtask test-hygiene`, `cargo xtask attribution`, `cargo xtask rows`
+and `cargo xtask schema --check`. The pre-commit hooks also check TOML, YAML, JSON, whitespace and large files.
 CI separately builds `rustgis-web` for `wasm32-unknown-unknown` and runs
 `cargo deny --locked check licenses sources` against `deny.toml`, including development
 dependencies. The fuzz workflow applies the same source policy using `fuzz/deny.toml`, which
@@ -94,8 +95,9 @@ bug to fix, not a retry to rely on; the retries are a stopgap for tests that wai
 A pull request's CI runs the tests of the packages it changes and those that depend on them, as
 `cargo xtask changed --list` finds them. The whole workspace is tested for a push to `main`, a
 `ci:` label, a manual run on every platform, a change to `Cargo.lock`, `rust-toolchain*`, `.github/`
-or `.config/`, and a file outside every package that nothing includes. Lint, the wasm build, the
-licence check and the schema check always run whole. The `Tests pass` job fails when any other job
+or `.config/`, and a file outside every package that nothing includes. Lint and the wasm build
+always run whole; the licence and schema checks run on pull requests and merge groups only when
+their watched files change. The `Tests pass` job fails when any other job
 does; it is the check to require before merging.
 
 Workflow actions are pinned to full commit SHAs with the previous version or branch in a comment.
@@ -108,7 +110,12 @@ Other workspace tasks:
 | --- | --- |
 | `cargo xtask changed [--list] [base]` | Run the `cargo xtask ci` checks on only the packages your branch changes and those that depend on them: a quicker check while you work. A file outside every package that no package includes, such as `Cargo.lock`, checks the whole workspace. `--list` prints the packages without checking them |
 | `cargo xtask layers` | Check crate dependency direction (target-specific dependencies included) and keep UI dependencies out of lower layers; a new crate under `crates/` needs a layer in `LAYERS` |
+| `cargo xtask test-hygiene` | Check tests for documented timer waits (`// test-wait:`), `#[ignore = "..."]` reasons and tautological assertions |
 | `cargo xtask attribution` | Check that every image and font file has a row in `ATTRIBUTION.md` (its path, a directory above it or a pattern in backticks; a bare name covers a file at the repository root) |
+| `cargo xtask rows [--update]` | Check that direct `Feature` row accesses outside `rustgis-data` stay within `xtask/row-uses.txt`; `--update` writes a lower count |
+| `cargo xtask memory` | Measure peak memory of representative CLI workflows against `xtask/memory-limits.txt` (Linux) |
+| `cargo xtask commands` | Refresh `crates/engine/command-surface.txt` after adding, removing or renaming a registered command or parameter |
+| `cargo xtask schema [--check]` | Regenerate `schema/project.schema.json` from the saved project types, or verify it is up to date (`--check`) |
 | `cargo xtask notices` | Regenerate the shipped `THIRD-PARTY-LICENSES.txt` files after changing dependencies, or after adding code or data from another project to `INCLUDED` in `xtask/src/notices.rs` (with its licence text in `third-party/`); requires `cargo-about` |
 | `cargo xtask notices --check` | Check the notices without writing them; stale notices warn in CI but block releases |
 | `cargo xtask web-pwa <dir>` | Generate the service worker in a Trunk build output directory, such as `dist/web` |

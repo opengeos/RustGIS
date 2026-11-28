@@ -188,11 +188,13 @@ jobs:
             echo "run=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if ! changed="$(git diff --name-only "$fork_point" HEAD 2>/dev/null)"; then
+          changed_file="$(mktemp)"
+          trap 'rm -f "$changed_file"' EXIT
+          if ! git diff -z --no-renames --name-only "$fork_point" HEAD >"$changed_file" 2>/dev/null; then
             echo "run=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if grep -qE '^(Cargo\.lock|(.*/)?Cargo\.toml|deny\.toml|about\.toml|xtask/src/(main|notices)\.rs|(.*/)?THIRD-PARTY-LICENSES\.txt|\.github/scripts/(check-cargo-sources|review-deferrals|ratchet-limits|test_[^/]+)\.py|\.github/workflows/ci\.yml|crates/map/src/color/(scientific|matplotlib)\.rs|crates/tiles/src/(symbols|style)\.rs|crates/data/src/(raster/crs|esripbf)\.rs)$|^(third-party/|\.cargo/)' <<<"$changed"; then
+          if grep -zqE '^(Cargo\.lock|(.*/)?Cargo\.toml|deny\.toml|about\.toml|xtask/src/(main|notices)\.rs|(.*/)?THIRD-PARTY-LICENSES\.txt|\.github/scripts/[^/]+\.py|\.github/workflows/ci\.yml|crates/map/src/color/(scientific|matplotlib)\.rs|crates/tiles/src/(symbols|style)\.rs|crates/data/src/(raster/crs|esripbf)\.rs)$|^third-party/' "$changed_file" || grep -ziqE '(^|/)\.cargo(/|$)' "$changed_file"; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "No dependency, licence or notice files changed; skipping."
@@ -257,11 +259,13 @@ jobs:
             echo "run=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if ! changed="$(git diff --name-only "$fork_point" HEAD 2>/dev/null)"; then
+          changed_file="$(mktemp)"
+          trap 'rm -f "$changed_file"' EXIT
+          if ! git diff -z --no-renames --name-only "$fork_point" HEAD >"$changed_file" 2>/dev/null; then
             echo "run=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if grep -qE '^(crates/(geom|data|map|analysis|tiles|render|plugins|geolibre|engine)/|schema/|Cargo\.(toml|lock)$|rust-toolchain|xtask/src/main\.rs$|\.github/workflows/ci\.yml$)' <<<"$changed"; then
+          if grep -zqE '^(crates/(geom|data|map|analysis|tiles|render|plugins|geolibre|engine)/|schema/|Cargo\.(toml|lock)$|rust-toolchain|xtask/src/main\.rs$|\.github/workflows/ci\.yml$)' "$changed_file"; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "No schema-related files changed; skipping."
@@ -351,8 +355,9 @@ jobs:
           MERGE_GROUP_REF: ${{ github.event.merge_group.head_ref }}
         run: python3 .github/scripts/ratchet-limits.py
 
-  # The packages whose tests this run needs, for `test` (.github/scripts/test-selection.sh). Only
-  # tests are narrowed: lint, the wasm build, licences and the schema check run whole every time.
+  # The packages whose tests this run needs, for `test` (.github/scripts/test-selection.sh). Lint
+  # and the wasm build run whole every time; licences and the schema check skip on pull requests
+  # and merge groups when none of their watched files changed.
   select:
     name: Tests to run
     runs-on: ubuntu-latest
